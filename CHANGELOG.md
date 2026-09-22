@@ -7,6 +7,27 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Render (AP5): the `modelroom render --config ...` command (`modelroom/cli.py`,
+  `cli.render_with_config`, same pattern as `fetch_with_config`/`hardware_with_config`) and the
+  pure Markdown document builder it wraps (`modelroom/render.py::build_document`). A pure
+  reader of the current snapshot and every configured machine's hardware profile: eligibility
+  (`metadata_ok`/`approved` provenance, complete, active), the per-group-per-machine selection
+  rule (largest good-or-better quant, else the smallest, one row per distinct package picked by
+  any machine), the fit/installed/speed cell rules and a new minimal `Rating` contract
+  (`modelroom/contracts.py`) for an optional market-index Stars column -- any exception from a
+  `RatingSource` (including the new `render.RatingUnavailableError`) is treated the same way: a
+  `Market rating unavailable: <message>` note near the top and every Stars cell `–`, still exit
+  `0`. Runs under the same kernel lock as `fetch` and the same F13 schema-version-before-lock
+  ordering; refuses to overwrite a rendered document that is already newer than the snapshot
+  being rendered (exit `1`, file untouched). Writes atomically via the new
+  `state.py::atomic_write_text` (`.pid.tmp` + `os.replace`, alongside `atomic_write_json`);
+  both writers now pin LF line endings on every platform (measured 2026-09-22: the snapshot
+  and the rendered document came out CRLF on Windows).
+  Documented in `CONTRACTS.md` ("Render (AP5)", the `Rating` model, and the updated Exit codes
+  table). Covered by `tests/test_render.py` (the pure builder: selection, fit/installed/speed
+  cells, stars/rating, header round-trip) and `tests/test_cli.py` (the `render` verb end to
+  end: the lock, every schema-version/no-snapshot/newer-document exit path, and
+  `render_with_config`).
 - Hardware (AP4): the `modelroom hardware --config ... --machine ...` command
   (`modelroom/cli.py`), the persisted per-machine hardware profile
   (`<state>/hardware/<machine>.json`, `HardwareSnapshot`/`InstalledModel`/`Measurement` in

@@ -34,6 +34,7 @@ from modelroom.state import (
     StaleRunError,
     acquire_lock,
     atomic_write_json,
+    atomic_write_text,
     check_run_is_newer,
     hardware_snapshot_path,
     load_existing_hardware_snapshot,
@@ -390,6 +391,39 @@ def test_atomic_write_json_leaves_no_tmp_file_on_a_serialization_failure(tmp_pat
 
     assert not target.exists()
     assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_atomic_write_text_leaves_no_tmp_file_on_success(tmp_path: Path):
+    target = tmp_path / "docs" / "models.md"
+
+    atomic_write_text(target, "# Model packages\n")
+
+    assert target.read_text(encoding="utf-8") == "# Model packages\n"
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_atomic_write_text_replaces_an_existing_file(tmp_path: Path):
+    target = tmp_path / "docs" / "models.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("old content\n", encoding="utf-8")
+
+    atomic_write_text(target, "new content\n")
+
+    assert target.read_text(encoding="utf-8") == "new content\n"
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_both_atomic_writers_emit_lf_line_endings_on_every_platform(tmp_path: Path):
+    """`write_text` alone would translate `\\n` to the platform newline; both writers pin LF."""
+    json_target = tmp_path / "snapshot.json"
+    text_target = tmp_path / "packages.md"
+
+    atomic_write_json(json_target, {"a": [1, 2]})
+    atomic_write_text(text_target, "# Model packages\n\n| a |\n")
+
+    assert b"\r" not in json_target.read_bytes()
+    assert b"\r" not in text_target.read_bytes()
+    assert text_target.read_bytes().count(b"\n") == 3
 
 
 # --- write_snapshot / load_existing_snapshot ---------------------------------------------

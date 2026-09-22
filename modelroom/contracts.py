@@ -686,3 +686,37 @@ class Fit(BaseModel):
     context: int = Field(ge=0)
     context_assumed: bool
     reason: str | None
+
+
+# --- render (AP5) ---------------------------------------------------------------------------
+
+
+class Rating(BaseModel):
+    """A market-index star rating for one base model, as a `render.RatingSource` returns it.
+
+    AP5's only new contract: `render` (`modelroom/render.py`) calls a `RatingSource` once per
+    base model it renders and turns the result into the Package table's Stars column
+    (CONTRACTS.md, "Render (AP5)"). Not persisted anywhere -- a `RatingSource` is a live
+    callable, never a file this module reads or writes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stars: float
+    source: str
+
+    @field_validator("stars")
+    @classmethod
+    def _check_stars(cls, value: float) -> float:
+        if not (0.5 <= value <= 5.0):
+            raise ValueError(f"stars must be between 0.5 and 5.0: {value!r}")
+        if round(value * 2) != value * 2:
+            raise ValueError(f"stars must be a multiple of 0.5: {value!r}")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def _check_source(cls, value: str) -> str:
+        if not value:
+            raise ValueError("source must be a non-empty label")
+        return value

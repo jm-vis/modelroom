@@ -14,11 +14,12 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from modelroom.cli import fetch_with_config, hardware_with_config, main
+from modelroom.cli import fetch_with_config, hardware_with_config, main, render_with_config
 from modelroom.config import Configuration
 from modelroom.contracts import load_hardware_snapshot, load_snapshot
 from modelroom.http import FixtureTransport, Response
 from modelroom.llmfit import FixtureRunner
+from modelroom.render import RatingUnavailableError
 
 from fixture_support import FIXTURES, build_transport, json_response, qwen35_example_config_dict, qwen35_transport_mapping
 
@@ -614,3 +615,173 @@ def test_hardware_with_config_unknown_machine_is_exit_2(tmp_path: Path):
     code = hardware_with_config(config, "no-such-machine", runner=_llmfit_runner(), transport=_ollama_transport(), now=RUN1)
 
     assert code == 2
+
+
+# --- render: schema-version gates, lock, no-snapshot, newer-document refusal ----------------
+
+
+def test_render_no_snapshot_is_exit_1_and_writes_nothing(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+
+    code = main(["render", "--config", str(config_path)], now=RUN1)
+
+    assert code == 1
+    assert not (tmp_path / "models.md").exists()
+
+
+def test_render_snapshot_with_unsupported_schema_version_is_exit_3(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "modelroom.json").write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
+
+    code = main(["render", "--config", str(config_path)], now=RUN1)
+
+    assert code == 3
+    assert not (state_dir / "modelroom.lock").exists()
+    assert not (tmp_path / "models.md").exists()
+
+
+def test_render_hardware_with_unsupported_schema_version_is_exit_3(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    (hardware_dir / "workstation.json").write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
+
+    code = main(["render", "--config", str(config_path)], now=RUN2)
+
+    assert code == 3
+    assert not (tmp_path / "models.md").exists()
+
+
+def test_render_end_to_end_exit_0_writes_a_markdown_document(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
+
+    code = main(["render", "--config", str(config_path)], now=RUN2)
+
+    assert code == 0
+    markdown_path = tmp_path / "models.md"
+    text = markdown_path.read_text(encoding="utf-8")
+    assert text.startswith("<!-- modelroom render: snapshot_run_at=")
+    assert "# Model packages" in text
+    assert not list((tmp_path / "state").glob("*.tmp"))
+    assert not list(markdown_path.parent.glob("*.tmp"))
+    # The lock is the same stable kernel-lock file `fetch` already created -- render only takes
+    # and releases it, never deletes it (modelroom/state.py, "Lock file").
+    lock_path = tmp_path / "state" / "modelroom.lock"
+    assert lock_path.exists()
+    assert lock_path.read_bytes() == b""
+
+
+def test_render_stops_at_a_lock_held_by_another_process(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
+    lock_path = tmp_path / "state" / "modelroom.lock"
+    holder_script = tmp_path / "render_lock_holder.py"
+    holder_script.write_text(
+        "import sys, time\n"
+        "from datetime import datetime, timezone\n"
+        "from pathlib import Path\n"
+        "from modelroom.state import acquire_lock\n"
+        "path = Path(sys.argv[1])\n"
+        "acquire_lock(path, 'render', datetime.now(timezone.utc))\n"
+        "print('holding', flush=True)\n"
+        "time.sleep(20)\n",
+        encoding="utf-8",
+    )
+    holder = subprocess.Popen(
+        [sys.executable, str(holder_script), str(lock_path)], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert holder.stdout.readline().strip() == "holding", "the holder process never acquired the lock"
+
+        code = main(["render", "--config", str(config_path)], now=RUN2)
+
+        assert code == 1
+        assert not (tmp_path / "models.md").exists()
+    finally:
+        holder.kill()
+        holder.wait(timeout=5)
+
+
+def test_render_refuses_when_the_existing_document_is_newer(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN2) == 0
+    assert main(["render", "--config", str(config_path)], now=RUN2) == 0
+    markdown_path = tmp_path / "models.md"
+    before = markdown_path.read_text(encoding="utf-8")
+
+    # Simulate a snapshot older than the one already rendered underneath the existing document.
+    state_dir = tmp_path / "state"
+    old_snapshot = json.loads((state_dir / "modelroom.json").read_text(encoding="utf-8"))
+    old_snapshot["run_at"] = RUN1.isoformat()
+    (state_dir / "modelroom.json").write_text(json.dumps(old_snapshot), encoding="utf-8")
+
+    code = main(["render", "--config", str(config_path)], now=RUN2)
+
+    assert code == 1
+    assert markdown_path.read_text(encoding="utf-8") == before
+
+
+def test_render_replaces_an_older_existing_document(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
+    assert main(["render", "--config", str(config_path)], now=RUN1) == 0
+
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN2) == 0
+    code = main(["render", "--config", str(config_path)], now=RUN2)
+
+    assert code == 0
+    text = (tmp_path / "models.md").read_text(encoding="utf-8")
+    assert f"snapshot_run_at={RUN2.isoformat()}" in text
+
+
+# --- render_with_config: the programmatic entry point, and the Rating source ----------------
+
+
+def test_render_with_config_runs_end_to_end(tmp_path: Path):
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    config = Configuration.from_dict(data)
+    assert fetch_with_config(config, "workstation", transport=_transport(), now=RUN1) == 0
+
+    code = render_with_config(config, now=RUN2)
+
+    assert code == 0
+    assert (tmp_path / "models.md").exists()
+
+
+def test_render_with_config_rating_source_failure_is_exit_0_with_a_note(tmp_path: Path):
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    config = Configuration.from_dict(data)
+    assert fetch_with_config(config, "workstation", transport=_transport(), now=RUN1) == 0
+
+    def _failing(repo: str):
+        raise RatingUnavailableError("market index unreachable")
+
+    code = render_with_config(config, rating=_failing, now=RUN2)
+
+    assert code == 0
+    text = (tmp_path / "models.md").read_text(encoding="utf-8")
+    assert "Market rating unavailable: market index unreachable" in text
+
+
+def test_render_with_config_no_source_given_has_no_rating_note(tmp_path: Path):
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    config = Configuration.from_dict(data)
+    assert fetch_with_config(config, "workstation", transport=_transport(), now=RUN1) == 0
+
+    code = render_with_config(config, now=RUN2)
+
+    assert code == 0
+    text = (tmp_path / "models.md").read_text(encoding="utf-8")
+    assert "Market rating unavailable" not in text
+
+
+def test_render_with_config_defaults_to_the_real_clock(tmp_path: Path):
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    config = Configuration.from_dict(data)
+    # No snapshot at all -> exit 1 regardless of the clock; the real-clock default path is
+    # exercised without ever depending on its actual value.
+    assert render_with_config(config) == 1

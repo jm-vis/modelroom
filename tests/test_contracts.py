@@ -27,6 +27,7 @@ from modelroom.contracts import (
     Measurement,
     Package,
     PackageFile,
+    Rating,
     SchemaVersionError,
     Snapshot,
     architecture_from_hf_config,
@@ -52,6 +53,7 @@ MODEL_CLASSES = {
     "Measurement": Measurement,
     "HardwareSnapshot": HardwareSnapshot,
     "Fit": Fit,
+    "Rating": Rating,
 }
 
 _NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
@@ -773,3 +775,38 @@ def test_fit_rejects_an_extra_field():
     payload["extra_field"] = "nope"
     with pytest.raises(ValidationError):
         Fit.model_validate(payload)
+
+
+# --- Rating: stars range/step, source non-empty, extra=forbid ------------------------------
+
+
+def test_rating_accepts_a_whole_and_a_half_star_value():
+    Rating.model_validate({"stars": 5.0, "source": "market index"})
+    Rating.model_validate({"stars": 0.5, "source": "market index"})
+
+
+def test_rating_rejects_a_non_half_step_value():
+    with pytest.raises(ValidationError):
+        Rating.model_validate({"stars": 3.3, "source": "market index"})
+
+
+def test_rating_rejects_a_value_below_the_minimum():
+    with pytest.raises(ValidationError):
+        Rating.model_validate({"stars": 0.0, "source": "market index"})
+
+
+def test_rating_rejects_a_value_above_the_maximum():
+    with pytest.raises(ValidationError):
+        Rating.model_validate({"stars": 5.5, "source": "market index"})
+
+
+def test_rating_rejects_an_empty_source():
+    with pytest.raises(ValidationError):
+        Rating.model_validate({"stars": 3.0, "source": ""})
+
+
+def test_rating_rejects_an_extra_field():
+    payload = dict(EXAMPLES["Rating"])
+    payload["extra_field"] = "nope"
+    with pytest.raises(ValidationError):
+        Rating.model_validate(payload)

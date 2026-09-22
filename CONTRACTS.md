@@ -62,10 +62,10 @@ it is the tag part of `ollama_name` after the colon.
 
 | Code | Meaning |
 |---|---|
-| `0` | success: every fetch area is `complete` |
-| `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch` stopped at another process's lock; or this run's `run_at` is not newer than the stored snapshot's -- the latter two write nothing |
+| `0` | success: every fetch area is `complete` (`render`: the document was written, even when its rating source failed) |
+| `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first writes nothing |
 | `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration; or a required external tool (`llmfit`) is missing or below the minimum version |
-| `3` | an input file (configuration or snapshot) has an unsupported `schema_version` |
+| `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version` |
 
 ## Models
 
@@ -554,6 +554,24 @@ renderer must use.
   "context": 8192,
   "context_assumed": true,
   "reason": null
+}
+```
+
+### Rating
+
+A market-index star rating for one base model, as a `render.RatingSource` (see "Render (AP5)"
+below) returns it to `modelroom render`. Not persisted anywhere -- a `RatingSource` is a live
+callable a caller passes to `cli.render_with_config`, never a file this module reads or writes.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `stars` | `float` | `0.5 <= stars <= 5.0`, a multiple of `0.5` | the star rating |
+| `source` | `str` | non-empty | a short label naming where the rating came from, e.g. `"market index"` |
+
+```json
+{
+  "stars": 3.5,
+  "source": "market index"
 }
 ```
 
@@ -1263,3 +1281,109 @@ package (~5.6 GiB, `L=42, KVH=8, D=128`) has `need_gib = 7.9725` GiB: `good` on 
 as if it were current for that profile, since the hardware may have changed since that
 measurement was taken. This check belongs to the renderer (a later work package), not to
 `compute_fit` or to the `Measurement`/`HardwareSnapshot` models themselves.
+
+## Render (AP5)
+
+`modelroom render --config <toml>` (`cli.render_with_config(config, rating=None, now=None)` is
+the programmatic entry point, same pattern as `fetch_with_config`/`hardware_with_config`) is a
+**pure reader** of the current snapshot and every configured machine's hardware profile. It
+writes exactly one file, `config.paths.markdown`, and never touches `config.paths.state` beyond
+the lock and the reads `load_existing_snapshot`/`load_existing_hardware_snapshot` already do.
+`modelroom/render.py::build_document` is the pure function that turns an already-loaded
+`Configuration`, `Snapshot` and `{machine: HardwareSnapshot | None}` mapping into the Markdown
+text; `cli.py` owns the lock, the schema-version gates and the atomic write.
+
+**Rating source.** `render.RatingSource = Callable[[str], Rating | None]`, called with a base
+model's full `hf_repo`. `render.RatingUnavailableError` is for a source that cannot answer at
+all; **any exception the source raises is treated the same way**: the whole Stars column
+renders `–` and the document carries a note near the top, `Market rating unavailable:
+<message>` (`<message>` is `str(exception)`), and the command still exits `0` -- a rating
+failure never blocks the package view. `None` from the source for one base model means "no
+rating for that model" (`–` for its rows only, no note). No source given (`rating=None`, the
+CLI's own default -- there is no `--rating` flag) renders every Stars cell `–` with no note.
+The source is called once per base model that has at least one row in the Package table, never
+once per package.
+
+**Lock and ordering.** `render` acquires the same lock `fetch` uses
+(`acquire_lock(config.paths.lock_file, "render", now)`), reads the snapshot only after the lock
+is held, and releases it in `finally` -- lock held elsewhere exits `1`. Same ordering as `fetch`
+(F13): the snapshot's `schema_version` is checked *before* the lock is taken; unsupported exits
+`3` with nothing written, not even a lock file. A hardware file with an unsupported
+`schema_version` also exits `3` (checked once the lock is held, before anything is written). No
+snapshot at all exits `1` with "nothing to render, run fetch first"; nothing is written.
+
+**Header and the newer-document refusal.** Every rendered document starts with a fixed header
+line:
+
+```
+<!-- modelroom render: snapshot_run_at=<ISO UTC> rendered_at=<ISO UTC> -->
+```
+
+`render.format_header_line`/`render.parse_header_line` write and read it. Before writing,
+`cli.py` reads the existing `config.paths.markdown` (if any) and parses its first line; when the
+existing document's `snapshot_run_at` is **strictly newer** than the snapshot about to be
+rendered, the write is refused (exit `1`, the message names both timestamps, the file is left
+untouched). Equal or older is replaced. A file with no such first line (missing, empty, or from
+before `render` ever wrote one) is always replaced. The write itself is atomic
+(`state.atomic_write_text`, the same `.pid.tmp` + `os.replace` convention as
+`atomic_write_json`) and, like every file this package writes, uses LF line endings on every
+platform. `run-status.json` is never touched by `render` -- it belongs to `fetch`.
+
+**What is rendered.** A fixed header block (title, snapshot run time, rendered time, the number
+of base models / packages -- `fetch`'s own request budget is never shown here, it belongs to
+`run-status.json`), an Area status table (one row per `snapshot.areas`, always rendered even
+after a partial `fetch` failure -- the document always shows the last valid snapshot), a
+Machines table (one row per `config.machines`: name, VRAM/RAM GiB, the configured reserves,
+backend/GPU name, profile measured-at, profile age in whole days relative to `rendered_at`, and
+the installed-model count or `unknown (<installed_unavailable_reason>)`; a machine with no
+hardware profile yet renders `no hardware profile yet` for every measured column), and the
+Package table.
+
+**Eligibility.** Only packages with `provenance in ("metadata_ok", "approved")`, `complete ==
+True` and `active == True` are ever shown.
+
+**Grouping and ordering.** Eligible packages group by (base model, packager), packager being the
+Hugging Face owner or the literal `"ollama"`. Groups are ordered by base model in configuration
+order (families, then base models within a family), then packager alphabetically with `"ollama"`
+always last.
+
+**Selection rule**, per group *and per configured machine*: the package with the largest
+quantization (`QUANT_ORDER` index, unknown sorting last -- same convention as
+`quantization.sort_key`) whose `fit.py::compute_fit` class on that machine is `"good"` or
+`"perfect"`; when none qualifies, the smallest present package (`quantization.sort_key`) with
+whatever class it gets. Ties among qualifying packages at the same quant index break by
+`sort_key`, first wins. A machine with no hardware profile can judge no package, so it always
+falls back to the smallest. Since the pick can differ per machine, the Package table renders one
+row per *distinct* package selected by at least one machine (a package selected by two machines
+is one row) -- every row still shows a `fit (computed, v1): <machine>` cell for *every*
+configured machine, computed fresh for that exact package, whether or not it was that machine's
+own pick. `Variants` on a row is the group's eligible-package count minus the number of distinct
+rows the group produced.
+
+**Fit cell.** `<class> (<mode>, need <need_gib:.1f> / pool <pool_gib:.1f> GiB)` for a judged fit;
+`fit_class == "unknown"` renders only `unknown: <reason>`, **never** the zeroed placeholder
+numbers `compute_fit` returns for that case (CONTRACTS.md, "Fit contract v1", already forbids
+printing them). A machine with no hardware profile renders `no profile` instead of calling
+`compute_fit` at all.
+
+**Installed cell**, per package per machine (measured 2026-09-22: the local Ollama daemon's
+`/api/tags` digest equals the registry manifest digest for the same tag, and sibling tags such
+as `9b` and `9b-q4_K_M` share one digest): for an Ollama package, `yes` when any
+`hardware.installed[].digest == package.manifest_digest`, else `no`; `unknown` when that
+machine's `installed` is `None` or it has no hardware profile at all; a Hugging Face package is
+always `–` (a GGUF file on disk is not observed by AP4). The Package table's Installed column
+joins every configured machine's cell as `<machine>: <cell>; <machine>: <cell>; ...`.
+
+**Speed cell** (one column, not per machine): the renderer searches every configured machine's
+hardware profile for a `Measurement` that is both *current* (`profile_measured_at ==
+hardware.measured_at` for that machine's own profile) and *content-matching* the package
+(`ollama_manifest_digest == package.manifest_digest`, or `hf_repo`/`hf_revision` equal to the
+package's and `hf_file_digest` equal to one of its weight files' digests). The first match found
+(machines checked in `config.machines` order) renders `<tps_mean:.1f> tps @<context>
+(<machine>)`; a stale or non-matching measurement is silently not shown -- `–` when none
+matches anywhere.
+
+**Exit codes**, per this section: `0` rendered (also when the rating source failed), `1` the
+lock is held, there is no snapshot to render, or the existing document was rendered from a
+newer snapshot (all three write nothing), `2` the configuration is missing or invalid, `3` the
+snapshot's or a hardware file's `schema_version` is unsupported.

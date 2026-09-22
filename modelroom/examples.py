@@ -215,4 +215,8 @@ EXAMPLES: dict[str, dict] = {
         "context_assumed": True,
         "reason": None,
     },
+    "Rating": {
+        "stars": 3.5,
+        "source": "market index",
+    },
 }

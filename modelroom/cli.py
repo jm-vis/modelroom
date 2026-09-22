@@ -1,20 +1,22 @@
-"""The `modelroom` command line: `fetch` and `hardware` today, `render`/`check` later.
+"""The `modelroom` command line: `fetch`, `hardware` and `render` today, `check` later.
 
 `main(argv)` is the real entry point (`[project.scripts]` in `pyproject.toml`); it takes
 optional `transport`/`runner`/`now` keyword arguments purely for dependency injection in tests
 -- the real CLI never passes them, so it always uses `UrllibTransport()`, `SubprocessRunner()`
 and the real clock. Exit codes follow AGENTS.md/CONTRACTS.md: `0` success (`fetch`: every area
 complete; `hardware`: the profile was measured and written, whether or not the local Ollama
-daemon could be reached), `1` (`fetch` only) at least one area incomplete, the lock is held, or
-this run is not newer than the stored snapshot, `2` the configuration is missing/invalid, the
-named machine is not a writer (`fetch`) or not configured at all (`hardware`), or a required
-external tool (`llmfit`) is missing or too old, `3` a stored file's schema_version is
-unsupported.
+daemon could be reached; `render`: the document was written, even when its rating source
+failed), `1` (`fetch`/`render`) at least one `fetch` area incomplete, the lock is held, a
+`fetch` run is not newer than the stored snapshot, `render` has no snapshot to read, or
+`render`'s existing document was rendered from a newer snapshot, `2` the configuration is
+missing/invalid, the named machine is not a writer (`fetch`) or not configured at all
+(`hardware`), or a required external tool (`llmfit`) is missing or too old, `3` a stored file's
+(configuration, snapshot or hardware profile) `schema_version` is unsupported.
 
-`fetch_with_config`/`hardware_with_config` are the programmatic entry points for a caller that
-already has a `Configuration` object (e.g. built with `Configuration.from_dict`) and wants to
-run a command without going through argv/`load_config` -- `_cmd_fetch`/`_cmd_hardware` are thin
-wrappers around them.
+`fetch_with_config`/`hardware_with_config`/`render_with_config` are the programmatic entry
+points for a caller that already has a `Configuration` object (e.g. built with
+`Configuration.from_dict`) and wants to run a command without going through argv/`load_config`
+-- `_cmd_fetch`/`_cmd_hardware`/`_cmd_render` are thin wrappers around them.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .config import ConfigError, Configuration, load_config
-from .contracts import HARDWARE_SCHEMA_VERSION, SchemaVersionError
+from .contracts import HARDWARE_SCHEMA_VERSION, HardwareSnapshot, SchemaVersionError
 from .fetch import run_fetch
 from .http import Transport, UrllibTransport
 from .llmfit import (
@@ -39,10 +41,12 @@ from .llmfit import (
     hardware_fields_from_llmfit_system,
 )
 from .ollama_local import fetch_installed_models
+from .render import RatingSource, build_document, parse_header_line
 from .state import (
     LockHeldError,
     StaleRunError,
     acquire_lock,
+    atomic_write_text,
     check_run_is_newer,
     load_existing_hardware_snapshot,
     load_existing_snapshot,
@@ -69,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     hardware_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
     hardware_parser.add_argument("--machine", required=True, help="This machine's name in [machines]")
 
+    render_parser = subparsers.add_parser(
+        "render", help="Render the current snapshot and every machine's hardware profile to Markdown."
+    )
+    render_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
+
     return parser
 
 
@@ -84,6 +93,8 @@ def main(
         return _cmd_fetch(args, transport, now)
     if args.command == "hardware":
         return _cmd_hardware(args, runner, transport, now)
+    if args.command == "render":
+        return _cmd_render(args, now)
     parser.error(f"unknown command: {args.command}")
     return 2  # pragma: no cover - argparse.error already exits
 
@@ -261,6 +272,101 @@ def hardware_with_config(
         f"{machine}: vram {snapshot.vram_gib:.2f} GiB, ram {snapshot.ram_gib:.2f} GiB, {installed_summary}"
     )
     return 0
+
+
+def _cmd_render(args: argparse.Namespace, now: datetime | None) -> int:
+    try:
+        config = load_config(args.config)
+    except SchemaVersionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    return render_with_config(config, now=now)
+
+
+def render_with_config(
+    config: Configuration, rating: RatingSource | None = None, now: datetime | None = None
+) -> int:
+    """Run `render` against an already-loaded `Configuration` -- see `fetch_with_config`.
+
+    A pure reader: acquires the same lock `fetch` uses (`modelroom/state.py::acquire_lock`),
+    reads the snapshot and every configured machine's hardware profile, and writes exactly one
+    Markdown file (`config.paths.markdown`) via `modelroom.render.build_document`. `rating` is a
+    `RatingSource` for the Package table's Stars column; `None` (the CLI's own default -- there
+    is no `--rating` flag) renders every Stars cell as `–` with no failure note.
+    """
+    rendered_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
+
+    # Same ordering as fetch_with_config (F13): the schema-version gate on the existing
+    # snapshot runs before the lock is taken -- an unsupported version exits 3 with nothing
+    # written, not even a lock file.
+    try:
+        load_existing_snapshot(config)
+    except SchemaVersionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+
+    try:
+        handle = acquire_lock(config.paths.lock_file, "render", rendered_at)
+    except LockHeldError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    try:
+        return _render_locked(config, rendered_at, rating)
+    finally:
+        release_lock(handle)
+
+
+def _render_locked(config: Configuration, rendered_at: datetime, rating: RatingSource | None) -> int:
+    try:
+        snapshot = load_existing_snapshot(config)
+    except SchemaVersionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    if snapshot is None:
+        print("nothing to render, run fetch first", file=sys.stderr)
+        return 1
+
+    try:
+        hardware_by_machine = _load_hardware_profiles(config)
+    except SchemaVersionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+
+    refusal = _refusal_against_existing_document(config.paths.markdown, snapshot.run_at)
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
+    document = build_document(config, snapshot, hardware_by_machine, rendered_at, rating)
+    atomic_write_text(config.paths.markdown, document)
+    return 0
+
+
+def _load_hardware_profiles(config: Configuration) -> dict[str, HardwareSnapshot | None]:
+    return {name: load_existing_hardware_snapshot(config, name) for name in config.machines}
+
+
+def _refusal_against_existing_document(markdown_path: Path, new_snapshot_run_at: datetime) -> str | None:
+    """`None` when `render` may write `markdown_path`, else the message to print and exit 1 with.
+
+    A missing file, or one whose first line is not the fixed header (`parse_header_line`
+    returns `None` either way), is never a reason to refuse -- only a header whose own
+    `snapshot_run_at` is strictly newer than the snapshot about to be rendered blocks the write.
+    """
+    if not markdown_path.exists():
+        return None
+    header = parse_header_line(markdown_path.read_text(encoding="utf-8"))
+    if header is None or header.snapshot_run_at <= new_snapshot_run_at:
+        return None
+    return (
+        f"{markdown_path}: already rendered from a newer snapshot "
+        f"({header.snapshot_run_at.isoformat()} > {new_snapshot_run_at.isoformat()}); nothing written"
+    )
 
 
 if __name__ == "__main__":

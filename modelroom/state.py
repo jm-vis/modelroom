@@ -218,7 +218,26 @@ def atomic_write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8", newline="\n")
+        os.replace(tmp_path, path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write `text` to `path` atomically: a `.tmp` file, then `os.replace`.
+
+    Same convention as `atomic_write_json` (used by `render` for `config.paths.markdown`,
+    which is not JSON): a failure at any point leaves no `.tmp` file behind and re-raises.
+    Both writers emit LF line endings on every platform (`newline="\n"`), so a file that
+    lands in a Git working tree on Windows is not rewritten with CRLF.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp_path.write_text(text, encoding="utf-8", newline="\n")
         os.replace(tmp_path, path)
     except Exception:
         if tmp_path.exists():
