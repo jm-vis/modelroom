@@ -1,0 +1,8 @@
+#!/bin/sh
+# Second gate right before push: the same public hygiene check over the working tree, so a
+# commit that slipped past pre-commit on another machine still cannot leave.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+uv run --frozen python tests/test_public_hygiene.py || {
+    echo "pre-push: public hygiene check failed, push refused" >&2
+    exit 1
+}

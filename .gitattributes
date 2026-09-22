@@ -1,0 +1,4 @@
+# Text files are stored and checked out with LF on every platform; the git hooks are shell scripts.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

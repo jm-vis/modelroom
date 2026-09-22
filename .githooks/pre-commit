@@ -1,0 +1,9 @@
+#!/bin/sh
+# Public-repo guard: refuses a commit if any tracked file carries operator-specific content
+# (machine paths, e-mail addresses, internal workspace vocabulary, key prefixes).
+# Enable once per clone: git config core.hooksPath .githooks
+cd "$(git rev-parse --show-toplevel)" || exit 1
+uv run --frozen python tests/test_public_hygiene.py || {
+    echo "pre-commit: public hygiene check failed, commit refused" >&2
+    exit 1
+}

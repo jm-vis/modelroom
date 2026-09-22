@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+
+# Local environment and secrets never enter the repository
+.env
+.env.*
+!.env.example
+
+# Generated artefacts
+_derived/
+_graph_code_modelroom/
+
+# Editor and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
