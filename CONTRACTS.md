@@ -793,15 +793,20 @@ O_CREAT)` -- never `O_EXCL`, since the file is meant to persist across runs and 
 and locks exactly one byte at offset 0 (`_LOCK_OFFSET`). On success it truncates the file to one
 byte past that (`_CONTENT_OFFSET`) and writes `{"pid": <int>, "command": <str>, "started_at":
 <ISO 8601 UTC>}` from that offset onward (no `token` any more -- there is nothing left to
-arbitrate). `LockHandle` is a small frozen dataclass (`path`, `fd`); the fd stays open for as
-long as the caller holds the lock, since the lock lives exactly as long as that fd does.
+arbitrate). If writing that content fails after the lock was won, the fd is unlocked and closed
+before the error propagates, so no lock is ever held without a handle to release it (fix-round
+4, Codex P2). `LockHandle` is a small dataclass (`path`, `fd`, `released`); the fd stays open for
+as long as the caller holds the lock, since the lock lives exactly as long as that fd does.
 `release_lock(handle)` truncates the file back to empty, releases the kernel lock, and closes the
-fd -- idempotent (a second release finds an already-closed fd; that one `OSError`, `errno.EBADF`,
-is swallowed, any other propagates). **The file itself is never deleted**, by either function; a
-fresh `acquire_lock` reuses it. On failure (`OSError`, including `BlockingIOError`)
-`LockHeldError` is raised, naming the current holder's pid/command/started_at when a read of the
-content succeeds and parses (it may still be empty or unparseable while the holder is mid-write,
-in which case the message says only that another process holds it).
+fd in a `finally`, so a failing truncate or unlock still closes it and the failure propagates.
+Idempotent through the handle's own `released` flag, never through the descriptor: once the fd is
+closed its number is reused by the next `os.open` in the process, so a second release must not
+touch the descriptor at all (fix-round 4, Codex P1; tested by opening another file right after
+the first release and releasing the stale handle again). **The file itself is never deleted**,
+by either function; a fresh `acquire_lock` reuses it. On failure (`OSError`, including
+`BlockingIOError`) `LockHeldError` is raised, naming the current holder's pid/command/started_at
+when a read of the content succeeds and parses (it may still be empty or unparseable while the
+holder is mid-write, in which case the message says only that another process holds it).
 
 **Why the lock byte is not part of the content.** The lock is one reserved byte at offset 0,
 never part of the JSON, which starts one byte later at `_CONTENT_OFFSET`. Windows locking is

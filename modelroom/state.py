@@ -6,7 +6,6 @@ inside this module) so tests control time exactly, per AGENTS.md's "no mocking" 
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import sys
@@ -58,13 +57,18 @@ class StaleRunError(Exception):
 # --- lock -------------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass
 class LockHandle:
     """An open, locked file descriptor. Keep it until `release_lock` -- the kernel lock lives
-    exactly as long as this fd stays open (`release_lock` closes it)."""
+    exactly as long as this fd stays open (`release_lock` closes it and sets `released`).
+
+    `released` is the handle's own state, not the OS's: once the fd is closed its number is
+    reused by the next `os.open` in this process, so a second release must never touch the
+    descriptor again (fix-round 4, Codex P1)."""
 
     path: Path
     fd: int
+    released: bool = False
 
 
 def acquire_lock(path: Path, command: str, now: datetime) -> LockHandle:
@@ -104,11 +108,22 @@ def acquire_lock(path: Path, command: str, now: datetime) -> LockHandle:
         os.close(fd)
         raise LockHeldError(_describe_holder(path)) from None
 
+    try:
+        _write_holder(fd, command, now)
+    except BaseException:
+        # fix-round 4 (Codex P2): a failure after winning the lock must not leave the fd open
+        # with the lock held -- nobody would ever get a handle to release it
+        _unlock_exclusive(fd)
+        os.close(fd)
+        raise
+    return LockHandle(path=path, fd=fd)
+
+
+def _write_holder(fd: int, command: str, now: datetime) -> None:
     content = json.dumps({"pid": os.getpid(), "command": command, "started_at": now.isoformat()})
     os.ftruncate(fd, _CONTENT_OFFSET)
     os.lseek(fd, _CONTENT_OFFSET, 0)
     os.write(fd, content.encode("utf-8"))
-    return LockHandle(path=path, fd=fd)
 
 
 def _lock_exclusive(fd: int) -> None:
@@ -174,18 +189,20 @@ def release_lock(handle: LockHandle) -> None:
     """Empty `handle`'s lock file, release the kernel lock, and close the fd.
 
     The file is never deleted -- it stays on disk, empty, ready for the next `acquire_lock`
-    (which grows it back to `_CONTENT_OFFSET` bytes itself, once it has the lock). Idempotent: a
-    second release of the same handle finds an already-closed fd, which raises `OSError` with
-    `errno.EBADF` from the first call -- exactly that one errno is swallowed, any other `OSError`
-    propagates.
+    (which grows it back to `_CONTENT_OFFSET` bytes itself, once it has the lock). Idempotent
+    through the handle's own `released` flag: a second release returns before touching the
+    descriptor at all, because its number may already belong to another file opened since
+    (fix-round 4, Codex P1). The fd is closed in `finally`, so a failing truncate or unlock still
+    closes it (closing releases the kernel lock too) and the failure propagates (Codex P2).
     """
+    if handle.released:
+        return
+    handle.released = True
     try:
         os.ftruncate(handle.fd, 0)
         _unlock_exclusive(handle.fd)
+    finally:
         os.close(handle.fd)
-    except OSError as exc:
-        if exc.errno != errno.EBADF:
-            raise
 
 
 # --- atomic writes ------------------------------------------------------------------------

@@ -164,6 +164,52 @@ def test_release_lock_is_idempotent(tmp_path: Path):
     release_lock(handle)  # must not raise
 
     assert lock_path.exists()
+    assert handle.released is True
+
+
+def test_second_release_never_touches_a_file_that_reused_the_descriptor_number(tmp_path: Path):
+    # Fix-round 4 (Codex P1): after `release_lock` closes the fd, the OS hands the same descriptor
+    # number to the next `os.open` in this process. A second release of the stale handle must not
+    # truncate, unlock or close that unrelated file -- it must be a no-op on the handle's own
+    # "released" state, never a descriptor operation.
+    lock_path = tmp_path / "modelroom.lock"
+    other_path = tmp_path / "other.json"
+    other_path.write_text('{"keep": "me"}', encoding="utf-8")
+
+    handle = acquire_lock(lock_path, "fetch", RUN1)
+    release_lock(handle)
+
+    other_fd = os.open(other_path, os.O_RDWR)
+    try:
+        assert other_fd == handle.fd  # the descriptor number was reused, so the trap is armed
+
+        release_lock(handle)
+
+        assert other_path.read_text(encoding="utf-8") == '{"keep": "me"}'
+        os.write(other_fd, b"")  # still open: a close by the stale release would raise EBADF here
+    finally:
+        os.close(other_fd)
+
+
+class _BrokenClock:
+    """A `now` whose `isoformat` fails -- the simplest way to make acquire_lock fail *after* it
+    already holds the kernel lock, without mocking anything in the module under test."""
+
+    def isoformat(self) -> str:
+        raise RuntimeError("clock broken")
+
+
+def test_acquire_lock_releases_the_kernel_lock_when_writing_the_holder_fails(tmp_path: Path):
+    # Fix-round 4 (Codex P2): a failure between winning the lock and returning the handle must
+    # not leave the fd open with the lock held -- otherwise every later acquire in this process
+    # (and every other process) would be blocked until this process exits.
+    lock_path = tmp_path / "modelroom.lock"
+
+    with pytest.raises(RuntimeError, match="clock broken"):
+        acquire_lock(lock_path, "fetch", _BrokenClock())  # type: ignore[arg-type]
+
+    handle = acquire_lock(lock_path, "fetch", RUN1)  # would raise LockHeldError if the fd leaked
+    release_lock(handle)
 
 
 def test_lock_is_released_after_an_exception_in_the_caller(tmp_path: Path):

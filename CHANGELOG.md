@@ -214,3 +214,10 @@ All notable changes to this project are documented in this file. The format foll
 
   Documented in `CONTRACTS.md` under "Lock file" (rewritten) and `_valid_parameters_b`'s own
   docstring in `modelroom/hf.py`.
+- Fix-round 4, two handle-management findings against the new lock:
+  - **P1** `release_lock` is idempotent through `LockHandle.released`, not by catching `EBADF`:
+    a closed descriptor's number is reused by the next `os.open`, so a second release of a stale
+    handle used to truncate, unlock and close whichever file had inherited that number.
+  - **P2** `acquire_lock` unlocks and closes the fd when writing the holder content fails after
+    the lock was won; `release_lock` closes the fd in `finally`. Previously such a failure left
+    the kernel lock held with no handle to release it until the process exited.
