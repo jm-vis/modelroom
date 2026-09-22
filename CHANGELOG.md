@@ -7,6 +7,28 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Hardware (AP4): the `modelroom hardware --config ... --machine ...` command
+  (`modelroom/cli.py`), the persisted per-machine hardware profile
+  (`<state>/hardware/<machine>.json`, `HardwareSnapshot`/`InstalledModel`/`Measurement` in
+  `modelroom/contracts.py`), a dependency-injected `llmfit` subprocess binding with a version
+  gate (`modelroom/llmfit.py`), the local Ollama daemon inventory
+  (`modelroom/ollama_local.py::fetch_installed_models`, `GET /api/tags`, never a command
+  failure when the daemon is unreachable), and the pure fit computation contract v1
+  (`modelroom/fit.py::compute_fit` -- weights/KV-cache sizing, GPU/RAM pool selection, the
+  perfect/good/marginal/too_tight thresholds, and the CPU cap). `hardware` only requires the
+  named machine to be configured, not a `writer`, and takes no lock (each machine writes only
+  its own file). New fixtures (`llmfit_system_laptop.json`, `llmfit_version.txt`,
+  `ollama_tags_local.json`, all recorded 2026-09-22) are documented in
+  `tests/fixtures/README.md`; the models, the llmfit/Ollama field mappings and "Fit contract
+  v1" (formula, thresholds, the exact "fit (computed, v1)" wording a renderer must use) are
+  documented in `CONTRACTS.md`. Covered by `tests/test_contracts.py` (new models),
+  `tests/test_llmfit.py`, `tests/test_ollama_local.py`, `tests/test_fit.py`,
+  `tests/test_state.py` (hardware snapshot path/load/write) and `tests/test_cli.py` (the
+  `hardware` verb end to end, including every exit-2/exit-3 path).
+- The validated `EXAMPLES` of every contract model moved from `modelroom/contracts.py` to
+  `modelroom/examples.py` (data next to the tests that use it; the contract module keeps the
+  models and rules, and stays under the repository's file-size guard).
+
 - Project scaffold: package metadata, MIT license, tool-neutral rules (`AGENTS.md`), contract
   discipline (`CONTRACTS.md`), documentation map, public hygiene test and git hooks that run it,
   single-source version test.

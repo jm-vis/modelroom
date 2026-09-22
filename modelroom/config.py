@@ -18,6 +18,7 @@ from .contracts import (
     SchemaVersionError,
     check_schema_version,
     validate_hf_repo,
+    validate_machine_name,
     validate_ollama_pair,
     validate_repo_aliases,
 )
@@ -28,7 +29,6 @@ CONFIG_SCHEMA_VERSION = 1
 CONFIG_SCHEMA_RANGE: tuple[int, int] = (1, 2)
 
 _FAMILY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
-_MACHINE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _MIN_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -203,8 +203,7 @@ class Configuration(BaseModel):
     @classmethod
     def _check_machine_names(cls, value: dict[str, MachineConfig]) -> dict[str, MachineConfig]:
         for name in value:
-            if not _MACHINE_NAME_RE.fullmatch(name):
-                raise ValueError(f"machine name must match '[a-z0-9][a-z0-9-]*': {name!r}")
+            validate_machine_name(name)
         return value
 
     @model_validator(mode="after")

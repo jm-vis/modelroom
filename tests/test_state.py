@@ -12,8 +12,18 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from modelroom.contracts import Architecture, Area, BaseModelSpec, Package, PackageFile, Snapshot
+from modelroom.contracts import (
+    Architecture,
+    Area,
+    BaseModelSpec,
+    HardwareSnapshot,
+    Package,
+    PackageFile,
+    SchemaVersionError,
+    Snapshot,
+)
 from modelroom.fetch_types import AreaOutcome
 from modelroom.state import (
     LockHeldError,
@@ -21,9 +31,12 @@ from modelroom.state import (
     acquire_lock,
     atomic_write_json,
     check_run_is_newer,
+    hardware_snapshot_path,
+    load_existing_hardware_snapshot,
     load_existing_snapshot,
     merge_snapshot,
     release_lock,
+    write_hardware_snapshot,
     write_run_status,
     write_snapshot,
 )
@@ -358,3 +371,93 @@ def test_write_run_status_lists_every_area_with_run_at_budget_and_candidates(tmp
     assert data["candidates"] == []
     assert len(data["areas"]) == 2
     assert {area["status"] for area in data["areas"]} == {"complete", "incomplete"}
+
+
+# --- hardware snapshot: path, load, write (AP4) --------------------------------------------
+
+
+def _config(tmp_path: Path):
+    from modelroom.config import Configuration
+
+    return Configuration.from_dict(
+        {
+            "schema_version": 1,
+            "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-7B", "repo_aliases": []}]}],
+            "packagers": ["packager"],
+            "publishers": ["acme"],
+            "machines": {"workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True}},
+            "paths": {"state": str(tmp_path), "markdown": str(tmp_path / "models.md")},
+        }
+    )
+
+
+def _hardware_snapshot_dict(**overrides) -> dict:
+    data = {
+        "schema_version": 1,
+        "machine": "workstation",
+        "measured_at": RUN1.isoformat(),
+        "llmfit_version": "1.1.16",
+        "vram_gib": 11.94,
+        "ram_gib": 127.46,
+        "free_ram_gib_at_measurement": 76.64,
+        "gpu_name": "Nova GPU",
+        "backend": "CUDA",
+        "unified_memory": False,
+        "installed": None,
+        "installed_unavailable_reason": "daemon unreachable",
+        "measurements": [],
+    }
+    data.update(overrides)
+    return data
+
+
+def test_hardware_snapshot_path_is_under_the_hardware_subdir(tmp_path: Path):
+    config = _config(tmp_path)
+    assert hardware_snapshot_path(config, "workstation") == config.paths.hardware_dir / "workstation.json"
+
+
+def test_load_existing_hardware_snapshot_returns_none_when_no_file_exists(tmp_path: Path):
+    config = _config(tmp_path)
+    assert load_existing_hardware_snapshot(config, "workstation") is None
+
+
+def test_write_hardware_snapshot_then_load_round_trips(tmp_path: Path):
+    config = _config(tmp_path)
+
+    written = write_hardware_snapshot(config, "workstation", _hardware_snapshot_dict())
+    loaded = load_existing_hardware_snapshot(config, "workstation")
+
+    assert isinstance(written, HardwareSnapshot)
+    assert loaded is not None
+    assert loaded.machine == "workstation"
+    assert loaded.vram_gib == 11.94
+    assert list(config.paths.hardware_dir.glob("*.tmp")) == []
+
+
+def test_write_hardware_snapshot_is_scoped_to_its_own_machine_file(tmp_path: Path):
+    config = _config(tmp_path)
+    write_hardware_snapshot(config, "workstation", _hardware_snapshot_dict())
+
+    assert load_existing_hardware_snapshot(config, "inference-server") is None
+    assert (config.paths.hardware_dir / "workstation.json").exists()
+    assert not (config.paths.hardware_dir / "inference-server.json").exists()
+
+
+def test_load_existing_hardware_snapshot_raises_schema_version_error(tmp_path: Path):
+    config = _config(tmp_path)
+    path = hardware_snapshot_path(config, "workstation")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
+
+    with pytest.raises(SchemaVersionError):
+        load_existing_hardware_snapshot(config, "workstation")
+
+
+def test_write_hardware_snapshot_validates_before_writing(tmp_path: Path):
+    config = _config(tmp_path)
+    bad = _hardware_snapshot_dict(ram_gib=-1.0)  # ram_gib must be > 0
+
+    with pytest.raises(ValidationError):
+        write_hardware_snapshot(config, "workstation", bad)
+
+    assert not hardware_snapshot_path(config, "workstation").exists()

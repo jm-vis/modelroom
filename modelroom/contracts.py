@@ -8,7 +8,7 @@ repeats `EXAMPLES` verbatim. See `CONTRACTS.md` for the rules these models follo
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -20,11 +20,17 @@ SNAPSHOT_SCHEMA_VERSION = 1
 # schema_version 1 for now.
 SNAPSHOT_SCHEMA_RANGE: tuple[int, int] = (1, 2)
 
+HARDWARE_SCHEMA_VERSION = 1
+# Own range, same half-open convention as SNAPSHOT_SCHEMA_RANGE -- a hardware profile and a
+# fetch snapshot version independently of each other.
+HARDWARE_SCHEMA_RANGE: tuple[int, int] = (1, 2)
+
 _HF_REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 _MANIFEST_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _APPROVAL_CONTENT_RE = re.compile(r"^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")
 _OLLAMA_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
+_MACHINE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # Qwen's own convention inserts an extra `-split` marker before the counter
 # (`Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00010.gguf`); the counter itself is otherwise
 # identical to every other packager's `-NNNNN-of-NNNNN` suffix.
@@ -79,6 +85,32 @@ def validate_ollama_pair(ollama_base: str | None, ollama_tag: str | None) -> Non
     """
     if (ollama_base is None) != (ollama_tag is None):
         raise ValueError("ollama_base and ollama_tag must both be set, or both be None")
+
+
+def validate_machine_name(value: str) -> str:
+    """Validate that `value` looks like a configured machine name (`^[a-z0-9][a-z0-9-]*$`).
+
+    Shared by `HardwareSnapshot.machine` (this module) and the keys of `Configuration.machines`
+    (`modelroom/config.py`) so a machine name means the same thing everywhere it appears.
+    """
+    if not _MACHINE_NAME_RE.fullmatch(value):
+        raise ValueError(f"machine name must match '[a-z0-9][a-z0-9-]*$': {value!r}")
+    return value
+
+
+def check_aware_utc(value: datetime, field_name: str) -> datetime:
+    """Validate that `value` is a timezone-aware datetime at UTC offset.
+
+    Every AP4 hardware/measurement timestamp uses this (`HardwareSnapshot.measured_at`,
+    `InstalledModel.observed_at`, `Measurement.profile_measured_at`/`measured_at`) -- a naive
+    datetime, or one at a non-UTC offset, is rejected rather than silently accepted and later
+    misread. Earlier snapshot/config datetimes did not need this check spelled out because
+    every producer already emitted UTC ISO-8601 with a `Z`/`+00:00` suffix; AP4 makes the rule
+    explicit and checked, rather than only conventional.
+    """
+    if value.tzinfo is None or value.utcoffset() != timedelta(0):
+        raise ValueError(f"{field_name} must be an aware UTC datetime: {value!r}")
+    return value
 
 
 def shards_complete(files: list["PackageFile"]) -> bool:
@@ -460,159 +492,194 @@ def load_snapshot(data: dict) -> Snapshot:
     return Snapshot.model_validate(data)
 
 
-EXAMPLES: dict[str, dict] = {
-    "Architecture": {
-        "source_repo": "acme/Nova-7B",
-        "source_revision": "1a2b3c4d5e6f7890abcdef1234567890abcdef12",
-        "kind": "dense_classic",
-        "num_hidden_layers": 32,
-        "num_key_value_heads": 8,
-        "head_dim": 128,
-        "layer_types": None,
-        "max_context": 131072,
-    },
-    "BaseModelSpec": {
-        "hf_repo": "acme/Nova-7B",
-        "repo_aliases": ["Nova-7B-Instruct-GGUF"],
-        "ollama_base": "nova",
-        "ollama_tag": "7b",
-        "publisher": "acme",
-        "parameters_b": 7.0,
-        "architecture": {
-            "source_repo": "acme/Nova-7B",
-            "source_revision": "1a2b3c4d5e6f7890abcdef1234567890abcdef12",
-            "kind": "dense_classic",
-            "num_hidden_layers": 32,
-            "num_key_value_heads": 8,
-            "head_dim": 128,
-            "layer_types": None,
-            "max_context": 131072,
-        },
-    },
-    "Family": {
-        "name": "nova",
-        "base_models": [
-            {
-                "hf_repo": "acme/Nova-7B",
-                "repo_aliases": ["Nova-7B-Instruct-GGUF"],
-                "ollama_base": "nova",
-                "ollama_tag": "7b",
-                "publisher": "acme",
-                "parameters_b": 7.0,
-                "architecture": {
-                    "source_repo": "acme/Nova-7B",
-                    "source_revision": "1a2b3c4d5e6f7890abcdef1234567890abcdef12",
-                    "kind": "dense_classic",
-                    "num_hidden_layers": 32,
-                    "num_key_value_heads": 8,
-                    "head_dim": 128,
-                    "layer_types": None,
-                    "max_context": 131072,
-                },
-            }
-        ],
-    },
-    "PackageFile": {
-        "name": "Nova-7B-Q4_K_M.gguf",
-        "role": "weights",
-        "size_bytes": 4500000000,
-        "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd",
-    },
-    "Approval": {
-        "date": "2026-09-01",
-        "content": "1a2b3c4d5e6f7890abcdef1234567890abcdef12",
-        "by": "acme-ai-team",
-    },
-    "Package": {
-        "source": "huggingface",
-        "repo": "packager/Nova-7B-GGUF",
-        "revision": "9f8e7d6c5b4a3928170615243342516078960a1b",
-        "base_model_hf_repo": "acme/Nova-7B",
-        "format": "gguf",
-        "files": [
-            {
-                "name": "Nova-7B-Q4_K_M.gguf",
-                "role": "weights",
-                "size_bytes": 4500000000,
-                "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd",
-            }
-        ],
-        "complete": True,
-        "quantization": "Q4_K_M",
-        "default_context": None,
-        "provenance": "metadata_ok",
-        "unresolved_reason": None,
-        "approval": None,
-        "observed_at": "2026-09-22T09:00:00Z",
-        "last_seen": "2026-09-22T09:00:00Z",
-        "active": True,
-    },
-    "Area": {
-        "source": "huggingface",
-        "base_model_hf_repo": "acme/Nova-7B",
-        "packager": "packager",
-        "status": "complete",
-        "last_success": "2026-09-22T09:00:00Z",
-        "error": None,
-    },
-    "Snapshot": {
-        "schema_version": 1,
-        "run_at": "2026-09-22T09:00:00Z",
-        "areas": [
-            {
-                "source": "huggingface",
-                "base_model_hf_repo": "acme/Nova-7B",
-                "packager": "packager",
-                "status": "complete",
-                "last_success": "2026-09-22T09:00:00Z",
-                "error": None,
-            }
-        ],
-        "base_models": [
-            {
-                "hf_repo": "acme/Nova-7B",
-                "repo_aliases": ["Nova-7B-Instruct-GGUF"],
-                "ollama_base": "nova",
-                "ollama_tag": "7b",
-                "publisher": "acme",
-                "parameters_b": 7.0,
-                "architecture": {
-                    "source_repo": "acme/Nova-7B",
-                    "source_revision": "1a2b3c4d5e6f7890abcdef1234567890abcdef12",
-                    "kind": "dense_classic",
-                    "num_hidden_layers": 32,
-                    "num_key_value_heads": 8,
-                    "head_dim": 128,
-                    "layer_types": None,
-                    "max_context": 131072,
-                },
-            }
-        ],
-        "packages": [
-            {
-                "source": "huggingface",
-                "repo": "packager/Nova-7B-GGUF",
-                "revision": "9f8e7d6c5b4a3928170615243342516078960a1b",
-                "base_model_hf_repo": "acme/Nova-7B",
-                "format": "gguf",
-                "files": [
-                    {
-                        "name": "Nova-7B-Q4_K_M.gguf",
-                        "role": "weights",
-                        "size_bytes": 4500000000,
-                        "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd",
-                    }
-                ],
-                "complete": True,
-                "quantization": "Q4_K_M",
-                "default_context": None,
-                "provenance": "metadata_ok",
-                "unresolved_reason": None,
-                "approval": None,
-                "observed_at": "2026-09-22T09:00:00Z",
-                "last_seen": "2026-09-22T09:00:00Z",
-                "active": True,
-            }
-        ],
-    },
-}
+# --- hardware profile (AP4) -----------------------------------------------------------------
+
+
+class InstalledModel(BaseModel):
+    """One model the local Ollama daemon reports installed, as `modelroom/ollama_local.py` saw it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    digest: str
+    size_bytes: int = Field(ge=0)
+    observed_at: datetime
+
+    @field_validator("digest")
+    @classmethod
+    def _check_digest(cls, value: str) -> str:
+        if not _MANIFEST_DIGEST_RE.fullmatch(value):
+            raise ValueError(f"digest must be 'sha256:' plus 64 hex characters: {value!r}")
+        return value
+
+    @field_validator("observed_at")
+    @classmethod
+    def _check_observed_at(cls, value: datetime) -> datetime:
+        return check_aware_utc(value, "observed_at")
+
+
+class Measurement(BaseModel):
+    """One recorded `bench` result, bound to the exact package content and hardware profile it measured.
+
+    `content_source` discriminates which of the two field groups below is populated, exactly
+    the pattern `Package.source` already uses for `repo`/`revision` vs.
+    `ollama_name`/`manifest_digest`. The alternative the brief allowed -- one polymorphic
+    `content` field holding either a bare digest string or a `{repo, revision, file_digest}`
+    object -- was not chosen, so that this model stays the same shape as every other
+    coupled-field model in this file. `profile_measured_at` is not cross-checked against a
+    `HardwareSnapshot.measured_at` here: AP4 only defines and validates `Measurement`, the
+    renderer (a later work package) is what refuses a measurement whose profile does not match
+    the snapshot it is being read alongside (see CONTRACTS.md, "Fit contract v1").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    content_source: Literal["ollama", "huggingface"]
+    ollama_manifest_digest: str | None = None
+    hf_repo: str | None = None
+    hf_revision: str | None = None
+    hf_file_digest: str | None = None
+    context: int = Field(gt=0)
+    runtime: str
+    profile_measured_at: datetime
+    measured_at: datetime
+    tps_mean: float = Field(gt=0)
+    tps_range: tuple[float, float]
+
+    @field_validator("profile_measured_at")
+    @classmethod
+    def _check_profile_measured_at(cls, value: datetime) -> datetime:
+        return check_aware_utc(value, "profile_measured_at")
+
+    @field_validator("measured_at")
+    @classmethod
+    def _check_measured_at(cls, value: datetime) -> datetime:
+        return check_aware_utc(value, "measured_at")
+
+    @model_validator(mode="after")
+    def _check_content_fields(self) -> "Measurement":
+        hf_fields = (self.hf_repo, self.hf_revision, self.hf_file_digest)
+        if self.content_source == "ollama":
+            if self.ollama_manifest_digest is None or any(f is not None for f in hf_fields):
+                raise ValueError(
+                    "content_source 'ollama' requires ollama_manifest_digest and no hf_* fields"
+                )
+            if not _MANIFEST_DIGEST_RE.fullmatch(self.ollama_manifest_digest):
+                raise ValueError(
+                    f"ollama_manifest_digest must be 'sha256:' plus 64 hex characters: "
+                    f"{self.ollama_manifest_digest!r}"
+                )
+        else:
+            if self.ollama_manifest_digest is not None or any(f is None for f in hf_fields):
+                raise ValueError(
+                    "content_source 'huggingface' requires hf_repo, hf_revision and "
+                    "hf_file_digest, and no ollama_manifest_digest"
+                )
+            if not _HF_REPO_RE.fullmatch(self.hf_repo):
+                raise ValueError(f"hf_repo must look like 'owner/name': {self.hf_repo!r}")
+            if not _SHA1_RE.fullmatch(self.hf_revision):
+                raise ValueError(f"hf_revision must be a 40-hex commit sha: {self.hf_revision!r}")
+            if not _MANIFEST_DIGEST_RE.fullmatch(self.hf_file_digest):
+                raise ValueError(
+                    f"hf_file_digest must be 'sha256:' plus 64 hex characters: {self.hf_file_digest!r}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_tps_range(self) -> "Measurement":
+        low, high = self.tps_range
+        if low > high:
+            raise ValueError(f"tps_range low must be <= high: {self.tps_range!r}")
+        return self
+
+
+class HardwareSnapshot(BaseModel):
+    """One machine's measured hardware, as `hardware` wrote it to `<state>/hardware/<machine>.json`.
+
+    Reserved headroom (`reserve_ram_gib`/`reserve_vram_gib`) is deliberately not a field here:
+    it is operator policy chosen once per machine, not a measured fact, and it can change
+    without a new hardware measurement -- it lives in the configuration's `machines.<name>`
+    (`config.MachineConfig`) instead, and `modelroom/fit.py::compute_fit` takes both a
+    `HardwareSnapshot` and a `MachineConfig` as separate parameters rather than merging them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int
+    machine: str
+    measured_at: datetime
+    llmfit_version: str
+    vram_gib: float = Field(ge=0)
+    ram_gib: float = Field(gt=0)
+    free_ram_gib_at_measurement: float | None = Field(default=None, ge=0)
+    gpu_name: str | None = None
+    backend: str | None = None
+    unified_memory: bool
+    installed: list[InstalledModel] | None = None
+    installed_unavailable_reason: str | None = None
+    measurements: list[Measurement] = Field(default_factory=list)
+
+    @field_validator("machine")
+    @classmethod
+    def _check_machine(cls, value: str) -> str:
+        return validate_machine_name(value)
+
+    @field_validator("measured_at")
+    @classmethod
+    def _check_measured_at(cls, value: datetime) -> datetime:
+        return check_aware_utc(value, "measured_at")
+
+    @model_validator(mode="after")
+    def _check_schema_version(self) -> "HardwareSnapshot":
+        if self.schema_version != HARDWARE_SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version must be {HARDWARE_SCHEMA_VERSION}, got {self.schema_version}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_installed_xor_reason(self) -> "HardwareSnapshot":
+        if self.installed is not None:
+            if self.installed_unavailable_reason is not None:
+                raise ValueError("installed_unavailable_reason must be None when installed is a list")
+        elif not self.installed_unavailable_reason:
+            raise ValueError("installed_unavailable_reason is required when installed is None")
+        return self
+
+
+def load_hardware_snapshot(data: dict) -> HardwareSnapshot:
+    """Validate `schema_version` before field validation, then build a `HardwareSnapshot`.
+
+    Same convention as `load_snapshot`: raises `SchemaVersionError` -- for a missing,
+    non-integer, or out-of-range `schema_version` -- before Pydantic ever sees the payload.
+    """
+    version = data.get("schema_version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise SchemaVersionError(
+            f"hardware snapshot: schema_version is missing or not an integer: {version!r}"
+        )
+    check_schema_version(version, HARDWARE_SCHEMA_RANGE, "hardware snapshot")
+    return HardwareSnapshot.model_validate(data)
+
+
+class Fit(BaseModel):
+    """Whether one GGUF package fits one measured machine (fit contract v1).
+
+    Computed by `modelroom/fit.py::compute_fit`, never persisted by AP4 -- a later renderer
+    (AP5) calls it fresh against the current snapshot and hardware profile every time it
+    renders, and always labels the result "fit (computed, v1)", never "runs" (CONTRACTS.md,
+    "Fit contract v1").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    fit_class: Literal["perfect", "good", "marginal", "too_tight", "unknown"]
+    mode: Literal["gpu", "cpu_gpu", "cpu"] | None
+    need_gib: float = Field(ge=0)
+    weights_gib: float = Field(ge=0)
+    kv_gib: float = Field(ge=0)
+    pool_gib: float
+    reserve_gib: float = Field(ge=0)
+    context: int = Field(ge=0)
+    context_assumed: bool
+    reason: str | None

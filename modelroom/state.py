@@ -12,7 +12,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import Configuration
-from .contracts import Area, BaseModelSpec, Package, Snapshot, SNAPSHOT_SCHEMA_VERSION, load_snapshot
+from .contracts import (
+    Area,
+    BaseModelSpec,
+    HardwareSnapshot,
+    Package,
+    Snapshot,
+    SNAPSHOT_SCHEMA_VERSION,
+    load_hardware_snapshot,
+    load_snapshot,
+)
 from .fetch_types import AreaOutcome
 from .quantization import package_identity_key
 
@@ -137,6 +146,41 @@ def write_run_status(config: Configuration, snapshot: Snapshot, request_used: in
         "candidates": [],
     }
     atomic_write_json(config.paths.run_status_file, data)
+
+
+# --- hardware profile (AP4) ----------------------------------------------------------------
+#
+# No lock guards these functions: unlike the snapshot (one shared file every writer machine's
+# `fetch` merges into), each machine's hardware profile is a file only that machine ever
+# writes (`<state>/hardware/<machine>.json`), so there is nothing to serialize against another
+# process (CONTRACTS.md, "Hardware profile (AP4)").
+
+
+def hardware_snapshot_path(config: Configuration, machine: str) -> Path:
+    return config.paths.hardware_dir / f"{machine}.json"
+
+
+def load_existing_hardware_snapshot(config: Configuration, machine: str) -> HardwareSnapshot | None:
+    """The current hardware profile for `machine`, or `None` if `hardware` never ran there.
+
+    `SchemaVersionError` propagates unchanged, exactly like `load_existing_snapshot` -- the CLI
+    maps it to exit code 3.
+    """
+    path = hardware_snapshot_path(config, machine)
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return load_hardware_snapshot(data)
+
+
+def write_hardware_snapshot(config: Configuration, machine: str, data: dict) -> HardwareSnapshot:
+    """Validate `data` as a `HardwareSnapshot`, then atomically replace this machine's file.
+
+    Validation happens before any file is touched, same convention as `write_snapshot`.
+    """
+    snapshot = load_hardware_snapshot(data)
+    atomic_write_json(hardware_snapshot_path(config, machine), snapshot.model_dump(mode="json"))
+    return snapshot
 
 
 # --- version rule -------------------------------------------------------------------------

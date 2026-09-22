@@ -15,12 +15,13 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from modelroom.cli import fetch_with_config, main
+from modelroom.cli import fetch_with_config, hardware_with_config, main
 from modelroom.config import Configuration
-from modelroom.contracts import load_snapshot
-from modelroom.http import Response
+from modelroom.contracts import load_hardware_snapshot, load_snapshot
+from modelroom.http import FixtureTransport, Response
+from modelroom.llmfit import FixtureRunner
 
-from fixture_support import build_transport, qwen35_example_config_dict, qwen35_transport_mapping
+from fixture_support import FIXTURES, build_transport, json_response, qwen35_example_config_dict, qwen35_transport_mapping
 
 RUN1 = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
 RUN2 = datetime(2026, 9, 22, 10, 0, 0, tzinfo=timezone.utc)
@@ -65,6 +66,26 @@ def _to_toml(data: dict) -> str:
 
 def _transport():
     return build_transport(qwen35_transport_mapping())
+
+
+def _llmfit_runner(version_stdout: str = "llmfit 1.1.16\n", system_stdout: str | None = None) -> FixtureRunner:
+    if system_stdout is None:
+        system_stdout = (FIXTURES / "llmfit_system_laptop.json").read_text(encoding="utf-8")
+    return FixtureRunner(
+        {
+            ("llmfit", "--version"): subprocess.CompletedProcess(["llmfit", "--version"], 0, stdout=version_stdout, stderr=""),
+            ("llmfit", "system", "--json"): subprocess.CompletedProcess(
+                ["llmfit", "system", "--json"], 0, stdout=system_stdout, stderr=""
+            ),
+        }
+    )
+
+
+def _ollama_transport(status: int = 200) -> FixtureTransport:
+    url = "http://127.0.0.1:11434/api/tags"
+    if status == 200:
+        return FixtureTransport({("GET", url): json_response("ollama_tags_local.json")})
+    return FixtureTransport({("GET", url): Response(status=status, headers={}, body=b"error")})
 
 
 # --- configuration / writer errors --------------------------------------------------------
@@ -225,3 +246,210 @@ def test_fetch_with_config_defaults_to_the_real_transport_and_clock(tmp_path: Pa
     config = Configuration.from_dict(data)
 
     assert fetch_with_config(config, "laptop") == 2
+
+
+# --- hardware: configuration / machine errors -----------------------------------------------
+
+
+def test_hardware_missing_config_file_is_exit_2(tmp_path: Path):
+    code = main(["hardware", "--config", str(tmp_path / "missing.toml"), "--machine", "workstation"])
+    assert code == 2
+
+
+def test_hardware_unknown_machine_is_exit_2(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "no-such-machine"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+    assert code == 2
+
+
+def test_hardware_does_not_require_a_writer_machine(tmp_path: Path):
+    # Unlike fetch, hardware only requires the machine to be configured, not a writer -- it is
+    # measured on every machine (CONTRACTS.md).
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    data["machines"]["inference-server"] = {"reserve_ram_gib": 16.0, "reserve_vram_gib": 2.0, "writer": False}
+    config_path = tmp_path / "modelroom.toml"
+    config_path.write_text(_to_toml(data), encoding="utf-8")
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "inference-server"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+    assert code == 0
+
+
+# --- hardware: llmfit gate ------------------------------------------------------------------
+
+
+def test_hardware_llmfit_missing_is_exit_2(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+
+    def _missing_runner(args):
+        raise FileNotFoundError("llmfit not found")
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_missing_runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+    assert code == 2
+
+
+def test_hardware_llmfit_too_old_is_exit_2(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    runner = _llmfit_runner(version_stdout="llmfit 1.0.0\n")
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+    assert code == 2
+
+
+# --- hardware: schema-3 path ------------------------------------------------------------
+
+
+def test_hardware_existing_snapshot_with_unsupported_schema_version_is_exit_3(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    (hardware_dir / "workstation.json").write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+    assert code == 3
+
+
+# --- hardware: end-to-end against the fixture runner/transport ------------------------------
+
+
+def test_hardware_end_to_end_exit_0_writes_a_valid_hardware_snapshot(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 0
+    path = tmp_path / "state" / "hardware" / "workstation.json"
+    loaded = load_hardware_snapshot(json.loads(path.read_text(encoding="utf-8")))
+    assert loaded.machine == "workstation"
+    assert loaded.measured_at == RUN1
+    assert loaded.llmfit_version == "1.1.16"
+    assert loaded.vram_gib == 11.94
+    assert loaded.ram_gib == 127.46
+    assert loaded.installed is not None
+    assert len(loaded.installed) == 3
+    assert loaded.installed_unavailable_reason is None
+    assert not list((tmp_path / "state" / "hardware").glob("*.tmp"))
+
+    out = capsys.readouterr().out
+    assert "workstation" in out
+    assert "installed: 3" in out
+
+
+def test_hardware_end_to_end_ollama_daemon_unreachable_is_still_exit_0(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(status=500),
+        now=RUN1,
+    )
+
+    assert code == 0
+    path = tmp_path / "state" / "hardware" / "workstation.json"
+    loaded = load_hardware_snapshot(json.loads(path.read_text(encoding="utf-8")))
+    assert loaded.installed is None
+    assert loaded.installed_unavailable_reason is not None
+
+    out = capsys.readouterr().out
+    assert "installed: unknown" in out
+
+
+def test_hardware_preserves_measurements_from_an_existing_snapshot(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    existing = {
+        "schema_version": 1,
+        "machine": "workstation",
+        "measured_at": RUN1.isoformat(),
+        "llmfit_version": "1.1.16",
+        "vram_gib": 11.94,
+        "ram_gib": 127.46,
+        "free_ram_gib_at_measurement": 76.64,
+        "gpu_name": "Nova GPU",
+        "backend": "CUDA",
+        "unified_memory": False,
+        "installed": None,
+        "installed_unavailable_reason": "not queried yet",
+        "measurements": [
+            {
+                "content_source": "ollama",
+                "ollama_manifest_digest": "sha256:" + "ab" * 32,
+                "hf_repo": None,
+                "hf_revision": None,
+                "hf_file_digest": None,
+                "context": 8192,
+                "runtime": "ollama 0.12.3",
+                "profile_measured_at": RUN1.isoformat(),
+                "measured_at": RUN1.isoformat(),
+                "tps_mean": 42.5,
+                "tps_range": [40.0, 45.0],
+            }
+        ],
+    }
+    (hardware_dir / "workstation.json").write_text(json.dumps(existing), encoding="utf-8")
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN2,
+    )
+
+    assert code == 0
+    loaded = load_hardware_snapshot(json.loads((hardware_dir / "workstation.json").read_text(encoding="utf-8")))
+    assert loaded.measured_at == RUN2
+    assert len(loaded.measurements) == 1
+    assert loaded.measurements[0].ollama_manifest_digest == "sha256:" + "ab" * 32
+
+
+# --- hardware_with_config: the programmatic entry point for an in-memory Configuration -----
+
+
+def test_hardware_with_config_runs_end_to_end_from_an_in_memory_configuration(tmp_path: Path):
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    config = Configuration.from_dict(data)
+
+    code = hardware_with_config(config, "workstation", runner=_llmfit_runner(), transport=_ollama_transport(), now=RUN1)
+
+    assert code == 0
+    assert (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
+def test_hardware_with_config_unknown_machine_is_exit_2(tmp_path: Path):
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    config = Configuration.from_dict(data)
+
+    code = hardware_with_config(config, "no-such-machine", runner=_llmfit_runner(), transport=_ollama_transport(), now=RUN1)
+
+    assert code == 2

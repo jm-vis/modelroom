@@ -82,3 +82,27 @@ raw body file assumed to be a `200` with no headers of interest
   case, page 1 carrying a `Link: <...>; rel="next"` header to page 2 and page 2 carrying none,
   so `modelroom/hf.py`'s tree fetch is tested against the real pagination mechanism even
   though the specific file list is invented.
+
+## Hardware (AP4)
+
+Both real commands here were run on the same reference laptop, 2026-09-22.
+
+- `llmfit_system_laptop.json` -- real, recorded 2026-09-22, `llmfit system --json` (llmfit
+  1.1.16). `system.gpu_vram_gb` `11.94`, `system.total_ram_gb` `127.46` for a physical 128 GB
+  machine (llmfit's own `_gb` fields are already GiB, division by `1024**3` in its source --
+  taken unchanged into `HardwareSnapshot.vram_gib`/`ram_gib`, see CONTRACTS.md "Local llmfit
+  binding"). Used whole, untrimmed, by `tests/test_llmfit.py` and `tests/test_cli.py`.
+- `llmfit_version.txt` -- real, recorded 2026-09-22, `llmfit --version` (`llmfit 1.1.16\n`).
+  Small enough to keep as the literal recorded stdout rather than only a hardcoded string in
+  test code.
+- `ollama_tags_local.json` -- real, recorded 2026-09-22, `GET
+  http://127.0.0.1:11434/api/tags` against the local Ollama daemon, **trimmed** from 19
+  installed models down to 3 (two `unsloth`/`hf.co` GGUF pulls and one library model,
+  `granite4.2:8b`) to keep the fixture small; the trimmed-out entries were plain duplicates of
+  the same shape, nothing behaviourally distinct was cut. One field was also redacted: the
+  `granite4.2:8b` entry's real `details.parent_model` pointed at a build machine's local
+  filesystem path and was blanked to `""` -- `parent_model` is not read by
+  `modelroom/ollama_local.py` at all, only `name`/`digest`/`size` are, so the redaction
+  changes nothing the fetcher or its tests depend on. Every entry's `digest` is the daemon's
+  **bare hex, with no `sha256:` prefix** (measured 2026-09-22) -- `fetch_installed_models`
+  normalizes it before building `InstalledModel` (CONTRACTS.md, "Local Ollama inventory").

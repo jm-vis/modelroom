@@ -1,0 +1,39 @@
+{
+  "providers": {
+    "llama.cpp": {
+      "available": false,
+      "detection_hint": "not in PATH, set LLAMA_CPP_PATH",
+      "llama_cli_path": null,
+      "llama_server_path": null,
+      "server_running": false
+    }
+  },
+  "system": {
+    "available_ram_gb": 76.64,
+    "backend": "CUDA",
+    "cpu_cores": 14,
+    "cpu_name": "Intel(R) Core(TM) Ultra 5 245HX",
+    "gpu_count": 2,
+    "gpu_name": "NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU",
+    "gpu_vram_gb": 11.94,
+    "gpus": [
+      {
+        "backend": "CUDA",
+        "count": 1,
+        "name": "NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU",
+        "unified_memory": false,
+        "vram_gb": 11.94
+      },
+      {
+        "backend": "SYCL",
+        "count": 1,
+        "name": "Intel(R) Graphics",
+        "unified_memory": false,
+        "vram_gb": 2.0
+      }
+    ],
+    "has_gpu": true,
+    "total_ram_gb": 127.46,
+    "unified_memory": false
+  }
+}

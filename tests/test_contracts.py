@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from modelroom.examples import EXAMPLES
 from modelroom.contracts import (
-    EXAMPLES,
+    HARDWARE_SCHEMA_RANGE,
+    HARDWARE_SCHEMA_VERSION,
     SNAPSHOT_SCHEMA_RANGE,
     SNAPSHOT_SCHEMA_VERSION,
     Approval,
@@ -19,12 +21,17 @@ from modelroom.contracts import (
     Area,
     BaseModelSpec,
     Family,
+    Fit,
+    HardwareSnapshot,
+    InstalledModel,
+    Measurement,
     Package,
     PackageFile,
     SchemaVersionError,
     Snapshot,
     architecture_from_hf_config,
     check_schema_version,
+    load_hardware_snapshot,
     load_snapshot,
     shards_complete,
 )
@@ -41,6 +48,10 @@ MODEL_CLASSES = {
     "Package": Package,
     "Area": Area,
     "Snapshot": Snapshot,
+    "InstalledModel": InstalledModel,
+    "Measurement": Measurement,
+    "HardwareSnapshot": HardwareSnapshot,
+    "Fit": Fit,
 }
 
 _NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
@@ -606,3 +617,136 @@ def test_any_moe_field_present_signals_moe_even_with_a_count_of_one():
 def test_dense_config_without_any_moe_field_stays_dense():
     config = {"num_hidden_layers": 32, "num_key_value_heads": 8, "head_dim": 128}
     assert architecture_from_hf_config("acme/Nova-7B", None, config).kind == "dense_classic"
+
+
+# --- InstalledModel: digest format, aware-UTC observed_at ---------------------------------
+
+
+def test_installed_model_rejects_a_bare_hex_digest_without_sha256_prefix():
+    payload = dict(EXAMPLES["InstalledModel"])
+    payload["digest"] = "ab" * 32  # the Ollama daemon's own /api/tags shape -- must be rejected raw
+    with pytest.raises(ValidationError):
+        InstalledModel.model_validate(payload)
+
+
+def test_installed_model_rejects_a_naive_observed_at():
+    payload = dict(EXAMPLES["InstalledModel"])
+    payload["observed_at"] = datetime(2026, 9, 22, 9, 0, 0)  # no tzinfo
+    with pytest.raises(ValidationError):
+        InstalledModel.model_validate(payload)
+
+
+# --- Measurement: content_source-coupled fields, tps_range --------------------------------
+
+
+def test_measurement_ollama_content_rejects_a_stray_hf_field():
+    payload = dict(EXAMPLES["Measurement"])
+    payload["hf_repo"] = "acme/Nova-7B"
+    with pytest.raises(ValidationError):
+        Measurement.model_validate(payload)
+
+
+def test_measurement_huggingface_content_requires_all_three_hf_fields():
+    payload = dict(EXAMPLES["Measurement"])
+    payload["content_source"] = "huggingface"
+    payload["ollama_manifest_digest"] = None
+    payload["hf_repo"] = "acme/Nova-7B"
+    payload["hf_revision"] = "1a2b3c4d5e6f7890abcdef1234567890abcdef12"
+    # hf_file_digest deliberately left at None
+    with pytest.raises(ValidationError):
+        Measurement.model_validate(payload)
+
+
+def test_measurement_huggingface_content_validates_with_all_three_hf_fields():
+    payload = dict(EXAMPLES["Measurement"])
+    payload["content_source"] = "huggingface"
+    payload["ollama_manifest_digest"] = None
+    payload["hf_repo"] = "acme/Nova-7B"
+    payload["hf_revision"] = "1a2b3c4d5e6f7890abcdef1234567890abcdef12"
+    payload["hf_file_digest"] = "sha256:" + "cd" * 32
+    Measurement.model_validate(payload)
+
+
+def test_measurement_rejects_a_tps_range_with_low_above_high():
+    payload = dict(EXAMPLES["Measurement"])
+    payload["tps_range"] = [45.0, 40.0]
+    with pytest.raises(ValidationError):
+        Measurement.model_validate(payload)
+
+
+def test_measurement_rejects_a_naive_measured_at():
+    payload = dict(EXAMPLES["Measurement"])
+    payload["measured_at"] = "2026-09-22T09:05:00"  # no offset
+    with pytest.raises(ValidationError):
+        Measurement.model_validate(payload)
+
+
+# --- HardwareSnapshot: schema version, machine name reuse, installed/reason XOR -----------
+
+
+def test_hardware_snapshot_rejects_unsupported_schema_version():
+    payload = dict(EXAMPLES["HardwareSnapshot"])
+    payload["schema_version"] = 2
+    with pytest.raises(ValidationError):
+        HardwareSnapshot.model_validate(payload)
+
+
+def test_hardware_snapshot_rejects_a_bad_machine_name():
+    payload = dict(EXAMPLES["HardwareSnapshot"])
+    payload["machine"] = "Bad Name"
+    with pytest.raises(ValidationError):
+        HardwareSnapshot.model_validate(payload)
+
+
+def test_hardware_snapshot_rejects_installed_and_reason_both_set():
+    payload = dict(EXAMPLES["HardwareSnapshot"])
+    payload["installed_unavailable_reason"] = "daemon unreachable"
+    with pytest.raises(ValidationError):
+        HardwareSnapshot.model_validate(payload)
+
+
+def test_hardware_snapshot_rejects_neither_installed_nor_reason():
+    payload = dict(EXAMPLES["HardwareSnapshot"])
+    payload["installed"] = None
+    payload["installed_unavailable_reason"] = None
+    with pytest.raises(ValidationError):
+        HardwareSnapshot.model_validate(payload)
+
+
+def test_hardware_snapshot_accepts_installed_none_with_a_reason():
+    payload = dict(EXAMPLES["HardwareSnapshot"])
+    payload["installed"] = None
+    payload["installed_unavailable_reason"] = "daemon unreachable"
+    HardwareSnapshot.model_validate(payload)
+
+
+def test_hardware_snapshot_rejects_a_naive_measured_at():
+    payload = dict(EXAMPLES["HardwareSnapshot"])
+    payload["measured_at"] = "2026-09-22T09:00:00"  # no offset
+    with pytest.raises(ValidationError):
+        HardwareSnapshot.model_validate(payload)
+
+
+def test_load_hardware_snapshot_rejects_unsupported_schema_version():
+    payload = dict(EXAMPLES["HardwareSnapshot"])
+    payload["schema_version"] = 99
+    with pytest.raises(SchemaVersionError):
+        load_hardware_snapshot(payload)
+
+
+def test_load_hardware_snapshot_accepts_the_example():
+    load_hardware_snapshot(EXAMPLES["HardwareSnapshot"])
+
+
+# --- Fit: extra=forbid, no schema_version (never persisted) --------------------------------
+
+
+def test_fit_example_has_no_schema_version_field():
+    assert "schema_version" not in EXAMPLES["Fit"]
+
+
+def test_fit_rejects_an_extra_field():
+    payload = dict(EXAMPLES["Fit"])
+    payload["extra_field"] = "nope"
+    with pytest.raises(ValidationError):
+        Fit.model_validate(payload)

@@ -69,7 +69,7 @@ it is the tag part of `ollama_name` after the colon.
 
 ## Models
 
-Every example below is `EXAMPLES["<ModelName>"]` from `modelroom/contracts.py`, verbatim; a
+Every example below is `EXAMPLES["<ModelName>"]` from `modelroom/examples.py`, verbatim; a
 contract test parses this file for `### <ModelName>` headings and their `json` blocks and
 checks both directions: every model in the module is documented here, and every heading here
 names a real model with a matching example.
@@ -393,6 +393,170 @@ filename-or-tag)` must be unique across `packages`.
 }
 ```
 
+### InstalledModel
+
+One model the local Ollama daemon reports as installed, as `modelroom/ollama_local.py` read it
+from `GET http://127.0.0.1:11434/api/tags`. That endpoint returns the digest as bare hex, with
+no `sha256:` prefix; the fetcher normalizes it before building this model (CONTRACTS.md,
+"Local Ollama inventory" below).
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `name` | `str` | -- | the model name as the Ollama daemon lists it |
+| `digest` | `str` | `sha256:` + 64 hex, same validator as `Package.manifest_digest` | the layer digest the daemon reported |
+| `size_bytes` | `int` | `>= 0` | the size the daemon reported |
+| `observed_at` | `datetime` | aware UTC | when this `hardware` run queried the daemon |
+
+```json
+{
+  "name": "nova:7b",
+  "digest": "sha256:abababababababababababababababababababababababababababababababab",
+  "size_bytes": 4500000000,
+  "observed_at": "2026-09-22T09:00:00Z"
+}
+```
+
+### Measurement
+
+One recorded `bench` result, bound to the exact package content and hardware profile it
+measured. AP4 only defines and validates this model -- there is no `bench` command yet; it is
+a later work package. `content_source` discriminates which of the two field groups below is
+populated, exactly the pattern `Package.source` already uses for `repo`/`revision` vs.
+`ollama_name`/`manifest_digest`: a `content_source == "ollama"` measurement carries
+`ollama_manifest_digest` and no `hf_*` field; a `content_source == "huggingface"` measurement
+carries all three `hf_*` fields and no `ollama_manifest_digest`. The brief's other option -- one
+polymorphic `content` field holding either a bare digest string or a `{repo, revision,
+file_digest}` object -- was not chosen, so this model stays the same shape as every other
+coupled-field model in this file.
+
+`profile_measured_at` is meant to equal the `HardwareSnapshot.measured_at` it was benched
+against, but that equality is **not** a validator on this model: `Measurement` validates in
+isolation (it is never attached to a specific `HardwareSnapshot` instance at validation time,
+only stored in its `measurements` list). The renderer (a later work package) reads both and
+refuses to render a measurement whose `profile_measured_at` does not match the snapshot it is
+being read alongside -- see "Fit contract v1" below for the exact wording it must use.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `content_source` | `"ollama" \| "huggingface"` | -- | which field group below is populated |
+| `ollama_manifest_digest` | `str \| None` | `sha256:` + 64 hex; required iff `content_source == "ollama"` | the Ollama manifest digest measured |
+| `hf_repo` | `str \| None` | `owner/name`; required iff `content_source == "huggingface"` | the packager repo measured |
+| `hf_revision` | `str \| None` | 40-hex commit sha; required iff `content_source == "huggingface"` | the commit measured |
+| `hf_file_digest` | `str \| None` | `sha256:` + 64 hex; required iff `content_source == "huggingface"` | the exact file measured |
+| `context` | `int` | `> 0` | the context length the benchmark ran at |
+| `runtime` | `str` | -- | the inference runtime and version, e.g. `ollama 0.12.3` |
+| `profile_measured_at` | `datetime` | aware UTC | the hardware profile this measurement was benched against (see above) |
+| `measured_at` | `datetime` | aware UTC | when the benchmark itself ran |
+| `tps_mean` | `float` | `> 0` | mean tokens/second observed |
+| `tps_range` | `tuple[float, float]` | low `<=` high | the observed tokens/second range |
+
+```json
+{
+  "content_source": "ollama",
+  "ollama_manifest_digest": "sha256:abababababababababababababababababababababababababababababababab",
+  "hf_repo": null,
+  "hf_revision": null,
+  "hf_file_digest": null,
+  "context": 8192,
+  "runtime": "ollama 0.12.3",
+  "profile_measured_at": "2026-09-22T09:00:00Z",
+  "measured_at": "2026-09-22T09:05:00Z",
+  "tps_mean": 42.5,
+  "tps_range": [40.0, 45.0]
+}
+```
+
+### HardwareSnapshot
+
+One machine's measured hardware, written by `hardware` to `<state>/hardware/<machine>.json`
+(see the persisted-forms table above). Reserved headroom (`reserve_ram_gib`/`reserve_vram_gib`)
+is deliberately **not** a field here: it is operator policy chosen once per machine, not a
+measured fact, and it can change without a new hardware measurement. It lives in the
+configuration's `machines.<name>` (`config.MachineConfig`) instead; `modelroom/fit.py::compute_fit`
+takes a `HardwareSnapshot` and a `MachineConfig` as two separate parameters rather than merging
+them into one persisted shape.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `schema_version` | `int` | must equal `HARDWARE_SCHEMA_VERSION` (currently `1`) | the hardware profile's schema version |
+| `machine` | `str` | `^[a-z0-9][a-z0-9-]*$`, same rule as a `Configuration.machines` key | which machine this profile describes |
+| `measured_at` | `datetime` | aware UTC | when `hardware` took this measurement |
+| `llmfit_version` | `str` | -- | the installed `llmfit` version that produced `system` below |
+| `vram_gib` | `float` | `>= 0` | GPU VRAM, from `llmfit system --json`'s `system.gpu_vram_gb` unchanged (already GiB, see below) |
+| `ram_gib` | `float` | `> 0` | total system RAM, from `system.total_ram_gb` unchanged |
+| `free_ram_gib_at_measurement` | `float \| None` | `>= 0` | free RAM at measurement time, from `system.available_ram_gb` |
+| `gpu_name` | `str \| None` | -- | from `system.gpu_name` |
+| `backend` | `str \| None` | -- | from `system.backend` |
+| `unified_memory` | `bool` | -- | from `system.unified_memory` |
+| `installed` | `list[InstalledModel] \| None` | exactly one of `installed`/`installed_unavailable_reason` is set, see below | the local Ollama daemon's inventory, or `None` if it could not be read |
+| `installed_unavailable_reason` | `str \| None` | non-empty iff `installed is None` | why the Ollama daemon could not be reached, when `installed` is `None` |
+| `measurements` | `list[Measurement]` | -- | bench results carried over from the previous hardware profile for this machine (AP4 never adds to this list, only preserves it) |
+
+```json
+{
+  "schema_version": 1,
+  "machine": "workstation",
+  "measured_at": "2026-09-22T09:00:00Z",
+  "llmfit_version": "1.1.16",
+  "vram_gib": 11.94,
+  "ram_gib": 127.46,
+  "free_ram_gib_at_measurement": 76.64,
+  "gpu_name": "Nova GPU",
+  "backend": "CUDA",
+  "unified_memory": false,
+  "installed": [
+    {
+      "name": "nova:7b",
+      "digest": "sha256:abababababababababababababababababababababababababababababababab",
+      "size_bytes": 4500000000,
+      "observed_at": "2026-09-22T09:00:00Z"
+    }
+  ],
+  "installed_unavailable_reason": null,
+  "measurements": []
+}
+```
+
+`modelroom.contracts.load_hardware_snapshot(data)` is the entry point for reading a persisted
+hardware profile, checking `schema_version` against `HARDWARE_SCHEMA_RANGE` before field
+validation, exactly like `load_snapshot`.
+
+### Fit
+
+The result of judging whether one GGUF package fits one measured machine, computed by
+`modelroom/fit.py::compute_fit`. **Not persisted by AP4** -- a later renderer calls it fresh
+every time against the current snapshot and hardware profile, rather than storing a stale
+verdict. See "Fit contract v1" below for the formula, thresholds and the exact wording a
+renderer must use.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `fit_class` | `"perfect" \| "good" \| "marginal" \| "too_tight" \| "unknown"` | -- | the fit verdict |
+| `mode` | `"gpu" \| "cpu_gpu" \| "cpu" \| None` | `None` only when `fit_class == "unknown"` | where the package would run |
+| `need_gib` | `float` | `>= 0` | estimated memory needed |
+| `weights_gib` | `float` | `>= 0` | the package's weight files, summed |
+| `kv_gib` | `float` | `>= 0` | estimated KV-cache size at `context` |
+| `pool_gib` | `float` | -- | the memory pool judged against (can be negative if reserves exceed capacity) |
+| `reserve_gib` | `float` | `>= 0` | the reserve actually applied (VRAM or RAM, matching `mode`) |
+| `context` | `int` | `>= 0` | the context length used for `kv_gib` |
+| `context_assumed` | `bool` | -- | `true` when `context` is the 8192 fallback, not the package's own `default_context` |
+| `reason` | `str \| None` | non-`None` typically iff `fit_class == "unknown"` | why the fit could not be computed, when it could not |
+
+```json
+{
+  "fit_class": "good",
+  "mode": "gpu",
+  "need_gib": 7.125,
+  "weights_gib": 5.0,
+  "kv_gib": 1.125,
+  "pool_gib": 10.94,
+  "reserve_gib": 1.0,
+  "context": 8192,
+  "context_assumed": true,
+  "reason": null
+}
+```
+
 ## Configuration
 
 The models below make up `Configuration`, the parsed form of `modelroom.toml`. They live in
@@ -598,6 +762,15 @@ command ends. A lock younger than two hours blocks the new run immediately with
 the holder's pid, command and start time. A lock at or beyond two hours, or one whose content
 cannot be parsed, is treated as abandoned by a crashed process and silently overwritten.
 
+**`hardware` takes no lock.** Every other command that writes shared state under
+`config.paths.state` (today, only `fetch`) goes through `modelroom.lock` first, because they
+all write to the *same* file (`modelroom.json`) that a second concurrent run could corrupt.
+`hardware` writes only `<state>/hardware/<machine>.json`, a file scoped to the one machine it
+ran on -- two different machines running `hardware` at the same time write two different
+files, and two `hardware` runs on the *same* machine (the only case that could race) are
+already serialized by the operator invoking them, not by this tool. See "Hardware profile
+(AP4)" below.
+
 ### Run status (`run-status.json`)
 
 Written by `modelroom/state.py::write_run_status` at the end of every `fetch` run, including
@@ -776,3 +949,130 @@ convention, not only the most common one:
 AP1 already gave `Package` the `active: bool`, `observed_at: datetime` and `last_seen:
 datetime` fields `fetch` needs to record history (see the `Package` model above); AP3 uses
 them exactly as documented there and did not need to extend the contract.
+
+## Hardware profile (AP4)
+
+`modelroom hardware --config <toml> --machine <name>` measures the machine it runs on and
+writes `<state>/hardware/<machine>.json` (`HardwareSnapshot`, models documented above). Unlike
+`fetch`, the named machine only has to be *configured* (present in `Configuration.machines`),
+not a `writer` -- hardware is measured on every machine, including inference-only ones. Exit
+codes reuse the table above unchanged: `2` for an unconfigured machine or a missing/too-old
+`llmfit`, `3` for an existing hardware file with an unsupported `schema_version`, `0`
+otherwise -- including when the local Ollama daemon could not be reached (`installed` is then
+`None` with a reason, never a command failure).
+
+### Local llmfit binding
+
+`modelroom/llmfit.py` calls `llmfit --version` first (`check_llmfit_version`), comparing it
+against `config.llmfit.min_version` as an integer `(major, minor, patch)` tuple -- a version
+below the minimum, or a missing `llmfit` binary (`FileNotFoundError` from the runner), both
+raise `LlmfitError` naming the minimum version and an install hint; the CLI maps this to exit
+code 2. `llmfit system --json` is then called and its `system` block mapped to
+`HardwareSnapshot`'s hardware fields:
+
+| `llmfit system --json` field | `HardwareSnapshot` field |
+|---|---|
+| `system.gpu_vram_gb` | `vram_gib` |
+| `system.total_ram_gb` | `ram_gib` |
+| `system.available_ram_gb` | `free_ram_gib_at_measurement` |
+| `system.gpu_name` | `gpu_name` |
+| `system.backend` | `backend` |
+| `system.unified_memory` | `unified_memory` |
+
+llmfit's own `_gb` fields are already GiB -- its source divides by `1024**3`, not `1000**3` --
+so they are taken unchanged (measured 2026-09-22 on the reference laptop: `total_ram_gb`
+`127.46` for a 128 GB machine, `tests/fixtures/llmfit_system_laptop.json`). The `providers`
+block and `gpus[]` (per-GPU detail, for a multi-GPU machine) are both ignored in v1. A
+GPU-less machine's `gpu_vram_gb` defaults to `0.0` and `gpu_name`/`backend` to `None` rather
+than raising; only a response with no `system.total_ram_gb` at all is a hard `LlmfitError`,
+since every other field can legitimately be absent.
+
+### Local Ollama inventory
+
+`modelroom/ollama_local.py::fetch_installed_models` reads `GET
+http://127.0.0.1:11434/api/tags` (the base URL is a parameter; the daemon on the machine
+running `hardware`, never the public Ollama registry `modelroom/ollama.py` fetches from). Each
+entry becomes one `InstalledModel(name, digest, size_bytes, observed_at)`. The daemon reports
+`digest` as bare hex, with **no** `sha256:` prefix (measured 2026-09-22,
+`tests/fixtures/ollama_tags_local.json`, trimmed from a real response to three entries); the
+fetcher prepends `sha256:` before building `InstalledModel`. The daemon being unreachable
+(a transport error, a non-`200` status, an unparseable body, or a response missing the
+`models` field) is **never** a failure of the `hardware` command -- it comes back as
+`(None, reason)`, which the CLI writes as `installed=None` /
+`installed_unavailable_reason=reason`.
+
+### `hardware` write
+
+`_cmd_hardware`/`hardware_with_config` (`modelroom/cli.py`) run the llmfit gate, `llmfit
+system --json`, and the Ollama inventory read, then build a `HardwareSnapshot` with
+`measured_at` = now (UTC, no microseconds, same convention as `fetch`'s `run_at`) and
+`measurements` carried over unchanged from the machine's existing hardware file, when one
+exists (`state.py::load_existing_hardware_snapshot`, `load_hardware_snapshot` under the hood --
+an unsupported `schema_version` there is exit `3`, exactly like `fetch`'s snapshot check). The
+resulting dict is validated and written with `state.py::write_hardware_snapshot`
+(`load_hardware_snapshot` then `atomic_write_json`), never partially. `hardware` prints one
+summary line to stdout: the machine name, `vram_gib`/`ram_gib`, and either `installed: <n>` or
+`installed: unknown (<reason>)`.
+
+## Fit contract v1
+
+`modelroom/fit.py::compute_fit(package, base_model, hardware, machine_config) -> Fit` is a
+pure function (no I/O) computing whether one `Package` fits one machine, given its
+`HardwareSnapshot` and the `MachineConfig` naming its reserved headroom. **A renderer must
+always label this result "fit (computed, v1)", never "runs"** -- it is an estimate from a
+memory-sizing formula, not a measurement of the package actually loading and generating
+tokens (that is what `Measurement`/`bench`, a later work package, are for).
+
+**Coverage.** Only `base_model.architecture.kind == "dense_classic"` is judged; anything else
+(including a hybrid or MoE architecture resolved to `"unknown"`, e.g. `Qwen/Qwen3.5-9B`) comes
+back `fit_class="unknown"`, `reason="architecture not covered by v1"`. Only a `complete`
+`format == "gguf"` package is judged; an incomplete package or a non-GGUF (`tensor`) package
+also comes back `"unknown"` with a reason. A `Fit` for an unknown case carries zeroed
+numeric fields (`need_gib`, `weights_gib`, `kv_gib`, `pool_gib`, `reserve_gib` all `0.0`,
+`context` `0`, `mode` `None`) -- these are placeholders, not measurements, and a renderer must
+never print them for an `"unknown"` fit.
+
+**Formula.**
+
+- `weights_gib` = the sum of `size_bytes` over every `PackageFile` with role `weights` or
+  `weights_shard`, divided by `1024**3`.
+- `context` = `package.default_context` when the package states one, else `8192`
+  (`context_assumed=True` in that case). The assumption is deliberately visible in the result,
+  never silently baked into `need_gib` alone.
+- `kv_gib = 2 * L * KVH * D * 2 bytes * context / 1024**3`, where `L =
+  architecture.num_hidden_layers`, `KVH = architecture.num_key_value_heads`, `D =
+  architecture.head_dim` -- the standard KV-cache size for a GQA/MQA transformer at 16-bit
+  precision (`2 bytes` per element, the leading `2` for key and value each).
+- `need_gib = weights_gib * 1.10 + kv_gib + 0.50` -- a 10 % overhead on the weights themselves
+  (allocator/runtime overhead) plus a flat 0.50 GiB fixed cost (activations and other small
+  buffers), on top of the KV cache.
+
+**Pool and mode.** `available_vram = hardware.vram_gib - machine_config.reserve_vram_gib`.
+When `need_gib <= available_vram`, the package fits the GPU: `mode="gpu"`, `pool_gib =
+available_vram`, `reserve_gib = reserve_vram_gib`. Otherwise it falls back to the RAM pool:
+`pool_gib = hardware.ram_gib - machine_config.reserve_ram_gib`, `reserve_gib =
+reserve_ram_gib`, `mode="cpu_gpu"` when `hardware.vram_gib > 0` (some GPU exists, just not
+enough) else `mode="cpu"`.
+
+**Classification.** `ratio = need_gib / pool_gib` (a `pool_gib <= 0` is always `too_tight`,
+never a division): `ratio <= 0.60` is `perfect`, `<= 0.85` is `good`, `<= 0.98` is `marginal`,
+anything above is `too_tight`. **Off the GPU (`mode` is `cpu_gpu` or `cpu`), the class is
+capped at `good`** -- a ratio that would otherwise read `perfect` still comes back `good`,
+because "perfect" is reserved for a package that comfortably fits in VRAM.
+
+**Worked examples** (also `tests/test_fit.py`, values restated in each test's own comments so
+they can be recomputed by hand): a dense 8B Q4_K_M package (~5.0 GiB weights, `L=36, KVH=8,
+D=128`, context assumed 8192) has `kv_gib = 1.125` GiB and `need_gib = 7.125` GiB. On the
+reference laptop (`vram_gib=11.94`, `reserve_vram_gib=1.0`) that is `mode="gpu"`, ratio
+`0.6513` -> `good`. On a small server (`vram_gib=0`, `ram_gib=7.56`, `reserve_ram_gib=3.0`) it
+falls to `mode="cpu"`, `pool_gib=4.56`, ratio `1.5625` -> `too_tight`. A dense 9B Q4_K_M
+package (~5.6 GiB, `L=42, KVH=8, D=128`) has `need_gib = 7.9725` GiB: `good` on the laptop
+(ratio `0.7288`), `too_tight` on the server (ratio `1.748`).
+
+**`Measurement.profile_measured_at` cross-check.** `Measurement` itself does not check its
+`profile_measured_at` against any particular `HardwareSnapshot.measured_at` (see the
+`Measurement` model above) -- a renderer reading `hardware.measurements` alongside
+`hardware` refuses to show a measurement whose `profile_measured_at != hardware.measured_at`
+as if it were current for that profile, since the hardware may have changed since that
+measurement was taken. This check belongs to the renderer (a later work package), not to
+`compute_fit` or to the `Measurement`/`HardwareSnapshot` models themselves.
