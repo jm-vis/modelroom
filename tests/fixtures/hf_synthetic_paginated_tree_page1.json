@@ -1,0 +1,20 @@
+{
+  "_comment": "Synthetic, hand-written: no repo with more than 1000 files was at hand to record, so this stands in for the pagination case. The Link header points to the second (final) page.",
+  "status": 200,
+  "headers": {
+    "Link": "<https://huggingface.co/api/models/synthetic/Big-Repo-GGUF/tree/1111111111111111111111111111111111111111?recursive=true&cursor=page2>; rel=\"next\""
+  },
+  "body": [
+    {
+      "type": "file",
+      "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 1000000000,
+      "path": "Big-Repo-Q4_K_M.gguf",
+      "lfs": {
+        "oid": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 1000000000,
+        "pointerSize": 135
+      }
+    }
+  ]
+}

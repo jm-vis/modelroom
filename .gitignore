@@ -21,3 +21,6 @@ _graph_code_modelroom/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local safety-net for deletes (a developer-machine hook, not part of the repository)
+.trash/

@@ -47,3 +47,38 @@ the tests actually need:
 config (`num_hidden_layers`, `num_key_value_heads`, `head_dim` all present, no `layer_types`
 key) so `architecture_from_hf_config` has a real `kind="dense_classic"` case to resolve
 alongside the two real, non-dense fixtures above.
+
+## Fetch (AP3)
+
+A handful of these fixtures carry more than a raw response body -- an HTTP status and/or
+response headers matter to the code under test. Those are saved as a small envelope,
+`{"status": <int>, "headers": {...}, "body": <object-or-string>}`, loaded by
+`tests/fixture_support.py::envelope_response`; everything else keeps the AP1 convention of a
+raw body file assumed to be a `200` with no headers of interest
+(`tests/fixture_support.py::json_response` / `html_response`).
+
+- `ollama_tags_qwen35.html` -- real, recorded 2026-09-22, `GET
+  https://ollama.com/library/qwen3.5/tags`. The tag names live in `<a href="/library/qwen3.5:
+  <tag>" ...>` anchors; `modelroom/ollama.py` extracts only the `href` targets, nothing else
+  from the page (no login, no anti-bot circumvention, one page per configured base model, per
+  the `datenextraktion` rules this project follows).
+- `ollama_manifest_head_9b.json` -- envelope, real, recorded 2026-09-22: the headers of `HEAD
+  https://registry.ollama.ai/v2/library/qwen3.5/manifests/9b`. `ollama-content-digest` is
+  `6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7`; a `GET` to the same URL
+  carries no such header (see the Ollama section above), which is why the manifest digest is
+  read from a `HEAD` request in `modelroom/ollama.py`, not from hashing the `GET` body, when the
+  header is present.
+- `hf_unsloth_does_not_exist_model.json` -- envelope, real, recorded 2026-09-22: `GET
+  https://huggingface.co/api/models/unsloth/Does-Not-Exist-GGUF`. **Deviation from the original
+  assumption:** an anonymous request against a repo that does not exist gets HTTP `401`
+  (`{"error": "Invalid username or password."}`), never a `404` -- Hugging Face does not let an
+  unauthenticated caller distinguish "private" from "does not exist". `modelroom/hf.py`
+  therefore treats `401` exactly like `404` on the model-info call: "no package here" for a
+  packager candidate, `kind="unknown"` for a base model's architecture. A genuine transport
+  error or any other status still ends the area `incomplete`.
+- `hf_synthetic_paginated_tree_page1.json` / `hf_synthetic_paginated_tree_page2.json` --
+  synthetic, hand-written. No repo with more than 1000 files (the point at which Hugging
+  Face's tree endpoint paginates) was at hand to record; these two envelopes stand in for that
+  case, page 1 carrying a `Link: <...>; rel="next"` header to page 2 and page 2 carrying none,
+  so `modelroom/hf.py`'s tree fetch is tested against the real pagination mechanism even
+  though the specific file list is invented.

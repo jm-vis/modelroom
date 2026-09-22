@@ -370,6 +370,22 @@ def test_shards_complete_mixed_sharded_and_non_sharded_is_incomplete():
     assert shards_complete(files) is False
 
 
+# --- shards_complete: Qwen's own "-split-NNNNN-of-NNNNN" shard suffix (AP3 acceptance, F3) ---
+
+
+def test_shards_complete_accepts_the_qwen_split_shard_suffix():
+    files = [
+        _weights_file("Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00002.gguf"),
+        _weights_file("Qwen3VL-235B-A22B-Instruct-F16-split-00002-of-00002.gguf"),
+    ]
+    assert shards_complete(files) is True
+
+
+def test_shards_complete_qwen_split_shard_missing_one_is_incomplete():
+    files = [_weights_file("Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00010.gguf")]
+    assert shards_complete(files) is False
+
+
 # --- Package provenance invariants (finding 4) ----------------------------------------------
 
 

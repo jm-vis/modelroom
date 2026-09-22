@@ -25,7 +25,10 @@ _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 _MANIFEST_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _APPROVAL_CONTENT_RE = re.compile(r"^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")
 _OLLAMA_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
-_SHARD_RE = re.compile(r"^(?P<stem>.+)-(?P<idx>\d{5})-of-(?P<total>\d{5})(?:\.[^.]+)?$")
+# Qwen's own convention inserts an extra `-split` marker before the counter
+# (`Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00010.gguf`); the counter itself is otherwise
+# identical to every other packager's `-NNNNN-of-NNNNN` suffix.
+_SHARD_RE = re.compile(r"^(?P<stem>.+)-(?:split-)?(?P<idx>\d{5})-of-(?P<total>\d{5})(?:\.[^.]+)?$")
 
 
 class SchemaVersionError(Exception):
@@ -82,11 +85,12 @@ def shards_complete(files: list["PackageFile"]) -> bool:
     """Whether a package's weight files are a complete set.
 
     A single non-sharded weights file is complete. Zero weight files is never complete. A
-    sharded set (filenames ending in `-NNNNN-of-NNNNN`, optionally before an extension) is
-    complete only when every shard shares the same normalized stem and the same total `N`,
-    the indices present are exactly `{1..N}` with no duplicate index, and no non-sharded file
-    is mixed in. Mixed stems, a mixed sharded/non-sharded set, or any duplicate index makes the
-    package incomplete. Files with role `mmproj` or `other` are not weights and are ignored.
+    sharded set (filenames ending in `-NNNNN-of-NNNNN`, optionally preceded by `-split` and
+    optionally before an extension -- Qwen's own convention) is complete only when every shard
+    shares the same normalized stem and the same total `N`, the indices present are exactly
+    `{1..N}` with no duplicate index, and no non-sharded file is mixed in. Mixed stems, a mixed
+    sharded/non-sharded set, or any duplicate index makes the package incomplete. Files with
+    role `mmproj` or `other` are not weights and are ignored.
     """
     weight_files = [f for f in files if f.role in ("weights", "weights_shard")]
     if not weight_files:

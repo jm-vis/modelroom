@@ -1,0 +1,18 @@
+{
+  "_comment": "Synthetic, hand-written: second and final page for hf_synthetic_paginated_tree_page1.json. No Link header, so the fetcher stops here.",
+  "status": 200,
+  "headers": {},
+  "body": [
+    {
+      "type": "file",
+      "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 2000000000,
+      "path": "Big-Repo-Q8_0.gguf",
+      "lfs": {
+        "oid": "2222222222222222222222222222222222222222222222222222222222222222",
+        "size": 2000000000,
+        "pointerSize": 135
+      }
+    }
+  ]
+}

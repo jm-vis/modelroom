@@ -277,41 +277,7 @@ def test_parse_hf_quant_mmproj_check_applies_to_the_basename_with_backslash():
 
 
 # --- QUANT_ORDER is pinned, and the longest-suffix rule is exercised on a real overlap ----
-# (finding 13)
-
-
-def test_quant_order_is_exactly_this_tuple_in_order():
-    assert QUANT_ORDER == (
-        "IQ2_XXS",
-        "IQ2_M",
-        "UD-IQ2_XXS",
-        "UD-IQ2_M",
-        "Q2_K",
-        "UD-Q2_K_XL",
-        "IQ3_XXS",
-        "UD-IQ3_XXS",
-        "Q3_K_S",
-        "Q3_K_M",
-        "UD-Q3_K_XL",
-        "IQ4_XS",
-        "IQ4_NL",
-        "Q4_0",
-        "Q4_1",
-        "Q4_K_S",
-        "Q4_K_M",
-        "UD-Q4_K_XL",
-        "Q5_K_S",
-        "Q5_K_M",
-        "UD-Q5_K_XL",
-        "Q6_K",
-        "UD-Q6_K_XL",
-        "Q8_0",
-        "UD-Q8_K_XL",
-        "F16",
-        "BF16",
-        "F32",
-    )
-    assert len(QUANT_ORDER) == 28
+# (finding 13; the pinned tuple itself moved to the AP3-extension test below, finding 4)
 
 
 def test_parse_hf_quant_resolves_the_longest_suffix_on_a_real_overlap():
@@ -395,6 +361,169 @@ def test_identity_stem_keeps_the_extension_but_drops_the_shard_suffix():
     assert identity_stem("Nova-7B-BF16.safetensors") == "Nova-7B-BF16.safetensors"
     assert identity_stem("Nova-7B-BF16-00001-of-00002.gguf") == "Nova-7B-BF16.gguf"
     assert identity_stem("Nova-7B-BF16-00002-of-00002.gguf") == "Nova-7B-BF16.gguf"
+
+
+# --- AP3 acceptance findings, real 2026-09-22 filenames -----------------------------------
+# --- F1: unsloth per-quant subfolders (BF16/, UD-Q2_K_XL/, ...) ----------------------------
+
+
+def test_parse_hf_quant_resolves_unsloth_per_quant_subfolder_filenames():
+    assert parse_hf_quant("BF16/GLM-5.2-BF16-00001-of-00033.gguf") == "BF16"
+    assert parse_hf_quant("UD-Q2_K_XL/Kimi-K2.6-UD-Q2_K_XL-00001-of-00008.gguf") == "UD-Q2_K_XL"
+    assert parse_hf_quant("Q8_0/GLM-5.3-Flash-Q8_0-00001-of-00008.gguf") == "Q8_0"
+
+
+def test_identity_stem_keeps_the_folder_for_per_quant_subfolders():
+    # Two different unsloth subfolders can carry a file with the same basename (e.g. the same
+    # shard index); they must never collapse into one package identity.
+    a = identity_stem("BF16/model-00001-of-00002.gguf")
+    b = identity_stem("Q8_0/model-00001-of-00002.gguf")
+    assert a != b
+
+
+# --- F2: mradermacher's dot convention (`<base>.<QUANT>.gguf`) and lowercase f16 -----------
+
+
+def test_parse_hf_quant_accepts_the_mradermacher_dot_convention():
+    assert parse_hf_quant("Qwen3.5-9B.IQ4_XS.gguf") == "IQ4_XS"
+    assert parse_hf_quant("gemma-4-31B-it.Q2_K.gguf") == "Q2_K"
+    assert parse_hf_quant("EuroLLM-9B-Instruct-2512.Q8_0.gguf") == "Q8_0"
+
+
+def test_parse_hf_quant_accepts_lowercase_f16_and_bf16():
+    assert parse_hf_quant("Qwen3.5-9B.f16.gguf") == "F16"
+    assert parse_hf_quant("Nova-7B-bf16.gguf") == "BF16"
+
+
+def test_parse_hf_quant_mmproj_marker_anywhere_in_the_basename_is_none():
+    # Not only a basename that *starts* with "mmproj" -- mradermacher's dot convention puts it
+    # mid-name.
+    assert parse_hf_quant("Qwen3.5-9B.mmproj-f16.gguf") is None
+    assert parse_hf_quant("Qwen3-VL-235B-A22B-Instruct.mmproj-Q8_0.gguf") is None
+
+
+# --- F3: Qwen's own "-split-NNNNN-of-NNNNN" shard suffix -----------------------------------
+
+
+def test_normalize_file_stem_strips_the_qwen_split_shard_suffix():
+    assert (
+        normalize_file_stem("Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00010.gguf")
+        == "Qwen3VL-235B-A22B-Instruct-F16"
+    )
+
+
+def test_parse_hf_quant_resolves_the_qwen_split_shard_filename():
+    assert parse_hf_quant("Qwen3VL-235B-A22B-Instruct-Q4_K_M-split-00001-of-00003.gguf") == "Q4_K_M"
+
+
+# --- F5: an importance-matrix file is never a weight, never its own package ----------------
+
+
+def test_parse_hf_quant_imatrix_marker_anywhere_is_none():
+    assert parse_hf_quant("MiniMax-M3-imatrix.gguf") is None
+
+
+# --- F4: QUANT_ORDER extended for tokens observed live but previously unparsed -------------
+
+
+def test_quant_order_is_exactly_this_tuple_in_order_after_ap3_extension():
+    assert QUANT_ORDER == (
+        "TQ1_0",
+        "UD-TQ1_0",
+        "UD-Q1_0",
+        "TQ2_0",
+        "UD-TQ2_0",
+        "IQ1_S",
+        "IQ1_M",
+        "UD-IQ1_S",
+        "UD-IQ1_M",
+        "IQ2_XXS",
+        "IQ2_XS",
+        "IQ2_S",
+        "IQ2_M",
+        "UD-IQ2_XXS",
+        "UD-IQ2_M",
+        "Q2_K",
+        "Q2_K_L",
+        "UD-Q2_K_XL",
+        "IQ3_XXS",
+        "IQ3_XS",
+        "UD-IQ3_XXS",
+        "IQ3_S",
+        "UD-IQ3_S",
+        "IQ3_M",
+        "Q3_K_S",
+        "Q3_K_M",
+        "Q3_K_L",
+        "Q3_K_XL",
+        "UD-Q3_K_XL",
+        "IQ4_XS",
+        "UD-IQ4_XS",
+        "IQ4_NL",
+        "UD-IQ4_NL",
+        "Q4_0",
+        "Q4_1",
+        "Q4_K_S",
+        "Q4_K_M",
+        "UD-Q4_K_XL",
+        "MXFP4",
+        "MXFP4_MOE",
+        "Q5_K_S",
+        "Q5_K_M",
+        "UD-Q5_K_XL",
+        "Q6_K",
+        "UD-Q6_K_XL",
+        "Q8_0",
+        "UD-Q8_K_XL",
+        "F16",
+        "BF16",
+        "F32",
+    )
+    assert len(QUANT_ORDER) == 50
+
+
+def test_unsloth_ud_iq4_builds_parse_to_the_ud_member():
+    # Live snapshot 2026-09-22: unsloth/GLM-5.2-GGUF and unsloth/MiniMax-M3-GGUF ship these.
+    assert parse_hf_quant("UD-IQ4_NL/GLM-5.2-UD-IQ4_NL-00001-of-00009.gguf") == "UD-IQ4_NL"
+    assert parse_hf_quant("UD-IQ4_XS/MiniMax-M3-UD-IQ4_XS-00001-of-00006.gguf") == "UD-IQ4_XS"
+    assert QUANT_ORDER.index("IQ4_XS") < QUANT_ORDER.index("UD-IQ4_XS") < QUANT_ORDER.index("IQ4_NL")
+    assert QUANT_ORDER.index("IQ4_NL") < QUANT_ORDER.index("UD-IQ4_NL") < QUANT_ORDER.index("Q4_0")
+
+
+def test_quant_order_ternary_and_1bit_members_sort_below_iq1_s():
+    below_iq1_s = ("TQ1_0", "UD-TQ1_0", "UD-Q1_0", "TQ2_0", "UD-TQ2_0")
+    iq1_s_index = QUANT_ORDER.index("IQ1_S")
+    for member in below_iq1_s:
+        assert QUANT_ORDER.index(member) < iq1_s_index, member
+
+
+def test_quant_order_iq1_and_iq2_chain_is_ascending():
+    chain = ["IQ1_S", "IQ1_M", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M"]
+    indices = [QUANT_ORDER.index(m) for m in chain]
+    assert indices == sorted(indices)
+
+
+def test_quant_order_q2_k_l_sorts_above_q2_k():
+    assert QUANT_ORDER.index("Q2_K") < QUANT_ORDER.index("Q2_K_L")
+
+
+def test_quant_order_iq3_chain_is_ascending():
+    chain = ["IQ3_XXS", "IQ3_XS", "IQ3_S", "IQ3_M"]
+    indices = [QUANT_ORDER.index(m) for m in chain]
+    assert indices == sorted(indices)
+
+
+def test_quant_order_q3_k_chain_is_ascending():
+    chain = ["Q3_K_S", "Q3_K_M", "Q3_K_L", "Q3_K_XL"]
+    indices = [QUANT_ORDER.index(m) for m in chain]
+    assert indices == sorted(indices)
+
+
+def test_quant_order_mxfp4_sorts_between_q4_k_m_and_q5_k_s():
+    q4_k_m = QUANT_ORDER.index("Q4_K_M")
+    q5_k_s = QUANT_ORDER.index("Q5_K_S")
+    assert q4_k_m < QUANT_ORDER.index("MXFP4") < q5_k_s
+    assert q4_k_m < QUANT_ORDER.index("MXFP4_MOE") < q5_k_s
 
 
 def test_two_file_formats_of_the_same_build_have_distinct_identities():

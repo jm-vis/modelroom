@@ -1,0 +1,7 @@
+{
+  "status": 200,
+  "headers": {
+    "ollama-content-digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7",
+    "Content-Type": "application/vnd.docker.distribution.manifest.v2+json"
+  }
+}

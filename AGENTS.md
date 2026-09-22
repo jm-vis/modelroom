@@ -31,9 +31,11 @@ run the tests, commit the lock.
 - YAGNI. No placeholder code, no unimplemented TODOs, no dead code. A function does one thing.
 - Explicit error handling. Every failure that a user can act on becomes a message and an exit
   code; nothing is swallowed.
-- Exit codes are part of the contract: `0` success, `1` at least one fetch area incomplete,
-  `2` the configuration is missing or invalid, or a required external tool is missing or too
-  old, `3` an input file has an unsupported schema version.
+- Exit codes are part of the contract: `0` success, `1` at least one fetch area incomplete (or
+  `fetch` stopped at another process's lock, or this run is not newer than the stored
+  snapshot -- both leave the state directory untouched), `2` the configuration is missing or
+  invalid, the named machine is not a writer, or a required external tool is missing or too
+  old, `3` an input file has an unsupported schema version. Details: `CONTRACTS.md`.
 
 ## Hard boundaries
 

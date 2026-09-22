@@ -417,3 +417,124 @@ def test_real_ollama_gguf_quant_tag_is_metadata_ok():
     package = _package_from_ollama_manifest(tag="9b-q4_K_M", fixture_name="ollama_qwen35_9b-q4_K_M.json")
     provenance, reason = decide_provenance(package, _qwen35_ollama_base_model(), hf_tags=None, approvals=[])
     assert (provenance, reason) == ("metadata_ok", None)
+
+
+# --- AP3 acceptance findings ----------------------------------------------------------------
+# --- F1: unsloth per-quant subfolders; the file-stem prefix must ignore the folder ----------
+
+
+def test_unsloth_per_quant_subfolder_file_stem_is_metadata_ok():
+    # Real layout observed 2026-09-22: unsloth ships one subfolder per quantization
+    # (`BF16/`, `UD-Q2_K_XL/`, ...); the folder segment must never defeat the base-name prefix
+    # match on the file's own basename.
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="BF16/Nova-7B-BF16.gguf")
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+    )
+    assert (provenance, reason) == ("metadata_ok", None)
+
+
+def test_draft_model_in_a_foreign_subfolder_stays_unresolved_file_stem():
+    # Real observed layout: a packager repo can carry a draft/MTP model dropped under its own
+    # subfolder (e.g. `MTP/mtp-gemma-4-31B-it-BF16.gguf`); it must never be mistaken for the
+    # base model just because it landed inside the repo's tree.
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="MTP/mtp-Nova-7B-BF16.gguf")
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+    )
+    assert (provenance, reason) == ("unresolved", "file_stem")
+
+
+# --- F2: mradermacher's `<base>.<QUANT>.gguf` (dot separator) convention -------------------
+
+
+def test_mradermacher_dot_convention_file_stem_is_metadata_ok():
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B.Q4_K_M.gguf")
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+    )
+    assert (provenance, reason) == ("metadata_ok", None)
+
+
+# --- F3: Qwen's own "-split-NNNNN-of-NNNNN" shard suffix; a real, documented mismatch -------
+
+
+def test_qwen_split_shard_stem_mismatch_stays_unresolved_file_stem():
+    # Real observed name (2026-09-22): the packager's own shard filename spells the base
+    # "Qwen3VL-..." (no dash before VL) while the base repo is "Qwen3-VL-235B-A22B-Instruct" --
+    # a genuine mismatch under the file_stem rule, not a bug to work around. Only 1 of 10
+    # shards is modelled here, so `complete` is `False` (shards_complete's own concern, not
+    # this test's), built directly rather than through `_hf_package` (a single-file helper).
+    base_model = _nova_base_model(
+        hf_repo="Qwen/Qwen3-VL-235B-A22B-Instruct", repo_aliases=[], parameters_b=235.0
+    )
+    package = Package(
+        source="huggingface",
+        repo="packager/Qwen3-VL-235B-A22B-Instruct-GGUF",
+        revision=_HF_REVISION_NEW,
+        base_model_hf_repo="Qwen/Qwen3-VL-235B-A22B-Instruct",
+        format="gguf",
+        files=[
+            PackageFile(
+                name="Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00010.gguf",
+                role="weights_shard",
+                size_bytes=1,
+                digest=None,
+            )
+        ],
+        complete=False,
+        quantization="F16",
+        default_context=None,
+        provenance="unresolved",
+        unresolved_reason="file_stem",
+        approval=None,
+        observed_at=_NOW,
+        last_seen=_NOW,
+        active=True,
+    )
+    provenance, reason = decide_provenance(
+        package,
+        base_model,
+        hf_tags=["base_model:Qwen/Qwen3-VL-235B-A22B-Instruct"],
+        approvals=[],
+    )
+    assert (provenance, reason) == ("unresolved", "file_stem")
+
+
+# --- F6: Ollama size token accepted within 15% of the measured parameters_b ----------------
+
+
+def test_ollama_size_token_within_tolerance_of_measured_parameters_is_metadata_ok():
+    # Real measurement 2026-09-22: Qwen/Qwen3.5-9B's safetensors.total gives
+    # parameters_b = 9.653104368 (it counts embeddings), but the library tag is "9b" --
+    # exact equality can never match this, only a tolerance can.
+    package = _ollama_package(ollama_name="nova:9b-q4_K_M")
+    base_model = _nova_base_model(parameters_b=9.653104368, ollama_tag="9b")
+    provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
+    assert (provenance, reason) == ("metadata_ok", None)
+
+
+def test_ollama_size_token_30b_matches_measured_30_5b():
+    package = _ollama_package(ollama_name="nova:30b-q4_K_M")
+    base_model = _nova_base_model(parameters_b=30.5, ollama_tag="30b")
+    provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
+    assert (provenance, reason) == ("metadata_ok", None)
+
+
+def test_ollama_size_token_1_5b_matches_measured_1_54b():
+    package = _ollama_package(ollama_name="nova:1.5b-q4_K_M")
+    base_model = _nova_base_model(parameters_b=1.54, ollama_tag="1.5b")
+    provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
+    assert (provenance, reason) == ("metadata_ok", None)
+
+
+def test_ollama_size_token_declared_size_far_outside_tolerance_is_unresolved():
+    # The tag itself matches the base model's own declared `ollama_tag` ("70b"), so the
+    # tag-boundary check alone would pass -- the *measured* parameters_b must still gate it.
+    package = _ollama_package(ollama_name="nova:70b-q4_K_M")
+    base_model = _nova_base_model(parameters_b=7.0, ollama_tag="70b")
+    provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
+    assert (provenance, reason) == ("unresolved", "size_token")

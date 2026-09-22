@@ -62,10 +62,10 @@ it is the tag part of `ollama_name` after the colon.
 
 | Code | Meaning |
 |---|---|
-| `0` | success |
-| `1` | at least one fetch area ended incomplete; complete areas were published |
-| `2` | required external tool (`llmfit`) missing or below the minimum version |
-| `3` | an input file has an unsupported `schema_version` |
+| `0` | success: every fetch area is `complete` |
+| `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch` stopped at another process's lock; or this run's `run_at` is not newer than the stored snapshot's -- the latter two write nothing |
+| `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration; or a required external tool (`llmfit`) is missing or below the minimum version |
+| `3` | an input file (configuration or snapshot) has an unsupported `schema_version` |
 
 ## Models
 
@@ -580,3 +580,199 @@ the field and explaining why.
 `SchemaVersionError` is checked, and raised, before `ConfigError` ever gets a chance to wrap a
 field problem -- exactly like `load_snapshot`, so a wrong `schema_version` is never reported as
 an ordinary validation error.
+
+## Fetch runtime state (AP3)
+
+`modelroom/state.py` owns three files under `config.paths.state` besides the snapshot itself.
+None of the three is a contract in the sense above (no `schema_version`, no `EXAMPLES` entry,
+no cross-tool compatibility promise) -- they exist only for the lifetime of one deployment's
+own `fetch` runs, exactly as `AGENTS.md` already scoped them.
+
+### Lock file (`modelroom.lock`)
+
+A plain JSON object, `{"pid": <int>, "command": <str>, "started_at": <ISO 8601 UTC>}`, written
+by `modelroom/state.py::acquire_lock` before any package command (today, only `fetch`) does
+anything else, and removed by `release_lock` in a `finally` block regardless of how the
+command ends. A lock younger than two hours blocks the new run immediately with
+`LockHeldError` -- this project never waits for a lock, it fails fast with a message naming
+the holder's pid, command and start time. A lock at or beyond two hours, or one whose content
+cannot be parsed, is treated as abandoned by a crashed process and silently overwritten.
+
+### Run status (`run-status.json`)
+
+Written by `modelroom/state.py::write_run_status` at the end of every `fetch` run, including
+one that ends exit `1` -- it is the one file a caller can always read to see what happened,
+whether or not the snapshot changed.
+
+```json
+{
+  "run_at": "2026-09-22T09:00:00+00:00",
+  "request_budget": {"used": 87, "total": 400},
+  "areas": [
+    {
+      "source": "huggingface",
+      "base_model_hf_repo": "acme/Nova-7B",
+      "packager": "packager",
+      "status": "complete",
+      "error": null,
+      "last_success": "2026-09-22T09:00:00+00:00"
+    }
+  ],
+  "candidates": []
+}
+```
+
+`areas` always lists every area this run covered -- one entry per (source, base model,
+packager) triple, mirroring `Snapshot.areas` after the merge (see below). `candidates` is
+always `[]` in this work package: ranking under-covered base models or suggesting new
+packagers to configure is a later feature, not something AP3 computes.
+
+### Area semantics
+
+An "area" (the `Area` model, already defined above) is one Hugging Face packager-owner's
+candidate repos for one base model, or one base model's whole Ollama library entry:
+
+- **Hugging Face**: one area per `(base_model.hf_repo, owner)`, where `owner` ranges over
+  `modelroom/hf.py::candidate_owners` -- every configured `packagers` entry plus the base
+  model's own owner (a publisher counts as a packager of its own models), filtered to
+  `config.allowed_owners()`. Every candidate repo name under that owner (`<base_name>-GGUF`
+  plus every `repo_aliases` entry, exact names, de-duplicated) is probed within the same area;
+  a candidate that does not exist does not end the area, only a genuine failure does (see
+  below). `Area.packager` is that owner.
+- **Ollama**: one area per base model that configures both `ollama_base` and `ollama_tag`;
+  `Area.packager` is always `None`. A base model with neither configured is a trivially
+  `complete`, empty area (there is nothing to look up).
+
+An area ends `incomplete` only for a genuine failure: any HTTP status other than `200`
+(Hugging Face model-info additionally treats `401`/`404` as "not found", see below, not a
+failure), a network error, a body that fails to parse, a response missing a field the fetcher
+needs (Hugging Face: `sha`; Ollama: zero tags parsed from the tags page), or the run's request
+budget running out mid-area (`error` is exactly `"budget exhausted"`). A candidate repo that
+simply does not exist, or a base model with no Ollama configuration, is not a failure.
+
+**Deviation from the original assumption, measured 2026-09-22** (see
+`tests/fixtures/README.md`): an anonymous request for a Hugging Face repo that does not exist
+returns HTTP `401` (`{"error": "Invalid username or password."}`), not `404` -- Hugging Face
+does not let an unauthenticated caller distinguish "private" from "does not exist" any more.
+`modelroom/hf.py` treats `401` exactly like `404` on the model-info call, for both a packager
+candidate ("no package here") and a base model's own repo (architecture resolves `"unknown"`).
+
+### Request budget
+
+Every `fetch` run wraps its transport in `modelroom/http.py::BudgetedTransport`, default
+budget `400` requests for the whole run (shared across every area, not per-area). Once
+exhausted, the transport raises `BudgetExhaustedError("budget exhausted")` instead of making
+the request; the fetcher in progress catches it exactly like any other failure and ends its
+*current* area `incomplete` with that message. Areas already completed before the budget ran
+out keep their results; areas not yet started are simply never attempted, and their old state
+(if any) is left untouched by the merge rule below.
+
+### Merge rule (building this run's `Snapshot`)
+
+`modelroom/state.py::merge_snapshot(old, run_at, area_outcomes, base_models)` builds the
+`Snapshot` a run writes:
+
+- **Base models** are always replaced wholesale by this run's results -- an unknown
+  architecture, or a base model this run could not reach at all, is still "this run's result",
+  never silently carried over from `old`.
+- **A `complete` area** replaces its packages: every package this run found is written with
+  `active=True`; a package that existed in `old` under this exact area (same source, base
+  model and -- for Hugging Face -- the same packager owner as the repo it came from) but was
+  not found this run is kept with `active=False` rather than deleted, so its history survives.
+  A package's `observed_at` is carried over from `old` when the same package identity
+  (`quantization.package_identity_key`) already existed; `last_seen` is always bumped to
+  `run_at`.
+- **An `incomplete` area** leaves every package that belonged to it in `old` completely
+  untouched (not even `last_seen` moves) and records `status="incomplete"`, `error`, and the
+  *old* `Area.last_success` (never bumped, since nothing was actually confirmed this run).
+- A base model or area this run never touches at all (not configured any more) simply does
+  not appear in the result -- `merge_snapshot` only ever iterates `area_outcomes` and the
+  `base_models` list it is given, it does not scan `old` for leftovers to carry forward on its
+  own.
+
+### Version rule
+
+`modelroom/state.py::check_run_is_newer(old, run_at)` refuses a run whose `run_at` is not
+*strictly* newer than `old.run_at` (`run_at <= old.run_at`, so the same second counts as
+stale, not just an earlier one), raising `StaleRunError` before anything is fetched or
+written. `run_at` itself is the run's start time, UTC, truncated to whole seconds
+(`datetime.now(timezone.utc).replace(microsecond=0)` in `modelroom/cli.py`, or an injected
+value in tests) -- second precision is deliberate: two `fetch` runs started in the same wall
+second are indistinguishable and the second one must not silently win.
+
+### `parameters_b` when Hugging Face has no answer this run
+
+`BaseModelSpec.parameters_b` must be `> 0`; a base model whose publisher repo could not be
+reached, or whose model-info response carries no `safetensors.total`, therefore cannot simply
+report `0.0`. `modelroom/fetch.py::run_fetch` falls back, in order: the previous snapshot's
+`parameters_b` for the same `hf_repo`, when one exists; otherwise the literal placeholder
+`1.0` (billion) -- an intentionally obvious, wrong-looking number rather than a fabricated
+"real" one, easy to spot in a rendered snapshot as "not actually measured yet". Reading the
+real count from a packager's GGUF metadata (`gguf.total` in a Hugging Face model-info
+response) instead of only the publisher's `safetensors.total` is left for a later work
+package.
+
+### Ollama packages: files and `default_context`
+
+An Ollama manifest's weight layer(s) become one `PackageFile` per `application/vnd.ollama.
+image.model` layer (role `weights`, the registry's own digest, `format="gguf"`). A
+tensor-only manifest (only `application/vnd.ollama.image.tensor` layers, no `.image.model`
+layer -- an MLX-style build) can carry hundreds of per-tensor layers; rather than modelling
+one `PackageFile` per tensor, `modelroom/ollama.py` aggregates them into a single synthetic
+file (summed size, no digest, `format="tensor"`), since a tensor package is always
+`("unresolved", "format")` regardless of its individual tensor layout, which is not part of
+this catalog's contract. `Package.default_context` (Ollama's `num_ctx`) is always `None` in
+this work package -- reading it means downloading the manifest's `params` layer by digest,
+one more request per tag, left for a later work package.
+
+### Ollama size-token tolerance (AP3 acceptance fix)
+
+`modelroom/provenance.py::_decide_ollama` reads the Ollama tag's size token (the first
+`-`-separated token, e.g. `9b` in `9b-q4_K_M`) and compares it against the base model's
+measured `parameters_b`. A live snapshot (13 base models, 79 areas, 358 packages, 2026-09-22)
+showed the original exact-equality rule (`first_token == f"{parameters_b:g}b"`) can never match
+real data: `safetensors.total` counts embeddings, so `Qwen/Qwen3.5-9B` measures
+`parameters_b = 9.653104368`, while its library tag is plainly `9b`.
+
+The rule is now a tolerance, not an equality: the first token must fully match a size-token
+pattern (`<number>b` for billions or `<number>m` for millions, case-insensitive -- `7banana`
+never matches at all, it is not a size token), and the declared size must be within 15 % of
+`parameters_b` (`abs(parameters_b - declared) <= 0.15 * declared`). Examples: `9b` for a
+measured `9.653104368` passes (0.65 vs. a 1.35 allowance); `30b` for a measured `30.5` passes;
+`1.5b` for a measured `1.54` passes; `70b` for a measured `7.0` still fails (63 vs. a 10.5
+allowance) -- a genuinely wrong tag is still rejected, only the packager's rounding is
+tolerated. The full tag still has to equal `base_model.ollama_tag` or start with
+`ollama_tag + "-"` (unchanged token-boundary rule) once the size token itself passes.
+
+### Package file-stem naming conventions (AP3 acceptance fixes)
+
+`modelroom/provenance.py::_decide_huggingface`'s file-stem check
+(`quantization.match_base_prefix`) and `modelroom/quantization.py::parse_hf_quant` were
+extended against the same live snapshot to match every allow-listed packager's real naming
+convention, not only the most common one:
+
+- **Per-quant subfolders** (unsloth): a weight file's basename is matched against
+  `<base_name><sep><QUANT>`, never the full path -- `BF16/GLM-5.2-BF16-00001-of-00033.gguf`
+  matches base `zai-org/GLM-5.2` on its basename `GLM-5.2-BF16` alone, and two files with the
+  same basename in different subfolders (e.g. two `00001-of-00002.gguf` shards under different
+  quant folders) still keep distinct package identities (the folder segment is never stripped
+  from `quantization.identity_stem`).
+- **Dot separator** (mradermacher): `<sep>` is `-` (most packagers) or `.`
+  (`Qwen3.5-9B.IQ4_XS.gguf`, `Qwen3.5-9B.mmproj-f16.gguf`).
+- **Qwen's own shard suffix**: `-NNNNN-of-NNNNN` may be preceded by an extra `-split` marker
+  (`Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00010.gguf`); such files are role
+  `weights_shard` like any other shard.
+- **Non-weight markers**: a basename *containing* `mmproj` (role `mmproj`) or `imatrix` (role
+  `other`) is never a weight file and never carries a quantization, even mid-name
+  (`Qwen3-VL-235B-A22B-Instruct.mmproj-Q8_0.gguf`, `MiniMax-M3-imatrix.gguf`); previously only a
+  basename *starting with* `mmproj` was recognized.
+- **`QUANT_ORDER`** gained the ternary/1-bit family (`TQ1_0`, `TQ2_0`, their `UD-` dynamic
+  variants, `UD-Q1_0`), the missing `IQ1`/`IQ2`/`IQ3`/`Q2_K`/`Q3_K` members, `MXFP4`/
+  `MXFP4_MOE`, and case-insensitive matching so mradermacher's lowercase `f16`/`bf16` resolve
+  to the canonical uppercase member.
+
+### Package fetch fields (already part of `Package`, not new)
+
+AP1 already gave `Package` the `active: bool`, `observed_at: datetime` and `last_seen:
+datetime` fields `fetch` needs to record history (see the `Package` model above); AP3 uses
+them exactly as documented there and did not need to extend the contract.
