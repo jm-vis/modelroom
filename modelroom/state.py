@@ -112,8 +112,9 @@ def acquire_lock(path: Path, command: str, now: datetime) -> LockHandle:
         _write_holder(fd, command, now)
     except BaseException:
         # fix-round 4 (Codex P2): a failure after winning the lock must not leave the fd open
-        # with the lock held -- nobody would ever get a handle to release it
-        _unlock_exclusive(fd)
+        # with the lock held -- nobody would ever get a handle to release it. Closing the fd
+        # is enough: the kernel drops the lock with it, and a single close leaves no second
+        # step that could fail and skip the first (round 5).
         os.close(fd)
         raise
     return LockHandle(path=path, fd=fd)

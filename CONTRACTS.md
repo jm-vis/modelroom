@@ -793,9 +793,9 @@ O_CREAT)` -- never `O_EXCL`, since the file is meant to persist across runs and 
 and locks exactly one byte at offset 0 (`_LOCK_OFFSET`). On success it truncates the file to one
 byte past that (`_CONTENT_OFFSET`) and writes `{"pid": <int>, "command": <str>, "started_at":
 <ISO 8601 UTC>}` from that offset onward (no `token` any more -- there is nothing left to
-arbitrate). If writing that content fails after the lock was won, the fd is unlocked and closed
-before the error propagates, so no lock is ever held without a handle to release it (fix-round
-4, Codex P2). `LockHandle` is a small dataclass (`path`, `fd`, `released`); the fd stays open for
+arbitrate). If writing that content fails after the lock was won, the fd is closed (one call,
+which drops the kernel lock with it) before the error propagates, so no lock is ever held without
+a handle to release it (fix-round 4, Codex P2). `LockHandle` is a small dataclass (`path`, `fd`, `released`); the fd stays open for
 as long as the caller holds the lock, since the lock lives exactly as long as that fd does.
 `release_lock(handle)` truncates the file back to empty, releases the kernel lock, and closes the
 fd in a `finally`, so a failing truncate or unlock still closes it and the failure propagates.
