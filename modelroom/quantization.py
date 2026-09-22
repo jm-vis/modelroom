@@ -53,6 +53,23 @@ QUANT_ORDER: tuple[str, ...] = (
 
 _SHARD_SUFFIX_RE = re.compile(r"-\d{5}-of-\d{5}$")
 _STEM_EXTENSIONS = (".gguf", ".safetensors")
+# An Ollama tag starts with a size token such as `9b`, `1.5b` or `270m`; anything else is not
+# a library size tag and carries no quantization of its own.
+_SIZE_TOKEN_RE = re.compile(r"(?i)\d+(?:\.\d+)?[bm]")
+
+
+def identity_stem(filename: str) -> str:
+    """The stem used for package identity: the shard suffix is removed, the extension kept.
+
+    `Nova-7B-BF16.gguf` and `Nova-7B-BF16.safetensors` are two different builds of the same
+    repo and must never collapse into one identity; the shards of one build
+    (`name-00001-of-00002.gguf`, `name-00002-of-00002.gguf`) must.
+    """
+    lower = filename.lower()
+    for extension in _STEM_EXTENSIONS:
+        if lower.endswith(extension):
+            return normalize_file_stem(filename) + extension
+    return normalize_file_stem(filename)
 
 
 def normalize_file_stem(filename: str) -> str:
@@ -105,9 +122,9 @@ def parse_ollama_tag_quant(tag: str) -> str | None:
     it unknown.
     """
     tokens = tag.split("-")
-    if len(tokens) < 2:
+    if len(tokens) < 2 or not _SIZE_TOKEN_RE.fullmatch(tokens[0]):
         return None
-    if any(token.lower() == "mlx" for token in tokens[1:-1]):
+    if any(token.lower() == "mlx" for token in tokens):
         return None
     last = tokens[-1]
     for quant in QUANT_ORDER:
@@ -144,10 +161,11 @@ def inherit_from_siblings(
 def package_identity_key(package: "Package") -> tuple[str, str, str]:
     """The `(source, repo|ollama_name, filename-or-tag)` triple that identifies a package.
 
-    For Hugging Face, the third element is the sorted, de-duplicated tuple of the normalized
-    stems of every weights/weights-shard file, joined with `|` (so the shards of one sharded
-    package collapse to the same identity, and the result never depends on the order `files`
-    happens to list them in). For Ollama, it is the tag part of `ollama_name` after the colon.
+    For Hugging Face, the third element is the sorted, de-duplicated set of the identity stems
+    (shard suffix removed, extension kept) of every weights/weights-shard file, joined with
+    `|`: the shards of one sharded package collapse to the same identity, two file formats of
+    the same build stay distinct, and the result never depends on the order `files` happens
+    to list them in. For Ollama, it is the tag part of `ollama_name` after the colon.
     """
     if package.source == "huggingface":
         repo_or_name = package.repo or ""
@@ -160,9 +178,7 @@ def _weights_filename_or_tag(package: "Package") -> str:
     if package.source == "ollama":
         name = package.ollama_name or ""
         return name.split(":", 1)[1] if ":" in name else name
-    stems = {
-        normalize_file_stem(file.name) for file in package.files if file.role in ("weights", "weights_shard")
-    }
+    stems = {identity_stem(file.name) for file in package.files if file.role in ("weights", "weights_shard")}
     return "|".join(sorted(stems))
 
 

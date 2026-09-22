@@ -52,10 +52,11 @@ the manifest digest on Ollama.
 
 The internal `(source, repo|ollama_name, filename-or-tag)` triple that `Snapshot` uses to reject
 duplicate packages (see the `Snapshot` model below) never depends on file order: for a Hugging
-Face package, its third element is the sorted, de-duplicated set of the normalized stems of
-every `weights`/`weights_shard` file, joined with `|` (so a sharded package's shards, which all
-normalize to the same stem, still collapse to one identity). For an Ollama package it is the
-tag part of `ollama_name` after the colon.
+Face package, its third element is the sorted, de-duplicated set of the identity stems of
+every `weights`/`weights_shard` file (shard suffix removed, file extension kept), joined with
+`|`: a sharded package's shards collapse to one identity, while `Nova-7B-BF16.gguf` and
+`Nova-7B-BF16.safetensors` in the same repo stay two distinct packages. For an Ollama package
+it is the tag part of `ollama_name` after the colon.
 
 ## Exit codes
 
@@ -81,9 +82,10 @@ are all present, `layer_types` is either absent or entirely `"full_attention"`, 
 the MoE fields below signal a mixture-of-experts model; a hybrid or MoE config, or a missing
 file, resolves to `"unknown"` with the numeric fields left at `None`. The MoE check looks at
 both the top level of `config.json` and, when present, its `text_config`: any of
-`num_local_experts`, `num_experts`, `n_routed_experts` or `num_experts_per_tok` present with a
-value `> 1`, or `moe_intermediate_size` present with any truthy value, rules out
-`dense_classic` even when the three numeric fields all look plausible.
+`num_local_experts`, `num_experts`, `n_routed_experts`, `num_experts_per_tok` or
+`moe_intermediate_size` present with a value other than `null` rules out `dense_classic` even
+when the three numeric fields all look plausible. Presence is the signal, the value is not
+interpreted: a dense decoder does not carry these fields at all.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|

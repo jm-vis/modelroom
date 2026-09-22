@@ -122,23 +122,21 @@ class Architecture(BaseModel):
         return self
 
 
-# Any of these fields, present at the top level or under `text_config` with a value that
-# signals a mixture-of-experts model, rules out `dense_classic` regardless of the plain
-# numeric fields. The first four are expert counts (a MoE model has more than one); the last
-# is an expert-FFN size that is simply present (truthy) only on a MoE config.
-_MOE_COUNT_FIELDS = ("num_local_experts", "num_experts", "n_routed_experts", "num_experts_per_tok")
-_MOE_SIZE_FIELD = "moe_intermediate_size"
+# Any of these fields, present at the top level or under `text_config` with a value other
+# than None, marks a mixture-of-experts config and rules out `dense_classic` regardless of the
+# plain numeric fields. A dense decoder does not carry them at all, so presence is the signal;
+# the value is not interpreted (a routed expert count of 1 is still a MoE layout).
+_MOE_FIELDS = (
+    "num_local_experts",
+    "num_experts",
+    "n_routed_experts",
+    "num_experts_per_tok",
+    "moe_intermediate_size",
+)
 
 
 def _is_moe_config(config: dict, layer_config: dict) -> bool:
-    for source in (config, layer_config):
-        for field in _MOE_COUNT_FIELDS:
-            value = source.get(field)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 1:
-                return True
-        if source.get(_MOE_SIZE_FIELD):
-            return True
-    return False
+    return any(source.get(field) is not None for source in (config, layer_config) for field in _MOE_FIELDS)
 
 
 def architecture_from_hf_config(

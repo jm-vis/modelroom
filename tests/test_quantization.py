@@ -13,6 +13,7 @@ from modelroom.quantization import (
     QUANT_ORDER,
     inherit_from_siblings,
     normalize_file_stem,
+    identity_stem,
     package_identity_key,
     parse_hf_quant,
     parse_ollama_tag_quant,
@@ -247,14 +248,14 @@ def test_package_identity_key_third_element_is_sorted_and_order_independent():
     key_forward = package_identity_key(forward)
     key_reversed = package_identity_key(reversed_)
     assert key_forward == key_reversed
-    assert key_forward[2] == "A-Q4_K_M|B-Q4_K_M"
+    assert key_forward[2] == "A-Q4_K_M.gguf|B-Q4_K_M.gguf"
 
 
 def test_package_identity_key_deduplicates_repeated_stems():
     file_1 = _StubPackageFile("Nova-70B-Q4_K_M-00001-of-00002.gguf", "weights_shard")
     file_2 = _StubPackageFile("Nova-70B-Q4_K_M-00002-of-00002.gguf", "weights_shard")
     package = _StubPackage(source="huggingface", repo="acme/Nova-70B-GGUF", ollama_name=None, files=[file_1, file_2])
-    assert package_identity_key(package)[2] == "Nova-70B-Q4_K_M"
+    assert package_identity_key(package)[2] == "Nova-70B-Q4_K_M.gguf"
 
 
 # --- parse_ollama_tag_quant: last token, descriptive middle tokens ignored (finding 7) -----
@@ -365,3 +366,57 @@ def test_sort_key_orders_real_tree_fixture_packages_from_smallest_to_largest():
 
     shuffled = [packages[2], packages[0], packages[1]]
     assert sorted(shuffled, key=sort_key) == packages
+
+
+def test_sort_key_uses_the_size_when_two_real_packages_share_a_quantization():
+    # Same quantization from two packager repos: only the recorded size can order them, so a
+    # sort key that dropped the size component would fail here.
+    entry = {e["path"]: e for e in _unsloth_tree_entries()}["Qwen3.5-9B-Q4_K_M.gguf"]
+    smaller = _hf_package_from_tree_entry(entry)
+    larger = _hf_package_from_tree_entry({**entry, "size": entry["size"] * 2}).model_copy(
+        update={"repo": "aaa-packager/Qwen3.5-9B-GGUF"}
+    )
+    assert larger.quantization == smaller.quantization
+    assert sorted([larger, smaller], key=sort_key) == [smaller, larger]
+
+
+# --- Codex round 2: size token and mlx anywhere; identity keeps the file format ------------
+
+
+def test_ollama_tag_without_a_size_token_carries_no_quantization():
+    assert parse_ollama_tag_quant("banana-q4_K_M") is None
+    assert parse_ollama_tag_quant("mlx-bf16") is None
+    assert parse_ollama_tag_quant("1.5b-q8_0") == "Q8_0"
+    assert parse_ollama_tag_quant("270m-fp16") is None
+
+
+def test_identity_stem_keeps_the_extension_but_drops_the_shard_suffix():
+    assert identity_stem("Nova-7B-BF16.gguf") == "Nova-7B-BF16.gguf"
+    assert identity_stem("Nova-7B-BF16.safetensors") == "Nova-7B-BF16.safetensors"
+    assert identity_stem("Nova-7B-BF16-00001-of-00002.gguf") == "Nova-7B-BF16.gguf"
+    assert identity_stem("Nova-7B-BF16-00002-of-00002.gguf") == "Nova-7B-BF16.gguf"
+
+
+def test_two_file_formats_of_the_same_build_have_distinct_identities():
+    def build(name: str, fmt: str) -> Package:
+        return Package(
+            source="huggingface",
+            repo="acme/Nova-7B",
+            revision="1" * 40,
+            base_model_hf_repo="acme/Nova-7B",
+            format=fmt,
+            files=[PackageFile(name=name, role="weights", size_bytes=1, digest=None)],
+            complete=True,
+            quantization=None,
+            default_context=None,
+            provenance="unresolved",
+            unresolved_reason="format" if fmt != "gguf" else "repo_name",
+            approval=None,
+            observed_at=_NOW,
+            last_seen=_NOW,
+            active=True,
+        )
+
+    gguf = build("Nova-7B-BF16.gguf", "gguf")
+    tensor = build("Nova-7B-BF16.safetensors", "tensor")
+    assert package_identity_key(gguf) != package_identity_key(tensor)

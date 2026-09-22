@@ -574,9 +574,9 @@ def test_moe_field_under_text_config_is_also_detected():
     assert architecture.kind == "unknown"
 
 
-def test_num_experts_per_tok_of_one_does_not_alone_signal_moe():
-    # A value of exactly 1 is the boundary the finding draws ("> 1"); a genuinely dense config
-    # would not carry this field at all, but the threshold itself must be exercised.
+def test_any_moe_field_present_signals_moe_even_with_a_count_of_one():
+    # A dense decoder does not carry expert fields at all, so their presence is the signal;
+    # a routed expert count of 1 is still a MoE layout and must not pass as dense_classic.
     config = {
         "num_hidden_layers": 32,
         "num_key_value_heads": 8,
@@ -584,4 +584,9 @@ def test_num_experts_per_tok_of_one_does_not_alone_signal_moe():
         "num_experts_per_tok": 1,
     }
     architecture = architecture_from_hf_config("acme/Nova-7B", None, config)
-    assert architecture.kind == "dense_classic"
+    assert architecture.kind == "unknown"
+
+
+def test_dense_config_without_any_moe_field_stays_dense():
+    config = {"num_hidden_layers": 32, "num_key_value_heads": 8, "head_dim": 128}
+    assert architecture_from_hf_config("acme/Nova-7B", None, config).kind == "dense_classic"
