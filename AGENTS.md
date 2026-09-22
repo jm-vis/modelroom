@@ -32,8 +32,8 @@ run the tests, commit the lock.
 - Explicit error handling. Every failure that a user can act on becomes a message and an exit
   code; nothing is swallowed.
 - Exit codes are part of the contract: `0` success, `1` at least one fetch area incomplete,
-  `2` required external tool missing or too old, `3` an input file has an unsupported schema
-  version.
+  `2` the configuration is missing or invalid, or a required external tool is missing or too
+  old, `3` an input file has an unsupported schema version.
 
 ## Hard boundaries
 

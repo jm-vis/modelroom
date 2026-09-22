@@ -1,0 +1,59 @@
+# Example modelroom configuration.
+#
+# Copy this file to `modelroom.toml` and adjust the families, allow-listed owners, machines
+# and paths for your own setup. `paths.state` and `paths.markdown`, when relative, resolve
+# against this file's own directory -- never the current working directory.
+
+schema_version = 1
+
+# Hugging Face organisations that publish quantized packager repos (GGUF builds). A package's
+# repo owner has to be one of these, or one of `publishers` below.
+packagers = ["unsloth", "bartowski", "mradermacher", "lmstudio-community", "ggml-org"]
+
+# Hugging Face organisations that publish the base models themselves. Every family's `hf_repo`
+# owner below must appear here.
+publishers = ["Qwen", "deepseek-ai", "utter-project"]
+
+[[families]]
+name = "qwen3.5"
+
+  [[families.base_models]]
+  hf_repo = "Qwen/Qwen3.5-9B"
+  repo_aliases = ["Qwen3.5-9B-GGUF"]
+  ollama_base = "qwen3.5"
+  ollama_tag = "9b"
+
+[[families]]
+name = "deepseek-r1"
+
+  [[families.base_models]]
+  hf_repo = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+  repo_aliases = ["DeepSeek-R1-0528-Qwen3-8B-GGUF"]
+
+[[families]]
+name = "eurollm"
+
+  [[families.base_models]]
+  hf_repo = "utter-project/EuroLLM-9B-Instruct-2512"
+  repo_aliases = ["EuroLLM-9B-Instruct-2512-GGUF"]
+
+# Machines that run `hardware` (and, for a writer, `fetch`). Reserved headroom is subtracted
+# before a package is judged to fit.
+[machines.workstation]
+reserve_ram_gib = 8
+reserve_vram_gib = 1
+writer = true
+
+[machines.inference-server]
+reserve_ram_gib = 16
+reserve_vram_gib = 2
+writer = false
+
+[paths]
+# Relative to this file's directory: the shared state (snapshot, lock, run-status, hardware
+# profiles) and the rendered Markdown output.
+state = "state"
+markdown = "docs/models.md"
+
+[llmfit]
+min_version = "1.1.16"

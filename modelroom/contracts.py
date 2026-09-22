@@ -46,6 +46,38 @@ def check_schema_version(version: int, accepted: tuple[int, int], file_label: st
         )
 
 
+def validate_hf_repo(value: str) -> str:
+    """Validate that `value` looks like a Hugging Face `owner/name` repo id.
+
+    Shared by `BaseModelSpec` and `config.BaseModelConfig` so the rule is defined once.
+    """
+    if not _HF_REPO_RE.fullmatch(value):
+        raise ValueError(f"hf_repo must look like 'owner/name': {value!r}")
+    return value
+
+
+def validate_repo_aliases(value: list[str]) -> list[str]:
+    """Validate that every alias is a non-empty repo *name*, never `owner/name`.
+
+    Shared by `BaseModelSpec` and `config.BaseModelConfig` so the rule is defined once.
+    """
+    for alias in value:
+        if not alias:
+            raise ValueError("repo_aliases entries must be non-empty")
+        if "/" in alias:
+            raise ValueError(f"repo_aliases holds repo names, not 'owner/name': {alias!r}")
+    return value
+
+
+def validate_ollama_pair(ollama_base: str | None, ollama_tag: str | None) -> None:
+    """Validate that `ollama_base` and `ollama_tag` are both set, or both `None`.
+
+    Shared by `BaseModelSpec` and `config.BaseModelConfig` so the rule is defined once.
+    """
+    if (ollama_base is None) != (ollama_tag is None):
+        raise ValueError("ollama_base and ollama_tag must both be set, or both be None")
+
+
 def shards_complete(files: list["PackageFile"]) -> bool:
     """Whether a package's weight files are a complete set.
 
@@ -197,24 +229,16 @@ class BaseModelSpec(BaseModel):
     @field_validator("hf_repo")
     @classmethod
     def _check_hf_repo(cls, value: str) -> str:
-        if not _HF_REPO_RE.fullmatch(value):
-            raise ValueError(f"hf_repo must look like 'owner/name': {value!r}")
-        return value
+        return validate_hf_repo(value)
 
     @field_validator("repo_aliases")
     @classmethod
     def _check_repo_aliases(cls, value: list[str]) -> list[str]:
-        for alias in value:
-            if not alias:
-                raise ValueError("repo_aliases entries must be non-empty")
-            if "/" in alias:
-                raise ValueError(f"repo_aliases holds repo names, not 'owner/name': {alias!r}")
-        return value
+        return validate_repo_aliases(value)
 
     @model_validator(mode="after")
     def _check_ollama_pair(self) -> "BaseModelSpec":
-        if (self.ollama_base is None) != (self.ollama_tag is None):
-            raise ValueError("ollama_base and ollama_tag must both be set, or both be None")
+        validate_ollama_pair(self.ollama_base, self.ollama_tag)
         return self
 
 

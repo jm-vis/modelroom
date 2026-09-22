@@ -392,3 +392,191 @@ filename-or-tag)` must be unique across `packages`.
   ]
 }
 ```
+
+## Configuration
+
+The models below make up `Configuration`, the parsed form of `modelroom.toml`. They live in
+`modelroom/config.py`, not `modelroom/contracts.py` -- `Configuration` is what the user brings
+in, `Snapshot` is what `fetch` produces, and the two are never merged into one module. The
+three field validators every field below relies on (`hf_repo` shape, `repo_aliases` shape, the
+`ollama_base`/`ollama_tag` pair) are the same functions `BaseModelSpec` uses
+(`validate_hf_repo`, `validate_repo_aliases`, `validate_ollama_pair` in `modelroom/contracts.py`),
+so a base model's identity rules read the same in the config and in the snapshot.
+
+Every example below is `EXAMPLES["<ModelName>"]` from `modelroom/config.py`, verbatim, under a
+`#### <ModelName>` heading -- one level deeper than the `### <ModelName>` headings above, so
+the doc-sync test for the snapshot's models (which scans the whole file for `### ` headings)
+does not also pick these up. `tests/test_config.py` checks both directions the same way
+`tests/test_contracts.py` does for the models above: every model in `modelroom/config.py` is
+documented here, and every `#### ` heading here names a real model with a matching example.
+
+#### BaseModelConfig
+
+One base model a family resolves to, as the user configures it. Deliberately narrower than
+`BaseModelSpec`: `publisher`, `parameters_b` and `architecture` are read from Hugging Face at
+fetch time and live only in the snapshot, never here.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `hf_repo` | `str` | `owner/name`, same rule as `BaseModelSpec.hf_repo` | the publisher's exact Hugging Face repo |
+| `repo_aliases` | `list[str]` | same rule as `BaseModelSpec.repo_aliases` | further exact packager repo names that count as this base model |
+| `ollama_base` | `str \| None` | both set or both `None` with `ollama_tag` | the Ollama library model name, when one exists |
+| `ollama_tag` | `str \| None` | both set or both `None` with `ollama_base` | the Ollama library tag naming this base model's size |
+
+```json
+{
+  "hf_repo": "acme/Nova-7B",
+  "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+  "ollama_base": "nova",
+  "ollama_tag": "7b"
+}
+```
+
+#### FamilyConfig
+
+A family name and the base models it resolves to, as the user configures it.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `name` | `str` | non-empty, `^[a-z0-9][a-z0-9.-]*$` | the family's configured name (e.g. `qwen3.5`) |
+| `base_models` | `list[BaseModelConfig]` | at least one | the base models this family names |
+
+```json
+{
+  "name": "nova",
+  "base_models": [
+    {
+      "hf_repo": "acme/Nova-7B",
+      "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+      "ollama_base": "nova",
+      "ollama_tag": "7b"
+    }
+  ]
+}
+```
+
+#### MachineConfig
+
+One machine's reserved headroom and whether it runs `fetch` and writes the shared state. The
+machine's name is not a field here: it is the key under `Configuration.machines`, validated
+there (`^[a-z0-9][a-z0-9-]*$`) against every key at once.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `reserve_ram_gib` | `float` | `>= 0` | system RAM to leave unused when judging fit |
+| `reserve_vram_gib` | `float` | `>= 0` | GPU VRAM to leave unused when judging fit |
+| `writer` | `bool` | -- | whether this machine runs `fetch` and writes the shared state |
+
+```json
+{
+  "reserve_ram_gib": 8.0,
+  "reserve_vram_gib": 1.0,
+  "writer": true
+}
+```
+
+#### PathsConfig
+
+Where modelroom keeps its state and its rendered Markdown output. Both fields must be
+absolute once this model validates: `load_config` resolves a relative path against the config
+file's own directory before validation; a `Configuration` built programmatically
+(`Configuration.from_dict`) has to pass paths that are already absolute. This package never
+resolves a path against the process' working directory. `snapshot_file`, `lock_file`,
+`run_status_file` and `hardware_dir` are derived read-only properties, not fields. "Absolute"
+means absolute for the platform the command runs on (`C:\...` on Windows, `/...` on POSIX);
+the examples below use a `//host/share/...` form only because it is absolute on both.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `state` | `Path` | absolute | the state folder: snapshot, lock, run-status, `hardware/<machine>.json` |
+| `markdown` | `Path` | absolute | the rendered Markdown output file |
+
+```json
+{
+  "state": "//models/modelroom/state",
+  "markdown": "//models/modelroom/docs/models.md"
+}
+```
+
+#### LlmfitConfig
+
+The minimum `llmfit` version this configuration requires. Only the requirement is stored
+here; checking the installed tool against it is a later work package.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `min_version` | `str` | default `"1.1.16"`, `^\d+\.\d+\.\d+$` | the minimum accepted `llmfit` version |
+
+```json
+{
+  "min_version": "1.1.16"
+}
+```
+
+#### Configuration
+
+The whole `modelroom.toml`: families, allow-listed owners, machines, paths, tool gate. Family
+names are unique, `hf_repo` is unique across every family's base models, and the owner part of
+every `hf_repo` must appear in `publishers` (the error names the missing owner). `packagers`
+and `publishers` are each non-empty owner names, unique within their own list. `allowed_owners()`
+returns `frozenset(packagers) | frozenset(publishers)` -- the positive list a package's repo
+owner must belong to.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `schema_version` | `int` | must equal `CONFIG_SCHEMA_VERSION` (currently `1`) | the configuration's schema version |
+| `families` | `list[FamilyConfig]` | at least one, names unique, `hf_repo` unique across all | the families this configuration knows |
+| `packagers` | `list[str]` | non-empty, no `/`, unique | Hugging Face owners that publish packager (GGUF) repos |
+| `publishers` | `list[str]` | non-empty, no `/`, unique | Hugging Face owners that publish base models |
+| `machines` | `dict[str, MachineConfig]` | keys `^[a-z0-9][a-z0-9-]*$`; may be empty | this deployment's machines, keyed by name |
+| `paths` | `PathsConfig` | -- | where state and rendered output live |
+| `llmfit` | `LlmfitConfig` | default `LlmfitConfig()` | the minimum required `llmfit` version |
+
+```json
+{
+  "schema_version": 1,
+  "families": [
+    {
+      "name": "nova",
+      "base_models": [
+        {
+          "hf_repo": "acme/Nova-7B",
+          "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+          "ollama_base": "nova",
+          "ollama_tag": "7b"
+        }
+      ]
+    }
+  ],
+  "packagers": ["packager"],
+  "publishers": ["acme"],
+  "machines": {
+    "workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": true}
+  },
+  "paths": {
+    "state": "//models/modelroom/state",
+    "markdown": "//models/modelroom/docs/models.md"
+  },
+  "llmfit": {"min_version": "1.1.16"}
+}
+```
+
+### Path contract
+
+`paths.state` and `paths.markdown` are always absolute in a validated `Configuration`. A raw
+`modelroom.toml` may write them relative; `load_config` resolves a relative path against that
+file's own parent directory, never against the current working directory. A caller that builds
+a `Configuration` programmatically (`Configuration.from_dict`) has no config file to resolve
+against, so it must already pass absolute paths -- a relative one is a validation error naming
+the field and explaining why.
+
+### Error mapping
+
+| Error | Raised by | Meaning | Exit code |
+|---|---|---|---|
+| `SchemaVersionError` | `load_config`, `Configuration.from_dict` | `schema_version` is missing, not an integer, or outside `CONFIG_SCHEMA_RANGE` | `3` |
+| `ConfigError` | `load_config`, `Configuration.from_dict` | the config file is missing, is not valid TOML, or fails field/cross-field validation; the message names the config file path (for `load_config`) and the underlying cause | `2` |
+
+`SchemaVersionError` is checked, and raised, before `ConfigError` ever gets a chance to wrap a
+field problem -- exactly like `load_snapshot`, so a wrong `schema_version` is never reported as
+an ordinary validation error.
