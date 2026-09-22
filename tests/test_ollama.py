@@ -226,11 +226,56 @@ def test_fetch_ollama_area_manifest_failure_is_incomplete():
     assert outcome.packages == []
 
 
+# --- P3-4 (fix-round 5): a tag parsed from the (network-controlled) tags page must be shape-
+# checked before it is used to build the manifest URL -----------------------------------------
+
+
+def test_fetch_ollama_area_rejects_a_tag_with_invalid_characters_before_fetching_its_manifest():
+    poisoned_html = (
+        b'<html><body>'
+        b'<a href="/library/qwen3.5:9b">9b</a>'
+        b'<a href="/library/qwen3.5:9b-../../secret">9b-../../secret</a>'
+        b'</body></html>'
+    )
+    transport = build_transport(
+        {
+            ("GET", TAGS_URL): Response(status=200, headers={}, body=poisoned_html),
+            ("GET", _manifest_url("9b")): json_response("ollama_qwen35_9b.json"),
+        }
+    )
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert "9b-../../secret" in outcome.error
+    # the poisoned tag's manifest was never requested
+    assert ("GET", _manifest_url("9b-../../secret")) not in transport.calls
+
+
 # --- F3: a malformed manifest layer ends the area incomplete, never raises -----------------
 
 
 def test_fetch_ollama_area_manifest_layer_not_a_dict_ends_area_incomplete():
     body = b'{"schemaVersion":2,"layers":[null]}'
+    transport = build_transport(
+        {
+            ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),
+            ("GET", _manifest_url("9b")): Response(status=200, headers={}, body=body),
+        }
+    )
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- F6 (fix-round 5): a manifest missing 'layers' entirely is a shape error, never a silent
+# empty/unresolved stub that would overwrite a previously-good package under the same identity -
+
+def test_fetch_ollama_area_manifest_without_layers_key_ends_area_incomplete():
+    body = b'{"schemaVersion":2}'  # no 'layers' key at all -- a genuinely malformed manifest
     transport = build_transport(
         {
             ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),
@@ -252,6 +297,29 @@ def test_fetch_ollama_area_weights_layer_without_size_ends_area_incomplete():
     body = (
         b'{"schemaVersion":2,"layers":[{"mediaType":"application/vnd.ollama.image.model",'
         b'"digest":"sha256:' + b"a" * 64 + b'"}]}'  # no "size" field at all
+    )
+    transport = build_transport(
+        {
+            ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),
+            ("GET", _manifest_url("9b")): Response(status=200, headers={}, body=body),
+        }
+    )
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- F8 (fix-round 5, extended to ollama.py for the same reason hf.py needed it): an
+# implausibly large weight layer 'size' is a shape error, not an OverflowError out of fit.py --
+
+
+def test_fetch_ollama_area_weights_layer_size_far_too_large_ends_area_incomplete():
+    body = (
+        b'{"schemaVersion":2,"layers":[{"mediaType":"application/vnd.ollama.image.model",'
+        b'"digest":"sha256:' + b"a" * 64 + b'","size":' + str(10**400).encode() + b"}]}"
     )
     transport = build_transport(
         {
@@ -356,6 +424,32 @@ def test_fetch_ollama_area_approval_does_not_follow_the_package_identity_to_anot
     assert by_name["qwen3.5:9b"].approval is None
 
 
+# --- P3-14 (fix-round 5): a message-less exception from a caller-supplied transport must never
+# become an empty Area.error --------------------------------------------------------------------
+
+
+def test_fetch_ollama_area_treats_a_message_less_transport_exception_on_the_tags_page_as_a_real_error():
+    def transport(method, url, headers=None):
+        raise Exception()  # no message at all -- str(Exception()) == ""
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error  # must be truthy, never ""
+
+
+def test_fetch_ollama_area_treats_a_message_less_transport_exception_on_the_manifest_as_a_real_error():
+    def transport(method, url, headers=None):
+        if url == TAGS_URL:
+            return Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>')
+        raise Exception()  # no message at all -- str(Exception()) == ""
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error  # must be truthy, never ""
+
+
 def test_fetch_ollama_area_budget_exhausted_mid_area_is_incomplete():
     inner = build_transport(
         {("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>')}
@@ -366,4 +460,8 @@ def test_fetch_ollama_area_budget_exhausted_mid_area_is_incomplete():
     outcome = fetch_ollama_area(budgeted, _qwen35_9b(), RUN_AT)
 
     assert outcome.status == "incomplete"
-    assert "budget exhausted" in outcome.error
+    # P3-12 (fix-round 5): exact text, not a substring -- CONTRACTS.md, "Request budget", promises
+    # exactly BudgetExhaustedError's own "budget exhausted", and every error path in
+    # `fetch_ollama_area` that can see a real BudgetExhaustedError already passes it through bare
+    # (unlike hf.py's tree-fetch path, which needed the P3-12 fix).
+    assert outcome.error == "budget exhausted"

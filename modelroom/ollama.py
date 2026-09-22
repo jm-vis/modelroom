@@ -18,18 +18,25 @@ tests/fixtures/README.md), so the extra request bought nothing and is dropped.
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime
 from html.parser import HTMLParser
 from typing import Literal
 
 from .contracts import Approval, BaseModelSpec, Package, PackageFile, shards_complete
-from .fetch_types import AreaOutcome
+from .fetch_types import AreaOutcome, error_text
 from .http import Transport
 from .provenance import decide_provenance
 from .quantization import inherit_from_siblings, package_identity_key, parse_ollama_tag_quant
 
 TAGS_URL = "https://ollama.com/library/{base}/tags"
 MANIFEST_URL = "https://registry.ollama.ai/v2/library/{base}/manifests/{tag}"
+
+# P3-4 (fix-round 5): a tag is parsed out of the (network-controlled) tags page HTML and then
+# used to build `MANIFEST_URL` -- the same charset `contracts._OLLAMA_NAME_RE` already requires
+# for the tag half of an `ollama_name`, checked here *before* the tag is used to build a URL,
+# never only once `Package.ollama_name`'s own validator would eventually reject it downstream.
+_TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _MODEL_MEDIA_TYPE = "application/vnd.ollama.image.model"
 _TENSOR_MEDIA_TYPE = "application/vnd.ollama.image.tensor"
@@ -98,7 +105,7 @@ def fetch_ollama_area(
     try:
         tags_response = transport("GET", TAGS_URL.format(base=base_model.ollama_base))
     except Exception as exc:
-        return _incomplete(base_model, str(exc))
+        return _incomplete(base_model, error_text(exc))
     if tags_response.status != 200:
         return _incomplete(base_model, f"unexpected status {tags_response.status} fetching tags page")
     try:
@@ -110,6 +117,9 @@ def fetch_ollama_area(
     if not all_tags:
         return _incomplete(base_model, "no tags parsed")
     kept_tags = _keep_relevant_tags(all_tags, base_model.ollama_tag)
+    for tag in kept_tags:
+        if not _TAG_RE.fullmatch(tag):
+            return _incomplete(base_model, f"{base_model.ollama_base}: invalid tag parsed from the tags page: {tag!r}")
 
     manifests: dict[str, dict] = {}
     digests: dict[str, str] = {}
@@ -117,7 +127,7 @@ def fetch_ollama_area(
         try:
             manifest, digest = _fetch_manifest(transport, base_model.ollama_base, tag)
         except Exception as exc:
-            return _incomplete(base_model, str(exc))
+            return _incomplete(base_model, error_text(exc))
         manifests[tag] = manifest
         digests[tag] = digest
 
@@ -175,10 +185,17 @@ def _validated_layers(base: str, tag: str, manifest: dict) -> list[dict]:
     """`manifest['layers']`, validated: F3/F4 -- every layer must be an object with `mediaType`/
     `digest` as strings when present; a weight (`.image.model`/`.image.tensor`) layer's own
     `size` is validated later, per layer, once its role is known (`_weight_layer_size`).
+
+    F6 (fix-round 5): a manifest missing `'layers'` entirely is a shape error -- the registry
+    always sends this key (measured 2026-09-22, see tests/fixtures/README.md); treating a
+    missing key as "empty" used to build a stub package (`complete=False`, `format="unknown"`)
+    under the *same* identity key as a previously valid package for this tag, which
+    `state.merge_snapshot` would then silently replace the good package with, on a genuinely
+    malformed response.
     """
-    layers = manifest.get("layers")
-    if layers is None:
-        return []
+    if "layers" not in manifest:
+        raise ValueError(f"{base}:{tag}: manifest has no 'layers'")
+    layers = manifest["layers"]
     if not isinstance(layers, list):
         raise ValueError(f"{base}:{tag}: manifest 'layers' is not a list")
     return [_validated_layer(base, tag, layer) for layer in layers]
@@ -196,6 +213,13 @@ def _validated_layer(base: str, tag: str, layer: object) -> dict:
     return layer
 
 
+# F8 (fix-round 5, same reasoning as hf.py::_MAX_FILE_SIZE_BYTES): an upper bound on a weight
+# layer's 'size' -- an implausible value would otherwise raise OverflowError out of
+# fit.py::compute_fit's `sum(...) / GIB` instead of ending this area incomplete like any other
+# shape problem.
+_MAX_FILE_SIZE_BYTES = 2**63
+
+
 def _weight_layer_size(layer: dict) -> int:
     """F4: a weight layer (`.image.model`/`.image.tensor`) without a real size is a shape error."""
     size = layer.get("size")
@@ -203,6 +227,8 @@ def _weight_layer_size(layer: dict) -> int:
         raise ValueError(f"weight layer has no 'size': {layer!r}")
     if isinstance(size, bool) or not isinstance(size, int) or size < 0:
         raise ValueError(f"weight layer 'size' is not a non-negative integer: {size!r}")
+    if size >= _MAX_FILE_SIZE_BYTES:
+        raise ValueError(f"weight layer 'size' is implausibly large: {size!r}")
     return size
 
 

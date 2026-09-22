@@ -22,6 +22,7 @@ points for a caller that already has a `Configuration` object (e.g. built with
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +30,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .config import ConfigError, Configuration, load_config
-from .contracts import HARDWARE_SCHEMA_VERSION, HardwareSnapshot, SchemaVersionError
+from .contracts import HARDWARE_SCHEMA_VERSION, HardwareSnapshot, SchemaVersionError, Snapshot
 from .fetch import run_fetch
 from .http import Transport, UrllibTransport
 from .llmfit import (
@@ -48,6 +49,7 @@ from .state import (
     acquire_lock,
     atomic_write_text,
     check_run_is_newer,
+    hardware_snapshot_path,
     load_existing_hardware_snapshot,
     load_existing_snapshot,
     release_lock,
@@ -55,6 +57,38 @@ from .state import (
     write_run_status,
     write_snapshot,
 )
+
+
+class _UnreadableStateFileError(Exception):
+    """A stored snapshot/hardware file is not valid JSON, or does not match its model (P2-3).
+
+    `state.load_existing_snapshot`/`load_existing_hardware_snapshot` let `json.JSONDecodeError`
+    and pydantic `ValidationError` propagate unchanged (only `SchemaVersionError` is their own);
+    `_read_snapshot`/`_read_hardware_snapshot` below catch those two and re-raise this instead,
+    naming the file, so every load site in `cli.py` maps it to exit `3` exactly like
+    `SchemaVersionError` -- a corrupt or wrong-shape file must never crash `main()` with an
+    uncaught exception (probe: a naive `Snapshot.run_at`, before P2-3's contract fix, validated
+    fine and then blew up `state.check_run_is_newer` with an uncaught `TypeError` instead; a
+    truncated file or one missing required fields did the same via `JSONDecodeError`/
+    `ValidationError`).
+    """
+
+
+def _read_snapshot(config: Configuration) -> Snapshot | None:
+    """`load_existing_snapshot`, wrapping a corrupt/wrong-shape file with its path (P2-3)."""
+    try:
+        return load_existing_snapshot(config)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise _UnreadableStateFileError(f"{config.paths.snapshot_file}: cannot read snapshot: {exc}") from exc
+
+
+def _read_hardware_snapshot(config: Configuration, machine: str) -> HardwareSnapshot | None:
+    """`load_existing_hardware_snapshot`, wrapping a corrupt/wrong-shape file with its path (P2-3)."""
+    try:
+        return load_existing_hardware_snapshot(config, machine)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        path = hardware_snapshot_path(config, machine)
+        raise _UnreadableStateFileError(f"{path}: cannot read hardware profile: {exc}") from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -142,8 +176,8 @@ def fetch_with_config(
     # snapshot is read again inside the lock (`_run_locked`), since it may change between the
     # two reads.
     try:
-        load_existing_snapshot(config)
-    except SchemaVersionError as exc:
+        _read_snapshot(config)
+    except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -161,8 +195,8 @@ def fetch_with_config(
 
 def _run_locked(config, transport: Transport, run_at: datetime) -> int:
     try:
-        old_snapshot = load_existing_snapshot(config)
-    except SchemaVersionError as exc:
+        old_snapshot = _read_snapshot(config)
+    except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -232,8 +266,8 @@ def hardware_with_config(
     installed, unavailable_reason = fetch_installed_models(active_transport, measured_at)
 
     try:
-        existing = load_existing_hardware_snapshot(config, machine)
-    except SchemaVersionError as exc:
+        existing = _read_hardware_snapshot(config, machine)
+    except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
     measurements = existing.measurements if existing is not None else []
@@ -304,8 +338,8 @@ def render_with_config(
     # snapshot runs before the lock is taken -- an unsupported version exits 3 with nothing
     # written, not even a lock file.
     try:
-        load_existing_snapshot(config)
-    except SchemaVersionError as exc:
+        _read_snapshot(config)
+    except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -323,8 +357,8 @@ def render_with_config(
 
 def _render_locked(config: Configuration, rendered_at: datetime, rating: RatingSource | None) -> int:
     try:
-        snapshot = load_existing_snapshot(config)
-    except SchemaVersionError as exc:
+        snapshot = _read_snapshot(config)
+    except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
     if snapshot is None:
@@ -333,7 +367,7 @@ def _render_locked(config: Configuration, rendered_at: datetime, rating: RatingS
 
     try:
         hardware_by_machine = _load_hardware_profiles(config)
-    except SchemaVersionError as exc:
+    except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -348,19 +382,26 @@ def _render_locked(config: Configuration, rendered_at: datetime, rating: RatingS
 
 
 def _load_hardware_profiles(config: Configuration) -> dict[str, HardwareSnapshot | None]:
-    return {name: load_existing_hardware_snapshot(config, name) for name in config.machines}
+    return {name: _read_hardware_snapshot(config, name) for name in config.machines}
 
 
 def _refusal_against_existing_document(markdown_path: Path, new_snapshot_run_at: datetime) -> str | None:
     """`None` when `render` may write `markdown_path`, else the message to print and exit 1 with.
 
-    A missing file, or one whose first line is not the fixed header (`parse_header_line`
-    returns `None` either way), is never a reason to refuse -- only a header whose own
-    `snapshot_run_at` is strictly newer than the snapshot about to be rendered blocks the write.
+    A missing file, one whose first line is not the fixed header, one whose header timestamps
+    are not aware UTC (`parse_header_line` returns `None` for all three), or one that is not
+    valid UTF-8 at all (fix-round 5, F4: `read_text` would otherwise raise `UnicodeDecodeError`
+    straight out of `render` for a corrupted/foreign-encoding existing file) is never a reason to
+    refuse -- only a header whose own `snapshot_run_at` is strictly newer than the snapshot about
+    to be rendered blocks the write.
     """
     if not markdown_path.exists():
         return None
-    header = parse_header_line(markdown_path.read_text(encoding="utf-8"))
+    try:
+        existing_text = markdown_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+    header = parse_header_line(existing_text)
     if header is None or header.snapshot_run_at <= new_snapshot_run_at:
         return None
     return (

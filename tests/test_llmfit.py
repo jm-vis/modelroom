@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ import pytest
 from modelroom.llmfit import (
     FixtureRunner,
     LlmfitError,
+    SubprocessRunner,
     check_llmfit_version,
     fetch_llmfit_system,
     hardware_fields_from_llmfit_system,
@@ -229,3 +232,100 @@ def test_hardware_fields_from_llmfit_system_rejects_a_non_bool_unified_memory():
 def test_hardware_fields_from_llmfit_system_accepts_a_true_unified_memory():
     fields = hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "unified_memory": True}})
     assert fields["unified_memory"] is True
+
+
+# --- F9 (fix-round 5): SubprocessRunner -- the only implementation that spawns a real process --
+#
+# `check_llmfit_version`/`fetch_llmfit_system` are unaffected by F9b: they still build
+# `["llmfit", ...]`, exactly as every `FixtureRunner`-based test above already exercises: the
+# name is resolved inside `SubprocessRunner` itself, the one runner a test never constructs to
+# fake a fixed response (per this module's own docstring) -- so it is tested directly here,
+# against a real process, never a `FixtureRunner`.
+
+
+def _write_llmfit_shim(directory: Path, version_line: str) -> None:
+    """A minimal real `llmfit` stand-in on disk: `--version` prints `version_line`."""
+    directory.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        (directory / "llmfit.bat").write_text(f"@echo off\r\necho {version_line}\r\n", encoding="utf-8")
+    else:
+        script = directory / "llmfit"
+        script.write_text(f"#!/bin/sh\necho '{version_line}'\n", encoding="utf-8")
+        script.chmod(0o755)
+
+
+def test_subprocess_runner_resolves_the_bare_name_before_invoking_it(tmp_path: Path):
+    on_path = tmp_path / "on_path"
+    _write_llmfit_shim(on_path, "llmfit 1.1.16")
+
+    def which(name: str) -> str | None:
+        assert name == "llmfit"
+        return str(on_path / ("llmfit.bat" if sys.platform == "win32" else "llmfit"))
+
+    runner = SubprocessRunner(which=which)
+    result = runner(["llmfit", "--version"])
+
+    assert result.returncode == 0
+    assert "llmfit 1.1.16" in result.stdout
+
+
+def test_subprocess_runner_raises_file_not_found_when_which_finds_nothing():
+    runner = SubprocessRunner(which=lambda name: None)
+    with pytest.raises(FileNotFoundError):
+        runner(["llmfit", "--version"])
+
+
+def test_subprocess_runner_missing_binary_becomes_an_ordinary_llmfit_error():
+    """End to end through `check_llmfit_version`, proving F9b's `FileNotFoundError` still maps
+    to the same `LlmfitError` `test_check_llmfit_version_rejects_a_missing_binary` already
+    covers for a hand-written fake -- here via the real `SubprocessRunner` path instead.
+    """
+    runner = SubprocessRunner(which=lambda name: None)
+    with pytest.raises(LlmfitError, match="1.1.16"):
+        check_llmfit_version(runner, "1.1.16")
+
+
+def test_subprocess_runner_prefers_the_path_entry_over_a_same_named_file_in_the_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """F9b: a same-named `llmfit` shim placed only in the current working directory must never
+    be the one that runs -- `which` (real `shutil.which` here, via `SubprocessRunner`'s own
+    default) only ever searches `PATH`, and `SubprocessRunner` invokes the exact resolved path,
+    never the bare name, so the current directory is never consulted at all.
+    """
+    on_path = tmp_path / "on_path"
+    _write_llmfit_shim(on_path, "llmfit 1.1.16")
+    planted_cwd = tmp_path / "planted_cwd"
+    _write_llmfit_shim(planted_cwd, "llmfit 9.9.9")  # the impostor -- must never be chosen
+
+    monkeypatch.chdir(planted_cwd)
+    monkeypatch.setenv("PATH", str(on_path))
+
+    result = SubprocessRunner()(["llmfit", "--version"])
+
+    assert "llmfit 1.1.16" in result.stdout
+    assert "9.9.9" not in result.stdout
+
+
+def test_subprocess_runner_decodes_output_as_utf8_with_replace_on_undecodable_bytes(tmp_path: Path):
+    """F9a: a fixed `encoding="utf-8", errors="replace"` never raises `UnicodeDecodeError`, even
+    for bytes that are not valid UTF-8 at all -- `text=True` alone decodes with
+    `locale.getpreferredencoding()` instead, which is not UTF-8 on Windows.
+    """
+    directory = tmp_path / "on_path"
+    directory.mkdir()
+    if sys.platform == "win32":
+        script = directory / "llmfit.bat"
+        # a raw non-UTF-8 byte (0x80) after "llmfit 1.1.16 " -- @echo off with this byte in a
+        # .bat comment line is enough to make cmd.exe's own output undecodable as UTF-8.
+        script.write_bytes(b"@echo off\r\necho llmfit 1.1.16 \x80\r\n")
+    else:
+        script = directory / "llmfit"
+        script.write_bytes(b"#!/bin/sh\nprintf 'llmfit 1.1.16 \\x80\\n'\n")
+        os.chmod(script, 0o755)
+
+    runner = SubprocessRunner(which=lambda name: str(script))
+    result = runner(["llmfit", "--version"])
+
+    assert result.returncode == 0
+    assert "llmfit 1.1.16" in result.stdout

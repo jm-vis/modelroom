@@ -223,6 +223,32 @@ def test_parse_header_line_returns_none_for_an_empty_file():
     assert parse_header_line("") is None
 
 
+# --- F4 (fix-round 5, own finding at the AP5 acceptance): a naive header timestamp is None --
+#
+# `datetime.fromisoformat` happily parses a timestamp with no UTC offset; before this fix
+# `parse_header_line` returned a `HeaderInfo` carrying naive datetimes, and
+# `cli.py::_refusal_against_existing_document`'s `header.snapshot_run_at <= new_snapshot_run_at`
+# then raised `TypeError: can't compare offset-naive and offset-aware datetimes` (the new
+# snapshot's `run_at` is always aware since P2-3). CONTRACTS.md, "Header and the newer-document
+# refusal", documents a header with a naive timestamp as `None`, same as no header at all.
+
+
+def test_parse_header_line_returns_none_for_a_naive_snapshot_run_at():
+    line = "<!-- modelroom render: snapshot_run_at=2026-09-22T09:00:00 rendered_at=2026-09-22T10:00:00+00:00 -->"
+    assert parse_header_line(line + "\n") is None
+
+
+def test_parse_header_line_returns_none_for_a_naive_rendered_at():
+    line = "<!-- modelroom render: snapshot_run_at=2026-09-22T09:00:00+00:00 rendered_at=2026-09-22T10:00:00 -->"
+    assert parse_header_line(line + "\n") is None
+
+
+def test_parse_header_line_returns_none_for_a_non_utc_offset():
+    """Same rule as `contracts.check_aware_utc`: aware but not UTC is still rejected."""
+    line = "<!-- modelroom render: snapshot_run_at=2026-09-22T11:00:00+02:00 rendered_at=2026-09-22T10:00:00+00:00 -->"
+    assert parse_header_line(line + "\n") is None
+
+
 def test_build_document_starts_with_the_header_line():
     document = _render([_hf_package()])
     assert document.startswith(format_header_line(NOW, RENDERED_AT))
@@ -331,17 +357,76 @@ def test_variants_count_excludes_packages_not_shown_as_a_row():
     assert "+2 more" in document
 
 
+# --- F5 (fix-round 5): a group fit v1 cannot judge at all makes no pick, never a useless one --
+#
+# Before F5, `_select_for_machine` fell back to "the smallest package" whenever nothing
+# qualified as good/perfect -- including when fit v1 could not judge *any* package of the group
+# (`fit_class == "unknown"` for every one, e.g. a whole architecture fit v1 does not cover, the
+# real Qwen3.5 case measured 2026-09-22: every package came back unknown, and the old fallback
+# still picked an arbitrary smallest quant such as `UD-IQ2_XXS` with `+21 more`, a recommendation
+# with no basis at all). The new rule: a machine with no judged package (all unknown, or no
+# hardware profile) makes no pick; if no machine picks anything for the group, it renders one
+# row with every package cell "–" except the fit cells ("no recommendation: <reason>") and
+# Variants ("<N> variants, none judged"). The "else the smallest" fallback still applies, but
+# only across the *judged* packages, when at least one is judged and none reach good/perfect.
+
+
+def test_group_entirely_unknown_renders_one_no_recommendation_row():
+    small = _hf_package(quantization="Q3_K_S", weights_bytes=int(3.5 * GIB), repo="packager/Nova-8B-GGUF-small")
+    mid = _hf_package(quantization="Q4_K_M", weights_bytes=int(5.0 * GIB), repo="packager/Nova-8B-GGUF-mid")
+    large = _hf_package(quantization="Q5_K_M", weights_bytes=int(6.0 * GIB), repo="packager/Nova-8B-GGUF-good")
+    base_model = _base_model(architecture=_architecture(kind="unknown"))
+    # `_render`'s helper always attaches the default dense_classic `_base_model()` -- build
+    # directly so the group's base model is the unknown-architecture one instead.
+    config = _config(_SELECTION_MACHINES)
+    snapshot = _snapshot([small, mid, large], base_models=[base_model])
+    document = build_document(config, snapshot, {"workstation": _selection_hardware()}, RENDERED_AT)
+
+    assert "no recommendation: architecture not covered by v1" in document
+    assert "3 variants, none judged" in document
+    assert "Q3_K_S" not in document
+    assert "Q4_K_M" not in document
+    assert "Q5_K_M" not in document
+
+
+def test_group_with_one_judged_bad_package_among_unknowns_picks_the_judged_one():
+    unknown_a = _hf_package(
+        quantization="Q3_K_S", weights_bytes=0, repo="packager/Nova-8B-GGUF-unknown-a"
+    )  # a weight file with no size -> unknown, regardless of its (smallest) quant label
+    unknown_b = _hf_package(
+        quantization="Q4_K_M", weights_bytes=0, repo="packager/Nova-8B-GGUF-unknown-b"
+    )
+    judged_bad = _hf_package(
+        quantization="Q8_0", weights_bytes=int(50.0 * GIB), repo="packager/Nova-8B-GGUF-huge"
+    )  # judged (too_tight) on the tiny hardware below -- the only package fit v1 could judge
+    document = _render(
+        [unknown_a, unknown_b, judged_bad],
+        machines={"workstation": MachineConfig(reserve_ram_gib=3.0, reserve_vram_gib=0.0, writer=True)},
+        hardware_by_machine={"workstation": _hardware(vram_gib=0.0, ram_gib=7.56)},
+    )
+
+    assert "Q8_0" in document
+    assert "too_tight" in document
+    assert "no recommendation" not in document
+    assert "+2 more" in document
+
+
 # --- fit cell: unknown never prints the zeroed numbers --------------------------------------
 
 
 def test_fit_cell_for_unknown_architecture_never_prints_numbers():
+    """F5 (fix-round 5): every package in the group is unknown here (architecture-level, so it
+    applies to every package regardless of its own properties) -- the group makes no pick at
+    all and renders the "no recommendation" row (see the F5 section below), never a fit cell
+    quoting the zeroed placeholder numbers `compute_fit` returns for the unknown case.
+    """
     package = _hf_package()
     base_model = _base_model(architecture=_architecture(kind="unknown"))
     config = _config()
     snapshot = _snapshot([package], base_models=[base_model])
     document = build_document(config, snapshot, {"workstation": _hardware()}, RENDERED_AT)
 
-    assert "unknown: architecture not covered by v1" in document
+    assert "no recommendation: architecture not covered by v1" in document
     assert "need 0.0" not in document
     assert "pool 0.0" not in document
 

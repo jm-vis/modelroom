@@ -314,6 +314,13 @@ lock_path = Path(sys.argv[1])
 go_path = Path(sys.argv[2])
 release_path = Path(sys.argv[3])
 now = datetime.fromisoformat(sys.argv[4])
+ready_path = Path(sys.argv[5])
+
+# P3-10 (fix-round 5, tightened): signal readiness *before* polling for "go", so the parent
+# waits for all three processes to actually be alive and about to race before ever writing
+# go_path -- without this, a process still in interpreter startup when "go" appears would only
+# reach acquire_lock some time later, and the round would not really be three-way concurrent.
+ready_path.write_text("ready", encoding="utf-8")
 
 deadline = time.monotonic() + 10
 while not go_path.exists() and time.monotonic() < deadline:
@@ -335,18 +342,35 @@ else:
 
 
 def _race_round(script_path: Path, lock_path: Path, go_path: Path, release_path: Path) -> list[str]:
-    """Launch three processes that all wait on `go_path`, then race `acquire_lock` against
-    `lock_path` the instant it appears. The winner keeps holding until `release_path` exists,
-    so every loser's attempt happens while the lock is genuinely held. Returns each process's
-    one line of stdout."""
+    """Launch three processes that each signal readiness, then wait on `go_path`, then race
+    `acquire_lock` against `lock_path` the instant it appears. `go_path` is written only once
+    every process's own `ready-<i>` file exists (P3-10, fix-round 5) -- a process still starting
+    up would otherwise not even be in its polling loop yet when `go_path` appears, and the round
+    would not really be three-way concurrent. The winner keeps holding until `release_path`
+    exists, so every loser's attempt happens while the lock is genuinely held. Returns each
+    process's one line of stdout.
+    """
+    ready_paths = [go_path.with_name(f"{go_path.name}.ready-{i}") for i in range(3)]
     procs = [
         subprocess.Popen(
-            [sys.executable, str(script_path), str(lock_path), str(go_path), str(release_path), RUN1.isoformat()],
+            [
+                sys.executable,
+                str(script_path),
+                str(lock_path),
+                str(go_path),
+                str(release_path),
+                RUN1.isoformat(),
+                str(ready_paths[i]),
+            ],
             stdout=subprocess.PIPE,
             text=True,
         )
-        for _ in range(3)
+        for i in range(3)
     ]
+    deadline = time.monotonic() + 10
+    while not all(p.exists() for p in ready_paths) and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert all(p.exists() for p in ready_paths), "not every racing process signaled ready in time"
     go_path.write_text("go", encoding="utf-8")
     outputs = [proc.stdout.readline().strip() for proc in procs]
     release_path.write_text("release", encoding="utf-8")
@@ -383,13 +407,34 @@ def test_atomic_write_json_leaves_no_tmp_file_on_success(tmp_path: Path):
     assert list(tmp_path.rglob("*.tmp")) == []
 
 
-def test_atomic_write_json_leaves_no_tmp_file_on_a_serialization_failure(tmp_path: Path):
+def test_atomic_write_json_raises_before_ever_creating_a_tmp_file_for_unserializable_data(tmp_path: Path):
+    # P3-7 (fix-round 5, renamed): `json.dumps(data, ...)` is evaluated as `write_text`'s own
+    # argument -- a `TypeError` here happens *before* `write_text` (and so `tmp_path`) is ever
+    # touched, so this proves only that no tmp file is created in the first place, never that
+    # the except-clause's own `tmp_path.unlink()` cleanup runs (it does not: `tmp_path.exists()`
+    # is already `False`). The old name claimed the broader "serialization failure leaves no tmp
+    # file" contract; `test_atomic_write_json_leaves_no_tmp_file_when_replace_fails` below is
+    # what actually exercises that cleanup, by failing *after* the tmp file exists.
     target = tmp_path / "state" / "modelroom.json"
 
     with pytest.raises(TypeError):
         atomic_write_json(target, {"a": {1, 2, 3}})  # a set is not JSON serializable
 
     assert not target.exists()
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_atomic_write_json_leaves_no_tmp_file_when_replace_fails(tmp_path: Path):
+    # P3-7 (fix-round 5): a real post-write failure -- `os.replace` raises `PermissionError`
+    # (an `OSError`) when the destination is an existing directory (measured on Windows) -- so
+    # the tmp file genuinely exists when the except-clause runs, actually exercising its
+    # `tmp_path.unlink()` cleanup, unlike the serialization-failure test above.
+    target = tmp_path / "state" / "modelroom.json"
+    target.mkdir(parents=True)  # a directory where the file should go
+
+    with pytest.raises(OSError):
+        atomic_write_json(target, {"a": 1})
+
     assert list(tmp_path.rglob("*.tmp")) == []
 
 

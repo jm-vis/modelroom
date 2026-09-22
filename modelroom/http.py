@@ -23,6 +23,77 @@ USER_AGENT = f"modelroom/{modelroom.__version__}"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_REQUEST_BUDGET = 400
 
+# P2-1 (fix-round 5): the only HTTPS hosts this package ever talks to (read from the modules
+# that build the URLs, not guessed) -- `hf.py::HF_API`, `ollama.py::TAGS_URL`,
+# `ollama.py::MANIFEST_URL`. AGENTS.md's own "Security, definition of done" names the local
+# Ollama daemon as the one legitimate HTTP (not HTTPS) destination, at
+# `ollama_local.py::DEFAULT_BASE_URL`'s host.
+_ALLOWED_HTTPS_HOSTS: frozenset[str] = frozenset({"huggingface.co", "ollama.com", "registry.ollama.ai"})
+_ALLOWED_HTTP_HOSTS: frozenset[str] = frozenset({"127.0.0.1"})
+
+
+class TransportSecurityError(Exception):
+    """`UrllibTransport` refuses to open a URL whose scheme/host is not on its allow-list.
+
+    Every URL this package ever hands a `Transport` that did not originate in its own
+    configuration or source code -- the `Location` header a 302 answer carries
+    (`RedirectingTransport` calls `inner` again with it, so it passes back through this same
+    check on the next hop) and the `Link: rel="next"` header `hf.py::_fetch_tree` follows
+    verbatim -- eventually reaches `UrllibTransport.__call__`, since that is the only
+    implementation that ever opens a real connection (composed as the innermost layer in
+    production: `RedirectingTransport(BudgetedTransport(UrllibTransport()))`). This is the one
+    choke point that makes AGENTS.md's "HTTPS to huggingface.co/ollama.com/registry.ollama.ai,
+    HTTP to a local Ollama daemon" attack-surface promise true regardless of what an upstream
+    caller forgot to check: a `file://`/`ftp://`/`data:` URL, or an HTTPS URL to any other host,
+    is refused here before anything is opened.
+    """
+
+
+def _check_allowed(url: str, allowed_https_hosts: frozenset[str], allowed_http_hosts: frozenset[str]) -> None:
+    """Raise `TransportSecurityError` unless `url` is `https://<allowed host>` or `http://<allowed
+    loopback host>` -- checked before `UrllibTransport` ever opens a connection.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme == "https" and parsed.hostname in allowed_https_hosts:
+        return
+    if parsed.scheme == "http" and parsed.hostname in allowed_http_hosts:
+        return
+    raise TransportSecurityError(
+        f"refusing to open {url!r}: scheme {parsed.scheme!r} / host {parsed.hostname!r} is not on the allow-list"
+    )
+
+
+def _build_opener() -> urllib.request.OpenerDirector:
+    """An `OpenerDirector` carrying exactly the handlers this transport needs.
+
+    `urllib.request.build_opener(_NoAutoRedirect)` (the previous implementation) looks like an
+    explicit handler list but is not one: `build_opener` auto-fills every *default* handler
+    class it does not see represented (directly or by subclass) among its arguments, so leaving
+    `FileHandler`/`FTPHandler`/`DataHandler` out of the call still adds them back in -- measured
+    directly (fix-round 5 P2-1 probe): `UrllibTransport()("GET", "file:///.../pyvenv.cfg")`
+    returned status `None` and 178 bytes of a local file. Building an `OpenerDirector` directly
+    and registering only `HTTPHandler`/`HTTPSHandler`/`_NoAutoRedirect`/`HTTPErrorProcessor` has
+    no such auto-fill: a `file://`/`ftp://`/`data:` URL is structurally impossible here even if
+    `_check_allowed` were ever bypassed, never merely rejected by a check that a bug could skip.
+    """
+    opener = urllib.request.OpenerDirector()
+    for handler_class in (
+        urllib.request.HTTPHandler,
+        urllib.request.HTTPSHandler,
+        _NoAutoRedirect,
+        urllib.request.HTTPErrorProcessor,
+        # `_NoAutoRedirect.redirect_request` returning `None` makes `http_error_302` itself
+        # return `None` (stdlib source: `if new is None: return`) -- with no
+        # `HTTPDefaultErrorHandler` to fall back to, `OpenerDirector.error` would then return
+        # `None` all the way out of `opener.open`, not the 3xx response. This handler's
+        # `http_error_default` raises `HTTPError` instead, which `__call__` below already
+        # catches and turns into an ordinary `Response` -- the same path a genuine 4xx/5xx
+        # takes.
+        urllib.request.HTTPDefaultErrorHandler,
+    ):
+        opener.add_handler(handler_class())
+    return opener
+
 
 class BudgetExhaustedError(Exception):
     """Raised by `BudgetedTransport` once a run's request budget is used up.
@@ -91,14 +162,30 @@ class UrllibTransport:
     it. Following a redirect chain is `RedirectingTransport`'s job, not this transport's: that
     inversion is what lets `run_fetch` compose `RedirectingTransport(BudgetedTransport(...))` so
     every hop of a chain is booked against the run's request budget *before* it is made, failure
-    paths included, rather than only being counted after the whole chain already resolved.
+    paths included, rather than only being counted after the whole chain already resolved --
+    and, since every hop calls back into this same transport (P2-1), every hop is also checked
+    against the allow-list again, so a poisoned redirect target is refused on the hop that would
+    have followed it, never only on the first.
+
+    `allowed_https_hosts`/`allowed_http_hosts` default to the production allow-list
+    (`_ALLOWED_HTTPS_HOSTS`/`_ALLOWED_HTTP_HOSTS`); a caller overrides them only to relax the
+    check for a test (e.g. a loopback server on a non-default port), always as an explicit
+    constructor argument here, never through an environment variable or a module global.
     """
 
-    def __init__(self, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        allowed_https_hosts: frozenset[str] = _ALLOWED_HTTPS_HOSTS,
+        allowed_http_hosts: frozenset[str] = _ALLOWED_HTTP_HOSTS,
+    ) -> None:
         self._timeout = timeout
-        self._opener = urllib.request.build_opener(_NoAutoRedirect)
+        self._allowed_https_hosts = allowed_https_hosts
+        self._allowed_http_hosts = allowed_http_hosts
+        self._opener = _build_opener()
 
     def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
+        _check_allowed(url, self._allowed_https_hosts, self._allowed_http_hosts)
         request_headers = {"User-Agent": USER_AGENT}
         request_headers.update(headers or {})
         request = urllib.request.Request(url, method=method, headers=request_headers)

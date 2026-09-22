@@ -214,6 +214,12 @@ def atomic_write_json(path: Path, data: dict) -> None:
 
     A failure at any point (serialization, the write, the replace) leaves no `.tmp` file
     behind and re-raises.
+
+    P3-9 (fix-round 5, decided): atomic, not durable -- no `os.fsync` on the temp file or its
+    directory, so a power loss in the narrow window after `os.replace` returns but before the OS
+    flushes could still lose the write. Not fixed on purpose: every file this writes is a
+    reconstructible cache of the registries/local daemon, recovered by re-running the command,
+    not by restoring a backup (CONTRACTS.md, "Atomic writes: atomicity, not durability").
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")

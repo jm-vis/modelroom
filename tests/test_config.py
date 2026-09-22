@@ -264,6 +264,51 @@ def test_configuration_rejects_duplicate_packager():
         Configuration.model_validate(payload)
 
 
+# --- P3-6 (fix-round 5): a packager repo name claimed by two base models is a config error --
+#
+# `hf.py::fetch_hf_area` probes `<owner>/<name>-GGUF` and every `repo_aliases` entry under every
+# owner in `packagers` (global to the whole configuration) plus each base model's own owner.
+# `Package` identity (CONTRACTS.md, "Identity") does not carry `base_model_hf_repo`, so two base
+# models sharing a repo name would each write into the *same* `result_packages` dict entry in
+# `state.merge_snapshot` -- whichever area's outcome is processed last silently wins, the other's
+# packages vanish with no error. Caught at configuration load instead.
+
+
+def test_configuration_rejects_a_repo_alias_shared_by_two_base_models():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    second_family = json.loads(json.dumps(payload["families"][0]))
+    second_family["name"] = "other-family"
+    second_family["base_models"][0]["hf_repo"] = "acme/Other-7B"
+    # same repo_aliases entry as the first base model's -- both hf_repo values differ (so the
+    # existing hf_repo-uniqueness check does not fire), but the *packager repo name* collides.
+    payload["families"].append(second_family)
+    with pytest.raises(ValidationError):
+        Configuration.model_validate(payload)
+
+
+def test_configuration_rejects_a_default_gguf_name_colliding_with_another_base_models_alias():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    second_family = json.loads(json.dumps(payload["families"][0]))
+    second_family["name"] = "other-family"
+    second_family["base_models"][0]["hf_repo"] = "acme/Nova-7B-Instruct"
+    # this base model's *default* candidate name ("Nova-7B-Instruct-GGUF") collides with the
+    # first base model's explicit repo_aliases entry.
+    second_family["base_models"][0]["repo_aliases"] = []
+    payload["families"].append(second_family)
+    with pytest.raises(ValidationError):
+        Configuration.model_validate(payload)
+
+
+def test_configuration_accepts_distinct_repo_aliases_across_base_models():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    second_family = json.loads(json.dumps(payload["families"][0]))
+    second_family["name"] = "other-family"
+    second_family["base_models"][0]["hf_repo"] = "acme/Other-7B"
+    second_family["base_models"][0]["repo_aliases"] = ["Other-7B-Instruct-GGUF"]
+    payload["families"].append(second_family)
+    Configuration.model_validate(payload)  # must not raise
+
+
 def test_configuration_accepts_empty_machines():
     payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
     payload["machines"] = {}

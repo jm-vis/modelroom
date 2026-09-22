@@ -101,12 +101,17 @@ def validate_machine_name(value: str) -> str:
 def check_aware_utc(value: datetime, field_name: str) -> datetime:
     """Validate that `value` is a timezone-aware datetime at UTC offset.
 
-    Every AP4 hardware/measurement timestamp uses this (`HardwareSnapshot.measured_at`,
-    `InstalledModel.observed_at`, `Measurement.profile_measured_at`/`measured_at`) -- a naive
+    Every persisted timestamp in this module uses this: AP4's hardware/measurement fields
+    (`HardwareSnapshot.measured_at`, `InstalledModel.observed_at`,
+    `Measurement.profile_measured_at`/`measured_at`) and, since fix-round 5 (P2-3),
+    `Package.observed_at`/`last_seen`, `Area.last_success` and `Snapshot.run_at` -- a naive
     datetime, or one at a non-UTC offset, is rejected rather than silently accepted and later
-    misread. Earlier snapshot/config datetimes did not need this check spelled out because
-    every producer already emitted UTC ISO-8601 with a `Z`/`+00:00` suffix; AP4 makes the rule
-    explicit and checked, rather than only conventional.
+    misread (probe: a naive `Snapshot.run_at` validated without complaint, then
+    `state.check_run_is_newer` raised `TypeError: can't compare offset-naive and offset-aware
+    datetimes` out of `cli.main`). Earlier snapshot/config datetimes did not need this check
+    spelled out because every producer already emitted UTC ISO-8601 with a `Z`/`+00:00` suffix;
+    AP4 made the rule explicit and checked for its own new fields, rather than only
+    conventional, and fix-round 5 closes the gap for the fields AP3 had already shipped.
     """
     if value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{field_name} must be an aware UTC datetime: {value!r}")
@@ -347,6 +352,16 @@ class Package(BaseModel):
     last_seen: datetime
     active: bool
 
+    @field_validator("observed_at")
+    @classmethod
+    def _check_observed_at(cls, value: datetime) -> datetime:
+        return check_aware_utc(value, "observed_at")
+
+    @field_validator("last_seen")
+    @classmethod
+    def _check_last_seen(cls, value: datetime) -> datetime:
+        return check_aware_utc(value, "last_seen")
+
     @field_validator("ollama_name")
     @classmethod
     def _check_ollama_name(cls, value: str | None) -> str | None:
@@ -429,6 +444,11 @@ class Area(BaseModel):
     last_success: datetime | None = None
     error: str | None = None
 
+    @field_validator("last_success")
+    @classmethod
+    def _check_last_success(cls, value: datetime | None) -> datetime | None:
+        return check_aware_utc(value, "last_success") if value is not None else None
+
     @model_validator(mode="after")
     def _check_error_present_when_incomplete(self) -> "Area":
         if self.status == "incomplete" and not self.error:
@@ -446,6 +466,11 @@ class Snapshot(BaseModel):
     areas: list[Area] = Field(default_factory=list)
     base_models: list[BaseModelSpec] = Field(default_factory=list)
     packages: list[Package] = Field(default_factory=list)
+
+    @field_validator("run_at")
+    @classmethod
+    def _check_run_at(cls, value: datetime) -> datetime:
+        return check_aware_utc(value, "run_at")
 
     @model_validator(mode="after")
     def _check_schema_version(self) -> "Snapshot":

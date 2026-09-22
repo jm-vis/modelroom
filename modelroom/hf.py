@@ -37,8 +37,8 @@ from .contracts import (
     architecture_from_hf_config,
     shards_complete,
 )
-from .fetch_types import AreaOutcome
-from .http import Transport
+from .fetch_types import AreaOutcome, error_text
+from .http import BudgetExhaustedError, Transport
 from .provenance import decide_provenance
 from .quantization import has_shard_suffix, identity_stem, non_weight_role, package_identity_key, parse_hf_quant
 
@@ -55,6 +55,13 @@ _LINK_NEXT_RE = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 # this shape -- the same 40-hex rule Architecture.source_revision itself enforces, checked here
 # first so a malformed sha never reaches that validator and raises out of this module.
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
+
+# P3-3 (fix-round 5): a hard cap on `_fetch_tree`'s `Link: rel="next"` pagination -- a real
+# repo's tree fits in a handful of pages; a chain that has not terminated within this many hops
+# is either a broken/hostile response or a page loop, never a legitimate tree, so it raises
+# instead of fetching forever. The hop that would exceed the cap is never made, the same
+# convention `http.py::MAX_REDIRECTS` uses for a redirect chain.
+_MAX_TREE_PAGES = 20
 
 
 @dataclass(frozen=True)
@@ -210,7 +217,7 @@ def fetch_hf_area(
         try:
             info_response = transport("GET", f"{HF_API}/models/{repo}")
         except Exception as exc:
-            return _incomplete(base_model, owner, str(exc))
+            return _incomplete(base_model, owner, error_text(exc))
         if info_response.status in _NOT_FOUND_STATUSES:
             continue
         if info_response.status != 200:
@@ -222,6 +229,14 @@ def fetch_hf_area(
         if not isinstance(info, dict) or not isinstance(info.get("sha"), str):
             return _incomplete(base_model, owner, f"{repo}: model info missing 'sha'")
         sha = info["sha"]
+        # P3-4 (fix-round 5): `sha` is registry-controlled data, about to become a URL path
+        # segment (`_fetch_tree`) and, on assembly, a `Package.revision` -- validated against
+        # the same 40-hex shape `Package.revision`/`Architecture.source_revision` already
+        # require, *before* it is used to build that URL, rather than only failing once
+        # `_fetch_tree` has already made the request and `Package`'s own validator rejects it
+        # downstream.
+        if not _SHA1_RE.fullmatch(sha):
+            return _incomplete(base_model, owner, f"{repo}: model info 'sha' is not a 40-hex commit sha: {sha!r}")
         tags = info.get("tags") if isinstance(info.get("tags"), list) else []
 
         try:
@@ -229,6 +244,13 @@ def fetch_hf_area(
             packages.extend(
                 _assemble_packages(repo, sha, base_model, tags, entries, run_at, previous_by_key or {})
             )
+        except BudgetExhaustedError as exc:
+            # P3-12 (fix-round 5): CONTRACTS.md, "Request budget", promises the area's error is
+            # exactly BudgetExhaustedError's own message -- never repo-prefixed like a genuine
+            # shape problem below, since the budget is a whole-run resource, not a fact about
+            # this particular repo. (Always non-empty in practice -- BudgetExhaustedError's
+            # message is a fixed literal -- but error_text keeps every str(exc) capture uniform.)
+            return _incomplete(base_model, owner, error_text(exc))
         except Exception as exc:
             # F3: a malformed tree page (wrong shape, a weight file with no size, ...) ends
             # this area incomplete like any other genuine failure, never raises out of here.
@@ -245,9 +267,14 @@ def fetch_hf_area(
 
 
 def _fetch_tree(transport: Transport, repo: str, sha: str) -> list[dict]:
+    """The repo's full tree, following `Link: rel="next"` pagination.
+
+    P3-3: capped at `_MAX_TREE_PAGES` hops -- a chain that has not terminated by then raises
+    instead of continuing forever, and the page that would exceed the cap is never requested.
+    """
     url = f"{HF_API}/models/{repo}/tree/{sha}?recursive=true"
     entries: list[dict] = []
-    while url:
+    for _ in range(_MAX_TREE_PAGES):
         response = transport("GET", url)
         if response.status != 200:
             raise RuntimeError(f"{repo}: unexpected status {response.status} fetching tree")
@@ -261,7 +288,9 @@ def _fetch_tree(transport: Transport, repo: str, sha: str) -> list[dict]:
         link = response.header("Link")
         match = _LINK_NEXT_RE.search(link) if link else None
         url = match.group(1) if match else None
-    return entries
+        if url is None:
+            return entries
+    raise RuntimeError(f"{repo}: tree pagination did not finish within {_MAX_TREE_PAGES} pages")
 
 
 def _classify_role(name: str) -> Literal["weights", "weights_shard", "mmproj", "other"]:
@@ -291,6 +320,14 @@ def _files_from_tree(entries: list[dict]) -> list[PackageFile]:
     file must carry a non-negative integer `size` (a missing or malformed size on a weight file
     is a shape error, since a silently-assumed `0` would later make `fit` believe an empty
     package fits everywhere) -- a non-weight file (`mmproj`/`other`) may still default to `0`.
+
+    F7 (fix-round 5): a `type: "file"` entry's `path` missing, empty or not a string is *also* a
+    shape error, never silently skipped -- `if not name: continue` used to drop it before the
+    `isinstance` check below ever ran (a real directory entry never reaches here at all, since
+    it is filtered out by `type != "file"` above; a genuine file entry always carries a real
+    path). Silently dropping every entry this way made a tree that is entirely malformed look
+    like a genuinely empty, `complete` area, which `state.merge_snapshot` then reads as "this
+    area really has zero files now" and deactivates every one of its old packages.
     """
     files: list[PackageFile] = []
     for entry in entries:
@@ -299,15 +336,23 @@ def _files_from_tree(entries: list[dict]) -> list[PackageFile]:
         if entry.get("type") != "file":
             continue
         name = entry.get("path")
-        if not name:
-            continue
-        if not isinstance(name, str):
-            raise ValueError(f"tree entry 'path' is not a string: {name!r}")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"tree entry 'path' is missing, empty or not a string: {name!r}")
         role = _classify_role(name)
         size_bytes = _tree_entry_size(name, role, entry.get("size"))
         digest = _tree_entry_digest(entry.get("lfs"))
         files.append(PackageFile(name=name, role=role, size_bytes=size_bytes, digest=digest))
     return files
+
+
+# F8 (fix-round 5): an upper bound on a tree entry's 'size' -- `json.loads` parses a JSON
+# integer literal of any width without complaint, and a value near or beyond this bound would
+# later raise `OverflowError` out of `fit.py::compute_fit`'s `sum(...) / GIB` (Python's own
+# `int.__truediv__` cannot convert an arbitrarily large int to `float`) instead of this module
+# ending the area `incomplete` like any other shape problem. `2**63` is already far past any
+# real file size (an exabyte); chosen as a round, generous bound rather than tuned to a
+# specific failure threshold.
+_MAX_FILE_SIZE_BYTES = 2**63
 
 
 def _tree_entry_size(name: str, role: str, raw_size: object) -> int:
@@ -317,6 +362,8 @@ def _tree_entry_size(name: str, role: str, raw_size: object) -> int:
         return 0
     if isinstance(raw_size, bool) or not isinstance(raw_size, int) or raw_size < 0:
         raise ValueError(f"tree entry 'size' for {name!r} is not a non-negative integer: {raw_size!r}")
+    if raw_size >= _MAX_FILE_SIZE_BYTES:
+        raise ValueError(f"tree entry 'size' for {name!r} is implausibly large: {raw_size!r}")
     return raw_size
 
 

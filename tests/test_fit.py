@@ -108,13 +108,16 @@ def test_unknown_architecture_is_unknown_fit():
 
 
 def test_incomplete_package_is_unknown_fit():
+    # P3-7 (fix-round 5): `fit.reason is not None` alone would still pass even if `compute_fit`
+    # mixed this case up with a different `unknown` branch (e.g. "architecture not covered by
+    # v1") -- pin the exact reason this test's name is actually about.
     package = _gguf_package(weights_bytes=5 * GIB, complete=False)
     base_model = _base_model()
 
     fit = compute_fit(package, base_model, LAPTOP, LAPTOP_MACHINE)
 
     assert fit.fit_class == "unknown"
-    assert fit.reason is not None
+    assert fit.reason == "only a complete gguf package is judged by fit contract v1"
 
 
 def test_non_gguf_package_is_unknown_fit():

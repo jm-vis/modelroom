@@ -122,6 +122,35 @@ def test_fetch_snapshot_with_unsupported_schema_version_is_exit_3(tmp_path: Path
     assert code == 3
 
 
+# --- P2-3 (fix-round 5): a corrupt or wrong-shape state file is exit 3, not an uncaught crash -
+
+
+def test_fetch_snapshot_with_truncated_json_is_exit_3_and_names_the_file(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    snapshot_path = state_dir / "modelroom.json"
+    snapshot_path.write_text('{"schema_version": 1, "run_at": ', encoding="utf-8")  # truncated
+
+    code = main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1)
+
+    assert code == 3
+    assert str(snapshot_path) in capsys.readouterr().err
+
+
+def test_fetch_snapshot_with_wrong_shape_is_exit_3(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    snapshot_path = state_dir / "modelroom.json"
+    snapshot_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")  # missing run_at etc.
+
+    code = main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1)
+
+    assert code == 3
+    assert str(snapshot_path) in capsys.readouterr().err
+
+
 # --- F13: the schema-version gate runs before the lock, never touching it -------------------
 
 
@@ -209,6 +238,10 @@ def test_fetch_a_second_run_older_than_the_stored_snapshot_is_exit_1_and_writes_
 
     assert code == 1
     assert snapshot_path.read_text(encoding="utf-8") == before
+    # P3-11 (fix-round 5): the stale run still acquired and released the lock (the schema-version
+    # gate runs before it, but the staleness check runs inside it, F13) -- the file itself is
+    # never deleted (CONTRACTS.md, "Lock file"), but release_lock always empties it.
+    assert (tmp_path / "state" / "modelroom.lock").read_bytes() == b""
 
 
 # --- the lock, against a real second process -----------------------------------------------
@@ -273,10 +306,17 @@ def test_fetch_with_config_non_writer_machine_is_exit_2(tmp_path: Path):
     assert code == 2
 
 
-def test_fetch_with_config_defaults_to_the_real_transport_and_clock(tmp_path: Path):
-    # No transport/now given -- must fall back exactly like `_cmd_fetch` does, never raise for
-    # a missing keyword argument. A non-writer machine short-circuits before either default is
-    # ever exercised against the network or the wall clock.
+def test_fetch_with_config_accepts_omitted_transport_and_now_without_raising(tmp_path: Path):
+    """P3-13 (fix-round 5, renamed): this only proves `fetch_with_config(config, machine)` --
+    `transport`/`now` both omitted -- never raises `TypeError` for a missing keyword argument,
+    exactly like `_cmd_fetch` calls it. It does **not** prove the real defaults
+    (`UrllibTransport()`, `datetime.now(timezone.utc)`) ever run: a non-writer machine returns
+    exit `2` before either default is even constructed, and this suite must never let a real
+    `UrllibTransport()` make a live network call in the first place (AGENTS.md, "Network-facing
+    code is tested against recorded fixtures, never against the live API"), so there is no way
+    to exercise that default's actual network behavior from this test suite at all -- only that
+    the call site itself is valid Python.
+    """
     data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
     data["machines"]["laptop"] = {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False}
     config = Configuration.from_dict(data)
@@ -477,6 +517,30 @@ def test_hardware_llmfit_system_unified_memory_a_string_is_exit_2_and_writes_not
     assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
 
 
+def test_hardware_naive_now_is_exit_2_via_the_hardware_snapshot_validator(tmp_path: Path, capsys):
+    """P3-8 (fix-round 5): confirms `hardware_with_config`'s R7 `except ValidationError` around
+    `write_hardware_snapshot` is still reachable after P2-3 added the aware-UTC check to
+    `HardwareSnapshot.measured_at` -- no test exercised it before. A naive `now` (a legitimate
+    way for a programmatic caller of `hardware_with_config` to reach it, even though the real
+    CLI always passes `now=None`, per `main`'s own docstring) makes `measured_at.isoformat()`
+    naive, and `write_hardware_snapshot` -> `load_hardware_snapshot` ->
+    `HardwareSnapshot.model_validate` then raises `ValidationError` for it.
+    """
+    config_path = _write_config(tmp_path)
+    naive_now = datetime(2026, 9, 22, 9, 0, 0)  # no tzinfo
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=naive_now,
+    )
+
+    assert code == 2
+    assert "did not validate as a hardware profile" in capsys.readouterr().err
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
 # --- hardware: schema-3 path ------------------------------------------------------------
 
 
@@ -493,6 +557,45 @@ def test_hardware_existing_snapshot_with_unsupported_schema_version_is_exit_3(tm
         now=RUN1,
     )
     assert code == 3
+
+
+# --- P2-3 (fix-round 5): a corrupt or wrong-shape existing hardware file is exit 3 ----------
+
+
+def test_hardware_existing_snapshot_with_truncated_json_is_exit_3_and_names_the_file(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    hardware_path = hardware_dir / "workstation.json"
+    hardware_path.write_text('{"schema_version": 1, "machine": ', encoding="utf-8")  # truncated
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 3
+    assert str(hardware_path) in capsys.readouterr().err
+
+
+def test_hardware_existing_snapshot_with_wrong_shape_is_exit_3(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    hardware_path = hardware_dir / "workstation.json"
+    hardware_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")  # missing machine etc.
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 3
+    assert str(hardware_path) in capsys.readouterr().err
 
 
 # --- hardware: end-to-end against the fixture runner/transport ------------------------------
@@ -655,6 +758,52 @@ def test_render_hardware_with_unsupported_schema_version_is_exit_3(tmp_path: Pat
     assert not (tmp_path / "models.md").exists()
 
 
+# --- P2-3 (fix-round 5): a corrupt or wrong-shape snapshot/hardware file is exit 3 ----------
+
+
+def test_render_snapshot_with_truncated_json_is_exit_3_and_names_the_file(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    snapshot_path = state_dir / "modelroom.json"
+    snapshot_path.write_text('{"schema_version": 1, "run_at": ', encoding="utf-8")  # truncated
+
+    code = main(["render", "--config", str(config_path)], now=RUN1)
+
+    assert code == 3
+    assert not (tmp_path / "models.md").exists()
+    assert str(snapshot_path) in capsys.readouterr().err
+
+
+def test_render_snapshot_with_wrong_shape_is_exit_3(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    snapshot_path = state_dir / "modelroom.json"
+    snapshot_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")  # missing run_at etc.
+
+    code = main(["render", "--config", str(config_path)], now=RUN1)
+
+    assert code == 3
+    assert not (tmp_path / "models.md").exists()
+    assert str(snapshot_path) in capsys.readouterr().err
+
+
+def test_render_hardware_with_truncated_json_is_exit_3_and_names_the_file(tmp_path: Path, capsys):
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    hardware_path = hardware_dir / "workstation.json"
+    hardware_path.write_text('{"schema_version": 1, "machine": ', encoding="utf-8")  # truncated
+
+    code = main(["render", "--config", str(config_path)], now=RUN2)
+
+    assert code == 3
+    assert not (tmp_path / "models.md").exists()
+    assert str(hardware_path) in capsys.readouterr().err
+
+
 def test_render_end_to_end_exit_0_writes_a_markdown_document(tmp_path: Path):
     config_path = _write_config(tmp_path)
     assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
@@ -736,6 +885,23 @@ def test_render_replaces_an_older_existing_document(tmp_path: Path):
     assert code == 0
     text = (tmp_path / "models.md").read_text(encoding="utf-8")
     assert f"snapshot_run_at={RUN2.isoformat()}" in text
+
+
+def test_render_replaces_an_existing_document_that_is_not_valid_utf8(tmp_path: Path):
+    """F4 (fix-round 5, own finding at the AP5 acceptance): an undecodable existing document
+    counts as no header, exactly like a missing/empty one -- `render` must replace it, never
+    raise `UnicodeDecodeError` out of `_refusal_against_existing_document`.
+    """
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
+    markdown_path = tmp_path / "models.md"
+    markdown_path.write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+
+    code = main(["render", "--config", str(config_path)], now=RUN1)
+
+    assert code == 0
+    text = markdown_path.read_text(encoding="utf-8")
+    assert f"snapshot_run_at={RUN1.isoformat()}" in text
 
 
 # --- render_with_config: the programmatic entry point, and the Rating source ----------------

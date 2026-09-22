@@ -65,7 +65,7 @@ it is the tag part of `ollama_name` after the colon.
 | `0` | success: every fetch area is `complete` (`render`: the document was written, even when its rating source failed) |
 | `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first writes nothing |
 | `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration; or a required external tool (`llmfit`) is missing or below the minimum version |
-| `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version` |
+| `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version`, is not valid JSON, or does not match its model (fix-round 5, P2-3: `cli.py`'s own `_read_snapshot`/`_read_hardware_snapshot` catch `json.JSONDecodeError`/pydantic `ValidationError` at every load site and name the file in the message, the same exit code as an unsupported `schema_version`) |
 
 ## Models
 
@@ -860,6 +860,24 @@ files, and two `hardware` runs on the *same* machine (the only case that could r
 already serialized by the operator invoking them, not by this tool. See "Hardware profile
 (AP4)" below.
 
+### Atomic writes: atomicity, not durability (P3-9, fix-round 5, decided)
+
+`state.py::atomic_write_json`/`atomic_write_text` (the `.pid.tmp` + `os.replace` convention every
+persisted file in this package uses) guarantee **atomicity** -- a reader of `modelroom.json`,
+`run-status.json` or a hardware profile always sees either the complete old content or the
+complete new content, never a torn write from a crash mid-write -- but not **durability**: neither
+function calls `os.fsync` on the temporary file's descriptor before `os.replace`, nor on the
+containing directory afterward (the second fsync a fully crash-safe rename needs on POSIX, so a
+directory-entry update is not itself lost on power failure). A power loss in the narrow window
+between `os.replace` returning and the OS actually flushing the new file's pages to disk could
+still lose the just-written content. Decided, not fixed: every file this convention writes is a
+locally reconstructible cache of what `huggingface.co`/`registry.ollama.ai`/the local Ollama
+daemon already say -- `run-status.json` is explicitly "runtime-only, not a contract" (this file's
+own "Source of truth" section), and a lost or torn `modelroom.json`/hardware profile is recovered
+by simply running `fetch`/`hardware` again, never by restoring from a backup. `fsync` on every
+write would cost real latency on every run for a durability guarantee this tool's actual failure
+mode (re-run the command) does not need.
+
 ### Run status (`run-status.json`)
 
 Written by `modelroom/state.py::write_run_status` at the end of every `fetch` run, including
@@ -902,8 +920,14 @@ candidate repos for one base model, or one base model's whole Ollama library ent
   a candidate that does not exist does not end the area, only a genuine failure does (see
   below). `Area.packager` is that owner.
 - **Ollama**: one area per base model that configures both `ollama_base` and `ollama_tag`;
-  `Area.packager` is always `None`. A base model with neither configured is a trivially
-  `complete`, empty area (there is nothing to look up).
+  `Area.packager` is always `None`. **P3-2 (fix-round 5, clarified):** `modelroom/fetch.py::
+  run_fetch` only ever calls `fetch_ollama_area` when a base model configures *both*
+  `ollama_base` and `ollama_tag` (`if base_model.ollama_base and base_model.ollama_tag:`) -- a
+  base model with neither configured gets **no Ollama area at all** in a `Snapshot`, not an
+  empty `complete` one; `fetch_ollama_area`'s own early return for that case (`status="complete"`,
+  `packages=[]`) is a defensive default for a *direct* caller of the function (covered by its own
+  unit test), never something this section's "one area per..." rule describes as appearing in a
+  merged `Snapshot`.
 
 An area ends `incomplete` only for a genuine failure: any HTTP status other than `200`
 (Hugging Face model-info additionally treats `401`/`404` as "not found", see below, not a
@@ -932,8 +956,12 @@ candidate ("no package here") and a base model's own repo (architecture resolves
 Every `fetch` run wraps its transport in `modelroom/http.py::BudgetedTransport`, default
 budget `400` requests for the whole run (shared across every area, not per-area). Once
 exhausted, the transport raises `BudgetExhaustedError("budget exhausted")` instead of making
-the request; the fetcher in progress catches it exactly like any other failure and ends its
-*current* area `incomplete` with that message. Areas already completed before the budget ran
+the request; the fetcher in progress catches it and ends its *current* area `incomplete` with
+`error` set to **exactly** `"budget exhausted"` -- never a repo- or tag-prefixed variant a
+genuine shape problem's error message carries (P3-12, fix-round 5: `modelroom/hf.py`'s
+tree-fetch catch clause distinguishes `BudgetExhaustedError` from every other exception for
+exactly this reason, since the budget is a whole-run resource limit, not a fact about the
+particular repo being fetched when it ran out). Areas already completed before the budget ran
 out keep their results.
 
 **Checked before each base model and before each area (fix-round 2, R4).**
@@ -1324,7 +1352,14 @@ line:
 existing document's `snapshot_run_at` is **strictly newer** than the snapshot about to be
 rendered, the write is refused (exit `1`, the message names both timestamps, the file is left
 untouched). Equal or older is replaced. A file with no such first line (missing, empty, or from
-before `render` ever wrote one) is always replaced. The write itself is atomic
+before `render` ever wrote one) is always replaced. **Fix-round 5, F4:** a header whose
+`snapshot_run_at`/`rendered_at` is not an aware UTC datetime (`parse_header_line` -- naive, or
+aware at a non-UTC offset, same rule as `contracts.check_aware_utc`) is *also* treated as no
+header, not compared at all -- `format_header_line` never writes anything else, so only a
+hand-edited or otherwise corrupted document could carry one, and comparing it against the new,
+always-aware snapshot's `run_at` would otherwise raise `TypeError` instead of refusing cleanly.
+An existing document that is not valid UTF-8 counts the same way (no header, always replaced)
+rather than raising `UnicodeDecodeError` out of `render`. The write itself is atomic
 (`state.atomic_write_text`, the same `.pid.tmp` + `os.replace` convention as
 `atomic_write_json`) and, like every file this package writes, uses LF line endings on every
 platform. `run-status.json` is never touched by `render` -- it belongs to `fetch`.
@@ -1350,21 +1385,41 @@ always last.
 **Selection rule**, per group *and per configured machine*: the package with the largest
 quantization (`QUANT_ORDER` index, unknown sorting last -- same convention as
 `quantization.sort_key`) whose `fit.py::compute_fit` class on that machine is `"good"` or
-`"perfect"`; when none qualifies, the smallest present package (`quantization.sort_key`) with
-whatever class it gets. Ties among qualifying packages at the same quant index break by
-`sort_key`, first wins. A machine with no hardware profile can judge no package, so it always
-falls back to the smallest. Since the pick can differ per machine, the Package table renders one
-row per *distinct* package selected by at least one machine (a package selected by two machines
-is one row) -- every row still shows a `fit (computed, v1): <machine>` cell for *every*
-configured machine, computed fresh for that exact package, whether or not it was that machine's
-own pick. `Variants` on a row is the group's eligible-package count minus the number of distinct
-rows the group produced.
+`"perfect"`; when none qualifies, the smallest *judged* package (`quantization.sort_key`, a real
+`fit_class` other than `"unknown"`) with whatever class it gets. Ties among qualifying packages
+at the same quant index break by `sort_key`, first wins. **Fix-round 5, F5:** a machine makes
+**no pick at all** when it has no hardware profile, or when `compute_fit`'s class is `"unknown"`
+for *every* package of the group (typically the whole architecture is not covered by fit v1 --
+the real Qwen3.5 case, measured 2026-09-22: every package came back unknown, and the previous
+"else the smallest" fallback still picked an arbitrary smallest-quant package such as
+`UD-IQ2_XXS` with no basis at all) -- the "smallest" fallback above only ever considers *judged*
+packages, never one fit v1 could not score. Since the pick can differ per machine, the Package
+table renders one row per *distinct* package selected by at least one machine (a package
+selected by two machines is one row) -- every row still shows a `fit (computed, v1): <machine>`
+cell for *every* configured machine, computed fresh for that exact package, whether or not it
+was that machine's own pick. `Variants` on a row is the group's eligible-package count minus the
+number of distinct rows the group produced.
+
+**No-recommendation row (fix-round 5, F5).** When *no* configured machine picks anything for a
+group (every machine's `_select_for_machine` returned no pick), the group renders exactly **one**
+row instead of the ordinary per-package rows: Base model, Stars and Packager as usual; Quant,
+Format, Size GiB, Context, Installed, Speed, Provenance and Observed all render `–`; each
+`fit (computed, v1): <machine>` cell renders `no recommendation: <reason>` (`compute_fit`'s own
+`reason` -- the same text for every package when the cause is architecture-level, computed
+against the group's `sort_key`-smallest package as a deterministic representative when it is
+package-level instead -- or the literal `no profile` when that machine has no hardware profile at
+all); `Variants` renders `<N> variants, none judged`, `N` being the group's full eligible-package
+count. A configuration with no machines at all is unaffected (unchanged from before F5: such a
+group renders no row at all, since there is nothing to have "no recommendation" *for*).
 
 **Fit cell.** `<class> (<mode>, need <need_gib:.1f> / pool <pool_gib:.1f> GiB)` for a judged fit;
-`fit_class == "unknown"` renders only `unknown: <reason>`, **never** the zeroed placeholder
-numbers `compute_fit` returns for that case (CONTRACTS.md, "Fit contract v1", already forbids
-printing them). A machine with no hardware profile renders `no profile` instead of calling
-`compute_fit` at all.
+`fit_class == "unknown"` on a row that *did* get selected (a different machine picked its package;
+see above) renders only `unknown: <reason>`, **never** the zeroed placeholder numbers
+`compute_fit` returns for that case (CONTRACTS.md, "Fit contract v1", already forbids printing
+them). A machine with no hardware profile renders `no profile` instead of calling `compute_fit`
+at all -- both of those still apply to an ordinary row; the no-recommendation row above always
+renders `no recommendation: <reason>`/`no recommendation: no profile` instead, never bare
+`unknown: <reason>`/`no profile`.
 
 **Installed cell**, per package per machine (measured 2026-09-22: the local Ollama daemon's
 `/api/tags` digest equals the registry manifest digest for the same tag, and sibling tags such

@@ -13,10 +13,17 @@ from __future__ import annotations
 import json
 import math
 import re
+import shutil
 import subprocess
-from typing import Protocol
+from typing import Callable, Protocol
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
+# F9b (fix-round 5): `Which = (name) -> absolute path | None`, the same dependency-injection
+# shape `Transport`/`Runner` already use -- the real implementation is `shutil.which`. Only
+# `SubprocessRunner` takes one (a test never constructs it -- see its own docstring -- so this
+# never touches a `FixtureRunner`-based test): a test that needs to prove which resolved path
+# `SubprocessRunner` invoked injects a fake resolver instead of needing a real binary on `PATH`.
+Which = Callable[[str], "str | None"]
 
 # `llmfit --help` (checked 2026-09-22) prints no install line of its own; this names the
 # project's own documented source instead (README.md, "Planned usage").
@@ -41,13 +48,38 @@ class Runner(Protocol):
 
 
 class SubprocessRunner:
-    """The real runner: `subprocess.run` with a fixed timeout, capturing text output."""
+    """The real runner: `subprocess.run` with a fixed timeout, capturing text output.
 
-    def __init__(self, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+    F9a (fix-round 5): decodes with a fixed `encoding="utf-8", errors="replace"` rather than
+    `text=True` alone, which decodes with `locale.getpreferredencoding()` -- on Windows that is
+    the system codepage, not UTF-8, so a non-ASCII `gpu_name`/similar in `llmfit`'s real UTF-8
+    output could raise `UnicodeDecodeError` here, uncaught by anything in this module, instead
+    of the process's own output ever reaching `check_llmfit_version`/`fetch_llmfit_system` to be
+    turned into an ordinary `LlmfitError`.
+
+    F9b (fix-round 5): resolves `args[0]` (always the bare name `"llmfit"`, from
+    `check_llmfit_version`/`fetch_llmfit_system`) to its absolute location via `which`
+    (`shutil.which` by default) *before* calling `subprocess.run`, rather than passing the bare
+    name straight through -- an unqualified executable name's search order on Windows checks the
+    current working directory before `PATH`, so a same-named file placed in the CWD could
+    otherwise run instead of the real one `PATH` points to. `which` returning `None` raises
+    `FileNotFoundError`, exactly the exception `subprocess.run` itself would raise for a name it
+    cannot find at all -- `check_llmfit_version` already turns that into `LlmfitError` naming an
+    install hint, `fetch_llmfit_system` into one via its broader `OSError` catch
+    (`FileNotFoundError` is an `OSError` subclass).
+    """
+
+    def __init__(self, timeout: float = DEFAULT_TIMEOUT_SECONDS, which: Which = shutil.which) -> None:
         self._timeout = timeout
+        self._which = which
 
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess:
-        return subprocess.run(args, capture_output=True, text=True, timeout=self._timeout)
+        resolved = self._which(args[0])
+        if resolved is None:
+            raise FileNotFoundError(f"{args[0]}: not found on PATH")
+        return subprocess.run(
+            [resolved, *args[1:]], capture_output=True, encoding="utf-8", errors="replace", timeout=self._timeout
+        )
 
 
 class FixtureRunner:

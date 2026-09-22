@@ -522,6 +522,50 @@ def test_package_ollama_name_valid_shape_is_accepted():
     Package.model_validate(payload)
 
 
+# --- P2-3 (fix-round 5): every datetime field is checked aware-UTC, not just AP4's ----------
+#
+# Probe (fix-round 5 brief): `Snapshot.model_validate({..., "run_at": "2026-09-22T09:00:00", ...})`
+# validated a naive timestamp without complaint, and `state.check_run_is_newer` then raised
+# `TypeError: can't compare offset-naive and offset-aware datetimes` out of `main()`. AP4 already
+# checks this for `InstalledModel.observed_at`/`Measurement.*`/`HardwareSnapshot.measured_at`
+# (see `contracts.check_aware_utc`'s own docstring); `Package.observed_at`/`Package.last_seen`,
+# `Area.last_success` and `Snapshot.run_at` did not.
+
+
+def test_package_rejects_a_naive_observed_at():
+    payload = dict(EXAMPLES["Package"])
+    payload["observed_at"] = "2026-09-22T09:00:00"  # no offset
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_package_rejects_a_naive_last_seen():
+    payload = dict(EXAMPLES["Package"])
+    payload["last_seen"] = "2026-09-22T09:00:00"  # no offset
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_area_rejects_a_naive_last_success():
+    payload = dict(EXAMPLES["Area"])
+    payload["last_success"] = "2026-09-22T09:00:00"  # no offset
+    with pytest.raises(ValidationError):
+        Area.model_validate(payload)
+
+
+def test_area_accepts_last_success_none():
+    payload = dict(EXAMPLES["Area"])
+    payload["last_success"] = None
+    Area.model_validate(payload)
+
+
+def test_snapshot_rejects_a_naive_run_at():
+    payload = dict(EXAMPLES["Snapshot"])
+    payload["run_at"] = "2026-09-22T09:00:00"  # no offset
+    with pytest.raises(ValidationError):
+        Snapshot.model_validate(payload)
+
+
 # --- re.fullmatch, never re.match, for every regex check (finding 10) ----------------------
 
 

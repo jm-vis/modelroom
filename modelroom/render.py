@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable
 
 from .config import Configuration
@@ -54,24 +54,34 @@ def format_header_line(snapshot_run_at: datetime, rendered_at: datetime) -> str:
     return f"<!-- modelroom render: snapshot_run_at={snapshot_run_at.isoformat()} rendered_at={rendered_at.isoformat()} -->"
 
 
+def _is_aware_utc(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() == timedelta(0)
+
+
 def parse_header_line(text: str) -> HeaderInfo | None:
     """The header line's two timestamps, or `None` when `text` has no such first line.
 
-    `None` covers both an empty file and one whose first line does not match the fixed format
-    (e.g. a document from before `render` wrote this header) -- either way, the caller (`cli.py`)
-    treats it as nothing to compare against, never a reason to fail.
+    `None` covers an empty file, one whose first line does not match the fixed format (e.g. a
+    document from before `render` wrote this header), and -- fix-round 5, F4 -- one whose
+    `snapshot_run_at`/`rendered_at` parses but is not an aware UTC datetime (`format_header_line`
+    never writes anything else, same rule as `contracts.check_aware_utc`; a hand-edited or
+    otherwise corrupted header with a naive timestamp would otherwise make
+    `cli.py::_refusal_against_existing_document`'s comparison against the new, always-aware
+    snapshot's `run_at` raise `TypeError` instead of just refusing to compare). Either way, the
+    caller (`cli.py`) treats it as nothing to compare against, never a reason to fail.
     """
     first_line = text.splitlines()[0] if text else ""
     match = _HEADER_RE.match(first_line)
     if match is None:
         return None
     try:
-        return HeaderInfo(
-            snapshot_run_at=datetime.fromisoformat(match.group("snapshot_run_at")),
-            rendered_at=datetime.fromisoformat(match.group("rendered_at")),
-        )
+        snapshot_run_at = datetime.fromisoformat(match.group("snapshot_run_at"))
+        rendered_at = datetime.fromisoformat(match.group("rendered_at"))
     except ValueError:
         return None
+    if not (_is_aware_utc(snapshot_run_at) and _is_aware_utc(rendered_at)):
+        return None
+    return HeaderInfo(snapshot_run_at=snapshot_run_at, rendered_at=rendered_at)
 
 
 # --- eligibility and grouping ----------------------------------------------------------------
@@ -125,16 +135,31 @@ def _quant_index(package: Package) -> int:
     return QUANT_ORDER.index(package.quantization) if package.quantization in QUANT_ORDER else len(QUANT_ORDER)
 
 
-def _select_for_machine(packages: list[Package], base_model: BaseModelSpec, hardware, machine_config) -> Package:
-    """The picked package for one machine: largest good-or-better quant, else the smallest."""
-    if hardware is None:
-        return min(packages, key=sort_key)
+def _select_for_machine(packages: list[Package], base_model: BaseModelSpec, hardware, machine_config) -> Package | None:
+    """The picked package for one machine, largest good-or-better quant, else the smallest
+    *judged* package -- or `None` when this machine has nothing to recommend at all.
 
-    qualifying = [
-        p for p in packages if compute_fit(p, base_model, hardware, machine_config).fit_class in _QUALIFYING_FIT_CLASSES
-    ]
+    F5 (fix-round 5): a machine with no hardware profile, or one where fit v1 cannot judge a
+    single package of the group (`fit_class == "unknown"` for every one -- typically the whole
+    architecture is not covered by v1, e.g. the real Qwen3.5 case measured 2026-09-22), makes no
+    pick, rather than falling back to an arbitrary "smallest" package fit v1 never actually
+    scored (the old behavior: a useless recommendation such as `UD-IQ2_XXS` for an architecture
+    fit v1 cannot judge at all). The "else the smallest" fallback still applies once at least one
+    package *was* judged (a real class, not "unknown") but none reached good/perfect -- scoped to
+    the judged packages only, never back to an unknown one that only looks smallest by quant
+    label.
+    """
+    if hardware is None:
+        return None
+
+    fits_by_key = {package_identity_key(p): compute_fit(p, base_model, hardware, machine_config) for p in packages}
+    judged = [p for p in packages if fits_by_key[package_identity_key(p)].fit_class != "unknown"]
+    if not judged:
+        return None
+
+    qualifying = [p for p in judged if fits_by_key[package_identity_key(p)].fit_class in _QUALIFYING_FIT_CLASSES]
     if not qualifying:
-        return min(packages, key=sort_key)
+        return min(judged, key=sort_key)
 
     max_index = max(_quant_index(p) for p in qualifying)
     candidates = [p for p in qualifying if _quant_index(p) == max_index]
@@ -144,21 +169,40 @@ def _select_for_machine(packages: list[Package], base_model: BaseModelSpec, hard
 def _select_group_packages(
     packages: list[Package], base_model: BaseModelSpec, config: Configuration, hardware_by_machine: dict
 ) -> list[Package]:
+    """Every distinct package picked by at least one machine -- never one a machine had nothing
+    to recommend for (F5: `_select_for_machine` returning `None` contributes nothing here).
+    """
     picked_by_key: dict[tuple, Package] = {}
     for machine_name, machine_config in config.machines.items():
         hardware = hardware_by_machine.get(machine_name)
         picked = _select_for_machine(packages, base_model, hardware, machine_config)
-        picked_by_key[package_identity_key(picked)] = picked
+        if picked is not None:
+            picked_by_key[package_identity_key(picked)] = picked
     return list(picked_by_key.values())
+
+
+def _no_recommendation_reason(packages: list[Package], base_model: BaseModelSpec, hardware, machine_config) -> str:
+    """F5: the reason text for a machine that made no pick -- `compute_fit`'s own reason (every
+    package shares it when the cause is architecture-level, the common case) computed against a
+    deterministic representative package (`sort_key`'s smallest) when it is package-level
+    instead, or the literal `"no profile"` when this machine has no hardware profile at all.
+    """
+    if hardware is None:
+        return "no profile"
+    representative = min(packages, key=sort_key)
+    return compute_fit(representative, base_model, hardware, machine_config).reason or "unknown"
 
 
 @dataclass(frozen=True)
 class PackageRow:
     base_model_hf_repo: str
     packager: str
-    package: Package
+    package: Package | None
     base_model: BaseModelSpec
     variants: int
+    # F5: set only on a "no recommendation" row (`package is None`) -- maps each configured
+    # machine name to the reason text its fit cell shows (`"no recommendation: <reason>"`).
+    no_recommendation: dict[str, str] | None = None
 
 
 def _build_rows(
@@ -173,6 +217,16 @@ def _build_rows(
             continue
         base_model = base_model_by_repo[repo]
         selected = _select_group_packages(packages, base_model, config, hardware_by_machine)
+        # F5: every configured machine made no pick for this group (config.machines is never
+        # empty here -- an empty one would make `selected` trivially empty for an unrelated
+        # reason, and must fall through to the ordinary, zero-row path unchanged).
+        if not selected and config.machines:
+            no_recommendation = {
+                name: _no_recommendation_reason(packages, base_model, hardware_by_machine.get(name), machine_config)
+                for name, machine_config in config.machines.items()
+            }
+            rows.append(PackageRow(repo, packager, None, base_model, len(packages), no_recommendation))
+            continue
         variants = len(packages) - len(selected)
         for package in sorted(selected, key=sort_key):
             rows.append(PackageRow(repo, packager, package, base_model, variants))
@@ -337,9 +391,37 @@ def _packages_table_header(machine_names: list[str]) -> str:
     return "| " + " | ".join(columns) + " |\n|" + "---|" * len(columns)
 
 
+def _no_recommendation_row_line(
+    row: PackageRow, ratings: dict, rating_failed: bool, machine_names: list[str]
+) -> str:
+    """F5: every package cell "–" except the fit cells (`"no recommendation: <reason>"`) and
+    Variants (`"<N> variants, none judged"`) -- there is no picked `Package` to read the other
+    cells from.
+    """
+    assert row.no_recommendation is not None  # only ever built alongside a no-recommendation row
+    cells = [
+        row.base_model_hf_repo,
+        _stars_cell(ratings.get(row.base_model_hf_repo), rating_failed),
+        row.packager,
+        "–",  # Quant
+        "–",  # Format
+        "–",  # Size GiB
+        "–",  # Context
+    ]
+    cells += [f"no recommendation: {row.no_recommendation[name]}" for name in machine_names]
+    cells.append("–")  # Installed
+    cells.append("–")  # Speed
+    cells.append("–")  # Provenance
+    cells.append("–")  # Observed
+    cells.append(f"{row.variants} variants, none judged")
+    return "| " + " | ".join(cells) + " |"
+
+
 def _package_row_line(
     row: PackageRow, config: Configuration, hardware_by_machine: dict, ratings: dict, rating_failed: bool, machine_names: list[str]
 ) -> str:
+    if row.package is None:
+        return _no_recommendation_row_line(row, ratings, rating_failed, machine_names)
     package = row.package
     cells = [
         package.base_model_hf_repo,

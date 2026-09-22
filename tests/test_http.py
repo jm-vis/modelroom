@@ -1,15 +1,23 @@
 """Tests for modelroom.http: the Transport protocol, FixtureTransport and the request budget.
 
-No test here ever touches the network: UrllibTransport's use of urllib.request is exercised
+Most tests here never touch the network: UrllibTransport's use of urllib.request is exercised
 indirectly (its request-shaping logic) without opening a real socket, by constructing it and
 checking the request object it would send is never enough on its own -- so the real transport
-is covered only by construction/attribute tests here, while every fetcher test in
+is covered mostly by construction/attribute tests here, while every fetcher test in
 test_hf.py/test_ollama.py drives the same Transport protocol through FixtureTransport.
+
+Fix-round 5 (P2-2) adds one exception: a real loopback `http.server` proves `_NoAutoRedirect`
+actually stops `urllib.request`'s own redirect following (nothing else can prove that without a
+real HTTP response carrying a real `Location` header), and doubles as the test bed for P2-1's
+allow-list refusal of a redirect target outside it.
 """
 
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -21,8 +29,48 @@ from modelroom.http import (
     FixtureTransport,
     RedirectingTransport,
     Response,
+    TransportSecurityError,
     UrllibTransport,
+    _ALLOWED_HTTP_HOSTS,
+    _ALLOWED_HTTPS_HOSTS,
+    _check_allowed,
 )
+
+
+class _RedirectHandler(BaseHTTPRequestHandler):
+    """`/a` answers 302 to whatever `redirect_target` currently holds, `/b` answers 200."""
+
+    redirect_target = "/b"
+
+    def do_GET(self) -> None:  # noqa: N802 -- stdlib override
+        self.server.requests_seen.append(self.path)  # type: ignore[attr-defined]
+        if self.path == "/a":
+            self.send_response(302)
+            self.send_header("Location", self.redirect_target)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 -- stdlib override
+        pass  # silence the default stderr access log
+
+
+@contextmanager
+def _loopback_server(redirect_target: str = "/b"):
+    """A real `ThreadingHTTPServer` on `127.0.0.1:0`; yields its base URL and its request log."""
+    handler = type("_Handler", (_RedirectHandler,), {"redirect_target": redirect_target})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.requests_seen = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", server.requests_seen
+    finally:
+        server.shutdown()
+        thread.join()
 
 
 def test_user_agent_carries_the_package_version():
@@ -44,6 +92,102 @@ def test_response_header_lookup_is_case_insensitive():
 def test_urllib_transport_constructs_with_a_default_timeout():
     transport = UrllibTransport()
     assert transport._timeout > 0
+
+
+# --- P2-1: UrllibTransport refuses file://, ftp:// and any host outside its allow-list --------
+#
+# Probe (fix-round 5 brief): UrllibTransport()("GET", "file:///.../pyvenv.cfg") returned status
+# None and 178 bytes of a local file -- build_opener(_NoAutoRedirect) still carries urllib's
+# default FileHandler/FTPHandler/DataHandler/HTTPHandler alongside it. Every case below must
+# raise before urllib ever opens anything, never a FileNotFoundError/URLError from actually
+# trying.
+
+
+def test_urllib_transport_refuses_a_file_url_without_opening_it():
+    transport = UrllibTransport()
+    # a path that does not exist: if the transport ever actually opened it, this would raise
+    # FileNotFoundError instead of TransportSecurityError.
+    missing = "file:///this/path/does/not/exist/pyvenv.cfg"
+
+    with pytest.raises(TransportSecurityError, match="file"):
+        transport("GET", missing)
+
+
+def test_urllib_transport_refuses_an_ftp_url():
+    transport = UrllibTransport()
+    with pytest.raises(TransportSecurityError):
+        transport("GET", "ftp://example.test/x")
+
+
+def test_urllib_transport_refuses_a_foreign_https_host():
+    transport = UrllibTransport()
+    with pytest.raises(TransportSecurityError, match="evil.example"):
+        transport("GET", "https://evil.example/x")
+
+
+def test_default_allow_list_accepts_exactly_the_three_hosts_this_package_talks_to():
+    """The production default covers exactly `hf.py::HF_API`'s host, `ollama.py::TAGS_URL`'s
+    host and `ollama.py::MANIFEST_URL`'s host over HTTPS -- read from those modules, never
+    guessed (fix-round 5 brief). Checked against `_check_allowed` directly, never by actually
+    opening a socket: this module's tests never touch the real network (see module docstring).
+    """
+    for url in (
+        "https://huggingface.co/api/models/acme/Nova-7B",
+        "https://ollama.com/library/nova/tags",
+        "https://registry.ollama.ai/v2/library/nova/manifests/7b",
+    ):
+        _check_allowed(url, _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_HOSTS)  # must not raise
+
+    with pytest.raises(TransportSecurityError):
+        _check_allowed("https://huggingface.co.evil.example/x", _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_HOSTS)
+
+
+def test_urllib_transport_rejects_loopback_http_without_the_explicit_relaxation():
+    """The local Ollama daemon's `http://127.0.0.1:11434` is a *production* default host (F1
+    text), but a caller that wants a *different* loopback host/port for a test must say so
+    explicitly -- never via an environment variable or a module global.
+    """
+    transport = UrllibTransport(allowed_http_hosts=frozenset())
+    with pytest.raises(TransportSecurityError):
+        transport("GET", "http://127.0.0.1:59999/api/tags")
+
+
+# --- P2-2: a real loopback server proves _NoAutoRedirect actually stops urllib's own following,
+# and doubles as P2-1's redirect-refusal test bed ---------------------------------------------
+
+
+def test_urllib_transport_returns_a_302_raw_instead_of_following_it():
+    with _loopback_server() as (base_url, requests_seen):
+        transport = UrllibTransport(allowed_http_hosts=frozenset({"127.0.0.1"}))
+
+        response = transport("GET", f"{base_url}/a")
+
+        assert response.status == 302
+        assert response.header("Location") == "/b"
+        assert requests_seen == ["/a"]
+
+
+def test_redirecting_transport_over_a_real_server_refuses_a_file_url_location():
+    with _loopback_server(redirect_target="file:///etc/passwd") as (base_url, requests_seen):
+        transport = UrllibTransport(allowed_http_hosts=frozenset({"127.0.0.1"}))
+        redirecting = RedirectingTransport(transport)
+
+        with pytest.raises(TransportSecurityError, match="file"):
+            redirecting("GET", f"{base_url}/a")
+
+        # the poisoned Location was never opened: only the first hop reached the server
+        assert requests_seen == ["/a"]
+
+
+def test_redirecting_transport_over_a_real_server_refuses_a_foreign_host_location():
+    with _loopback_server(redirect_target="https://evil.example/x") as (base_url, requests_seen):
+        transport = UrllibTransport(allowed_http_hosts=frozenset({"127.0.0.1"}))
+        redirecting = RedirectingTransport(transport)
+
+        with pytest.raises(TransportSecurityError, match="evil.example"):
+            redirecting("GET", f"{base_url}/a")
+
+        assert requests_seen == ["/a"]
 
 
 # --- FixtureTransport -----------------------------------------------------------------------

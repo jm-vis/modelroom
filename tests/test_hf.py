@@ -16,7 +16,7 @@ import pytest
 
 from modelroom.config import Configuration
 from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile
-from modelroom.hf import candidate_owners, fetch_base_model_meta, fetch_hf_area
+from modelroom.hf import _MAX_TREE_PAGES, candidate_owners, fetch_base_model_meta, fetch_hf_area
 from modelroom.http import Response
 from modelroom.quantization import package_identity_key
 
@@ -331,6 +331,67 @@ def test_fetch_hf_area_follows_link_header_pagination_across_tree_pages():
     assert outcome.status == "complete"
     assert {pkg.quantization for pkg in outcome.packages} == {"Q4_K_M", "Q8_0"}
     assert len(transport.calls) == 3
+
+
+# --- P3-3 (fix-round 5): a Link: rel="next" chain that never terminates must not fetch forever
+
+def test_fetch_hf_area_tree_pagination_stops_at_a_hard_cap():
+    sha = "2222222222222222222222222222222222222222"
+    base_url = "https://huggingface.co/api/models/synthetic/Forever-GGUF/tree/" + sha + "?recursive=true"
+
+    def page_url(n: int) -> str:
+        return base_url if n == 1 else f"{base_url}&cursor=page{n}"
+
+    mapping = {
+        ("GET", "https://huggingface.co/api/models/synthetic/Forever-GGUF"): Response(
+            status=200, headers={}, body=(b'{"sha": "' + sha.encode() + b'", "tags": []}')
+        ),
+    }
+    # a Link header on every page, including the last one this cap allows -- the chain never
+    # terminates on its own, so the cap is the only thing that ever stops it.
+    for n in range(1, _MAX_TREE_PAGES + 2):
+        mapping[("GET", page_url(n))] = Response(
+            status=200, headers={"Link": f'<{page_url(n + 1)}>; rel="next"'}, body=b"[]"
+        )
+    transport = build_transport(mapping)
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Forever", repo_aliases=["Forever-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert str(_MAX_TREE_PAGES) in outcome.error
+    # the model-info request, plus exactly _MAX_TREE_PAGES tree-page requests -- the page that
+    # would exceed the cap is never made.
+    assert len(transport.calls) == 1 + _MAX_TREE_PAGES
+    assert ("GET", page_url(_MAX_TREE_PAGES + 1)) not in transport.calls
+
+
+# --- P3-4 (fix-round 5): a malformed 'sha' from the packager repo's own model-info must never
+# reach the tree-fetch URL unchecked ---------------------------------------------------------
+
+
+def test_fetch_hf_area_rejects_a_malformed_sha_before_fetching_the_tree():
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/unsloth/Nova-7B-GGUF"): Response(
+                status=200,
+                headers={},
+                # not 40-hex: a packager repo response this project has never actually seen but
+                # must still never be trusted to build a URL path segment unchecked.
+                body=b'{"sha": "not-a-real-sha", "tags": []}',
+            ),
+        }
+    )
+    base_model = _qwen35_9b(hf_repo="acme/Nova-7B", repo_aliases=[], ollama_base=None, ollama_tag=None, publisher="acme")
+
+    outcome = fetch_hf_area(transport, base_model, owner="unsloth", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert "sha" in outcome.error
+    # the tree was never requested -- only the one model-info call was ever made.
+    assert transport.calls == [("GET", "https://huggingface.co/api/models/unsloth/Nova-7B-GGUF")]
 
 
 # --- fetch_hf_area: a 404/401 candidate is skipped, the area still completes --------------
@@ -667,6 +728,117 @@ def test_fetch_hf_area_non_weight_file_without_size_still_completes():
     assert readme.size_bytes == 0
 
 
+# --- F8 (fix-round 5): a weight file 'size' far outside any real file size is a shape error --
+#
+# `json.loads` parses a JSON integer literal like `10**400` without complaint (Python ints have
+# no fixed width); `_tree_entry_size`'s old `isinstance(int) and >= 0` check let it straight
+# through as a package's `size_bytes`, and `fit.py::compute_fit`'s `sum(...) / GIB` later raised
+# `OverflowError` (`int too large to convert to float`) out of `render`/`fit` instead of this
+# module ending the area `incomplete` like every other shape problem.
+
+
+def test_fetch_hf_area_weight_file_size_far_too_large_ends_area_incomplete():
+    sha = "5" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/Huge-Size-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/Huge-Size"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/Huge-Size-GGUF/tree/{sha}?recursive=true",
+            ): Response(
+                status=200,
+                headers={},
+                body=(
+                    b'[{"type": "file", "path": "Huge-Size-Q4_K_M.gguf", "size": '
+                    + str(10**400).encode()
+                    + b', "lfs": {"oid": "'
+                    + b"a" * 64
+                    + b'"}}]'
+                ),
+            ),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Huge-Size", repo_aliases=["Huge-Size-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- F7 (fix-round 5): a malformed 'path' on a file entry is a shape error, never silently
+# dropped -- dropping every entry this way would make the whole tree look genuinely empty, and
+# a `complete` area with zero files deactivates every one of the old area's packages (merge
+# rule) instead of ending `incomplete` and leaving them untouched.
+
+
+def test_fetch_hf_area_file_entry_with_a_non_string_path_ends_area_incomplete():
+    sha = "9" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/Bad-Path-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/Bad-Path"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/Bad-Path-GGUF/tree/{sha}?recursive=true",
+            ): Response(
+                status=200,
+                headers={},
+                body=b'[{"type": "file", "path": 0, "size": 10}]',  # path is an int, not a string
+            ),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Bad-Path", repo_aliases=["Bad-Path-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+def test_fetch_hf_area_file_entry_with_an_empty_path_ends_area_incomplete():
+    sha = "6" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/Empty-Path-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/Empty-Path"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/Empty-Path-GGUF/tree/{sha}?recursive=true",
+            ): Response(
+                status=200,
+                headers={},
+                body=b'[{"type": "file", "path": "", "size": 10}]',
+            ),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Empty-Path", repo_aliases=["Empty-Path-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
 # --- F6: a previous approval survives a fetch when its content still matches ---------------
 
 
@@ -815,5 +987,58 @@ def test_fetch_hf_area_budget_exhausted_mid_area_ends_it_incomplete():
     outcome = fetch_hf_area(budgeted, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
-    assert "budget exhausted" in outcome.error
+    # P3-12 (fix-round 5): exact text, not a substring -- CONTRACTS.md, "Request budget", says
+    # the fetcher "ends its current area incomplete with that message", `that message` being
+    # exactly `BudgetExhaustedError`'s own `"budget exhausted"`, never a repo-prefixed variant.
+    # The budget runs out on the model-info call itself here, before there is even a `repo` to
+    # prefix with.
+    assert outcome.error == "budget exhausted"
     assert outcome.packages == []
+
+
+def test_fetch_hf_area_budget_exhausted_mid_tree_fetch_ends_it_incomplete_with_the_exact_message():
+    """P3-12 (fix-round 5): the budget can also run out *inside* `_fetch_tree`'s pagination,
+    after a real `repo` is already known -- CONTRACTS.md's exact-text promise still applies:
+    `Area.error` is `"budget exhausted"`, never `f"{repo}: budget exhausted"` (measured before
+    this fix: the tree-fetch except-clause prefixed every exception with `repo`, including this
+    one, unlike the model-info except-clause a few lines above it).
+    """
+    sha = "3" * 40
+    inner = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/Budget-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": []}',
+            ),
+        }
+    )
+    from modelroom.http import BudgetedTransport
+
+    budgeted = BudgetedTransport(inner, budget=2)
+    budgeted.used = 1  # one slot already spent elsewhere -- the model-info call below spends the
+    # second (last) one, so the tree-fetch call after it is refused before it is ever made.
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Budget", repo_aliases=["Budget-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(budgeted, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error == "budget exhausted"
+    assert outcome.packages == []
+
+
+# --- P3-14 (fix-round 5): a message-less exception from a caller-supplied transport must never
+# become an empty Area.error -- Area's own validator requires a non-empty error whenever status
+# is incomplete, so an empty string here would raise ValidationError out of merge_snapshot ------
+
+
+def test_fetch_hf_area_treats_a_message_less_transport_exception_as_a_real_error():
+    def transport(method, url, headers=None):
+        raise Exception()  # no message at all -- str(Exception()) == ""
+
+    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error  # must be truthy, never ""

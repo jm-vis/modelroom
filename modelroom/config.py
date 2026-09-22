@@ -229,6 +229,33 @@ class Configuration(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _check_repo_names_do_not_collide_across_base_models(self) -> "Configuration":
+        """P3-6 (fix-round 5): no two base models may claim the same packager repo name.
+
+        `hf.py::fetch_hf_area` probes `<owner>/<name>-GGUF` and every `repo_aliases` entry, for
+        every base model, under every owner in `packagers` (global to the whole configuration)
+        plus that base model's own owner -- so a repo name shared by two base models would be
+        fetched into two areas that both produce a `Package` under the *same* identity key
+        (`CONTRACTS.md`, "Identity": identity never carries `base_model_hf_repo`), and
+        `state.merge_snapshot`'s `result_packages` dict would let whichever area is processed
+        last silently overwrite the other's package with no error and no trace. Caught here,
+        at configuration load, instead of at merge time.
+        """
+        claimed_by: dict[str, str] = {}
+        for family in self.families:
+            for base_model in family.base_models:
+                default_name = f"{base_model.hf_repo.split('/', 1)[1]}-GGUF"
+                for candidate in (default_name, *base_model.repo_aliases):
+                    existing = claimed_by.get(candidate)
+                    if existing is not None and existing != base_model.hf_repo:
+                        raise ValueError(
+                            f"packager repo name {candidate!r} is claimed by both {existing!r} "
+                            f"and {base_model.hf_repo!r} -- a repo name must name at most one base model"
+                        )
+                    claimed_by[candidate] = base_model.hf_repo
+        return self
+
+    @model_validator(mode="after")
     def _check_owners_are_publishers(self) -> "Configuration":
         publishers = set(self.publishers)
         for family in self.families:
