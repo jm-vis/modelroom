@@ -771,41 +771,56 @@ own `fetch` runs, exactly as `AGENTS.md` already scoped them.
 
 ### Lock file (`modelroom.lock`)
 
-A plain JSON object, `{"pid": <int>, "command": <str>, "started_at": <ISO 8601 UTC>, "token":
-<str>}`, written by `modelroom/state.py::acquire_lock` before any package command (today, only
-`fetch`) does anything else, and removed by `release_lock` regardless of how the command ends
-(the caller wraps it in a `finally` block). `acquire_lock` creates the file with
-`os.open(path, O_CREAT | O_EXCL | O_WRONLY)` -- one atomic syscall, never a `path.exists()`
-check followed by a separate write, which would leave a window two concurrent processes could
-both pass through (fix-round 1, F1). A lock younger than two hours blocks the new run
-immediately with `LockHeldError` -- this project never waits for a lock, it fails fast with a
-message naming the holder's pid, command and start time.
+**Fix-round 3: a kernel lock on a stable file, never a rename-based takeover.** The file is
+created once, never renamed and never deleted, and `modelroom/state.py::acquire_lock` takes an
+exclusive, non-blocking *kernel* lock on it (`msvcrt.locking` on Windows, `fcntl.flock`
+elsewhere) rather than arbitrating exclusivity through this module's own bookkeeping. This
+replaced fix-round 2's rename-based stale-lock takeover entirely: that design could not be made
+exclusive against a third process, because `os.replace` is not bound to the specific file
+generation a process actually read. Concretely, process A could see a stale lock, claim it,
+create a fresh one and return, and process B could then rename *A's own fresh lock* away (it has
+no way to tell A's brand-new lock from another stale one) and create its own -- neither
+`os.replace` call ever fails, so both A and B end up believing they hold the lock. Giving a
+foreign lock back on release had the same hole: it could hand the file back under a third
+process's now-current lock instead of the one it actually took it from. A kernel lock has no
+such window: the OS, not this module, decides who holds it. It also needs no "how old is too
+old" rule any more -- a crashed holder's lock is released by the kernel the instant its process
+exits, and a live holder keeps the lock no matter how long it has held it, so `LockHeldError` no
+longer carries an age threshold in its message.
 
-**Stale takeover (fix-round 2, R1).** A lock at or beyond two hours, or one whose content cannot
-be parsed, is treated as abandoned by a crashed process and taken over by *claiming* it first:
-`os.replace(path, <path>.stale.<token>)` atomically renames the existing file away. Of two
-processes racing the same stale file, only one rename can ever succeed -- the loser gets
-`FileNotFoundError` and loops back to retry the `O_EXCL` create from the top (finding the
-winner's now-young lock and raising `LockHeldError`), so the claim step itself can never be won
-twice. Only the process that won the claim then creates the lock fresh with `O_CREAT | O_EXCL`
-and unlinks the claimed file; if that create itself loses a race to a third party, the loop
-retries, capped at three attempts before raising `LockHeldError`. This replaces fix-round 1's
-"write our content, then re-read to check whose token survived" takeover: that approach had a
-real window in which two processes could each see their own token when the other's write landed
-between this process's own write and its re-read (there is no atomicity between a write and a
-later read of the same file), so both would return success while only one had actually written
-the content now on disk -- measured directly on Windows as an intermittent `PermissionError`
-when both processes' `os.replace` calls raced. An atomic rename has no such window. `acquire_lock`
-returns the `token` it wrote.
+`acquire_lock(path, command, now) -> LockHandle` opens `path` with `os.open(path, O_RDWR |
+O_CREAT)` -- never `O_EXCL`, since the file is meant to persist across runs and across crashes --
+and locks exactly one byte at offset 0 (`_LOCK_OFFSET`). On success it truncates the file to one
+byte past that (`_CONTENT_OFFSET`) and writes `{"pid": <int>, "command": <str>, "started_at":
+<ISO 8601 UTC>}` from that offset onward (no `token` any more -- there is nothing left to
+arbitrate). `LockHandle` is a small frozen dataclass (`path`, `fd`); the fd stays open for as
+long as the caller holds the lock, since the lock lives exactly as long as that fd does.
+`release_lock(handle)` truncates the file back to empty, releases the kernel lock, and closes the
+fd -- idempotent (a second release finds an already-closed fd; that one `OSError`, `errno.EBADF`,
+is swallowed, any other propagates). **The file itself is never deleted**, by either function; a
+fresh `acquire_lock` reuses it. On failure (`OSError`, including `BlockingIOError`)
+`LockHeldError` is raised, naming the current holder's pid/command/started_at when a read of the
+content succeeds and parses (it may still be empty or unparseable while the holder is mid-write,
+in which case the message says only that another process holds it).
 
-`release_lock(path, token)` is symmetric: it claims whatever is currently at `path` with
-`os.replace(path, <path>.release.<token>)` (a no-op if the file is already gone), then decides
-from the claimed content -- carries `token` -> unlink it; otherwise (another process took the
-lock over as stale while we still held what we thought was ours) it is not ours to delete, so it
-is given back under its original name with `os.replace(<claim>, path)`. This is a claim-then-
-decide, not fix-round 1's check-then-unlink, which had the same kind of window: a takeover could
-land between the read and the unlink, and the unlink would then delete a lock this process no
-longer owns.
+**Why the lock byte is not part of the content.** The lock is one reserved byte at offset 0,
+never part of the JSON, which starts one byte later at `_CONTENT_OFFSET`. Windows locking is
+*mandatory*, not advisory: a read that overlaps a locked byte raises `OSError`/`PermissionError`
+for any handle but the one holding the lock, so if the JSON started at offset 0, nobody --
+including this module's own holder-naming read -- could read it while the lock was held. Nothing
+is written or truncated before the lock call: until the lock is held, this process is not the
+only one touching the file. (`fcntl.flock` locks the whole file and is advisory, so the offset
+only matters on Windows; the layout is the same on both so the file format is one thing.)
+
+**Exclusivity is tested, not retried.**
+`tests/test_state.py::test_acquire_lock_is_exclusive_across_three_real_processes` starts three
+real processes that race `acquire_lock` against the same fresh file; the winner holds the lock
+until the test releases it, and every round must show exactly one winner and two
+`LockHeldError`s, with no retry. A first draft of that test let the winner exit right after
+acquiring -- which releases the lock (the kernel drops a lock with its process) and lets a slower
+sibling acquire legitimately. That looked like "two winners in one round in five" and was
+misread during the build as a lock-placement problem; it was a test flaw, and the retry that
+had been added to paper over it is gone.
 
 **Ordering (fix-round 1, F13):** `fetch_with_config` checks the existing snapshot's
 `schema_version` *before* calling `acquire_lock` at all -- an unsupported version exits `3`

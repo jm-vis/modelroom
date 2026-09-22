@@ -208,6 +208,14 @@ def test_hardware_fields_from_llmfit_system_rejects_a_non_string_gpu_name():
         hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "gpu_name": []}})
 
 
+def test_hardware_fields_from_llmfit_system_rejects_a_huge_json_integer_total_ram_gb():
+    # Fix-round 3: math.isfinite(10**400) itself raises OverflowError (an int too large to
+    # convert to float) -- _is_finite_number must catch it and treat the value as not finite,
+    # not let the OverflowError escape hardware_fields_from_llmfit_system as an uncaught crash.
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 10**400}})
+
+
 def test_hardware_fields_from_llmfit_system_rejects_a_non_string_backend():
     with pytest.raises(LlmfitError):
         hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "backend": 42}})

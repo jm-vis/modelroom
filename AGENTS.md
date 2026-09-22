@@ -31,6 +31,11 @@ run the tests, commit the lock.
 - YAGNI. No placeholder code, no unimplemented TODOs, no dead code. A function does one thing.
 - Explicit error handling. Every failure that a user can act on becomes a message and an exit
   code; nothing is swallowed.
+- A cross-process lock is a kernel file lock held on a stable file (`msvcrt.locking` on Windows,
+  `fcntl.flock` elsewhere, non-blocking), never a create-rename-delete choreography with an age
+  rule: the kernel releases a crashed holder's lock, a live holder keeps it regardless of age, and
+  the lock file is never renamed or deleted. Three review rounds showed that no file-name
+  choreography closes every race; see the "Lock file" section of `CONTRACTS.md`.
 - Exit codes are part of the contract: `0` success (`hardware`: measured and written, even
   when the local Ollama daemon could not be reached), `1` at least one `fetch` area incomplete
   (or `fetch` stopped at another process's lock, or this run is not newer than the stored

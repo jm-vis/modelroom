@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -84,165 +86,241 @@ def _hf_package(*, repo: str, filename: str, observed_at: datetime, last_seen: d
 
 
 # --- lock -----------------------------------------------------------------------------------
+#
+# Fix-round 3: the lock is a kernel lock on a stable file that is never renamed or deleted (see
+# CONTRACTS.md, "Lock file"). `acquire_lock` returns a `LockHandle` (no more token), and
+# `release_lock` takes only that handle.
 
 
-def test_acquire_lock_writes_pid_command_started_at_and_a_token(tmp_path: Path):
+def _read_lock_content(path: Path) -> dict:
+    """The lock file's JSON content, skipping the single reserved lock byte at offset 0 (see
+    `modelroom/state.py`'s `_LOCK_OFFSET`/`_CONTENT_OFFSET`) -- reading the whole file from
+    offset 0 would touch that byte and raise `PermissionError` on Windows while it is locked."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.lseek(fd, 1, 0)
+        raw = os.read(fd, 65536)
+    finally:
+        os.close(fd)
+    return json.loads(raw.decode("utf-8"))
+
+
+def test_acquire_lock_writes_pid_command_and_started_at(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
 
-    token = acquire_lock(lock_path, "fetch", RUN1)
+    handle = acquire_lock(lock_path, "fetch", RUN1)
+    try:
+        data = _read_lock_content(lock_path)
+        assert data["pid"] == os.getpid()
+        assert data["command"] == "fetch"
+        assert data["started_at"] == RUN1.isoformat()
+        assert "token" not in data
+    finally:
+        release_lock(handle)
 
-    data = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert data["pid"] == os.getpid()
-    assert data["command"] == "fetch"
-    assert data["started_at"] == RUN1.isoformat()
-    assert data["token"] == token
-    assert token  # non-empty
 
-
-def test_acquire_lock_raises_when_held_by_a_young_lock(tmp_path: Path):
+def test_acquire_lock_raises_while_a_handle_is_open(tmp_path: Path):
+    # A second acquire_lock call against the same path, while the first handle is still open,
+    # must raise -- regardless of how long the first has held it (a kernel lock does not age).
+    # This works in-process because `flock` is scoped per open file description and a Windows
+    # byte-range lock is scoped per handle, so a second `os.open` of the same path never inherits
+    # the first one's lock.
     lock_path = tmp_path / "modelroom.lock"
-    acquire_lock(lock_path, "fetch", RUN1)
+    handle = acquire_lock(lock_path, "fetch", RUN1)
+    try:
+        with pytest.raises(LockHeldError, match=str(os.getpid())):
+            acquire_lock(lock_path, "fetch", RUN1 + timedelta(hours=100))
 
-    with pytest.raises(LockHeldError):
-        acquire_lock(lock_path, "fetch", RUN1 + timedelta(minutes=5))
+        # the failed second attempt never touched our own content -- readable the whole time,
+        # since the lock covers only the reserved byte at offset 0, never the content
+        data = _read_lock_content(lock_path)
+        assert data["started_at"] == RUN1.isoformat()
+    finally:
+        release_lock(handle)
 
 
-def test_acquire_lock_is_not_a_check_then_write_race_two_calls_get_different_tokens(tmp_path: Path):
-    # F1: a second acquire_lock call against the same path, in the same process, at the same
-    # instant, must never both succeed with the file simply overwritten -- the second call
-    # finds the first call's still-young lock (via the atomic O_CREAT|O_EXCL create) and raises.
+def test_release_lock_empties_the_file_and_a_new_acquire_succeeds_afterwards(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
-    first_token = acquire_lock(lock_path, "fetch", RUN1)
+    handle = acquire_lock(lock_path, "fetch", RUN1)
 
-    with pytest.raises(LockHeldError):
-        acquire_lock(lock_path, "fetch", RUN1)
+    release_lock(handle)
 
-    data = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert data["token"] == first_token  # the second call never overwrote the first
+    assert lock_path.exists()  # the file is never deleted
+    assert lock_path.read_text(encoding="utf-8") == ""
+
+    second = acquire_lock(lock_path, "fetch", RUN1 + timedelta(minutes=1))
+    try:
+        data = _read_lock_content(lock_path)
+        assert data["started_at"] == (RUN1 + timedelta(minutes=1)).isoformat()
+    finally:
+        release_lock(second)
 
 
-def test_acquire_lock_overwrites_a_stale_lock_older_than_two_hours(tmp_path: Path):
+def test_release_lock_is_idempotent(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
-    acquire_lock(lock_path, "fetch", RUN1)
+    handle = acquire_lock(lock_path, "fetch", RUN1)
 
-    new_token = acquire_lock(lock_path, "fetch", RUN1 + timedelta(hours=2, minutes=1))
-
-    data = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert data["started_at"] == (RUN1 + timedelta(hours=2, minutes=1)).isoformat()
-    assert data["token"] == new_token  # the takeover's content is verified to be ours
-
-
-def test_release_lock_removes_the_file(tmp_path: Path):
-    lock_path = tmp_path / "modelroom.lock"
-    token = acquire_lock(lock_path, "fetch", RUN1)
-
-    release_lock(lock_path, token)
-
-    assert not lock_path.exists()
-
-
-def test_release_lock_is_a_no_op_when_no_lock_exists(tmp_path: Path):
-    release_lock(tmp_path / "modelroom.lock", "some-token")  # must not raise
-
-
-def test_release_lock_with_a_foreign_token_does_not_delete(tmp_path: Path):
-    # F1: release_lock must remove the file only when its content carries the caller's own
-    # token -- a foreign token (another process's lock, or a stale takeover) is left alone.
-    lock_path = tmp_path / "modelroom.lock"
-    acquire_lock(lock_path, "fetch", RUN1)
-
-    release_lock(lock_path, "not-the-real-token")
+    release_lock(handle)
+    release_lock(handle)  # must not raise
 
     assert lock_path.exists()
-
-
-def test_release_lock_with_a_foreign_token_leaves_no_leftover_release_claim_file(tmp_path: Path):
-    # R1: release_lock's atomic claim (os.replace(lock, lock.release.<token>)) must always give
-    # the file back under its original name when the token does not match -- never leave the
-    # renamed claim file lying around.
-    lock_path = tmp_path / "modelroom.lock"
-    real_token = acquire_lock(lock_path, "fetch", RUN1)
-
-    release_lock(lock_path, "not-the-real-token")
-
-    assert lock_path.exists()
-    assert list(tmp_path.glob(f"{lock_path.name}.release.*")) == []
-    data = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert data["token"] == real_token
-
-
-_RACE_SCRIPT = """
-import sys, time
-from pathlib import Path
-from datetime import datetime
-from modelroom.state import acquire_lock, LockHeldError
-
-lock_path = Path(sys.argv[1])
-go_path = Path(sys.argv[2])
-now = datetime.fromisoformat(sys.argv[3])
-
-while not go_path.exists():
-    time.sleep(0.001)
-
-try:
-    won_token = acquire_lock(lock_path, "fetch", now)
-    print(f"acquired:{won_token}")
-except LockHeldError:
-    print("held")
-"""
-
-
-def test_acquire_lock_stale_takeover_is_exclusive_across_real_processes(tmp_path: Path):
-    # R1: two real processes race the takeover of the same stale lock. The old
-    # write-then-reread implementation could let both see their own token (a race between one
-    # process's os.replace and its own re-read, with the other process's replace landing in
-    # between); the atomic rename-based claim must never let more than one process win.
-    script_path = tmp_path / "race_acquire.py"
-    script_path.write_text(_RACE_SCRIPT, encoding="utf-8")
-    stale_started = (RUN1 - timedelta(hours=3)).isoformat()
-
-    for i in range(5):
-        lock_path = tmp_path / f"race-{i}.lock"
-        go_path = tmp_path / f"go-{i}"
-        lock_path.write_text(
-            json.dumps({"pid": 999999, "command": "fetch", "started_at": stale_started, "token": "stale-token"}),
-            encoding="utf-8",
-        )
-
-        procs = [
-            subprocess.Popen(
-                [sys.executable, str(script_path), str(lock_path), str(go_path), RUN1.isoformat()],
-                stdout=subprocess.PIPE,
-                text=True,
-            )
-            for _ in range(2)
-        ]
-        go_path.write_text("go", encoding="utf-8")
-        outputs = [proc.communicate(timeout=10)[0].strip() for proc in procs]
-
-        acquired = [line for line in outputs if line.startswith("acquired:")]
-        held = [line for line in outputs if line == "held"]
-        assert len(acquired) == 1, f"round {i}: expected exactly one 'acquired', got {outputs!r}"
-        assert len(held) == 1, f"round {i}: expected exactly one 'held', got {outputs!r}"
-
-        winner_token = acquired[0].split(":", 1)[1]
-        data = json.loads(lock_path.read_text(encoding="utf-8"))
-        assert data["token"] == winner_token
-        # no leftover claim files from either process's takeover attempt
-        assert list(tmp_path.glob(f"{lock_path.name}.stale.*")) == []
 
 
 def test_lock_is_released_after_an_exception_in_the_caller(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
 
     with pytest.raises(RuntimeError):
-        token = acquire_lock(lock_path, "fetch", RUN1)
+        handle = acquire_lock(lock_path, "fetch", RUN1)
         try:
             raise RuntimeError("boom")
         finally:
-            release_lock(lock_path, token)
+            release_lock(handle)
 
-    assert not lock_path.exists()
+    # the file stays on disk, empty, and a fresh acquire succeeds -- release_lock ran in the
+    # finally block despite the exception propagating past it
+    assert lock_path.exists()
+    assert lock_path.read_text(encoding="utf-8") == ""
+    release_lock(acquire_lock(lock_path, "fetch", RUN1 + timedelta(minutes=1)))
+
+
+_HOLDER_SCRIPT = """
+import sys, time
+from pathlib import Path
+from datetime import datetime
+from modelroom.state import acquire_lock
+
+lock_path = Path(sys.argv[1])
+stop_path = Path(sys.argv[2])
+now = datetime.fromisoformat(sys.argv[3])
+
+acquire_lock(lock_path, "fetch", now)
+print("holding", flush=True)
+
+deadline = time.monotonic() + 10
+while not stop_path.exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+"""
+
+
+def test_acquire_lock_succeeds_after_a_holder_process_is_killed_without_releasing(tmp_path: Path):
+    # A real holder process acquires the lock and is then killed (simulating a crash, never
+    # releasing) -- this process gets LockHeldError naming the holder's pid while it is alive,
+    # and acquires successfully once it is gone: the kernel releases a crashed holder's lock on
+    # process exit, however "old" the file's content still looks.
+    #
+    # The pid to kill, and to match in the error, comes from the lock file's own content, not
+    # from `Popen.pid`: on this host `sys.executable` is a `uv`-managed launcher that spawns the
+    # real interpreter as its own child, so `holder.pid` names the launcher, not the process that
+    # actually calls `acquire_lock` -- killing `holder.pid` alone leaves that real process (and
+    # its lock) running. The file's content is always the ground truth for who actually holds
+    # the lock, and (by this design's whole point) it stays readable the entire time the lock is
+    # held, so reading it costs nothing extra.
+    lock_path = tmp_path / "modelroom.lock"
+    stop_path = tmp_path / "stop"
+    script_path = tmp_path / "holder.py"
+    script_path.write_text(_HOLDER_SCRIPT, encoding="utf-8")
+
+    holder = subprocess.Popen(
+        [sys.executable, str(script_path), str(lock_path), str(stop_path), RUN1.isoformat()],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    holder_pid: int | None = None
+    try:
+        assert holder.stdout.readline().strip() == "holding"
+        holder_pid = _read_lock_content(lock_path)["pid"]
+
+        with pytest.raises(LockHeldError, match=str(holder_pid)):
+            acquire_lock(lock_path, "fetch", RUN1)
+    finally:
+        if holder_pid is not None:
+            try:
+                os.kill(holder_pid, signal.SIGTERM)
+            except OSError:
+                pass  # already gone
+        holder.kill()
+        holder.wait(timeout=5)
+
+    # `os.kill`/`TerminateProcess` requests termination but does not itself wait for it to
+    # finish -- the OS can still be tearing the killed process down (and releasing its handles,
+    # including this lock) for a brief moment after the call returns. Retry on a short deadline
+    # rather than assume that teardown is always complete by the time we get here.
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            handle = acquire_lock(lock_path, "fetch", RUN1 + timedelta(minutes=1))
+            break
+        except LockHeldError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+    release_lock(handle)
+
+
+_RACE_SCRIPT = """
+import sys, time
+from pathlib import Path
+from datetime import datetime
+from modelroom.state import acquire_lock, release_lock, LockHeldError
+
+lock_path = Path(sys.argv[1])
+go_path = Path(sys.argv[2])
+release_path = Path(sys.argv[3])
+now = datetime.fromisoformat(sys.argv[4])
+
+deadline = time.monotonic() + 10
+while not go_path.exists() and time.monotonic() < deadline:
+    time.sleep(0.001)
+
+try:
+    handle = acquire_lock(lock_path, "fetch", now)
+except LockHeldError:
+    print("held", flush=True)
+else:
+    print("acquired", flush=True)
+    # hold the lock until the test says so -- exiting here would release it (the kernel drops a
+    # lock with its process) and let a slower sibling win legitimately, which is not a race
+    deadline = time.monotonic() + 10
+    while not release_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    release_lock(handle)
+"""
+
+
+def _race_round(script_path: Path, lock_path: Path, go_path: Path, release_path: Path) -> list[str]:
+    """Launch three processes that all wait on `go_path`, then race `acquire_lock` against
+    `lock_path` the instant it appears. The winner keeps holding until `release_path` exists,
+    so every loser's attempt happens while the lock is genuinely held. Returns each process's
+    one line of stdout."""
+    procs = [
+        subprocess.Popen(
+            [sys.executable, str(script_path), str(lock_path), str(go_path), str(release_path), RUN1.isoformat()],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(3)
+    ]
+    go_path.write_text("go", encoding="utf-8")
+    outputs = [proc.stdout.readline().strip() for proc in procs]
+    release_path.write_text("release", encoding="utf-8")
+    for proc in procs:
+        proc.communicate(timeout=10)
+    return outputs
+
+
+def test_acquire_lock_is_exclusive_across_three_real_processes(tmp_path: Path):
+    # Three processes wait on a go file, then all call acquire_lock against the same fresh lock
+    # path at once; the winner holds the lock until the test releases it. Exactly one process
+    # must win in every round, with no retry: a kernel lock has no timing window to allow for.
+    # (A first draft of this test let the winner exit right after acquiring, which releases the
+    # lock and lets a slower sibling acquire legitimately -- that looked like "two winners" and
+    # was misread as a lock-placement problem. It was a test flaw; see CONTRACTS.md, "Lock file".)
+    script_path = tmp_path / "race.py"
+    script_path.write_text(_RACE_SCRIPT, encoding="utf-8")
+
+    for i in range(5):
+        outputs = _race_round(script_path, tmp_path / f"race-{i}.lock", tmp_path / f"go-{i}", tmp_path / f"release-{i}")
+        assert sorted(outputs) == ["acquired", "held", "held"], f"round {i}: {outputs!r}"
 
 
 # --- atomic writes ----------------------------------------------------------------------

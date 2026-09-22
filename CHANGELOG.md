@@ -179,3 +179,38 @@ All notable changes to this project are documented in this file. The format foll
 
   Documented in `CONTRACTS.md` under "Lock file", "Approval carry-forward across fetch runs",
   "Request budget" and "`parameters_b` when Hugging Face has no answer this run".
+- Fix-round 3, four confirmed review findings against AP3+AP4:
+  - **1+2** `modelroom/state.py`'s lock is now a kernel lock on a stable file, not R1's
+    rename-based stale-lock takeover: that design could not be made exclusive against a third
+    process (`os.replace` is not bound to the file generation a process actually read, so process
+    A claiming a stale lock, creating a fresh one and returning could be followed by process B
+    renaming *A's* fresh lock away and creating its own, with neither `os.replace` call ever
+    failing), and giving a foreign lock back on release could hand the file back under a third
+    process's now-current lock instead of the one it was actually taken from. `acquire_lock`
+    now opens the file with `O_RDWR | O_CREAT` (never `O_EXCL`, never renamed, never deleted) and
+    takes an exclusive non-blocking kernel lock (`msvcrt.locking`/`fcntl.flock`) on one reserved
+    byte; the JSON content (no `token` field any more) starts one byte later, so it stays
+    readable by another process the whole time the lock is held. `LockHeldError` no longer
+    carries an age threshold -- a crashed holder's lock is released by the kernel on process
+    exit, a live holder keeps it regardless of age -- so `LOCK_MAX_AGE`/`MAX_TAKEOVER_ATTEMPTS`
+    and the stale-takeover machinery are gone. `acquire_lock` returns a `LockHandle`
+    (`path`, `fd`) instead of a token string; `release_lock(handle)` empties the file (never
+    deletes it) and is idempotent. `modelroom/cli.py::fetch_with_config` adapted to the new
+    signatures. The three-process race test holds the winner's lock until the test releases it
+    and demands exactly one winner per round, no retry (a first draft let the winner exit right
+    after acquiring, which releases the lock and let a slower sibling win legitimately -- a test
+    flaw that briefly looked like a lock-placement problem).
+  - **3** `modelroom/hf.py::_valid_parameters_b` now converts `safetensors.total` inside a
+    `try`/`except (OverflowError, ValueError)` and requires `math.isfinite(result) and result >
+    0` on the converted value, not just `total > 0` before dividing: a subnormal `total` like
+    `1e-320` passed the old check but underflowed to `0.0` after `/ 1e9` (which
+    `BaseModelSpec.parameters_b`'s `gt=0` would then reject), and a JSON integer far outside
+    `float` range (a raw `10**400`, which `json.loads` parses without complaint) overflowed the
+    division itself.
+  - **4** `modelroom/llmfit.py::_is_finite_number` now catches `OverflowError` from
+    `math.isfinite` itself, which raises for an `int` too large to convert to `float` (e.g. the
+    same `10**400` shape, this time in `total_ram_gb`) -- treated as "not finite", the same
+    verdict as `NaN`/infinity, instead of crashing `hardware_fields_from_llmfit_system`.
+
+  Documented in `CONTRACTS.md` under "Lock file" (rewritten) and `_valid_parameters_b`'s own
+  docstring in `modelroom/hf.py`.

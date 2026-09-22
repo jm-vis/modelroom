@@ -116,6 +116,46 @@ def test_run_fetch_zero_safetensors_total_returns_instead_of_raising(tmp_path):
     assert isinstance(load_snapshot(result.snapshot.model_dump(mode="json")), Snapshot)
 
 
+def test_run_fetch_subnormal_safetensors_total_returns_instead_of_raising(tmp_path):
+    # Fix-round 3: 1e-320 passes "> 0" but underflows to 0.0 once divided by 1e9, which
+    # BaseModelSpec.parameters_b's gt=0 constraint would reject if it ever reached fetch.py.
+    config = _config(tmp_path)
+    mapping = qwen35_transport_mapping()
+    mapping[("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B")] = Response(
+        status=200, headers={}, body=b'{"sha": "' + b"a" * 40 + b'", "safetensors": {"total": 1e-320}}'
+    )
+    mapping[("GET", f"https://huggingface.co/Qwen/Qwen3.5-9B/resolve/{'a' * 40}/config.json")] = Response(
+        status=404, headers={}, body=b"{}"
+    )
+    transport = build_transport(mapping)
+
+    result = run_fetch(config, transport, RUN1, old_snapshot=None)  # must not raise
+
+    assert result.snapshot.base_models[0].parameters_b is None
+    assert isinstance(load_snapshot(result.snapshot.model_dump(mode="json")), Snapshot)
+
+
+def test_run_fetch_huge_json_integer_safetensors_total_returns_instead_of_raising(tmp_path):
+    # Fix-round 3: a JSON integer far outside float range overflows the "/ 1e9" division itself.
+    config = _config(tmp_path)
+    huge_total = str(10**400).encode()
+    mapping = qwen35_transport_mapping()
+    mapping[("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B")] = Response(
+        status=200,
+        headers={},
+        body=b'{"sha": "' + b"a" * 40 + b'", "safetensors": {"total": ' + huge_total + b"}}",
+    )
+    mapping[("GET", f"https://huggingface.co/Qwen/Qwen3.5-9B/resolve/{'a' * 40}/config.json")] = Response(
+        status=404, headers={}, body=b"{}"
+    )
+    transport = build_transport(mapping)
+
+    result = run_fetch(config, transport, RUN1, old_snapshot=None)  # must not raise
+
+    assert result.snapshot.base_models[0].parameters_b is None
+    assert isinstance(load_snapshot(result.snapshot.model_dump(mode="json")), Snapshot)
+
+
 def test_run_fetch_malformed_sha_returns_instead_of_raising(tmp_path):
     config = _config(tmp_path)
     mapping = qwen35_transport_mapping()

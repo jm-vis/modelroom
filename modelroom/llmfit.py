@@ -170,7 +170,18 @@ def hardware_fields_from_llmfit_system(data: dict) -> dict:
 
 
 def _is_finite_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    """`True` only for a real, finite `int`/`float` (never `bool`).
+
+    Fix-round 3: `math.isfinite` itself raises `OverflowError` for an `int` too large to convert
+    to `float` (e.g. a JSON integer like `10**400`, which `json.loads` parses without complaint)
+    -- caught here and treated as "not finite", the same verdict as `NaN`/infinity.
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _positive_number(value: object, field: str) -> float:

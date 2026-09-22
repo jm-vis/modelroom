@@ -137,7 +137,7 @@ def fetch_with_config(
         return 3
 
     try:
-        token = acquire_lock(config.paths.lock_file, "fetch", run_at)
+        handle = acquire_lock(config.paths.lock_file, "fetch", run_at)
     except LockHeldError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -145,7 +145,7 @@ def fetch_with_config(
     try:
         return _run_locked(config, active_transport, run_at)
     finally:
-        release_lock(config.paths.lock_file, token)
+        release_lock(handle)
 
 
 def _run_locked(config, transport: Transport, run_at: datetime) -> int:

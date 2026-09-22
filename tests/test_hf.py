@@ -132,6 +132,51 @@ def test_fetch_base_model_meta_zero_safetensors_total_is_none_not_a_fabricated_z
     assert meta.parameters_b is None
 
 
+def test_fetch_base_model_meta_subnormal_safetensors_total_is_none_not_a_crash():
+    # Fix-round 3: 1e-320 passes the R2 "> 0" check but underflows to 0.0 once divided by 1e9,
+    # which BaseModelSpec.parameters_b's own gt=0 constraint would reject -- caught here instead.
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + QWEN_SHA.encode() + b'", "safetensors": {"total": 1e-320}}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/Qwen/Qwen3.5-9B/resolve/{QWEN_SHA}/config.json",
+            ): Response(status=404, headers={}, body=b"{}"),
+        }
+    )
+
+    meta = fetch_base_model_meta(transport, "Qwen/Qwen3.5-9B")
+
+    assert meta.parameters_b is None
+
+
+def test_fetch_base_model_meta_huge_json_integer_safetensors_total_is_none_not_a_crash():
+    # Fix-round 3: a JSON integer far outside float range (json.loads parses it without
+    # complaint) overflows the "/ 1e9" division itself -- caught here instead of raising.
+    huge_total = str(10**400).encode()
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + QWEN_SHA.encode() + b'", "safetensors": {"total": ' + huge_total + b"}}",
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/Qwen/Qwen3.5-9B/resolve/{QWEN_SHA}/config.json",
+            ): Response(status=404, headers={}, body=b"{}"),
+        }
+    )
+
+    meta = fetch_base_model_meta(transport, "Qwen/Qwen3.5-9B")
+
+    assert meta.parameters_b is None
+
+
 def test_fetch_base_model_meta_malformed_sha_resolves_architecture_unknown_and_never_raises():
     # R2: a non-40-hex 'sha' must never reach Architecture.source_revision's validator -- that
     # would raise a pydantic ValidationError straight out of fetch_base_model_meta, which its

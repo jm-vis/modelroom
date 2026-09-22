@@ -6,11 +6,18 @@ inside this module) so tests control time exactly, per AGENTS.md's "no mocking" 
 
 from __future__ import annotations
 
+import errno
 import json
 import os
-import secrets
-from datetime import datetime, timedelta
+import sys
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 from .config import Configuration
 from .contracts import (
@@ -26,17 +33,22 @@ from .contracts import (
 from .fetch_types import AreaOutcome
 from .quantization import package_identity_key
 
-LOCK_MAX_AGE = timedelta(hours=2)
-
-# R1: how many times acquire_lock retries a stale-lock takeover before giving up. A retry is
-# only ever needed when this attempt's own claim rename loses a race to a concurrent takeover
-# (see acquire_lock's docstring); three attempts is generous headroom over the one retry that
-# race can actually cause.
-MAX_TAKEOVER_ATTEMPTS = 3
+# Fix-round 3: the kernel lock covers exactly one byte, byte 0, which is never part of the JSON;
+# the content starts at `_CONTENT_OFFSET`, one byte later. Windows locking is mandatory, not
+# advisory -- a read that overlaps a locked byte raises `OSError`/`PermissionError` instead of
+# returning data, from any handle but the one holding the lock -- so if the JSON started at
+# offset 0, nobody but the holder could ever read it while the lock was held, including this
+# module's own `_read_lock` trying to name the holder in `LockHeldError`. Reserving one
+# otherwise-unused byte for the lock and starting the content one byte later keeps both
+# properties: exclusivity is the kernel's, and the content stays readable by any other process
+# the whole time the lock is held. (`fcntl.flock` locks the whole file and is advisory, so the
+# offset only matters on Windows; keeping one layout on both keeps the file format one thing.)
+_LOCK_OFFSET = 0
+_CONTENT_OFFSET = 1
 
 
 class LockHeldError(Exception):
-    """Another process holds the lock and it is not old enough to be considered stale."""
+    """Another live process holds the lock (age no longer matters, see `acquire_lock`)."""
 
 
 class StaleRunError(Exception):
@@ -46,108 +58,134 @@ class StaleRunError(Exception):
 # --- lock -------------------------------------------------------------------------------
 
 
-def acquire_lock(path: Path, command: str, now: datetime) -> str:
-    """Create the lock file exclusively, or raise `LockHeldError` if a live lock holds it.
+@dataclass(frozen=True)
+class LockHandle:
+    """An open, locked file descriptor. Keep it until `release_lock` -- the kernel lock lives
+    exactly as long as this fd stays open (`release_lock` closes it)."""
 
-    Uses `os.open` with `O_CREAT | O_EXCL` so the create-or-fail is one atomic syscall, never a
-    `path.exists()` check followed by a separate write (a window a second process could win).
-    On `FileExistsError` the existing holder is read: younger than `LOCK_MAX_AGE` blocks
-    immediately with `LockHeldError` -- this project never waits for a lock.
+    path: Path
+    fd: int
 
-    A stale (or unreadable) holder is taken over by claiming it first: `os.replace(path,
-    <path>.stale.<token>)` atomically renames the existing file away -- of two processes racing
-    the same stale file, only one rename can ever succeed (the other gets `FileNotFoundError`
-    and loops back to retry the `O_EXCL` create, see below), so the claim itself can never be
-    won twice (R1: the previous "write our content, then re-read to check whose token survived"
-    approach let two processes each see their own token when the other's write landed between
-    this process's own write and its re-read -- an atomic rename has no such window). Only the
-    process that won the claim then creates the lock fresh with `O_CREAT | O_EXCL` and unlinks
-    the claimed file; if that create itself loses a race to a third party, the loop retries (up
-    to `MAX_TAKEOVER_ATTEMPTS`) rather than assuming success. Returns the token the caller must
-    pass to `release_lock`.
+
+def acquire_lock(path: Path, command: str, now: datetime) -> LockHandle:
+    """Open `path` (creating it if needed) and take an exclusive, non-blocking kernel lock on it.
+
+    Fix-round 3: the lock is a kernel lock on a stable file that is never renamed or deleted --
+    `os.open(path, O_RDWR | O_CREAT)` (never `O_EXCL`: the file persists across runs and across
+    crashes), then `msvcrt.locking` (Windows) or `fcntl.flock` (elsewhere) with the non-blocking
+    flag. This replaces the previous rename-based takeover design entirely: that design's
+    "claim the stale file, then create fresh" could not be made exclusive against a third
+    process, because `os.replace` is not bound to the file generation a process actually read --
+    process A could claim a stale lock, create a fresh one and return, and process B could then
+    rename *A's* fresh lock away and create its own, with neither os.replace call ever failing.
+    Giving a foreign lock back on release had the same hole: it could overwrite a third process's
+    fresh lock instead of the one it took from. A kernel lock has no such window -- the OS, not
+    this module's own bookkeeping, decides who holds it, and it needs no "how old is too old"
+    rule at all: a crashed holder's lock is released by the kernel the moment its process exits,
+    and a live holder keeps the lock no matter how long it has held it.
+
+    The lock is taken at `_LOCK_OFFSET` on the file exactly as `os.open` leaves it: nothing is
+    written or truncated before the lock call, because until the lock is held this process is
+    not the only one touching the file. On failure (`OSError`, including `BlockingIOError`) the
+    fd is closed and `LockHeldError` is raised, naming the current holder's pid/command/started_at
+    when a read of the content (`_CONTENT_OFFSET` onward, never overlapping the locked byte)
+    succeeds and parses -- it may still be empty or unparseable while the holder is mid-write, in
+    which case the message says only that another process holds it. On success -- now the sole
+    owner of the lock byte -- the file is truncated to exactly `_CONTENT_OFFSET` bytes (which
+    also grows an empty file to that length) and rewritten from `_CONTENT_OFFSET` with this run's
+    own `{"pid", "command", "started_at"}` (no token any more -- there is nothing left to
+    arbitrate). A `LockHandle` is returned for `release_lock`.
     """
-    token = secrets.token_hex(16)
-    content = json.dumps(
-        {"pid": os.getpid(), "command": command, "started_at": now.isoformat(), "token": token}
-    )
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    for _ in range(MAX_TAKEOVER_ATTEMPTS):
-        if _create_lock_file(path, content):
-            return token
-
-        holder = _read_lock(path)
-        if holder is not None and now - holder["started_at"] < LOCK_MAX_AGE:
-            raise LockHeldError(
-                f"{path}: locked by pid {holder['pid']} running '{holder['command']}' since "
-                f"{holder['started_at'].isoformat()} (younger than {LOCK_MAX_AGE})"
-            )
-
-        claim_path = path.with_name(f"{path.name}.stale.{token}")
-        try:
-            os.replace(path, claim_path)
-        except FileNotFoundError:
-            continue  # another process's takeover claimed (or removed) it first; retry from the top
-
-        try:
-            if _create_lock_file(path, content):
-                return token
-        finally:
-            claim_path.unlink(missing_ok=True)
-        # Our claim won the rename race but a third party's create won the next one; loop back
-        # and let the next O_EXCL attempt see whatever is there now.
-
-    raise LockHeldError(f"{path}: lock takeover did not succeed after {MAX_TAKEOVER_ATTEMPTS} attempts")
-
-
-def _create_lock_file(path: Path, content: str) -> bool:
-    """Create `path` exclusively with `content`, or return `False` if it already exists."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False
-    try:
-        os.write(fd, content.encode("utf-8"))
-    finally:
+        _lock_exclusive(fd)
+    except OSError:
         os.close(fd)
-    return True
+        raise LockHeldError(_describe_holder(path)) from None
+
+    content = json.dumps({"pid": os.getpid(), "command": command, "started_at": now.isoformat()})
+    os.ftruncate(fd, _CONTENT_OFFSET)
+    os.lseek(fd, _CONTENT_OFFSET, 0)
+    os.write(fd, content.encode("utf-8"))
+    return LockHandle(path=path, fd=fd)
+
+
+def _lock_exclusive(fd: int) -> None:
+    """Take a non-blocking exclusive lock on `fd`'s `_LOCK_OFFSET` byte, raising `OSError` if
+    another fd already holds it."""
+    if sys.platform == "win32":
+        os.lseek(fd, _LOCK_OFFSET, 0)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        finally:
+            os.lseek(fd, 0, 0)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_exclusive(fd: int) -> None:
+    if sys.platform == "win32":
+        os.lseek(fd, _LOCK_OFFSET, 0)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        os.lseek(fd, 0, 0)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _describe_holder(path: Path) -> str:
+    holder = _read_lock(path)
+    if holder is None:
+        return f"{path}: held by another process, holder not yet written"
+    return (
+        f"{path}: locked by pid {holder['pid']} running '{holder['command']}' since "
+        f"{holder['started_at'].isoformat()}"
+    )
 
 
 def _read_lock(path: Path) -> dict | None:
+    """`path`'s holder info, or `None` if it cannot be read or parsed right now.
+
+    Reads from `_CONTENT_OFFSET` onward through a fresh handle, deliberately never touching the
+    locked byte at `_LOCK_OFFSET` -- that is what lets this succeed while another process holds
+    the lock. Still tolerant: the holder may be reading this file mid-write (empty or truncated
+    content), so any failure here -- a short read, bad JSON, or the file not existing yet --
+    simply means the holder is unknown, never a reason for `acquire_lock`'s own failure path to
+    raise.
+    """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.lseek(fd, _CONTENT_OFFSET, 0)
+            raw = os.read(fd, 65536)
+        finally:
+            os.close(fd)
+        data = json.loads(raw.decode("utf-8"))
         return {
             "pid": data["pid"],
             "command": data["command"],
             "started_at": datetime.fromisoformat(data["started_at"]),
-            "token": data.get("token"),
         }
     except Exception:
         return None
 
 
-def release_lock(path: Path, token: str) -> None:
-    """Remove the lock file, but only when its content still carries `token`.
+def release_lock(handle: LockHandle) -> None:
+    """Empty `handle`'s lock file, release the kernel lock, and close the fd.
 
-    A no-op if the file is already gone. R1: releasing is a claim-then-decide, not a
-    check-then-unlink -- `os.replace(path, <path>.release.<token>)` atomically claims whatever
-    is currently there (a concurrent stale-lock takeover in `acquire_lock` can never land
-    between our read and our unlink, because there is no such window any more). Once claimed,
-    its content decides the outcome: if it still carries `token`, it is ours and gets unlinked;
-    otherwise -- another process took the lock over as stale while we still held what we
-    thought was ours -- it is not ours to delete, so it is given back under its original name.
+    The file is never deleted -- it stays on disk, empty, ready for the next `acquire_lock`
+    (which grows it back to `_CONTENT_OFFSET` bytes itself, once it has the lock). Idempotent: a
+    second release of the same handle finds an already-closed fd, which raises `OSError` with
+    `errno.EBADF` from the first call -- exactly that one errno is swallowed, any other `OSError`
+    propagates.
     """
-    claim_path = path.with_name(f"{path.name}.release.{token}")
     try:
-        os.replace(path, claim_path)
-    except FileNotFoundError:
-        return
-
-    holder = _read_lock(claim_path)
-    if holder is not None and holder["token"] == token:
-        claim_path.unlink(missing_ok=True)
-    else:
-        os.replace(claim_path, path)
+        os.ftruncate(handle.fd, 0)
+        _unlock_exclusive(handle.fd)
+        os.close(handle.fd)
+    except OSError as exc:
+        if exc.errno != errno.EBADF:
+            raise
 
 
 # --- atomic writes ------------------------------------------------------------------------

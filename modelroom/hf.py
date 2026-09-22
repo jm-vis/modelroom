@@ -21,6 +21,7 @@ into every `Package.revision` this area produces.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -145,13 +146,25 @@ def _valid_sha(value: object) -> str | None:
 
 
 def _valid_parameters_b(safetensors: object) -> float | None:
-    """`safetensors.total` in billions, only when it is a real number greater than zero."""
+    """`safetensors.total` in billions, only when the conversion produces a real, finite,
+    positive `float`.
+
+    Fix-round 3: `total > 0` alone is not enough -- a subnormal value like `1e-320` passes it but
+    underflows to `0.0` once divided by `1e9` (which `BaseModelSpec.parameters_b`'s own `gt=0`
+    constraint would then reject downstream), and a JSON integer far outside `float` range (a raw
+    `10**400`, which `json.loads` parses without complaint) overflows the division itself
+    (`OverflowError`). Both resolve to `None` here, exactly like any other "not a real reading".
+    """
     if not isinstance(safetensors, dict):
         return None
     total = safetensors.get("total")
-    if isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0:
-        return total / 1e9
-    return None
+    if not isinstance(total, (int, float)) or isinstance(total, bool) or total <= 0:
+        return None
+    try:
+        result = total / 1e9
+    except (OverflowError, ValueError):
+        return None
+    return result if math.isfinite(result) and result > 0 else None
 
 
 def _candidate_repo_names(base_model: BaseModelSpec) -> list[str]:

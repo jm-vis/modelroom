@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import time
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -171,7 +170,11 @@ def test_fetch_end_to_end_exit_0_writes_a_valid_snapshot_and_run_status(tmp_path
     assert len(run_status["areas"]) == 3
     assert run_status["candidates"] == []
     assert not list((tmp_path / "state").glob("*.tmp"))
-    assert not (tmp_path / "state" / "modelroom.lock").exists()
+    # Fix-round 3: the lock file is a stable kernel-lock target, never deleted -- release_lock
+    # only empties it (see modelroom/state.py, "Lock file").
+    lock_path = tmp_path / "state" / "modelroom.lock"
+    assert lock_path.exists()
+    assert lock_path.read_bytes() == b""
 
 
 def test_fetch_end_to_end_exit_1_when_one_area_is_forced_incomplete(tmp_path: Path):
@@ -211,26 +214,28 @@ def test_fetch_a_second_run_older_than_the_stored_snapshot_is_exit_1_and_writes_
 
 
 def test_fetch_stops_at_a_lock_held_by_another_process(tmp_path: Path):
+    # Fix-round 3: the lock is a real kernel lock now (see modelroom/state.py), so the holder
+    # must take it through acquire_lock itself -- a plain file write, as the previous version of
+    # this test used, would no longer block anything.
     config_path = _write_config(tmp_path)
     lock_path = tmp_path / "state" / "modelroom.lock"
     holder_script = tmp_path / "lock_holder.py"
     holder_script.write_text(
-        "import json, sys, time\n"
+        "import sys, time\n"
         "from datetime import datetime, timezone\n"
         "from pathlib import Path\n"
+        "from modelroom.state import acquire_lock\n"
         "path = Path(sys.argv[1])\n"
-        "path.parent.mkdir(parents=True, exist_ok=True)\n"
-        "path.write_text(json.dumps({'pid': 999999, 'command': 'fetch', "
-        "'started_at': datetime.now(timezone.utc).isoformat()}))\n"
+        "acquire_lock(path, 'fetch', datetime.now(timezone.utc))\n"
+        "print('holding', flush=True)\n"
         "time.sleep(20)\n",
         encoding="utf-8",
     )
-    holder = subprocess.Popen([sys.executable, str(holder_script), str(lock_path)])
+    holder = subprocess.Popen(
+        [sys.executable, str(holder_script), str(lock_path)], stdout=subprocess.PIPE, text=True
+    )
     try:
-        deadline = time.monotonic() + 5
-        while not lock_path.exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert lock_path.exists(), "the holder process never created the lock file"
+        assert holder.stdout.readline().strip() == "holding", "the holder process never acquired the lock"
 
         code = main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1)
 
@@ -425,6 +430,23 @@ def test_hardware_llmfit_system_total_ram_nan_is_exit_2_and_writes_nothing(tmp_p
     # json.loads accepts the non-standard "NaN" literal -- a runner can genuinely produce this.
     config_path = _write_config(tmp_path)
     runner = _llmfit_runner(system_stdout='{"system": {"total_ram_gb": NaN}}')
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 2
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
+def test_hardware_llmfit_system_total_ram_a_huge_json_integer_is_exit_2_and_writes_nothing(tmp_path: Path):
+    # Fix-round 3: math.isfinite(10**400) raises OverflowError; a FixtureRunner stdout carrying
+    # the literal digits (a real llmfit subprocess could emit this) must still exit 2, not crash.
+    config_path = _write_config(tmp_path)
+    runner = _llmfit_runner(system_stdout=json.dumps({"system": {"total_ram_gb": 10**400}}))
 
     code = main(
         ["hardware", "--config", str(config_path), "--machine", "workstation"],
