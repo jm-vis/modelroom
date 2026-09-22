@@ -13,6 +13,7 @@ from modelroom.quantization import (
     QUANT_ORDER,
     inherit_from_siblings,
     normalize_file_stem,
+    package_identity_key,
     parse_hf_quant,
     parse_ollama_tag_quant,
     sort_key,
@@ -206,3 +207,161 @@ def test_sort_key_final_tie_break_is_the_full_package_key():
     keys = sorted([sort_key(second), sort_key(first)])
     assert keys[0][:3] == keys[1][:3]  # quant, size and packager tie
     assert keys[0][3] != keys[1][3]  # the full key still orders them deterministically
+
+
+# --- normalize_file_stem: shard suffix regardless of extension (finding 6) ----------------
+
+
+def test_normalize_file_stem_strips_shard_suffix_on_a_safetensors_file():
+    assert (
+        normalize_file_stem("model.safetensors-00001-of-00002.safetensors") == "model.safetensors"
+    )
+
+
+# --- package_identity_key: sorted, de-duplicated, order-independent (finding 6) -----------
+
+
+class _StubPackageFile:
+    def __init__(self, name: str, role: str) -> None:
+        self.name = name
+        self.role = role
+
+
+class _StubPackage:
+    """Duck-types the subset of `Package` that `package_identity_key` reads."""
+
+    def __init__(self, *, source: str, repo: str | None, ollama_name: str | None, files: list) -> None:
+        self.source = source
+        self.repo = repo
+        self.ollama_name = ollama_name
+        self.files = files
+
+
+def test_package_identity_key_third_element_is_sorted_and_order_independent():
+    file_a = _StubPackageFile("A-Q4_K_M.gguf", "weights")
+    file_b = _StubPackageFile("B-Q4_K_M.gguf", "weights")
+
+    forward = _StubPackage(source="huggingface", repo="acme/Nova-Bundle-GGUF", ollama_name=None, files=[file_a, file_b])
+    reversed_ = _StubPackage(source="huggingface", repo="acme/Nova-Bundle-GGUF", ollama_name=None, files=[file_b, file_a])
+
+    key_forward = package_identity_key(forward)
+    key_reversed = package_identity_key(reversed_)
+    assert key_forward == key_reversed
+    assert key_forward[2] == "A-Q4_K_M|B-Q4_K_M"
+
+
+def test_package_identity_key_deduplicates_repeated_stems():
+    file_1 = _StubPackageFile("Nova-70B-Q4_K_M-00001-of-00002.gguf", "weights_shard")
+    file_2 = _StubPackageFile("Nova-70B-Q4_K_M-00002-of-00002.gguf", "weights_shard")
+    package = _StubPackage(source="huggingface", repo="acme/Nova-70B-GGUF", ollama_name=None, files=[file_1, file_2])
+    assert package_identity_key(package)[2] == "Nova-70B-Q4_K_M"
+
+
+# --- parse_ollama_tag_quant: last token, descriptive middle tokens ignored (finding 7) -----
+
+
+def test_parse_ollama_tag_quant_reads_the_last_token_past_a_descriptive_middle_token():
+    assert parse_ollama_tag_quant("70b-instruct-q4_K_M") == "Q4_K_M"
+
+
+# --- parse_hf_quant: mmproj check applies to the basename only (finding 8) ----------------
+
+
+def test_parse_hf_quant_mmproj_check_applies_to_the_basename_with_forward_slash():
+    assert parse_hf_quant("projectors/mmproj-F16.gguf") is None
+
+
+def test_parse_hf_quant_mmproj_check_applies_to_the_basename_with_backslash():
+    assert parse_hf_quant("projectors\\mmproj-F16.gguf") is None
+
+
+# --- QUANT_ORDER is pinned, and the longest-suffix rule is exercised on a real overlap ----
+# (finding 13)
+
+
+def test_quant_order_is_exactly_this_tuple_in_order():
+    assert QUANT_ORDER == (
+        "IQ2_XXS",
+        "IQ2_M",
+        "UD-IQ2_XXS",
+        "UD-IQ2_M",
+        "Q2_K",
+        "UD-Q2_K_XL",
+        "IQ3_XXS",
+        "UD-IQ3_XXS",
+        "Q3_K_S",
+        "Q3_K_M",
+        "UD-Q3_K_XL",
+        "IQ4_XS",
+        "IQ4_NL",
+        "Q4_0",
+        "Q4_1",
+        "Q4_K_S",
+        "Q4_K_M",
+        "UD-Q4_K_XL",
+        "Q5_K_S",
+        "Q5_K_M",
+        "UD-Q5_K_XL",
+        "Q6_K",
+        "UD-Q6_K_XL",
+        "Q8_0",
+        "UD-Q8_K_XL",
+        "F16",
+        "BF16",
+        "F32",
+    )
+    assert len(QUANT_ORDER) == 28
+
+
+def test_parse_hf_quant_resolves_the_longest_suffix_on_a_real_overlap():
+    # "UD-IQ2_M" ends with "-IQ2_M", so both "IQ2_M" and "UD-IQ2_M" are real QUANT_ORDER
+    # candidates for this filename; the longer one must win, and the plain "IQ2_M" filename
+    # must still resolve to the shorter label rather than always preferring the longer one.
+    assert parse_hf_quant("Nova-7B-UD-IQ2_M.gguf") == "UD-IQ2_M"
+    assert parse_hf_quant("Nova-7B-IQ2_M.gguf") == "IQ2_M"
+
+
+# --- the HF tree fixture actually drives a size-based ordering test (finding 14) -----------
+
+
+def _unsloth_tree_entries() -> list[dict]:
+    tree = json.loads((FIXTURES / "hf_unsloth_qwen35_9b_gguf_tree.json").read_text(encoding="utf-8"))
+    return [entry for entry in tree if entry["type"] == "file" and entry["path"].endswith(".gguf")]
+
+
+def _hf_package_from_tree_entry(entry: dict) -> Package:
+    filename = entry["path"]
+    return Package(
+        source="huggingface",
+        repo="unsloth/Qwen3.5-9B-GGUF",
+        revision="3885219b6810b007914f3a7950a8d1b469d598a5",
+        base_model_hf_repo="Qwen/Qwen3.5-9B",
+        format="gguf",
+        files=[PackageFile(name=filename, role="weights", size_bytes=entry["size"], digest=None)],
+        complete=True,
+        quantization=parse_hf_quant(filename),
+        default_context=None,
+        provenance="metadata_ok",
+        unresolved_reason=None,
+        approval=None,
+        observed_at=_NOW,
+        last_seen=_NOW,
+        active=True,
+    )
+
+
+def test_sort_key_orders_real_tree_fixture_packages_from_smallest_to_largest():
+    entries_by_name = {entry["path"]: entry for entry in _unsloth_tree_entries()}
+    ordered_filenames = [
+        "Qwen3.5-9B-UD-IQ2_XXS.gguf",  # UD-IQ2_XXS: QUANT_ORDER index 2
+        "Qwen3.5-9B-Q4_K_M.gguf",  # Q4_K_M: QUANT_ORDER index 16
+        "Qwen3.5-9B-Q8_0.gguf",  # Q8_0: QUANT_ORDER index 23
+    ]
+    packages = [_hf_package_from_tree_entry(entries_by_name[name]) for name in ordered_filenames]
+    # Sanity: the fixture's real sizes also happen to increase in this order, so this genuinely
+    # exercises sort_key against real recorded sizes, not just the quant index in isolation.
+    sizes = [entries_by_name[name]["size"] for name in ordered_filenames]
+    assert sizes == sorted(sizes)
+
+    shuffled = [packages[2], packages[0], packages[1]]
+    assert sorted(shuffled, key=sort_key) == packages

@@ -52,14 +52,23 @@ QUANT_ORDER: tuple[str, ...] = (
 )
 
 _SHARD_SUFFIX_RE = re.compile(r"-\d{5}-of-\d{5}$")
-_OLLAMA_SIZE_TAG_RE = re.compile(r"^\d+(?:\.\d+)?[bBmMkK]-(.+)$")
+_STEM_EXTENSIONS = (".gguf", ".safetensors")
 
 
 def normalize_file_stem(filename: str) -> str:
-    """Strip the `.gguf` extension and a `-NNNNN-of-NNNNN` shard suffix, in that order."""
+    """Strip a trailing `.gguf`/`.safetensors` extension, then a `-NNNNN-of-NNNNN` shard suffix.
+
+    Order matters: the extension is stripped first so the shard suffix regex, which is
+    anchored at the end of the string, matches regardless of which of the two extensions (or
+    neither) the file carries -- e.g. both `name-00001-of-00002.gguf` and
+    `model.safetensors-00001-of-00002.safetensors` collapse to their un-sharded stem.
+    """
     stem = filename
-    if stem.lower().endswith(".gguf"):
-        stem = stem[: -len(".gguf")]
+    lower = stem.lower()
+    for extension in _STEM_EXTENSIONS:
+        if lower.endswith(extension):
+            stem = stem[: -len(extension)]
+            break
     stem = _SHARD_SUFFIX_RE.sub("", stem)
     return stem
 
@@ -70,11 +79,13 @@ def parse_hf_quant(filename: str) -> str | None:
     The quantization is the suffix after the last `-` of the normalized stem, matched
     case-sensitively against the longest member of `QUANT_ORDER` that is a `-<QUANT>` suffix
     (so `UD-Q4_K_XL`, which itself contains a `-`, wins over a shorter false match). An mmproj
-    file (its stem starts with `mmproj`, e.g. `mmproj-BF16.gguf`) is a projector, not a model
-    weight, and never carries a quantization even though its suffix looks like one.
+    file is a projector, not a model weight, and never carries a quantization even though its
+    suffix looks like one; the mmproj check looks at the basename only (the last `/` or `\\`
+    segment), so a path like `projectors/mmproj-F16.gguf` is still recognized as a projector.
     """
     stem = normalize_file_stem(filename)
-    if stem.lower().startswith("mmproj"):
+    basename = re.split(r"[\\/]", stem)[-1]
+    if basename.lower().startswith("mmproj"):
         return None
     candidates = [quant for quant in QUANT_ORDER if stem.endswith(f"-{quant}")]
     if not candidates:
@@ -85,17 +96,22 @@ def parse_hf_quant(filename: str) -> str | None:
 def parse_ollama_tag_quant(tag: str) -> str | None:
     """Read the quantization off an Ollama tag, e.g. `9b-q4_K_M` -> `Q4_K_M`.
 
-    The tag is expected to start with a size token (`9b-`, `70b-`, ...) followed by the
-    quantization, matched case-insensitively against `QUANT_ORDER`. A tag with no such suffix,
-    or whose suffix is not a `QUANT_ORDER` member (e.g. `9b-mlx-bf16`, a tensor-format build),
-    returns `None`; callers fall back to `inherit_from_siblings` or leave it unknown.
+    The tag is split on `-`; the quantization is the LAST token when it matches a
+    `QUANT_ORDER` member case-insensitively (so `70b-instruct-q4_K_M` -> `Q4_K_M`, the
+    descriptive middle tokens are ignored). Any middle token equal to `mlx` (case-insensitive)
+    marks a tensor build and forces `None` regardless of the last token (`9b-mlx-bf16` stays
+    `None`). A tag with fewer than two tokens (e.g. `9b` alone), or whose last token is not a
+    `QUANT_ORDER` member, returns `None`; callers fall back to `inherit_from_siblings` or leave
+    it unknown.
     """
-    match = _OLLAMA_SIZE_TAG_RE.match(tag)
-    if not match:
+    tokens = tag.split("-")
+    if len(tokens) < 2:
         return None
-    candidate = match.group(1)
+    if any(token.lower() == "mlx" for token in tokens[1:-1]):
+        return None
+    last = tokens[-1]
     for quant in QUANT_ORDER:
-        if quant.lower() == candidate.lower():
+        if quant.lower() == last.lower():
             return quant
     return None
 
@@ -128,9 +144,10 @@ def inherit_from_siblings(
 def package_identity_key(package: "Package") -> tuple[str, str, str]:
     """The `(source, repo|ollama_name, filename-or-tag)` triple that identifies a package.
 
-    For Hugging Face, the third element is the normalized stem of its first weights or
-    weights-shard file (so the shards of one sharded package collapse to the same identity).
-    For Ollama, it is the tag part of `ollama_name` after the colon.
+    For Hugging Face, the third element is the sorted, de-duplicated tuple of the normalized
+    stems of every weights/weights-shard file, joined with `|` (so the shards of one sharded
+    package collapse to the same identity, and the result never depends on the order `files`
+    happens to list them in). For Ollama, it is the tag part of `ollama_name` after the colon.
     """
     if package.source == "huggingface":
         repo_or_name = package.repo or ""
@@ -143,10 +160,10 @@ def _weights_filename_or_tag(package: "Package") -> str:
     if package.source == "ollama":
         name = package.ollama_name or ""
         return name.split(":", 1)[1] if ":" in name else name
-    for file in package.files:
-        if file.role in ("weights", "weights_shard"):
-            return normalize_file_stem(file.name)
-    return ""
+    stems = {
+        normalize_file_stem(file.name) for file in package.files if file.role in ("weights", "weights_shard")
+    }
+    return "|".join(sorted(stems))
 
 
 def _packager_name(package: "Package") -> str:

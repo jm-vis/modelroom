@@ -13,16 +13,19 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .quantization import package_identity_key
+from .quantization import QUANT_ORDER, package_identity_key
 
 SNAPSHOT_SCHEMA_VERSION = 1
-# Inclusive lower bound, exclusive upper bound: readers accept schema_version 1 for now.
+# Half-open range: a reader accepts schema_version >= low and < high. Readers accept exactly
+# schema_version 1 for now.
 SNAPSHOT_SCHEMA_RANGE: tuple[int, int] = (1, 2)
 
 _HF_REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 _MANIFEST_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})(?=\.[^.]+$)")
+_APPROVAL_CONTENT_RE = re.compile(r"^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")
+_OLLAMA_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SHARD_RE = re.compile(r"^(?P<stem>.+)-(?P<idx>\d{5})-of-(?P<total>\d{5})(?:\.[^.]+)?$")
 
 
 class SchemaVersionError(Exception):
@@ -39,33 +42,43 @@ def check_schema_version(version: int, accepted: tuple[int, int], file_label: st
     if not (low <= version < high):
         raise SchemaVersionError(
             f"{file_label}: schema_version {version} is outside the accepted range "
-            f"[{low}, {high})"
+            f"(accepted: >= {low} and < {high}; equivalently [{low}, {high}))"
         )
 
 
 def shards_complete(files: list["PackageFile"]) -> bool:
     """Whether a package's weight files are a complete set.
 
-    A single non-sharded weights file is complete. A sharded set (filenames ending in
-    `-NNNNN-of-NNNNN` before the extension) is complete when every index `1..N` is present
-    for a shared `N`. Files with role `mmproj` or `other` are not weights and are ignored.
+    A single non-sharded weights file is complete. Zero weight files is never complete. A
+    sharded set (filenames ending in `-NNNNN-of-NNNNN`, optionally before an extension) is
+    complete only when every shard shares the same normalized stem and the same total `N`,
+    the indices present are exactly `{1..N}` with no duplicate index, and no non-sharded file
+    is mixed in. Mixed stems, a mixed sharded/non-sharded set, or any duplicate index makes the
+    package incomplete. Files with role `mmproj` or `other` are not weights and are ignored.
     """
     weight_files = [f for f in files if f.role in ("weights", "weights_shard")]
     if not weight_files:
         return False
 
-    matches = [_SHARD_RE.search(f.name) for f in weight_files]
+    matches = [_SHARD_RE.match(f.name) for f in weight_files]
     if all(m is None for m in matches):
         return len(weight_files) == 1
     if any(m is None for m in matches):
         return False
 
-    totals = {int(m.group(2)) for m in matches}
+    stems = {m.group("stem") for m in matches}
+    if len(stems) != 1:
+        return False
+
+    totals = {int(m.group("total")) for m in matches}
     if len(totals) != 1:
         return False
     total = totals.pop()
-    indices = {int(m.group(1)) for m in matches}
-    return indices == set(range(1, total + 1))
+
+    indices = [int(m.group("idx")) for m in matches]
+    if len(indices) != len(set(indices)):
+        return False
+    return set(indices) == set(range(1, total + 1))
 
 
 class Architecture(BaseModel):
@@ -89,7 +102,7 @@ class Architecture(BaseModel):
     @field_validator("source_revision")
     @classmethod
     def _check_source_revision(cls, value: str | None) -> str | None:
-        if value is not None and not _SHA1_RE.match(value):
+        if value is not None and not _SHA1_RE.fullmatch(value):
             raise ValueError(f"source_revision must be a 40-hex commit sha or None: {value!r}")
         return value
 
@@ -109,6 +122,25 @@ class Architecture(BaseModel):
         return self
 
 
+# Any of these fields, present at the top level or under `text_config` with a value that
+# signals a mixture-of-experts model, rules out `dense_classic` regardless of the plain
+# numeric fields. The first four are expert counts (a MoE model has more than one); the last
+# is an expert-FFN size that is simply present (truthy) only on a MoE config.
+_MOE_COUNT_FIELDS = ("num_local_experts", "num_experts", "n_routed_experts", "num_experts_per_tok")
+_MOE_SIZE_FIELD = "moe_intermediate_size"
+
+
+def _is_moe_config(config: dict, layer_config: dict) -> bool:
+    for source in (config, layer_config):
+        for field in _MOE_COUNT_FIELDS:
+            value = source.get(field)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 1:
+                return True
+        if source.get(_MOE_SIZE_FIELD):
+            return True
+    return False
+
+
 def architecture_from_hf_config(
     source_repo: str, source_revision: str | None, config: dict | None
 ) -> Architecture:
@@ -116,9 +148,10 @@ def architecture_from_hf_config(
 
     Some publishers nest the language-model fields under a `text_config` key (multimodal
     configs); this reads from there when present, otherwise from the top level. `kind` is
-    `dense_classic` only when the three numeric fields are all present and `layer_types` is
-    either absent or entirely `"full_attention"` (a hybrid or MoE config, or a missing file,
-    resolves to `"unknown"` with the numeric fields left at `None`).
+    `dense_classic` only when the three numeric fields are all present, `layer_types` is
+    either absent or entirely `"full_attention"`, and none of the MoE fields (checked at both
+    the top level and in `text_config`) signal a mixture-of-experts model. A hybrid or MoE
+    config, or a missing file, resolves to `"unknown"` with the numeric fields left at `None`.
     """
     if config is None:
         return Architecture(source_repo=source_repo, source_revision=source_revision, kind="unknown")
@@ -133,8 +166,9 @@ def architecture_from_hf_config(
 
     has_numeric = None not in (num_hidden_layers, num_key_value_heads, head_dim)
     all_full_attention = layer_types is None or all(t == "full_attention" for t in layer_types)
+    is_moe = _is_moe_config(config, layer_config)
     kind: Literal["dense_classic", "unknown"] = (
-        "dense_classic" if has_numeric and all_full_attention else "unknown"
+        "dense_classic" if has_numeric and all_full_attention and not is_moe else "unknown"
     )
 
     return Architecture(
@@ -165,7 +199,7 @@ class BaseModelSpec(BaseModel):
     @field_validator("hf_repo")
     @classmethod
     def _check_hf_repo(cls, value: str) -> str:
-        if not _HF_REPO_RE.match(value):
+        if not _HF_REPO_RE.fullmatch(value):
             raise ValueError(f"hf_repo must look like 'owner/name': {value!r}")
         return value
 
@@ -173,6 +207,8 @@ class BaseModelSpec(BaseModel):
     @classmethod
     def _check_repo_aliases(cls, value: list[str]) -> list[str]:
         for alias in value:
+            if not alias:
+                raise ValueError("repo_aliases entries must be non-empty")
             if "/" in alias:
                 raise ValueError(f"repo_aliases holds repo names, not 'owner/name': {alias!r}")
         return value
@@ -213,6 +249,15 @@ class Approval(BaseModel):
     content: str
     by: str
 
+    @field_validator("content")
+    @classmethod
+    def _check_content(cls, value: str) -> str:
+        if not _APPROVAL_CONTENT_RE.fullmatch(value):
+            raise ValueError(
+                f"content must be a 40-hex commit sha or 'sha256:' plus 64 hex characters: {value!r}"
+            )
+        return value
+
 
 class Package(BaseModel):
     """One packaged build of a base model, as observed on Hugging Face or in Ollama.
@@ -241,6 +286,20 @@ class Package(BaseModel):
     last_seen: datetime
     active: bool
 
+    @field_validator("ollama_name")
+    @classmethod
+    def _check_ollama_name(cls, value: str | None) -> str | None:
+        if value is not None and not _OLLAMA_NAME_RE.fullmatch(value):
+            raise ValueError(f"ollama_name must look like '<base>:<tag>': {value!r}")
+        return value
+
+    @field_validator("quantization")
+    @classmethod
+    def _check_quantization(cls, value: str | None) -> str | None:
+        if value is not None and value not in QUANT_ORDER:
+            raise ValueError(f"quantization must be a QUANT_ORDER member or None: {value!r}")
+        return value
+
     @model_validator(mode="after")
     def _check_source_fields(self) -> "Package":
         if self.source == "huggingface":
@@ -248,16 +307,16 @@ class Package(BaseModel):
                 raise ValueError("a huggingface package must not carry ollama_name/manifest_digest")
             if self.repo is None or self.revision is None:
                 raise ValueError("a huggingface package requires repo and revision")
-            if not _HF_REPO_RE.match(self.repo):
+            if not _HF_REPO_RE.fullmatch(self.repo):
                 raise ValueError(f"repo must look like 'owner/name': {self.repo!r}")
-            if not _SHA1_RE.match(self.revision):
+            if not _SHA1_RE.fullmatch(self.revision):
                 raise ValueError(f"revision must be a 40-hex commit sha: {self.revision!r}")
         else:
             if self.repo is not None or self.revision is not None:
                 raise ValueError("an ollama package must not carry repo/revision")
             if self.ollama_name is None or self.manifest_digest is None:
                 raise ValueError("an ollama package requires ollama_name and manifest_digest")
-            if not _MANIFEST_DIGEST_RE.match(self.manifest_digest):
+            if not _MANIFEST_DIGEST_RE.fullmatch(self.manifest_digest):
                 raise ValueError(
                     f"manifest_digest must be 'sha256:' plus 64 hex characters: "
                     f"{self.manifest_digest!r}"
@@ -265,11 +324,35 @@ class Package(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_provenance_coupling(self) -> "Package":
-        if self.provenance == "approved" and self.approval is None:
-            raise ValueError("provenance 'approved' requires an approval")
-        if self.provenance != "unresolved" and self.unresolved_reason is not None:
+    def _check_complete_is_derived_from_files(self) -> "Package":
+        derived = shards_complete(self.files)
+        if self.complete != derived:
+            raise ValueError(
+                f"complete must be the value derived from files by shards_complete: "
+                f"expected {derived}, got {self.complete}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_provenance_invariants(self) -> "Package":
+        if self.format != "gguf" and (self.provenance != "unresolved" or self.unresolved_reason != "format"):
+            raise ValueError(
+                "a non-gguf package must have provenance='unresolved' and unresolved_reason='format'"
+            )
+        if self.provenance == "unresolved":
+            if not self.unresolved_reason:
+                raise ValueError("unresolved_reason is required when provenance is 'unresolved'")
+        elif self.unresolved_reason is not None:
             raise ValueError("unresolved_reason is only set when provenance is 'unresolved'")
+        if self.provenance == "approved":
+            if self.approval is None:
+                raise ValueError("provenance 'approved' requires an approval")
+            current_content = self.revision if self.source == "huggingface" else self.manifest_digest
+            if self.approval.content != current_content:
+                raise ValueError(
+                    "an 'approved' package's approval.content must match its current "
+                    "revision (huggingface) or manifest_digest (ollama)"
+                )
         return self
 
 
@@ -330,6 +413,25 @@ class Snapshot(BaseModel):
                 raise ValueError(f"duplicate package identity: {key}")
             seen.add(key)
         return self
+
+
+def load_snapshot(data: dict) -> Snapshot:
+    """Validate `schema_version` before field validation, then build a `Snapshot`.
+
+    A raw `Snapshot.model_validate(data)` call runs the schema-version check as one of the
+    model's own validators, so an out-of-range or missing version surfaces as a pydantic
+    `ValidationError` mixed in with every other field problem. Callers that need to map a
+    schema-version problem to a specific exit code (`3` in this project) call `load_snapshot`
+    instead: it raises `SchemaVersionError` -- for a missing, non-integer, or out-of-range
+    `schema_version` -- before Pydantic ever sees the payload. The model's own version check
+    stays in place as a second line of defense for callers that build a `Snapshot` some other
+    way.
+    """
+    version = data.get("schema_version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise SchemaVersionError(f"snapshot: schema_version is missing or not an integer: {version!r}")
+    check_schema_version(version, SNAPSHOT_SCHEMA_RANGE, "snapshot")
+    return Snapshot.model_validate(data)
 
 
 EXAMPLES: dict[str, dict] = {

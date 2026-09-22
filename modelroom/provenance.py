@@ -59,6 +59,9 @@ def _decide_huggingface(
         return "unresolved", "base_model_tag"
 
     weight_files = [f for f in package.files if f.role in ("weights", "weights_shard")]
+    if not weight_files:
+        return "unresolved", "no_weights"
+
     prefix = f"{base_name}-"
     for weight_file in weight_files:
         stem = normalize_file_stem(weight_file.name)
@@ -69,6 +72,16 @@ def _decide_huggingface(
 
 
 def _decide_ollama(package: "Package", base_model: "BaseModelSpec") -> tuple[str, str | None]:
+    """Decide provenance for an Ollama package against the tag conventions in CONTRACTS.md.
+
+    Order: the base name (`<ollama_base>:`) must prefix `ollama_name`; the base model must
+    declare an `ollama_tag`; the tag's first `-`-separated token must equal
+    `f"{parameters_b:g}b"` exactly (so `nova:7banana` and `nova:70b-q4_K_M` are both rejected
+    for a 7B model -- neither has a first token that equals `7b`); and the full tag must equal
+    `base_model.ollama_tag` or start with `base_model.ollama_tag + "-"` (token boundary, so
+    `7b-q4_K_M` and `7b-instruct-q4_K_M` match a `7b` base tag but a divergent base tag such as
+    `7b-preview` does not).
+    """
     ollama_name = package.ollama_name or ""
 
     if not base_model.ollama_base:
@@ -77,8 +90,15 @@ def _decide_ollama(package: "Package", base_model: "BaseModelSpec") -> tuple[str
         return "unresolved", "ollama_name"
 
     tag = ollama_name.split(":", 1)[1] if ":" in ollama_name else ""
+    if not base_model.ollama_tag:
+        return "unresolved", "ollama_tag"
+
+    first_token = tag.split("-", 1)[0]
     size_token = f"{base_model.parameters_b:g}b"
-    if not tag.startswith(size_token):
+    if first_token != size_token:
         return "unresolved", "size_token"
+
+    if tag != base_model.ollama_tag and not tag.startswith(f"{base_model.ollama_tag}-"):
+        return "unresolved", "ollama_tag"
 
     return "metadata_ok", None

@@ -25,6 +25,7 @@ from modelroom.contracts import (
     Snapshot,
     architecture_from_hf_config,
     check_schema_version,
+    load_snapshot,
     shards_complete,
 )
 
@@ -305,3 +306,282 @@ def test_snapshot_model_itself_rejects_wrong_schema_version():
     payload["schema_version"] = 2
     with pytest.raises(ValidationError):
         Snapshot.model_validate(payload)
+
+
+# --- Package.complete is derived from files, never accepted freely (finding 1) ------------
+
+
+def test_complete_true_with_no_files_is_rejected():
+    payload = dict(EXAMPLES["Package"])
+    payload["files"] = []
+    payload["complete"] = True
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_complete_false_with_a_single_complete_weight_file_is_rejected():
+    payload = dict(EXAMPLES["Package"])
+    payload["complete"] = False  # files already hold one non-sharded weight file -> derived True
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_complete_matching_the_derived_value_is_accepted():
+    payload = dict(EXAMPLES["Package"])
+    payload["complete"] = True
+    Package.model_validate(payload)
+
+
+# --- shards_complete: stems, duplicate indices (finding 2) ---------------------------------
+
+
+def test_shards_complete_mixed_stems_is_incomplete():
+    files = [
+        _weights_file("Nova-7B-Q4_K_M-00001-of-00002.gguf"),
+        _weights_file("Nova-7B-Q8_0-00002-of-00002.gguf"),
+    ]
+    assert shards_complete(files) is False
+
+
+def test_shards_complete_duplicate_index_is_incomplete():
+    files = [
+        _weights_file("Nova-70B-Q4_K_M-00001-of-00002.gguf"),
+        _weights_file("Nova-70B-Q4_K_M-00001-of-00002.gguf"),
+    ]
+    assert shards_complete(files) is False
+
+
+def test_shards_complete_duplicate_index_among_three_files_is_incomplete():
+    # Converting indices straight to a set loses the duplicate: {1, 1, 2} -> {1, 2}, which
+    # equals range(1, 3) even though the actual file count/index pairing is wrong.
+    files = [
+        _weights_file("Nova-70B-Q4_K_M-00001-of-00002.gguf"),
+        _weights_file("Nova-70B-Q4_K_M-00001-of-00002.gguf"),
+        _weights_file("Nova-70B-Q4_K_M-00002-of-00002.gguf"),
+    ]
+    assert shards_complete(files) is False
+
+
+def test_shards_complete_mixed_sharded_and_non_sharded_is_incomplete():
+    files = [
+        _weights_file("Nova-70B-Q4_K_M-00001-of-00002.gguf"),
+        PackageFile(name="Nova-70B-Q4_K_M.gguf", role="weights", size_bytes=1, digest=None),
+    ]
+    assert shards_complete(files) is False
+
+
+# --- Package provenance invariants (finding 4) ----------------------------------------------
+
+
+def test_non_gguf_package_must_be_unresolved_format():
+    payload = dict(EXAMPLES["Package"])
+    payload["format"] = "tensor"
+    # provenance/unresolved_reason still say metadata_ok/None from the gguf example -> rejected
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_non_gguf_package_with_unresolved_format_is_accepted():
+    payload = dict(EXAMPLES["Package"])
+    payload["format"] = "tensor"
+    payload["provenance"] = "unresolved"
+    payload["unresolved_reason"] = "format"
+    Package.model_validate(payload)
+
+
+def test_unresolved_provenance_requires_a_reason():
+    payload = dict(EXAMPLES["Package"])
+    payload["provenance"] = "unresolved"
+    payload["unresolved_reason"] = None
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_approved_package_with_mismatched_approval_content_is_rejected():
+    payload = dict(EXAMPLES["Package"])
+    payload["provenance"] = "approved"
+    payload["approval"] = {"date": "2026-09-01", "content": "a" * 40, "by": "acme-ai-team"}
+    # approval.content ("a"*40) does not match the package's revision -> rejected
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_approved_package_with_matching_approval_content_is_accepted():
+    payload = dict(EXAMPLES["Package"])
+    payload["provenance"] = "approved"
+    payload["approval"] = {"date": "2026-09-01", "content": payload["revision"], "by": "acme-ai-team"}
+    Package.model_validate(payload)
+
+
+# --- documented string formats (finding 9) --------------------------------------------------
+
+
+def test_repo_alias_empty_string_is_rejected():
+    payload = dict(EXAMPLES["BaseModelSpec"])
+    payload["repo_aliases"] = [""]
+    with pytest.raises(ValidationError):
+        BaseModelSpec.model_validate(payload)
+
+
+def test_approval_content_must_be_a_sha_or_sha256_digest():
+    payload = dict(EXAMPLES["Approval"])
+    payload["content"] = "not-a-digest"
+    with pytest.raises(ValidationError):
+        Approval.model_validate(payload)
+
+
+def test_approval_content_accepts_sha256_prefixed_digest():
+    payload = dict(EXAMPLES["Approval"])
+    payload["content"] = "sha256:" + "a" * 64
+    Approval.model_validate(payload)
+
+
+def test_package_quantization_must_be_a_quant_order_member():
+    payload = dict(EXAMPLES["Package"])
+    payload["quantization"] = "not-a-real-quant"
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_package_quantization_none_is_accepted():
+    payload = dict(EXAMPLES["Package"])
+    payload["quantization"] = None
+    Package.model_validate(payload)
+
+
+def test_package_ollama_name_must_match_base_colon_tag_shape():
+    payload = dict(EXAMPLES["Package"])
+    payload["source"] = "ollama"
+    del payload["repo"]
+    del payload["revision"]
+    payload["ollama_name"] = "not valid"
+    payload["manifest_digest"] = "sha256:" + "a" * 64
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_package_ollama_name_valid_shape_is_accepted():
+    payload = dict(EXAMPLES["Package"])
+    payload["source"] = "ollama"
+    del payload["repo"]
+    del payload["revision"]
+    payload["ollama_name"] = "nova:7b-q4_K_M"
+    payload["manifest_digest"] = "sha256:" + "a" * 64
+    Package.model_validate(payload)
+
+
+# --- re.fullmatch, never re.match, for every regex check (finding 10) ----------------------
+
+
+def test_hf_repo_with_trailing_newline_is_rejected():
+    payload = dict(EXAMPLES["BaseModelSpec"])
+    payload["hf_repo"] = payload["hf_repo"] + "\n"
+    with pytest.raises(ValidationError):
+        BaseModelSpec.model_validate(payload)
+
+
+def test_source_revision_with_trailing_newline_is_rejected():
+    with pytest.raises(ValidationError):
+        Architecture(
+            source_repo="acme/Nova-7B",
+            source_revision="1a2b3c4d5e6f7890abcdef1234567890abcdef12\n",
+            kind="unknown",
+        )
+
+
+def test_package_revision_with_trailing_newline_is_rejected():
+    payload = dict(EXAMPLES["Package"])
+    payload["revision"] = payload["revision"] + "\n"
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_package_manifest_digest_with_trailing_newline_is_rejected():
+    payload = dict(EXAMPLES["Package"])
+    payload["source"] = "ollama"
+    del payload["repo"]
+    del payload["revision"]
+    payload["ollama_name"] = "nova:7b-q4_K_M"
+    payload["manifest_digest"] = "sha256:" + "a" * 64 + "\n"
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+# --- load_snapshot: schema_version checked before Pydantic field validation (finding 11) ---
+
+
+def test_load_snapshot_rejects_out_of_range_version_with_schema_version_error():
+    payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    payload["schema_version"] = 2
+    with pytest.raises(SchemaVersionError):
+        load_snapshot(payload)
+
+
+def test_load_snapshot_rejects_missing_schema_version_with_schema_version_error():
+    payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    del payload["schema_version"]
+    with pytest.raises(SchemaVersionError):
+        load_snapshot(payload)
+
+
+def test_load_snapshot_rejects_non_integer_schema_version_with_schema_version_error():
+    payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    payload["schema_version"] = "1"
+    with pytest.raises(SchemaVersionError):
+        load_snapshot(payload)
+
+
+def test_load_snapshot_accepts_a_valid_snapshot():
+    payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    snapshot = load_snapshot(payload)
+    assert isinstance(snapshot, Snapshot)
+    assert snapshot.schema_version == SNAPSHOT_SCHEMA_VERSION
+
+
+def test_check_schema_version_message_states_the_half_open_range_explicitly():
+    with pytest.raises(SchemaVersionError) as excinfo:
+        check_schema_version(2, (1, 2), "snapshot")
+    assert "accepted: >= 1 and < 2" in str(excinfo.value)
+
+
+# --- architecture_from_hf_config: MoE configs are never dense_classic (finding 12) ---------
+
+
+def test_moe_config_with_all_dense_numeric_fields_is_still_unknown():
+    config = {
+        "num_hidden_layers": 32,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "num_local_experts": 8,
+        "num_experts_per_tok": 2,
+        "moe_intermediate_size": 1408,
+    }
+    architecture = architecture_from_hf_config("acme/Nova-8x7B", None, config)
+    assert architecture.kind == "unknown"
+    assert architecture.num_hidden_layers is None
+
+
+def test_moe_field_under_text_config_is_also_detected():
+    config = {
+        "text_config": {
+            "num_hidden_layers": 32,
+            "num_key_value_heads": 8,
+            "head_dim": 128,
+            "num_experts_per_tok": 2,
+        }
+    }
+    architecture = architecture_from_hf_config("acme/Nova-8x7B", None, config)
+    assert architecture.kind == "unknown"
+
+
+def test_num_experts_per_tok_of_one_does_not_alone_signal_moe():
+    # A value of exactly 1 is the boundary the finding draws ("> 1"); a genuinely dense config
+    # would not carry this field at all, but the threshold itself must be exercised.
+    config = {
+        "num_hidden_layers": 32,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "num_experts_per_tok": 1,
+    }
+    architecture = architecture_from_hf_config("acme/Nova-7B", None, config)
+    assert architecture.kind == "dense_classic"
