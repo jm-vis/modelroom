@@ -84,15 +84,17 @@ def _hf_package(*, repo: str, filename: str, observed_at: datetime, last_seen: d
 # --- lock -----------------------------------------------------------------------------------
 
 
-def test_acquire_lock_writes_pid_command_and_started_at(tmp_path: Path):
+def test_acquire_lock_writes_pid_command_started_at_and_a_token(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
 
-    acquire_lock(lock_path, "fetch", RUN1)
+    token = acquire_lock(lock_path, "fetch", RUN1)
 
     data = json.loads(lock_path.read_text(encoding="utf-8"))
     assert data["pid"] == os.getpid()
     assert data["command"] == "fetch"
     assert data["started_at"] == RUN1.isoformat()
+    assert data["token"] == token
+    assert token  # non-empty
 
 
 def test_acquire_lock_raises_when_held_by_a_young_lock(tmp_path: Path):
@@ -103,38 +105,64 @@ def test_acquire_lock_raises_when_held_by_a_young_lock(tmp_path: Path):
         acquire_lock(lock_path, "fetch", RUN1 + timedelta(minutes=5))
 
 
+def test_acquire_lock_is_not_a_check_then_write_race_two_calls_get_different_tokens(tmp_path: Path):
+    # F1: a second acquire_lock call against the same path, in the same process, at the same
+    # instant, must never both succeed with the file simply overwritten -- the second call
+    # finds the first call's still-young lock (via the atomic O_CREAT|O_EXCL create) and raises.
+    lock_path = tmp_path / "modelroom.lock"
+    first_token = acquire_lock(lock_path, "fetch", RUN1)
+
+    with pytest.raises(LockHeldError):
+        acquire_lock(lock_path, "fetch", RUN1)
+
+    data = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert data["token"] == first_token  # the second call never overwrote the first
+
+
 def test_acquire_lock_overwrites_a_stale_lock_older_than_two_hours(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
     acquire_lock(lock_path, "fetch", RUN1)
 
-    acquire_lock(lock_path, "fetch", RUN1 + timedelta(hours=2, minutes=1))
+    new_token = acquire_lock(lock_path, "fetch", RUN1 + timedelta(hours=2, minutes=1))
 
     data = json.loads(lock_path.read_text(encoding="utf-8"))
     assert data["started_at"] == (RUN1 + timedelta(hours=2, minutes=1)).isoformat()
+    assert data["token"] == new_token  # the takeover's content is verified to be ours
 
 
 def test_release_lock_removes_the_file(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
-    acquire_lock(lock_path, "fetch", RUN1)
+    token = acquire_lock(lock_path, "fetch", RUN1)
 
-    release_lock(lock_path)
+    release_lock(lock_path, token)
 
     assert not lock_path.exists()
 
 
 def test_release_lock_is_a_no_op_when_no_lock_exists(tmp_path: Path):
-    release_lock(tmp_path / "modelroom.lock")  # must not raise
+    release_lock(tmp_path / "modelroom.lock", "some-token")  # must not raise
+
+
+def test_release_lock_with_a_foreign_token_does_not_delete(tmp_path: Path):
+    # F1: release_lock must remove the file only when its content carries the caller's own
+    # token -- a foreign token (another process's lock, or a stale takeover) is left alone.
+    lock_path = tmp_path / "modelroom.lock"
+    acquire_lock(lock_path, "fetch", RUN1)
+
+    release_lock(lock_path, "not-the-real-token")
+
+    assert lock_path.exists()
 
 
 def test_lock_is_released_after_an_exception_in_the_caller(tmp_path: Path):
     lock_path = tmp_path / "modelroom.lock"
 
     with pytest.raises(RuntimeError):
-        acquire_lock(lock_path, "fetch", RUN1)
+        token = acquire_lock(lock_path, "fetch", RUN1)
         try:
             raise RuntimeError("boom")
         finally:
-            release_lock(lock_path)
+            release_lock(lock_path, token)
 
     assert not lock_path.exists()
 
@@ -318,6 +346,59 @@ def test_merge_snapshot_incomplete_area_keeps_old_packages_untouched_and_records
     assert snapshot.areas[0].status == "incomplete"
     assert snapshot.areas[0].error == "tree fetch failed"
     assert snapshot.areas[0].last_success == RUN1  # the OLD last_success, not bumped
+
+
+def test_merge_snapshot_drops_packages_of_an_area_no_longer_configured():
+    # F2: a base model (or area) removed from this run's configuration must not leave orphan
+    # packages behind -- only carry an old package over when its area is among this run's
+    # area_outcomes. An incomplete area's old packages are still kept untouched.
+    kept_package = _hf_package(repo="packager/Nova-7B-GGUF", filename="Nova-7B-Q4_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
+    removed_package = Package(
+        source="huggingface",
+        repo="packager/Other-7B-GGUF",
+        revision="b" * 40,
+        base_model_hf_repo="acme/Other-7B",
+        format="gguf",
+        files=[PackageFile(name="Other-7B-Q4_K_M.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization=None,
+        default_context=None,
+        provenance="unresolved",
+        unresolved_reason="repo_name",
+        approval=None,
+        observed_at=RUN1,
+        last_seen=RUN1,
+        active=True,
+    )
+    incomplete_area_package = _hf_package(
+        repo="other-packager/Nova-7B-GGUF", filename="Nova-7B-BF16.gguf", observed_at=RUN1, last_seen=RUN1
+    )
+    old = Snapshot(
+        schema_version=1,
+        run_at=RUN1,
+        areas=[
+            Area(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", last_success=RUN1, error=None),
+            Area(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="other-packager", status="complete", last_success=RUN1, error=None),
+            Area(source="huggingface", base_model_hf_repo="acme/Other-7B", packager="packager", status="complete", last_success=RUN1, error=None),
+        ],
+        base_models=[_base_model(), _base_model(hf_repo="acme/Other-7B")],
+        packages=[kept_package, incomplete_area_package, removed_package],
+    )
+    # This run configures acme/Nova-7B again, under both packager areas (one complete, one now
+    # failing) -- acme/Other-7B is no longer configured at all this run.
+    outcomes = [
+        AreaOutcome(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", error=None, packages=[kept_package]),
+        AreaOutcome(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="other-packager", status="incomplete", error="tree fetch failed", packages=[]),
+    ]
+
+    snapshot = merge_snapshot(old, RUN2, outcomes, [_base_model()])
+
+    assert isinstance(snapshot, Snapshot)
+    result_keys = {(p.repo, p.base_model_hf_repo) for p in snapshot.packages}
+    assert result_keys == {
+        ("packager/Nova-7B-GGUF", "acme/Nova-7B"),
+        ("other-packager/Nova-7B-GGUF", "acme/Nova-7B"),
+    }
 
 
 def test_merge_snapshot_base_models_are_always_replaced_by_this_runs_results():

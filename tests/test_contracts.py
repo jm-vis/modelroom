@@ -191,6 +191,29 @@ def test_neither_ollama_base_nor_tag_is_accepted():
     BaseModelSpec.model_validate(payload)
 
 
+# --- BaseModelSpec.parameters_b: None is "not measured", never a fabricated number (F11) ----
+
+
+def test_parameters_b_none_is_accepted():
+    payload = dict(EXAMPLES["BaseModelSpec"])
+    payload["parameters_b"] = None
+    BaseModelSpec.model_validate(payload)
+
+
+def test_parameters_b_zero_is_still_rejected():
+    payload = dict(EXAMPLES["BaseModelSpec"])
+    payload["parameters_b"] = 0.0
+    with pytest.raises(ValidationError):
+        BaseModelSpec.model_validate(payload)
+
+
+def test_parameters_b_negative_is_still_rejected():
+    payload = dict(EXAMPLES["BaseModelSpec"])
+    payload["parameters_b"] = -1.0
+    with pytest.raises(ValidationError):
+        BaseModelSpec.model_validate(payload)
+
+
 # --- Architecture: dense_classic completeness ----------------------------------------------
 
 

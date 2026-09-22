@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -39,24 +40,49 @@ class StaleRunError(Exception):
 # --- lock -------------------------------------------------------------------------------
 
 
-def acquire_lock(path: Path, command: str, now: datetime) -> None:
-    """Create the lock file, or raise `LockHeldError` if a live lock is already there.
+def acquire_lock(path: Path, command: str, now: datetime) -> str:
+    """Create the lock file exclusively, or raise `LockHeldError` if a live lock holds it.
 
-    A lock younger than `LOCK_MAX_AGE` blocks immediately -- this project never waits for a
-    lock. A lock at or beyond `LOCK_MAX_AGE`, or one whose content cannot be read, is treated
-    as abandoned and overwritten.
+    Uses `os.open` with `O_CREAT | O_EXCL` so the create-or-fail is one atomic syscall, never a
+    `path.exists()` check followed by a separate write (a window a second process could win).
+    On `FileExistsError` the existing holder is read: younger than `LOCK_MAX_AGE` blocks
+    immediately with `LockHeldError` -- this project never waits for a lock. Stale (or
+    unreadable) content is taken over by replacing it with our own and then re-reading it: only
+    when the re-read content still carries the random `token` we just wrote did our takeover
+    win the race against a concurrent one; otherwise `LockHeldError` is raised instead. Returns
+    the token the caller must pass to `release_lock`.
     """
-    if path.exists():
-        holder = _read_lock(path)
-        if holder is not None and now - holder["started_at"] < LOCK_MAX_AGE:
-            raise LockHeldError(
-                f"{path}: locked by pid {holder['pid']} running '{holder['command']}' since "
-                f"{holder['started_at'].isoformat()} (younger than {LOCK_MAX_AGE})"
-            )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"pid": os.getpid(), "command": command, "started_at": now.isoformat()}), encoding="utf-8"
+    token = secrets.token_hex(16)
+    content = json.dumps(
+        {"pid": os.getpid(), "command": command, "started_at": now.isoformat(), "token": token}
     )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        pass
+    else:
+        try:
+            os.write(fd, content.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return token
+
+    holder = _read_lock(path)
+    if holder is not None and now - holder["started_at"] < LOCK_MAX_AGE:
+        raise LockHeldError(
+            f"{path}: locked by pid {holder['pid']} running '{holder['command']}' since "
+            f"{holder['started_at'].isoformat()} (younger than {LOCK_MAX_AGE})"
+        )
+
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+    winner = _read_lock(path)
+    if winner is None or winner["token"] != token:
+        raise LockHeldError(f"{path}: lock takeover was raced by another process")
+    return token
 
 
 def _read_lock(path: Path) -> dict | None:
@@ -66,13 +92,22 @@ def _read_lock(path: Path) -> dict | None:
             "pid": data["pid"],
             "command": data["command"],
             "started_at": datetime.fromisoformat(data["started_at"]),
+            "token": data.get("token"),
         }
     except Exception:
         return None
 
 
-def release_lock(path: Path) -> None:
-    """Remove the lock file. A no-op if it is already gone."""
+def release_lock(path: Path, token: str) -> None:
+    """Remove the lock file, but only when its content still carries `token`.
+
+    A no-op if the file is already gone, or if it now carries a different token -- e.g. another
+    process took the lock over as stale while we still held what we thought was ours; deleting
+    it then would release a lock we no longer own.
+    """
+    holder = _read_lock(path)
+    if holder is None or holder["token"] != token:
+        return
     try:
         path.unlink()
     except FileNotFoundError:
@@ -225,7 +260,15 @@ def merge_snapshot(
     old_packages_by_key = {package_identity_key(p): p for p in (old.packages if old else [])}
     old_areas_by_key = {(a.source, a.base_model_hf_repo, a.packager): a for a in (old.areas if old else [])}
 
-    result_packages = dict(old_packages_by_key)
+    # F2: an old package is only ever carried into this run's result when its area is among
+    # this run's area_outcomes -- a base model or area no longer configured is dropped here,
+    # not kept forever just because merge_snapshot never explicitly deletes anything.
+    configured_area_keys = {(o.source, o.base_model_hf_repo, o.packager) for o in area_outcomes}
+    result_packages = {
+        key: package
+        for key, package in old_packages_by_key.items()
+        if _area_key_of_package(package) in configured_area_keys
+    }
     new_areas: list[Area] = []
 
     for outcome in area_outcomes:

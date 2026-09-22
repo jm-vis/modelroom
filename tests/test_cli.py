@@ -122,6 +122,36 @@ def test_fetch_snapshot_with_unsupported_schema_version_is_exit_3(tmp_path: Path
     assert code == 3
 
 
+# --- F13: the schema-version gate runs before the lock, never touching it -------------------
+
+
+def test_fetch_snapshot_with_unsupported_schema_version_never_creates_a_lock_file(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "modelroom.json").write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
+
+    code = main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1)
+
+    assert code == 3
+    assert not (state_dir / "modelroom.lock").exists()
+
+
+def test_fetch_snapshot_with_unsupported_schema_version_leaves_a_stale_lock_untouched(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "modelroom.json").write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
+    lock_path = state_dir / "modelroom.lock"
+    stale_content = json.dumps({"pid": 999999, "command": "fetch", "started_at": RUN1.isoformat(), "token": "x"})
+    lock_path.write_text(stale_content, encoding="utf-8")
+
+    code = main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN2)
+
+    assert code == 3
+    assert lock_path.read_text(encoding="utf-8") == stale_content
+
+
 # --- end-to-end against the fixture transport ----------------------------------------------
 
 
@@ -313,6 +343,62 @@ def test_hardware_llmfit_too_old_is_exit_2(tmp_path: Path):
         now=RUN1,
     )
     assert code == 2
+
+
+# --- F12: llmfit subprocess errors and shape problems are exit 2, not a crash --------------
+
+
+def test_hardware_llmfit_version_timeout_is_exit_2_and_writes_nothing(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+
+    def _timeout_runner(args):
+        raise subprocess.TimeoutExpired(cmd=args, timeout=10.0)
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_timeout_runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 2
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
+def test_hardware_llmfit_version_nonzero_returncode_is_exit_2(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    runner = FixtureRunner(
+        {
+            ("llmfit", "--version"): subprocess.CompletedProcess(
+                ["llmfit", "--version"], returncode=1, stdout="llmfit 1.1.16\n", stderr="boom"
+            )
+        }
+    )
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 2
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
+def test_hardware_llmfit_system_total_ram_null_is_exit_2_and_writes_nothing(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    runner = _llmfit_runner(system_stdout=json.dumps({"system": {"total_ram_gb": None}}))
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 2
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
 
 
 # --- hardware: schema-3 path ------------------------------------------------------------

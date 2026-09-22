@@ -531,6 +531,15 @@ def test_ollama_size_token_1_5b_matches_measured_1_54b():
     assert (provenance, reason) == ("metadata_ok", None)
 
 
+def test_ollama_base_model_with_no_measured_parameters_is_unresolved_parameters_unknown():
+    # F11: parameters_b is None (never measured this run, and no previous reading exists) --
+    # the tag can never be size-checked, so this is its own reason, not "size_token".
+    package = _ollama_package(ollama_name="nova:7b-q4_K_M")
+    base_model = _nova_base_model(parameters_b=None)
+    provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
+    assert (provenance, reason) == ("unresolved", "parameters_unknown")
+
+
 def test_ollama_size_token_declared_size_far_outside_tolerance_is_unresolved():
     # The tag itself matches the base model's own declared `ollama_tag` ("70b"), so the
     # tag-boundary check alone would pass -- the *measured* parameters_b must still gate it.

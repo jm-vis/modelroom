@@ -8,8 +8,11 @@ Two independent operations, matching CONTRACTS.md's area semantics:
 - `fetch_hf_area` covers one (base model, packager-owner) area: it probes every candidate
   repo name for that owner, assembles a `Package` per quantization group found in each
   candidate's file tree, and only ever ends `incomplete` on a genuine failure (a status other
-  than 200/404/401, a network error, an unparseable response, or the run's request budget
-  running out) -- a candidate repo that simply does not exist is not an error.
+  than 200/404/401, a network error, an unparseable response, a tree entry or weight-file size
+  in an unexpected shape, or the run's request budget running out) -- a candidate repo that
+  simply does not exist is not an error. Package assembly runs inside the same error handling
+  as the tree fetch itself, so a shape problem in one candidate ends only this area, never the
+  whole run (F3/F4).
 
 Everything here is bound to the revision it was observed at, per CONTRACTS.md's identity
 rules: a repo's `sha` from its model-info response is threaded through to the tree fetch and
@@ -25,6 +28,7 @@ from typing import Literal
 
 from .config import Configuration
 from .contracts import (
+    Approval,
     Architecture,
     BaseModelSpec,
     Package,
@@ -35,7 +39,7 @@ from .contracts import (
 from .fetch_types import AreaOutcome
 from .http import Transport
 from .provenance import decide_provenance
-from .quantization import has_shard_suffix, identity_stem, non_weight_role, parse_hf_quant
+from .quantization import has_shard_suffix, identity_stem, non_weight_role, package_identity_key, parse_hf_quant
 
 HF_API = "https://huggingface.co/api"
 
@@ -142,8 +146,20 @@ def _incomplete(base_model: BaseModelSpec, owner: str, error: str) -> AreaOutcom
     )
 
 
-def fetch_hf_area(transport: Transport, base_model: BaseModelSpec, owner: str, run_at: datetime) -> AreaOutcome:
-    """Fetch every candidate repo under `owner` for `base_model` and assemble their packages."""
+def fetch_hf_area(
+    transport: Transport,
+    base_model: BaseModelSpec,
+    owner: str,
+    run_at: datetime,
+    previous_by_key: dict[tuple[str, str, str], Package] | None = None,
+) -> AreaOutcome:
+    """Fetch every candidate repo under `owner` for `base_model` and assemble their packages.
+
+    `previous_by_key` (F6, default `None`) maps a package identity key to that package as it
+    stood in the previous snapshot; when a freshly assembled package shares its identity with
+    one that carried an `Approval`, that approval is carried forward into `decide_provenance` so
+    an approval bound to still-current content survives this fetch.
+    """
     packages: list[Package] = []
     for name in _candidate_repo_names(base_model):
         repo = f"{owner}/{name}"
@@ -166,9 +182,13 @@ def fetch_hf_area(transport: Transport, base_model: BaseModelSpec, owner: str, r
 
         try:
             entries = _fetch_tree(transport, repo, sha)
+            packages.extend(
+                _assemble_packages(repo, sha, base_model, tags, entries, run_at, previous_by_key or {})
+            )
         except Exception as exc:
-            return _incomplete(base_model, owner, str(exc))
-        packages.extend(_assemble_packages(repo, sha, base_model, tags, entries, run_at))
+            # F3: a malformed tree page (wrong shape, a weight file with no size, ...) ends
+            # this area incomplete like any other genuine failure, never raises out of here.
+            return _incomplete(base_model, owner, f"{repo}: {exc}")
 
     return AreaOutcome(
         source="huggingface",
@@ -221,21 +241,50 @@ def _classify_role(name: str) -> Literal["weights", "weights_shard", "mmproj", "
 
 
 def _files_from_tree(entries: list[dict]) -> list[PackageFile]:
+    """Build one `PackageFile` per file entry, or raise on a shape the registry never sends.
+
+    F3/F4: every entry must be an object; `path` must be a string; a `weights`/`weights_shard`
+    file must carry a non-negative integer `size` (a missing or malformed size on a weight file
+    is a shape error, since a silently-assumed `0` would later make `fit` believe an empty
+    package fits everywhere) -- a non-weight file (`mmproj`/`other`) may still default to `0`.
+    """
     files: list[PackageFile] = []
     for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"tree entry is not an object: {entry!r}")
         if entry.get("type") != "file":
             continue
         name = entry.get("path")
         if not name:
             continue
-        digest = None
-        lfs = entry.get("lfs")
-        if isinstance(lfs, dict) and lfs.get("oid"):
-            digest = f"sha256:{lfs['oid']}"
-        files.append(
-            PackageFile(name=name, role=_classify_role(name), size_bytes=entry.get("size") or 0, digest=digest)
-        )
+        if not isinstance(name, str):
+            raise ValueError(f"tree entry 'path' is not a string: {name!r}")
+        role = _classify_role(name)
+        size_bytes = _tree_entry_size(name, role, entry.get("size"))
+        digest = _tree_entry_digest(entry.get("lfs"))
+        files.append(PackageFile(name=name, role=role, size_bytes=size_bytes, digest=digest))
     return files
+
+
+def _tree_entry_size(name: str, role: str, raw_size: object) -> int:
+    if raw_size is None:
+        if role in ("weights", "weights_shard"):
+            raise ValueError(f"weight file {name!r} has no 'size'")
+        return 0
+    if isinstance(raw_size, bool) or not isinstance(raw_size, int) or raw_size < 0:
+        raise ValueError(f"tree entry 'size' for {name!r} is not a non-negative integer: {raw_size!r}")
+    return raw_size
+
+
+def _tree_entry_digest(lfs: object) -> str | None:
+    if not isinstance(lfs, dict):
+        return None
+    oid = lfs.get("oid")
+    if oid is None:
+        return None
+    if not isinstance(oid, str):
+        raise ValueError(f"tree entry lfs.oid is not a string: {oid!r}")
+    return f"sha256:{oid}"
 
 
 def _package_format(filename: str) -> Literal["gguf", "tensor", "unknown"]:
@@ -256,7 +305,13 @@ def _finalize(stub: Package, provenance: str, unresolved_reason: str | None) -> 
 
 
 def _assemble_packages(
-    repo: str, sha: str, base_model: BaseModelSpec, tags: list[str], entries: list[dict], run_at: datetime
+    repo: str,
+    sha: str,
+    base_model: BaseModelSpec,
+    tags: list[str],
+    entries: list[dict],
+    run_at: datetime,
+    previous_by_key: dict[tuple[str, str, str], Package],
 ) -> list[Package]:
     files = _files_from_tree(entries)
     weight_files = [f for f in files if f.role in ("weights", "weights_shard")]
@@ -286,6 +341,23 @@ def _assemble_packages(
             last_seen=run_at,
             active=True,
         )
-        provenance, unresolved_reason = decide_provenance(stub, base_model, tags, [])
+        stub, approvals = _carry_forward_approval(stub, previous_by_key)
+        provenance, unresolved_reason = decide_provenance(stub, base_model, tags, approvals)
         packages.append(_finalize(stub, provenance, unresolved_reason))
     return packages
+
+
+def _carry_forward_approval(
+    stub: Package, previous_by_key: dict[tuple[str, str, str], Package]
+) -> tuple[Package, list[Approval]]:
+    """F6: attach a previous package's `Approval` to `stub` when their identity keys match.
+
+    `decide_provenance` gets `[approval]` instead of `[]`; its own content check (the approval
+    still has to name the *current* revision) decides whether it actually resolves `approved`.
+    The approval stays on the returned `Package` regardless -- CONTRACTS.md: "the approval
+    object stays on the package for history".
+    """
+    previous = previous_by_key.get(package_identity_key(stub))
+    if previous is None or previous.approval is None:
+        return stub, []
+    return stub.model_copy(update={"approval": previous.approval}), [previous.approval]

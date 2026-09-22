@@ -8,9 +8,11 @@ The tags page is plain, unauthenticated web data extraction: one `GET` of one pa
 configured base model, the tag names read out of `<a href="/library/<base>:<tag>">` anchors
 with the standard-library `html.parser`, nothing else taken from the page, no login, no
 crawling beyond it (see the `datenextraktion` skill this project follows for scraping work).
-The manifest digest is read from a `HEAD` request's `ollama-content-digest` header, the only
-place the registry states it (measured 2026-09-22, see tests/fixtures/README.md); a `HEAD`
-response without that header falls back to hashing the `GET` body.
+The manifest digest is `sha256:` plus the sha256 of the manifest `GET` body -- **no `HEAD`
+request is made at all** (F5): measured 2026-09-22 against the real registry
+(`registry.ollama.ai/v2/library/qwen3.5/manifests/9b`, 709 bytes), hashing the `GET` body gives
+exactly the same digest the registry's `ollama-content-digest` `HEAD` header used to state (see
+tests/fixtures/README.md), so the extra request bought nothing and is dropped.
 """
 
 from __future__ import annotations
@@ -20,11 +22,11 @@ from datetime import datetime
 from html.parser import HTMLParser
 from typing import Literal
 
-from .contracts import BaseModelSpec, Package, PackageFile, shards_complete
+from .contracts import Approval, BaseModelSpec, Package, PackageFile, shards_complete
 from .fetch_types import AreaOutcome
 from .http import Transport
 from .provenance import decide_provenance
-from .quantization import inherit_from_siblings, parse_ollama_tag_quant
+from .quantization import inherit_from_siblings, package_identity_key, parse_ollama_tag_quant
 
 TAGS_URL = "https://ollama.com/library/{base}/tags"
 MANIFEST_URL = "https://registry.ollama.ai/v2/library/{base}/manifests/{tag}"
@@ -76,8 +78,18 @@ def _incomplete(base_model: BaseModelSpec, error: str) -> AreaOutcome:
     )
 
 
-def fetch_ollama_area(transport: Transport, base_model: BaseModelSpec, run_at: datetime) -> AreaOutcome:
-    """Fetch every kept tag of `base_model`'s Ollama library entry and assemble their packages."""
+def fetch_ollama_area(
+    transport: Transport,
+    base_model: BaseModelSpec,
+    run_at: datetime,
+    previous_by_key: dict[tuple[str, str, str], Package] | None = None,
+) -> AreaOutcome:
+    """Fetch every kept tag of `base_model`'s Ollama library entry and assemble their packages.
+
+    `previous_by_key` (F6, default `None`) maps a package identity key to that package as it
+    stood in the previous snapshot -- see `fetch_hf_area`'s docstring for the exact rule; the
+    same carry-forward applies here via `_build_package`.
+    """
     if not base_model.ollama_base or not base_model.ollama_tag:
         return AreaOutcome(
             source="ollama", base_model_hf_repo=base_model.hf_repo, packager=None, status="complete", error=None, packages=[]
@@ -109,20 +121,45 @@ def fetch_ollama_area(transport: Transport, base_model: BaseModelSpec, run_at: d
         manifests[tag] = manifest
         digests[tag] = digest
 
-    tag_quants = {tag: parse_ollama_tag_quant(tag) for tag in kept_tags}
-    tag_digests = {tag: _weights_digest(manifests[tag]) for tag in kept_tags}
-    resolved_quants = inherit_from_siblings(tag_digests, tag_quants)
+    try:
+        packages = _assemble_packages(
+            base_model, kept_tags, manifests, digests, run_at, previous_by_key or {}
+        )
+    except Exception as exc:
+        # F3: a malformed manifest (a layer in an unexpected shape, a weight layer with no
+        # size, ...) ends this area incomplete like any other genuine failure, never raises.
+        return _incomplete(base_model, f"{base_model.ollama_base}: {exc}")
 
-    packages = [
-        _build_package(base_model, tag, manifests[tag], digests[tag], resolved_quants[tag], run_at)
-        for tag in kept_tags
-    ]
     return AreaOutcome(
         source="ollama", base_model_hf_repo=base_model.hf_repo, packager=None, status="complete", error=None, packages=packages
     )
 
 
+def _assemble_packages(
+    base_model: BaseModelSpec,
+    kept_tags: list[str],
+    manifests: dict[str, dict],
+    digests: dict[str, str],
+    run_at: datetime,
+    previous_by_key: dict[tuple[str, str, str], Package],
+) -> list[Package]:
+    tag_layers = {tag: _validated_layers(base_model.ollama_base, tag, manifests[tag]) for tag in kept_tags}
+    tag_quants = {tag: parse_ollama_tag_quant(tag) for tag in kept_tags}
+    tag_digests = {tag: _weights_digest(tag_layers[tag]) for tag in kept_tags}
+    resolved_quants = inherit_from_siblings(tag_digests, tag_quants)
+
+    return [
+        _build_package(base_model, tag, tag_layers[tag], digests[tag], resolved_quants[tag], run_at, previous_by_key)
+        for tag in kept_tags
+    ]
+
+
 def _fetch_manifest(transport: Transport, base: str, tag: str) -> tuple[dict, str]:
+    """`GET` the manifest and return it with its digest: `sha256:` + sha256 of the raw body.
+
+    F5: no `HEAD` request is made at all any more -- see the module docstring for the
+    measurement showing the body hash equals the registry's old `HEAD` header exactly.
+    """
     url = MANIFEST_URL.format(base=base, tag=tag)
     get_response = transport("GET", url)
     if get_response.status != 200:
@@ -130,16 +167,47 @@ def _fetch_manifest(transport: Transport, base: str, tag: str) -> tuple[dict, st
     manifest = get_response.json()
     if not isinstance(manifest, dict):
         raise RuntimeError(f"{base}:{tag}: manifest response is not an object")
-
-    head_response = transport("HEAD", url)
-    header_digest = head_response.header("ollama-content-digest")
-    digest = f"sha256:{header_digest}" if header_digest else f"sha256:{hashlib.sha256(get_response.body).hexdigest()}"
+    digest = f"sha256:{hashlib.sha256(get_response.body).hexdigest()}"
     return manifest, digest
 
 
-def _weights_digest(manifest: dict) -> str | None:
+def _validated_layers(base: str, tag: str, manifest: dict) -> list[dict]:
+    """`manifest['layers']`, validated: F3/F4 -- every layer must be an object with `mediaType`/
+    `digest` as strings when present; a weight (`.image.model`/`.image.tensor`) layer's own
+    `size` is validated later, per layer, once its role is known (`_weight_layer_size`).
+    """
+    layers = manifest.get("layers")
+    if layers is None:
+        return []
+    if not isinstance(layers, list):
+        raise ValueError(f"{base}:{tag}: manifest 'layers' is not a list")
+    return [_validated_layer(base, tag, layer) for layer in layers]
+
+
+def _validated_layer(base: str, tag: str, layer: object) -> dict:
+    if not isinstance(layer, dict):
+        raise ValueError(f"{base}:{tag}: manifest layer is not an object: {layer!r}")
+    media_type = layer.get("mediaType")
+    if media_type is not None and not isinstance(media_type, str):
+        raise ValueError(f"{base}:{tag}: manifest layer mediaType is not a string: {media_type!r}")
+    digest = layer.get("digest")
+    if digest is not None and not isinstance(digest, str):
+        raise ValueError(f"{base}:{tag}: manifest layer digest is not a string: {digest!r}")
+    return layer
+
+
+def _weight_layer_size(layer: dict) -> int:
+    """F4: a weight layer (`.image.model`/`.image.tensor`) without a real size is a shape error."""
+    size = layer.get("size")
+    if size is None:
+        raise ValueError(f"weight layer has no 'size': {layer!r}")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise ValueError(f"weight layer 'size' is not a non-negative integer: {size!r}")
+    return size
+
+
+def _weights_digest(layers: list[dict]) -> str | None:
     """The digest used to detect digest-sibling tags: the model layer's, else the first tensor layer's."""
-    layers = manifest.get("layers") or []
     for layer in layers:
         if layer.get("mediaType") == _MODEL_MEDIA_TYPE:
             return layer.get("digest")
@@ -149,14 +217,13 @@ def _weights_digest(manifest: dict) -> str | None:
     return None
 
 
-def _package_files(tag: str, manifest: dict) -> tuple[Literal["gguf", "tensor", "unknown"], list[PackageFile]]:
-    layers = manifest.get("layers") or []
+def _package_files(tag: str, layers: list[dict]) -> tuple[Literal["gguf", "tensor", "unknown"], list[PackageFile]]:
     model_layers = [layer for layer in layers if layer.get("mediaType") == _MODEL_MEDIA_TYPE]
     tensor_layers = [layer for layer in layers if layer.get("mediaType") == _TENSOR_MEDIA_TYPE]
 
     if model_layers:
         files = [
-            PackageFile(name=f"{tag}.gguf", role="weights", size_bytes=layer.get("size") or 0, digest=layer.get("digest"))
+            PackageFile(name=f"{tag}.gguf", role="weights", size_bytes=_weight_layer_size(layer), digest=layer.get("digest"))
             for layer in model_layers
         ]
         return "gguf", files
@@ -164,7 +231,7 @@ def _package_files(tag: str, manifest: dict) -> tuple[Literal["gguf", "tensor", 
         # A tensor image can carry hundreds of per-tensor layers; it is always unresolved by
         # format regardless of quantization or file layout, so they are aggregated into one
         # synthetic file rather than modelled one-for-one (documented in CONTRACTS.md).
-        total_size = sum(layer.get("size") or 0 for layer in tensor_layers)
+        total_size = sum(_weight_layer_size(layer) for layer in tensor_layers)
         return "tensor", [PackageFile(name=f"{tag}.safetensors", role="weights", size_bytes=total_size, digest=None)]
     return "unknown", []
 
@@ -176,10 +243,26 @@ def _finalize(stub: Package, provenance: str, unresolved_reason: str | None) -> 
     return Package(**data)
 
 
+def _carry_forward_approval(
+    stub: Package, previous_by_key: dict[tuple[str, str, str], Package]
+) -> tuple[Package, list[Approval]]:
+    """F6: the same rule as `hf._carry_forward_approval`, see its docstring."""
+    previous = previous_by_key.get(package_identity_key(stub))
+    if previous is None or previous.approval is None:
+        return stub, []
+    return stub.model_copy(update={"approval": previous.approval}), [previous.approval]
+
+
 def _build_package(
-    base_model: BaseModelSpec, tag: str, manifest: dict, digest: str, quantization: str | None, run_at: datetime
+    base_model: BaseModelSpec,
+    tag: str,
+    layers: list[dict],
+    digest: str,
+    quantization: str | None,
+    run_at: datetime,
+    previous_by_key: dict[tuple[str, str, str], Package],
 ) -> Package:
-    format_, files = _package_files(tag, manifest)
+    format_, files = _package_files(tag, layers)
     stub = Package(
         source="ollama",
         ollama_name=f"{base_model.ollama_base}:{tag}",
@@ -197,5 +280,6 @@ def _build_package(
         last_seen=run_at,
         active=True,
     )
-    provenance, unresolved_reason = decide_provenance(stub, base_model, None, [])
+    stub, approvals = _carry_forward_approval(stub, previous_by_key)
+    provenance, unresolved_reason = decide_provenance(stub, base_model, None, approvals)
     return _finalize(stub, provenance, unresolved_reason)

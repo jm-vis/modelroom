@@ -26,12 +26,14 @@ change with them until someone re-records them on purpose.
 
 `GET https://registry.ollama.ai/v2/library/qwen3.5/manifests/<tag>`, saved as
 `ollama_qwen35_9b.json`, `ollama_qwen35_9b-q4_K_M.json`, `ollama_qwen35_9b-mlx-bf16.json`.
-The registry sends the manifest digest only as a response header to a `HEAD` request
-(`ollama-content-digest`, measured 2026-09-22: `HEAD .../manifests/9b` returns
-`6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7`); a `GET` carries no
-digest header, which is why a fetcher has to issue the `HEAD` (or hash the manifest body it
-received). The header is not part of these body fixtures. The manifest bodies carry the facts
-the tests actually need:
+**F5 (fix-round 1, superseding the assumption below):** measured again 2026-09-22 --
+`sha256` of the `9b` manifest's raw `GET` body (709 bytes) is
+`6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7`, byte-for-byte the same
+value a `HEAD .../manifests/9b` request's `ollama-content-digest` header used to state.
+`modelroom/ollama.py` now computes the digest this way and makes **no `HEAD` request at
+all**; the original assumption below (that the digest could only be read from the `HEAD`
+header) was true of the header's *content*, never of the *necessity* of the extra request.
+The manifest bodies carry the facts the tests actually need:
 
 - `9b` and `9b-q4_K_M` are byte-identical manifests: both list a single
   `application/vnd.ollama.image.model` weights layer with digest
@@ -62,12 +64,12 @@ raw body file assumed to be a `200` with no headers of interest
   <tag>" ...>` anchors; `modelroom/ollama.py` extracts only the `href` targets, nothing else
   from the page (no login, no anti-bot circumvention, one page per configured base model, per
   the `datenextraktion` rules this project follows).
-- `ollama_manifest_head_9b.json` -- envelope, real, recorded 2026-09-22: the headers of `HEAD
-  https://registry.ollama.ai/v2/library/qwen3.5/manifests/9b`. `ollama-content-digest` is
-  `6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7`; a `GET` to the same URL
-  carries no such header (see the Ollama section above), which is why the manifest digest is
-  read from a `HEAD` request in `modelroom/ollama.py`, not from hashing the `GET` body, when the
-  header is present.
+- `ollama_manifest_head_9b.json` -- envelope, real, recorded 2026-09-22: the headers of a
+  `HEAD https://registry.ollama.ai/v2/library/qwen3.5/manifests/9b` request. **Unused since
+  fix-round 1 (F5):** `modelroom/ollama.py` no longer makes a `HEAD` request at all (see the
+  Ollama section above), so nothing reads this file any more; kept as the historical record of
+  the measurement that F5's fix relies on (its `ollama-content-digest` value is exactly the
+  `sha256` of the `9b` manifest's `GET` body, `tests/test_ollama.py` asserts the two are equal).
 - `hf_unsloth_does_not_exist_model.json` -- envelope, real, recorded 2026-09-22: `GET
   https://huggingface.co/api/models/unsloth/Does-Not-Exist-GGUF`. **Deviation from the original
   assumption:** an anonymous request against a repo that does not exist gets HTTP `401`

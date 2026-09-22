@@ -59,6 +59,45 @@ def test_check_llmfit_version_rejects_unparseable_output():
         check_llmfit_version(runner, "1.1.16")
 
 
+# --- F12: subprocess-level failures (timeout, OSError, nonzero exit) are LlmfitError --------
+
+
+def test_check_llmfit_version_rejects_a_timeout():
+    runner = FixtureRunner({("llmfit", "--version"): subprocess.TimeoutExpired(cmd=["llmfit", "--version"], timeout=10.0)})
+    with pytest.raises(LlmfitError, match="1.1.16"):
+        check_llmfit_version(runner, "1.1.16")
+
+
+def test_check_llmfit_version_rejects_a_generic_os_error():
+    runner = FixtureRunner({("llmfit", "--version"): OSError("permission denied")})
+    with pytest.raises(LlmfitError, match="1.1.16"):
+        check_llmfit_version(runner, "1.1.16")
+
+
+def test_check_llmfit_version_rejects_a_nonzero_returncode():
+    runner = FixtureRunner(
+        {("llmfit", "--version"): _completed(["llmfit", "--version"], returncode=1, stdout="llmfit 1.1.16\n", stderr="boom")}
+    )
+    with pytest.raises(LlmfitError, match="boom"):
+        check_llmfit_version(runner, "1.1.16")
+
+
+def test_fetch_llmfit_system_rejects_a_timeout():
+    runner = FixtureRunner(
+        {("llmfit", "system", "--json"): subprocess.TimeoutExpired(cmd=["llmfit", "system", "--json"], timeout=10.0)}
+    )
+    with pytest.raises(LlmfitError):
+        fetch_llmfit_system(runner)
+
+
+def test_fixture_runner_raises_the_mapped_exception_instance():
+    exc = OSError("boom")
+    runner = FixtureRunner({("llmfit", "--version"): exc})
+    with pytest.raises(OSError, match="boom"):
+        runner(["llmfit", "--version"])
+    assert runner.calls == [("llmfit", "--version")]
+
+
 # --- llmfit system --json ---------------------------------------------------------------
 
 
@@ -119,3 +158,31 @@ def test_hardware_fields_from_llmfit_system_defaults_vram_to_zero_when_absent():
     assert fields["vram_gib"] == 0.0
     assert fields["gpu_name"] is None
     assert fields["backend"] is None
+
+
+# --- F12: hardware_fields_from_llmfit_system validates shapes, never crashes ----------------
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_null_total_ram_gb():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": None}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_zero_total_ram_gb():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 0}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_string_total_ram_gb():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": "127.46"}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_negative_gpu_vram_gb():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "gpu_vram_gb": -1.0}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_negative_available_ram_gb():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "available_ram_gb": -1.0}})

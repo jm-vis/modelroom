@@ -124,8 +124,18 @@ def fetch_with_config(
     run_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     active_transport = transport if transport is not None else UrllibTransport()
 
+    # F13: the schema-version gate on the existing snapshot runs *before* the lock is taken --
+    # an unsupported schema_version must exit 3 with nothing written, not even a lock file. The
+    # snapshot is read again inside the lock (`_run_locked`), since it may change between the
+    # two reads.
     try:
-        acquire_lock(config.paths.lock_file, "fetch", run_at)
+        load_existing_snapshot(config)
+    except SchemaVersionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+
+    try:
+        token = acquire_lock(config.paths.lock_file, "fetch", run_at)
     except LockHeldError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -133,7 +143,7 @@ def fetch_with_config(
     try:
         return _run_locked(config, active_transport, run_at)
     finally:
-        release_lock(config.paths.lock_file)
+        release_lock(config.paths.lock_file, token)
 
 
 def _run_locked(config, transport: Transport, run_at: datetime) -> int:

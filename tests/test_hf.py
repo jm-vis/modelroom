@@ -10,14 +10,15 @@ test_provenance.py plants defects no single real repo happens to have.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
 from modelroom.config import Configuration
-from modelroom.contracts import Architecture, BaseModelSpec
+from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile
 from modelroom.hf import candidate_owners, fetch_base_model_meta, fetch_hf_area
 from modelroom.http import Response
+from modelroom.quantization import package_identity_key
 
 from fixture_support import build_transport, envelope_response, json_response
 
@@ -478,6 +479,194 @@ def test_fetch_hf_area_qwen_split_shard_suffix_is_role_weights_shard_and_one_pac
     assert package.quantization == "F16"
     assert package.complete is True
     assert {f.role for f in package.files} == {"weights_shard"}
+
+
+# --- F3: a malformed tree entry ends the area incomplete, never raises out of fetch_hf_area --
+
+
+def test_fetch_hf_area_tree_entry_not_a_dict_ends_area_incomplete():
+    sha = "6" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/Null-Entry-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/Null-Entry"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/Null-Entry-GGUF/tree/{sha}?recursive=true",
+            ): Response(status=200, headers={}, body=b"[null]"),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Null-Entry", repo_aliases=["Null-Entry-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- F4: a weight file without a size is a shape error, the area ends incomplete -----------
+
+
+def test_fetch_hf_area_weight_file_without_size_ends_area_incomplete():
+    sha = "7" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/No-Size-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/No-Size"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/No-Size-GGUF/tree/{sha}?recursive=true",
+            ): Response(
+                status=200,
+                headers={},
+                body=b'[{"type": "file", "path": "No-Size-Q4_K_M.gguf", '
+                b'"lfs": {"oid": "' + b"a" * 64 + b'"}}]',  # no "size" field at all
+            ),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/No-Size", repo_aliases=["No-Size-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+def test_fetch_hf_area_non_weight_file_without_size_still_completes():
+    # A missing size on an mmproj/other file is not a shape error -- only weight files require
+    # a real size (CONTRACTS.md/F4).
+    sha = "8" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/Extra-No-Size-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/Extra-No-Size"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/Extra-No-Size-GGUF/tree/{sha}?recursive=true",
+            ): Response(
+                status=200,
+                headers={},
+                body=(
+                    b'[{"type": "file", "path": "Extra-No-Size-Q4_K_M.gguf", "size": 10, '
+                    b'"lfs": {"oid": "' + b"a" * 64 + b'"}},'
+                    b'{"type": "file", "path": "README.md"}]'  # no size, role "other"
+                ),
+            ),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Extra-No-Size", repo_aliases=["Extra-No-Size-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "complete"
+    assert len(outcome.packages) == 1
+    readme = next(f for f in outcome.packages[0].files if f.name == "README.md")
+    assert readme.role == "other"
+    assert readme.size_bytes == 0
+
+
+# --- F6: a previous approval survives a fetch when its content still matches ---------------
+
+
+def test_fetch_hf_area_carries_forward_an_approval_bound_to_the_current_revision():
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF"): json_response(
+                "hf_unsloth_qwen35_9b_gguf_model.json"
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF/tree/{UNSLOTH_SHA}?recursive=true",
+            ): json_response("hf_unsloth_qwen35_9b_gguf_tree.json"),
+        }
+    )
+    approval = Approval(date=date(2026, 9, 1), content=UNSLOTH_SHA, by="acme-ai-team")
+    previous = Package(
+        source="huggingface",
+        repo="unsloth/Qwen3.5-9B-GGUF",
+        revision=UNSLOTH_SHA,
+        base_model_hf_repo="Qwen/Qwen3.5-9B",
+        format="gguf",
+        files=[PackageFile(name="Qwen3.5-9B-Q4_1.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_1",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=approval,
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+    previous_by_key = {package_identity_key(previous): previous}
+
+    outcome = fetch_hf_area(
+        transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT, previous_by_key=previous_by_key
+    )
+
+    by_key = {package_identity_key(p): p for p in outcome.packages}
+    refreshed = by_key[package_identity_key(previous)]
+    assert refreshed.provenance == "approved"
+    assert refreshed.approval == approval
+
+
+def test_fetch_hf_area_approval_bound_to_an_older_revision_is_not_approved():
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF"): json_response(
+                "hf_unsloth_qwen35_9b_gguf_model.json"
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF/tree/{UNSLOTH_SHA}?recursive=true",
+            ): json_response("hf_unsloth_qwen35_9b_gguf_tree.json"),
+        }
+    )
+    stale_approval = Approval(date=date(2026, 1, 1), content="0" * 40, by="acme-ai-team")
+    previous = Package(
+        source="huggingface",
+        repo="unsloth/Qwen3.5-9B-GGUF",
+        revision="0" * 40,
+        base_model_hf_repo="Qwen/Qwen3.5-9B",
+        format="gguf",
+        files=[PackageFile(name="Qwen3.5-9B-Q4_1.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_1",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=stale_approval,
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+    previous_by_key = {package_identity_key(previous): previous}
+
+    outcome = fetch_hf_area(
+        transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT, previous_by_key=previous_by_key
+    )
+
+    by_key = {package_identity_key(p): p for p in outcome.packages}
+    refreshed = by_key[package_identity_key(previous)]
+    assert refreshed.provenance != "approved"
+    assert refreshed.approval == stale_approval  # kept for history, but no longer active
 
 
 def test_fetch_hf_area_budget_exhausted_mid_area_ends_it_incomplete():

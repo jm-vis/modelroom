@@ -37,6 +37,10 @@ def compute_fit(
         return _unknown("architecture not covered by v1")
     if package.format != "gguf" or not package.complete:
         return _unknown("only a complete gguf package is judged by fit contract v1")
+    if any(f.size_bytes == 0 for f in package.files if f.role in _WEIGHT_ROLES):
+        # F4: a weight file the fetcher never learned a real size for (size_bytes == 0) must
+        # never silently compute as an empty, "fits everywhere" package.
+        return _unknown("a weight file has no size")
 
     weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
     context = package.default_context or DEFAULT_CONTEXT

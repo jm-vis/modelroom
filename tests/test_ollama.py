@@ -5,24 +5,28 @@ mobile and a desktop layout row) is used to test `parse_library_tags` in isolati
 much larger than any base model this project's example configuration lists, so the full
 `fetch_ollama_area` happy-path tests use a small, hand-written HTML snippet instead, keeping
 control over exactly which manifests need a fixture. The three real qwen3.5 manifests (a
-shared-digest sibling pair for quantization inheritance, and a tensor-only manifest) still
-back every manifest-shape assertion; the HEAD digest header, a missing-header fallback, and
-error/budget paths use small synthetic Response objects, matching test_provenance.py's style.
+shared-digest sibling pair for quantization inheritance, and a tensor-only manifest) still back
+every manifest-shape assertion; the digest is always `sha256:` + sha256 of the manifest `GET`
+body (F5 -- no `HEAD` request is made at all any more, measured 2026-09-22 to equal the old
+`HEAD` header exactly for the `9b` fixture, see tests/fixtures/README.md); error/budget paths
+use small synthetic Response objects, matching test_provenance.py's style.
 """
 
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from modelroom.contracts import Architecture, BaseModelSpec
+from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile
 from modelroom.http import BudgetedTransport, Response
 from modelroom.ollama import fetch_ollama_area, parse_library_tags
+from modelroom.quantization import package_identity_key
 
-from fixture_support import FIXTURES, build_transport, envelope_response, json_response
+from fixture_support import FIXTURES, build_transport, json_response
 
 RUN_AT = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
 TAGS_URL = "https://ollama.com/library/qwen3.5/tags"
+_MANIFEST_9B_DIGEST = f"sha256:{hashlib.sha256((FIXTURES / 'ollama_qwen35_9b.json').read_bytes()).hexdigest()}"
 
 _SMALL_TAGS_HTML = (
     b'<html><body>'
@@ -57,24 +61,13 @@ def _manifest_url(tag: str) -> str:
     return f"https://registry.ollama.ai/v2/library/qwen3.5/manifests/{tag}"
 
 
-def _digest_header_response() -> Response:
-    return envelope_response("ollama_manifest_head_9b.json")
-
-
-def _no_digest_header_response() -> Response:
-    return Response(status=200, headers={}, body=b"")
-
-
 def _happy_path_transport():
     return build_transport(
         {
             ("GET", TAGS_URL): Response(status=200, headers={}, body=_SMALL_TAGS_HTML),
             ("GET", _manifest_url("9b")): json_response("ollama_qwen35_9b.json"),
-            ("HEAD", _manifest_url("9b")): _digest_header_response(),
             ("GET", _manifest_url("9b-q4_K_M")): json_response("ollama_qwen35_9b-q4_K_M.json"),
-            ("HEAD", _manifest_url("9b-q4_K_M")): _no_digest_header_response(),
             ("GET", _manifest_url("9b-mlx-bf16")): json_response("ollama_qwen35_9b-mlx-bf16.json"),
-            ("HEAD", _manifest_url("9b-mlx-bf16")): _no_digest_header_response(),
         }
     )
 
@@ -141,7 +134,7 @@ def test_fetch_ollama_area_gguf_manifest_becomes_a_gguf_package():
     plain = by_name["qwen3.5:9b"]
     assert plain.format == "gguf"
     assert plain.source == "ollama"
-    assert plain.manifest_digest == "sha256:6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7"
+    assert plain.manifest_digest == _MANIFEST_9B_DIGEST
     assert plain.complete is True
     assert plain.observed_at == RUN_AT
     assert plain.active is True
@@ -177,26 +170,32 @@ def test_fetch_ollama_area_gguf_package_with_matching_tags_is_metadata_ok():
     assert by_name["qwen3.5:9b-q4_K_M"].provenance == "metadata_ok"
 
 
-# --- manifest digest: HEAD header, or a hash-of-body fallback -----------------------------
+# --- manifest digest: sha256 of the GET body, no HEAD request at all (F5) ------------------
 
 
-def test_fetch_manifest_digest_falls_back_to_hashing_the_get_body_when_head_has_no_header():
-    body = (
-        b'{"schemaVersion":2,"layers":[{"mediaType":"application/vnd.ollama.image.model",'
-        b'"digest":"sha256:aaaa","size":1}]}'
-    )
-    transport = build_transport(
-        {
-            ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),
-            ("GET", _manifest_url("9b")): Response(status=200, headers={}, body=body),
-            ("HEAD", _manifest_url("9b")): Response(status=200, headers={}, body=b""),
-        }
-    )
+def test_fetch_manifest_digest_is_sha256_of_the_get_body_and_makes_exactly_one_call():
+    from modelroom.ollama import _fetch_manifest
+
+    body = (FIXTURES / "ollama_qwen35_9b.json").read_bytes()
+    transport = build_transport({("GET", _manifest_url("9b")): Response(status=200, headers={}, body=body)})
+
+    manifest, digest = _fetch_manifest(transport, "qwen3.5", "9b")
+
+    assert digest == f"sha256:{hashlib.sha256(body).hexdigest()}"
+    assert digest == _MANIFEST_9B_DIGEST  # matches the real HEAD header exactly (see fixtures/README.md)
+    assert transport.calls == [("GET", _manifest_url("9b"))]
+
+
+def test_fetch_ollama_area_transport_mapping_with_no_head_entry_at_all_passes():
+    # F5: a transport mapping that carries no HEAD entry for any manifest URL must still let
+    # the whole area complete -- if the fetcher ever made a HEAD call, FixtureTransport would
+    # raise KeyError immediately (no HEAD entry is recorded here).
+    transport = _happy_path_transport()
 
     outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
 
-    expected = f"sha256:{hashlib.sha256(body).hexdigest()}"
-    assert outcome.packages[0].manifest_digest == expected
+    assert outcome.status == "complete"
+    assert all(method == "GET" for method, _ in transport.calls)
 
 
 # --- failures end the area incomplete, never raise ----------------------------------------
@@ -225,6 +224,106 @@ def test_fetch_ollama_area_manifest_failure_is_incomplete():
     assert outcome.status == "incomplete"
     assert outcome.error
     assert outcome.packages == []
+
+
+# --- F3: a malformed manifest layer ends the area incomplete, never raises -----------------
+
+
+def test_fetch_ollama_area_manifest_layer_not_a_dict_ends_area_incomplete():
+    body = b'{"schemaVersion":2,"layers":[null]}'
+    transport = build_transport(
+        {
+            ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),
+            ("GET", _manifest_url("9b")): Response(status=200, headers={}, body=body),
+        }
+    )
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- F4: a weights layer without a size is a shape error, the area ends incomplete ---------
+
+
+def test_fetch_ollama_area_weights_layer_without_size_ends_area_incomplete():
+    body = (
+        b'{"schemaVersion":2,"layers":[{"mediaType":"application/vnd.ollama.image.model",'
+        b'"digest":"sha256:' + b"a" * 64 + b'"}]}'  # no "size" field at all
+    )
+    transport = build_transport(
+        {
+            ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),
+            ("GET", _manifest_url("9b")): Response(status=200, headers={}, body=body),
+        }
+    )
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- F6: a previous approval survives a fetch when its content still matches ---------------
+
+
+def test_fetch_ollama_area_carries_forward_an_approval_bound_to_the_current_digest():
+    transport = _happy_path_transport()
+    previous = Package(
+        source="ollama",
+        ollama_name="qwen3.5:9b",
+        manifest_digest=_MANIFEST_9B_DIGEST,
+        base_model_hf_repo="Qwen/Qwen3.5-9B",
+        format="gguf",
+        files=[PackageFile(name="9b.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_K_M",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=Approval(date=date(2026, 9, 1), content=_MANIFEST_9B_DIGEST, by="acme-ai-team"),
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+    previous_by_key = {package_identity_key(previous): previous}
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT, previous_by_key=previous_by_key)
+
+    by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
+    assert by_name["qwen3.5:9b"].provenance == "approved"
+    assert by_name["qwen3.5:9b"].approval.content == _MANIFEST_9B_DIGEST
+
+
+def test_fetch_ollama_area_approval_bound_to_an_older_digest_is_not_approved():
+    transport = _happy_path_transport()
+    stale_content = "sha256:" + "1" * 64
+    previous = Package(
+        source="ollama",
+        ollama_name="qwen3.5:9b",
+        manifest_digest=stale_content,
+        base_model_hf_repo="Qwen/Qwen3.5-9B",
+        format="gguf",
+        files=[PackageFile(name="9b.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_K_M",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=Approval(date=date(2026, 1, 1), content=stale_content, by="acme-ai-team"),
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+    previous_by_key = {package_identity_key(previous): previous}
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT, previous_by_key=previous_by_key)
+
+    by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
+    assert by_name["qwen3.5:9b"].provenance != "approved"
 
 
 def test_fetch_ollama_area_budget_exhausted_mid_area_is_incomplete():

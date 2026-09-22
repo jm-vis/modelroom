@@ -79,10 +79,12 @@ def _decide_huggingface(
     return "metadata_ok", None
 
 
-# A declared size token is accepted when it is within this fraction of the measured
-# `parameters_b`: `safetensors.total` counts embeddings, so a 9.653B model is legitimately
-# tagged `9b` by its packager -- an exact-equality rule can never match real data (see
-# CONTRACTS.md, "Ollama size-token tolerance").
+# A declared size token is accepted when it is within this fraction *of the declared value*
+# (abs(measured - declared) <= 0.15 * declared), not of the measured parameters_b: `safetensors.
+# total` counts embeddings, so a 9.653B model is legitimately tagged `9b` by its packager -- an
+# exact-equality rule can never match real data (see CONTRACTS.md, "Ollama size-token
+# tolerance"). 15 % is a heuristic chosen so that real registry tags pass (9.653 B tagged `9b`)
+# while a genuinely wrong tag (`70b` for a 7B model) still fails -- not a measured optimum.
 _SIZE_TOKEN_TOLERANCE = 0.15
 
 
@@ -92,7 +94,8 @@ def _size_token_matches(first_token: str, parameters_b: float) -> bool:
     `first_token` must fully match `SIZE_TOKEN_RE` (`<number>b` or `<number>m`, case-insensitive
     -- `7banana` is not a size token at all and never matches). A `b` token is compared directly
     in billions; an `m` token is converted to billions first. The declared size must be within
-    `_SIZE_TOKEN_TOLERANCE` (15 %) of `parameters_b`.
+    15 % *of the declared value* (`abs(parameters_b - declared) <= 0.15 * declared`) of
+    `parameters_b`, never `None` here -- callers gate on `parameters_b is None` first (F11).
     """
     match = SIZE_TOKEN_RE.fullmatch(first_token)
     if match is None:
@@ -107,13 +110,15 @@ def _decide_ollama(package: "Package", base_model: "BaseModelSpec") -> tuple[str
     """Decide provenance for an Ollama package against the tag conventions in CONTRACTS.md.
 
     Order: the base name (`<ollama_base>:`) must prefix `ollama_name`; the base model must
-    declare an `ollama_tag`; the tag's first `-`-separated token must be a size token
-    (`SIZE_TOKEN_RE`) whose declared size is within 15 % of `parameters_b` (`_size_token_matches`
-    -- `nova:7banana` is rejected because it is not a size token at all, `nova:70b-q4_K_M` is
-    rejected for a 7B model because 70 is nowhere near 7 within tolerance); and the full tag
-    must equal `base_model.ollama_tag` or start with `base_model.ollama_tag + "-"` (token
-    boundary, so `7b-q4_K_M` and `7b-instruct-q4_K_M` match a `7b` base tag but a divergent base
-    tag such as `7b-preview` does not).
+    declare an `ollama_tag`; `parameters_b` must have been measured at all (F11 --
+    `("unresolved", "parameters_unknown")` when it is `None`, since the size-token check below
+    cannot run without a real number to compare against); the tag's first `-`-separated token
+    must be a size token (`SIZE_TOKEN_RE`) whose declared size is within 15 % of `parameters_b`
+    (`_size_token_matches` -- `nova:7banana` is rejected because it is not a size token at all,
+    `nova:70b-q4_K_M` is rejected for a 7B model because 70 is nowhere near 7 within tolerance);
+    and the full tag must equal `base_model.ollama_tag` or start with `base_model.ollama_tag +
+    "-"` (token boundary, so `7b-q4_K_M` and `7b-instruct-q4_K_M` match a `7b` base tag but a
+    divergent base tag such as `7b-preview` does not).
     """
     ollama_name = package.ollama_name or ""
 
@@ -125,6 +130,9 @@ def _decide_ollama(package: "Package", base_model: "BaseModelSpec") -> tuple[str
     tag = ollama_name.split(":", 1)[1] if ":" in ollama_name else ""
     if not base_model.ollama_tag:
         return "unresolved", "ollama_tag"
+
+    if base_model.parameters_b is None:
+        return "unresolved", "parameters_unknown"
 
     first_token = tag.split("-", 1)[0]
     if not _size_token_matches(first_token, base_model.parameters_b):

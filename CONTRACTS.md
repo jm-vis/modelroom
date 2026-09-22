@@ -122,7 +122,7 @@ One publisher base model that packagers build GGUF/tensor packages from.
 | `ollama_base` | `str \| None` | both set or both `None` with `ollama_tag` | the Ollama library model name, when one exists |
 | `ollama_tag` | `str \| None` | both set or both `None` with `ollama_base` | the Ollama library tag naming this base model's size |
 | `publisher` | `str` | -- | the organisation that trained the model |
-| `parameters_b` | `float` | `> 0` | parameter count, in billions |
+| `parameters_b` | `float \| None` | `None`, or `> 0` | parameter count, in billions; `None` means not measured this run and no previous reading exists (fix-round 1, F11) |
 | `architecture` | `Architecture` | -- | the transformer shape, from the publisher's `config.json` |
 
 ```json
@@ -650,6 +650,15 @@ resolves a path against the process' working directory. `snapshot_file`, `lock_f
 means absolute for the platform the command runs on (`C:\...` on Windows, `/...` on POSIX);
 the examples below use a `//host/share/...` form only because it is absolute on both.
 
+**`paths.state` confinement (fix-round 1, F7).** `load_config` additionally requires
+`paths.state` to resolve (symlinks followed, `Path.resolve()`) to somewhere inside the config
+file's own directory tree; a `state` that escapes it (`../outside`, or a symlink pointing
+outside) is a `ConfigError` naming both paths, raised before anything is written. This
+confinement is enforced only by `load_config`, the file reader -- a programmatic caller
+(`Configuration.from_dict`) is trusted to already have confined its own paths and is not
+checked. **`paths.markdown` is deliberately not confined** -- it may live elsewhere by design
+(e.g. a shared docs tree outside the state directory).
+
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
 | `state` | `Path` | absolute | the state folder: snapshot, lock, run-status, `hardware/<machine>.json` |
@@ -734,6 +743,14 @@ a `Configuration` programmatically (`Configuration.from_dict`) has no config fil
 against, so it must already pass absolute paths -- a relative one is a validation error naming
 the field and explaining why.
 
+**A relative `--config`/`path` argument (fix-round 1, F8).** `load_config` resolves `path`
+itself to an absolute path first (`path = path.resolve()`), before reading the file or
+resolving `paths.state`/`paths.markdown` against its directory -- a relative `path.parent`
+(e.g. `Path(".")` when the process' current directory holds the config file) would otherwise
+stay relative forever and never make `paths.state`/`paths.markdown` absolute, failing
+`PathsConfig`'s own "must be absolute" check for a reason that has nothing to do with the TOML
+file's own content.
+
 ### Error mapping
 
 | Error | Raised by | Meaning | Exit code |
@@ -754,13 +771,27 @@ own `fetch` runs, exactly as `AGENTS.md` already scoped them.
 
 ### Lock file (`modelroom.lock`)
 
-A plain JSON object, `{"pid": <int>, "command": <str>, "started_at": <ISO 8601 UTC>}`, written
-by `modelroom/state.py::acquire_lock` before any package command (today, only `fetch`) does
-anything else, and removed by `release_lock` in a `finally` block regardless of how the
-command ends. A lock younger than two hours blocks the new run immediately with
-`LockHeldError` -- this project never waits for a lock, it fails fast with a message naming
-the holder's pid, command and start time. A lock at or beyond two hours, or one whose content
-cannot be parsed, is treated as abandoned by a crashed process and silently overwritten.
+A plain JSON object, `{"pid": <int>, "command": <str>, "started_at": <ISO 8601 UTC>, "token":
+<str>}`, written by `modelroom/state.py::acquire_lock` before any package command (today, only
+`fetch`) does anything else, and removed by `release_lock` in a `finally` block regardless of
+how the command ends. `acquire_lock` creates the file with `os.open(path, O_CREAT | O_EXCL |
+O_WRONLY)` -- one atomic syscall, never a `path.exists()` check followed by a separate write,
+which would leave a window two concurrent processes could both pass through (fix-round 1,
+F1). A lock younger than two hours blocks the new run immediately with `LockHeldError` -- this
+project never waits for a lock, it fails fast with a message naming the holder's pid, command
+and start time. A lock at or beyond two hours, or one whose content cannot be parsed, is
+treated as abandoned by a crashed process and taken over: the taking-over process writes its
+own content (including a fresh random `token`) and re-reads the file after `os.replace`, only
+proceeding when that content is still its own -- otherwise another process won the same
+takeover race and this one raises `LockHeldError` instead. `acquire_lock` returns the `token`
+it wrote; `release_lock(path, token)` removes the file only when its current content still
+carries that exact `token`, so a caller can never delete a lock it no longer holds.
+
+**Ordering (fix-round 1, F13):** `fetch_with_config` checks the existing snapshot's
+`schema_version` *before* calling `acquire_lock` at all -- an unsupported version exits `3`
+with nothing written, not even a lock file, and never disturbs one already there. The snapshot
+is read a second time once the lock is held (it may have changed between the two reads), and
+that second check is what a concurrent writer's own stale-schema snapshot would be caught by.
 
 **`hardware` takes no lock.** Every other command that writes shared state under
 `config.paths.state` (today, only `fetch`) goes through `modelroom.lock` first, because they
@@ -819,9 +850,17 @@ candidate repos for one base model, or one base model's whole Ollama library ent
 An area ends `incomplete` only for a genuine failure: any HTTP status other than `200`
 (Hugging Face model-info additionally treats `401`/`404` as "not found", see below, not a
 failure), a network error, a body that fails to parse, a response missing a field the fetcher
-needs (Hugging Face: `sha`; Ollama: zero tags parsed from the tags page), or the run's request
-budget running out mid-area (`error` is exactly `"budget exhausted"`). A candidate repo that
-simply does not exist, or a base model with no Ollama configuration, is not a failure.
+needs (Hugging Face: `sha`; Ollama: zero tags parsed from the tags page), a tree entry or
+manifest layer in a shape the registry never actually sends -- not a dict, `path`/`mediaType`/
+`digest` not a string, or a weight (`weights`/`weights_shard`, or an Ollama `.image.model`/
+`.image.tensor` layer) with no non-negative integer `size` (fix-round 1, F3/F4: package
+assembly for a candidate runs inside the same error handling as its tree/manifest fetch, so a
+shape problem in one candidate ends only this area, never the whole run; a non-weight file
+missing a size still defaults to `0`) -- or the run's request budget running out mid-area
+(`error` is exactly `"budget exhausted"`, or, for an area this run never even started because
+the budget was already exhausted before it, `"budget exhausted before this area was started"`,
+see "Request budget" below). A candidate repo that simply does not exist, or a base model with
+no Ollama configuration, is not a failure.
 
 **Deviation from the original assumption, measured 2026-09-22** (see
 `tests/fixtures/README.md`): an anonymous request for a Hugging Face repo that does not exist
@@ -837,17 +876,43 @@ budget `400` requests for the whole run (shared across every area, not per-area)
 exhausted, the transport raises `BudgetExhaustedError("budget exhausted")` instead of making
 the request; the fetcher in progress catches it exactly like any other failure and ends its
 *current* area `incomplete` with that message. Areas already completed before the budget ran
-out keep their results; areas not yet started are simply never attempted, and their old state
-(if any) is left untouched by the merge rule below.
+out keep their results.
+
+**A base model this run never even started reading** (fix-round 1, F9: the budget ran out
+before its turn came up in the family/base-model loop) is different from one that was
+*attempted* and ran out mid-area: `modelroom/fetch.py::run_fetch` stops calling
+`fetch_base_model_meta`/`fetch_hf_area`/`fetch_ollama_area` at all once the budget hits zero,
+every area that base model would have needed gets `AreaOutcome(status="incomplete",
+error="budget exhausted before this area was started")`, and the base model itself keeps its
+**previous `BaseModelSpec`** unchanged when the old snapshot has one (an unknown placeholder
+otherwise) -- never a fresh "unknown" reading that would silently overwrite a real one. "Base
+models are always replaced by this run's results" (below) means *whenever this run attempted to
+read them*; a base model the run never reached is the one exception, and keeps its previous
+spec. A base model that *was* attempted and merely ran out of budget mid-area still gets a
+fresh spec from whatever `fetch_base_model_meta` managed to read, exactly as before.
+
+A redirect chain `modelroom/http.py::UrllibTransport` follows (F10, see "Redirects" in the
+`http.py` module docs) costs one request per hop; `BudgetedTransport` charges every hop, not
+just the one call made into it, so a chain can overshoot the budget by at most its own length --
+documented, not eliminated, since the hop count is only known after the chain is followed.
 
 ### Merge rule (building this run's `Snapshot`)
 
 `modelroom/state.py::merge_snapshot(old, run_at, area_outcomes, base_models)` builds the
 `Snapshot` a run writes:
 
-- **Base models** are always replaced wholesale by this run's results -- an unknown
-  architecture, or a base model this run could not reach at all, is still "this run's result",
-  never silently carried over from `old`.
+- **Base models** are always replaced wholesale by this run's results whenever this run
+  *attempted* to read them -- an unknown architecture, or a base model this run tried and could
+  not reach at all, is still "this run's result", never silently carried over from `old`. A
+  base model the run never reached because the budget was exhausted before its turn is the one
+  exception (see "Request budget" above, F9): it keeps its previous spec.
+- **Packages of an area no longer configured this run are dropped, not kept forever**
+  (fix-round 1, F2): `merge_snapshot` only ever carries an old package into the result when its
+  area (`_area_key_of_package`) is among this run's `area_outcomes` -- a base model or an area
+  removed from the configuration leaves no orphan packages behind, and
+  `Snapshot._check_packages_reference_known_base_models` never has anything to reject. An
+  `incomplete` area's old packages are still kept, since that area *is* among this run's
+  outcomes, just not confirmed this run (see below).
 - **A `complete` area** replaces its packages: every package this run found is written with
   `active=True`; a package that existed in `old` under this exact area (same source, base
   model and -- for Hugging Face -- the same packager owner as the repo it came from) but was
@@ -858,10 +923,10 @@ out keep their results; areas not yet started are simply never attempted, and th
 - **An `incomplete` area** leaves every package that belonged to it in `old` completely
   untouched (not even `last_seen` moves) and records `status="incomplete"`, `error`, and the
   *old* `Area.last_success` (never bumped, since nothing was actually confirmed this run).
-- A base model or area this run never touches at all (not configured any more) simply does
-  not appear in the result -- `merge_snapshot` only ever iterates `area_outcomes` and the
-  `base_models` list it is given, it does not scan `old` for leftovers to carry forward on its
-  own.
+- An area this run never touches at all (not configured any more) simply does not appear in
+  the result, and neither do its packages (see F2 above) -- `merge_snapshot` only ever iterates
+  `area_outcomes` and the `base_models` list it is given, it does not scan `old` for leftovers
+  to carry forward on its own.
 
 ### Version rule
 
@@ -873,17 +938,41 @@ written. `run_at` itself is the run's start time, UTC, truncated to whole second
 value in tests) -- second precision is deliberate: two `fetch` runs started in the same wall
 second are indistinguishable and the second one must not silently win.
 
+### Approval carry-forward across fetch runs (fix-round 1, F6)
+
+Before F6, both fetchers called `decide_provenance(stub, base_model, tags, [])` -- always an
+empty approvals list -- so a package's `Approval` was lost the moment its area was fetched
+again, even when the content it was approved for had not changed. `modelroom/fetch.py::
+run_fetch` now builds `previous_by_key = {package_identity_key(p): p for p in
+old.packages}` once per run and passes it into `fetch_hf_area`/`fetch_ollama_area` as a new
+`previous_by_key` keyword parameter (default `None`, so a direct unit test may omit it). Each
+fetcher looks up the freshly assembled package's own identity key in `previous_by_key` before
+deciding provenance: when a previous package of the same identity carried an `Approval`, that
+approval is attached to the new package and passed to `decide_provenance` as `[approval]`
+instead of `[]` -- the existing content rule (`Package` model, "Three more invariants" above)
+still decides whether it actually resolves `"approved"` (the content still has to match the
+*current* revision/digest) or falls through to the metadata rules. The approval stays on the
+`Package` regardless of which way that goes, so its history is never lost even once it is no
+longer active. `merge_snapshot` needed no change for this: the freshly built package already
+carries the right `approval`/`provenance` by the time it reaches the merge.
+
 ### `parameters_b` when Hugging Face has no answer this run
 
-`BaseModelSpec.parameters_b` must be `> 0`; a base model whose publisher repo could not be
-reached, or whose model-info response carries no `safetensors.total`, therefore cannot simply
-report `0.0`. `modelroom/fetch.py::run_fetch` falls back, in order: the previous snapshot's
-`parameters_b` for the same `hf_repo`, when one exists; otherwise the literal placeholder
-`1.0` (billion) -- an intentionally obvious, wrong-looking number rather than a fabricated
-"real" one, easy to spot in a rendered snapshot as "not actually measured yet". Reading the
-real count from a packager's GGUF metadata (`gguf.total` in a Hugging Face model-info
-response) instead of only the publisher's `safetensors.total` is left for a later work
-package.
+**Rewritten in fix-round 1 (F11).** `BaseModelSpec.parameters_b` is `float | None`: `None`
+means "not measured this run, and no previous reading exists", never a fabricated number that
+could be mistaken for a real one; when it *is* a float, it must still be `> 0`. A base model
+whose publisher repo could not be reached, or whose model-info response carries no
+`safetensors.total`, therefore cannot simply report `0.0` (which would fail the `> 0`
+constraint) and no longer reports a placeholder either. `modelroom/fetch.py::run_fetch` falls
+back, in order: the previous snapshot's `parameters_b` for the same `hf_repo`, when one exists
+(a real earlier reading); otherwise `None`. A base model this run never even attempted to read
+because the request budget was exhausted first keeps its previous spec wholesale (see "Request
+budget" above, F9) rather than going through this fallback at all. Every consumer of
+`parameters_b` has to handle `None`: `modelroom/provenance.py::_decide_ollama` resolves
+`("unresolved", "parameters_unknown")` when it is `None`, since the size-token check a few
+sections below cannot run without a real number to compare against. Reading the real count
+from a packager's GGUF metadata (`gguf.total` in a Hugging Face model-info response) instead of
+only the publisher's `safetensors.total` is left for a later work package.
 
 ### Ollama packages: files and `default_context`
 
@@ -894,9 +983,19 @@ layer -- an MLX-style build) can carry hundreds of per-tensor layers; rather tha
 one `PackageFile` per tensor, `modelroom/ollama.py` aggregates them into a single synthetic
 file (summed size, no digest, `format="tensor"`), since a tensor package is always
 `("unresolved", "format")` regardless of its individual tensor layout, which is not part of
-this catalog's contract. `Package.default_context` (Ollama's `num_ctx`) is always `None` in
-this work package -- reading it means downloading the manifest's `params` layer by digest,
-one more request per tag, left for a later work package.
+this catalog's contract. A weight layer with no non-negative integer `size` is a shape error
+that ends the area `incomplete`, not a silent `0` (fix-round 1, F4 -- see "Area semantics"
+above). `Package.default_context` (Ollama's `num_ctx`) is always `None` in this work package --
+reading it means downloading the manifest's `params` layer by digest, one more request per
+tag, left for a later work package.
+
+**`manifest_digest` (fix-round 1, F5, superseding the original `HEAD`-request design):**
+`modelroom/ollama.py::_fetch_manifest` computes the digest as `sha256:` plus the sha256 of the
+manifest `GET` response's raw body, and makes no other request for it. Measured 2026-09-22
+against the real registry (`registry.ollama.ai/v2/library/qwen3.5/manifests/9b`, 709 bytes):
+hashing the `GET` body gives exactly the value the registry's `ollama-content-digest` `HEAD`
+response header used to state, so the extra `HEAD` request this project used to make for every
+tag bought nothing and is gone.
 
 ### Ollama size-token tolerance (AP3 acceptance fix)
 
@@ -909,12 +1008,18 @@ real data: `safetensors.total` counts embeddings, so `Qwen/Qwen3.5-9B` measures
 
 The rule is now a tolerance, not an equality: the first token must fully match a size-token
 pattern (`<number>b` for billions or `<number>m` for millions, case-insensitive -- `7banana`
-never matches at all, it is not a size token), and the declared size must be within 15 % of
-`parameters_b` (`abs(parameters_b - declared) <= 0.15 * declared`). Examples: `9b` for a
-measured `9.653104368` passes (0.65 vs. a 1.35 allowance); `30b` for a measured `30.5` passes;
-`1.5b` for a measured `1.54` passes; `70b` for a measured `7.0` still fails (63 vs. a 10.5
-allowance) -- a genuinely wrong tag is still rejected, only the packager's rounding is
-tolerated. The full tag still has to equal `base_model.ollama_tag` or start with
+never matches at all, it is not a size token), and the declared size must be within 15 %
+**of the declared value** (`abs(measured - declared) <= 0.15 * declared`) -- not of the
+measured `parameters_b`. 15 % is a heuristic chosen so that real registry tags pass (`9b` for a
+measured `9.653104368`) while a genuinely wrong tag (`70b` for a measured `7.0`) still fails, not
+a measured optimum (fix-round 1, F11, rewording only -- the formula itself is unchanged).
+Examples: `9b` for a measured `9.653104368` passes (0.65 vs. a 1.35 allowance); `30b` for a
+measured `30.5` passes; `1.5b` for a measured `1.54` passes; `70b` for a measured `7.0` still
+fails (63 vs. a 10.5 allowance) -- a genuinely wrong tag is still rejected, only the packager's
+rounding is tolerated. **`parameters_b` must have been measured at all** (fix-round 1, F11): a
+`None` value (see "`parameters_b` when Hugging Face has no answer this run" above) resolves
+`("unresolved", "parameters_unknown")` before this tolerance check ever runs, never a
+size-token mismatch. The full tag still has to equal `base_model.ollama_tag` or start with
 `ollama_tag + "-"` (unchanged token-boundary rule) once the size token itself passes.
 
 ### Package file-stem naming conventions (AP3 acceptance fixes)

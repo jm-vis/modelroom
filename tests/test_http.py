@@ -109,3 +109,23 @@ def test_budgeted_transport_default_budget_is_400():
     inner = FixtureTransport({})
     budgeted = BudgetedTransport(inner)
     assert budgeted.remaining == 400
+
+
+# --- F10: a response that followed redirects counts every hop against the budget -----------
+
+
+def test_budgeted_transport_counts_every_redirect_hop_reported_by_the_response():
+    response = Response(status=200, headers={}, body=b"{}", requests_made=3)
+    inner = FixtureTransport({("GET", "https://example.test/a"): response})
+    budgeted = BudgetedTransport(inner, budget=10)
+
+    result = budgeted("GET", "https://example.test/a")
+
+    assert result is response
+    assert budgeted.used == 3
+    assert budgeted.remaining == 7
+
+
+def test_response_requests_made_defaults_to_one():
+    response = Response(status=200, headers={}, body=b"{}")
+    assert response.requests_made == 1

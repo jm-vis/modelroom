@@ -53,17 +53,23 @@ class FixtureRunner:
     """Test runner: maps an exact `args` tuple to a recorded `CompletedProcess`, records calls.
 
     Never spawns a process. A call for an `args` tuple with no recorded response is a
-    test-authoring error, surfaced immediately as a `KeyError`.
+    test-authoring error, surfaced immediately as a `KeyError`. An `args` tuple may instead be
+    mapped to an `Exception` *instance* (e.g. `subprocess.TimeoutExpired(...)`, `OSError(...)`)
+    -- the runner raises it instead of returning it, so a test can simulate a subprocess that
+    times out or a binary that cannot be spawned, the same way a real `Runner` would raise.
     """
 
-    def __init__(self, responses: dict[tuple[str, ...], subprocess.CompletedProcess]) -> None:
+    def __init__(self, responses: dict[tuple[str, ...], subprocess.CompletedProcess | Exception]) -> None:
         self._responses = responses
         self.calls: list[tuple[str, ...]] = []
 
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess:
         key = tuple(args)
         self.calls.append(key)
-        return self._responses[key]
+        response = self._responses[key]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _parse_semver(text: str, label: str) -> tuple[int, int, int]:
@@ -74,17 +80,23 @@ def _parse_semver(text: str, label: str) -> tuple[int, int, int]:
 
 
 def check_llmfit_version(runner: Runner, min_version: str) -> str:
-    """Raise `LlmfitError` unless `llmfit` is installed and at least `min_version`.
+    """Raise `LlmfitError` unless `llmfit` is installed, responds, and is at least `min_version`.
 
     Returns the installed version string (e.g. `"1.1.16"`) on success. A missing binary
-    (`FileNotFoundError` from the runner) and a version below `min_version` both raise
-    `LlmfitError` naming the minimum version and an install hint; the CLI maps both to exit
-    code 2, indistinguishable from any other "required external tool" failure.
+    (`FileNotFoundError`), any other failure to run it at all (`subprocess.TimeoutExpired`, a
+    more general `OSError`), a non-zero exit code, or a version below `min_version` all raise
+    `LlmfitError` naming the minimum version and an install hint; the CLI maps every case to
+    exit code 2, indistinguishable from any other "required external tool" failure.
     """
     try:
         result = runner(["llmfit", "--version"])
     except FileNotFoundError as exc:
         raise LlmfitError(f"llmfit is not installed (requires >= {min_version}); {INSTALL_HINT}") from exc
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise LlmfitError(f"llmfit --version did not respond (requires >= {min_version}); {INSTALL_HINT}: {exc}") from exc
+
+    if result.returncode != 0:
+        raise LlmfitError(f"llmfit --version failed (exit {result.returncode}): {result.stderr.strip()}")
 
     match = _VERSION_OUTPUT_RE.search(result.stdout)
     if not match:
@@ -101,10 +113,14 @@ def check_llmfit_version(runner: Runner, min_version: str) -> str:
 def fetch_llmfit_system(runner: Runner) -> dict:
     """Run `llmfit system --json` and return the parsed JSON object.
 
-    A non-zero exit code or a body that fails to parse as JSON both raise `LlmfitError`; the
-    CLI maps this to exit code 2, like every other `llmfit` failure.
+    A failure to run the subprocess at all (`subprocess.TimeoutExpired`, a more general
+    `OSError`), a non-zero exit code, or a body that fails to parse as JSON all raise
+    `LlmfitError`; the CLI maps every case to exit code 2, like every other `llmfit` failure.
     """
-    result = runner(["llmfit", "system", "--json"])
+    try:
+        result = runner(["llmfit", "system", "--json"])
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise LlmfitError(f"llmfit system --json did not respond: {exc}") from exc
     if result.returncode != 0:
         raise LlmfitError(f"llmfit system --json failed (exit {result.returncode}): {result.stderr.strip()}")
     try:
@@ -122,17 +138,42 @@ def hardware_fields_from_llmfit_system(data: dict) -> dict:
     `system.gpu_vram_gb`/`total_ram_gb`/`available_ram_gb` are already GiB in llmfit's own
     output (division by 1024**3 in its source, e.g. 127.46 for a 128 GB machine), taken
     unchanged (CONTRACTS.md, "Local llmfit binding"). `providers` and `gpus[]` are ignored in
-    v1. `total_ram_gb` is the one field this cannot proceed without; a GPU-less machine
-    legitimately omits `gpu_vram_gb`/`gpu_name`/`backend`, so those default rather than raise.
+    v1. `total_ram_gb` is the one field this cannot proceed without, and (F12) it must be a real
+    positive number, not just present -- `null`, a string, zero or negative all raise
+    `LlmfitError` naming the field, the same as `HardwareSnapshot.ram_gib`'s own `gt=0` would
+    eventually reject, but caught here so it becomes an ordinary exit `2`, never a pydantic
+    crash. A GPU-less machine legitimately omits `gpu_vram_gb`/`gpu_name`/`backend`, so
+    `gpu_vram_gb` defaults to `0.0` rather than raising; when present, it and `available_ram_gb`
+    must still be non-negative numbers.
     """
     system = data.get("system")
     if not isinstance(system, dict) or "total_ram_gb" not in system:
         raise LlmfitError("llmfit system --json response has no 'system.total_ram_gb'")
     return {
-        "vram_gib": system.get("gpu_vram_gb") or 0.0,
-        "ram_gib": system["total_ram_gb"],
-        "free_ram_gib_at_measurement": system.get("available_ram_gb"),
+        "vram_gib": _non_negative_number(system.get("gpu_vram_gb"), "system.gpu_vram_gb", default=0.0),
+        "ram_gib": _positive_number(system.get("total_ram_gb"), "system.total_ram_gb"),
+        "free_ram_gib_at_measurement": _non_negative_number(
+            system.get("available_ram_gb"), "system.available_ram_gb", default=None
+        ),
         "gpu_name": system.get("gpu_name"),
         "backend": system.get("backend"),
         "unified_memory": bool(system.get("unified_memory", False)),
     }
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _positive_number(value: object, field: str) -> float:
+    if not _is_number(value) or value <= 0:
+        raise LlmfitError(f"llmfit system --json response field {field!r} is not a positive number: {value!r}")
+    return value
+
+
+def _non_negative_number(value: object, field: str, default: float | None) -> float | None:
+    if value is None:
+        return default
+    if not _is_number(value) or value < 0:
+        raise LlmfitError(f"llmfit system --json response field {field!r} is not a non-negative number: {value!r}")
+    return value

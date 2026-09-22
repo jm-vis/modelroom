@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -408,3 +409,80 @@ markdown = "docs/models.md"
 def test_config_schema_range_matches_snapshot_convention():
     assert CONFIG_SCHEMA_RANGE == (1, 2)
     assert CONFIG_SCHEMA_VERSION == 1
+
+
+# --- F7: paths.state must be confined to the config file's own directory tree --------------
+
+
+def _write_toml_with_state(directory: Path, state: str) -> Path:
+    config_path = directory / "modelroom.toml"
+    config_path.write_text(
+        f"""
+schema_version = 1
+packagers = ["packager"]
+publishers = ["acme"]
+
+[[families]]
+name = "nova"
+
+  [[families.base_models]]
+  hf_repo = "acme/Nova-7B"
+
+[paths]
+state = "{state}"
+markdown = "docs/models.md"
+""",
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_load_config_rejects_a_state_path_outside_the_config_directory(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_path = _write_toml_with_state(project_dir, "../outside")
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+    assert not (tmp_path / "outside").exists()
+
+
+def test_load_config_accepts_a_state_path_inside_the_config_directory(tmp_path):
+    config_path = _write_toml_with_state(tmp_path, "state")
+
+    config = load_config(config_path)
+
+    assert config.paths.state == tmp_path / "state"
+
+
+def test_load_config_rejects_a_symlinked_state_path_pointing_outside(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    link_path = project_dir / "state-link"
+    try:
+        link_path.symlink_to(outside_dir, target_is_directory=True)
+    except OSError:
+        pytest.skip("this OS/user refuses symlink creation")
+    config_path = _write_toml_with_state(project_dir, "state-link")
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
+# --- F8: a relative --config path must still resolve paths.state absolutely ----------------
+
+
+def test_load_config_with_a_relative_config_path_resolves_state_absolutely(tmp_path):
+    _write_toml_with_state(tmp_path, "state")
+    original_cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        config = load_config(Path("modelroom.toml"))
+    finally:
+        os.chdir(original_cwd)
+
+    assert config.paths.state.is_absolute()
+    assert config.paths.state == tmp_path / "state"

@@ -249,7 +249,9 @@ class Configuration(BaseModel):
         """Build a `Configuration` from an in-memory dict (e.g. for an integrating tool).
 
         Checks `schema_version` before field validation, exactly like `load_config`. Paths
-        under `paths` are not resolved here -- they must already be absolute.
+        under `paths` are not resolved here -- they must already be absolute. The `paths.state`
+        confinement check (F7) is enforced only by `load_config`, the file reader; a
+        programmatic caller owns its own paths and is trusted to have already confined them.
         """
         return _build_configuration(data, "config")
 
@@ -285,15 +287,39 @@ def _resolve_relative_paths(data: dict, base_dir: Path) -> None:
             paths[key] = str(base_dir / value)
 
 
+def _check_state_confinement(config: Configuration, config_dir: Path, label: str) -> None:
+    """F7: `paths.state` must resolve to somewhere inside `config_dir`'s own directory tree.
+
+    Symlinks are followed (`Path.resolve()`) before the containment check, so a symlink that
+    only *looks* like it is under the config directory but actually points elsewhere is still
+    rejected. `paths.markdown` is deliberately not confined -- CONTRACTS.md, "PathsConfig": it
+    may live elsewhere by design.
+    """
+    state_resolved = config.paths.state.resolve()
+    config_dir_resolved = config_dir.resolve()
+    try:
+        state_resolved.relative_to(config_dir_resolved)
+    except ValueError:
+        raise ConfigError(
+            f"{label}: paths.state ({config.paths.state}) must lie inside the config file's "
+            f"own directory tree ({config_dir_resolved}), but resolves to {state_resolved}"
+        ) from None
+
+
 def load_config(path: Path) -> Configuration:
     """Read, parse and validate a `modelroom.toml` configuration file.
 
-    `schema_version` is checked before field validation, exactly like `load_snapshot`.
-    Relative `paths.state`/`paths.markdown` are resolved against `path`'s own directory
-    before validation. A missing file, a TOML syntax error, or a validation error each become
-    a `ConfigError` naming `path` and the underlying cause; `SchemaVersionError` passes
+    `schema_version` is checked before field validation, exactly like `load_snapshot`. `path`
+    is resolved to an absolute path first (F8), so a relative `--config` argument still
+    resolves `paths.state`/`paths.markdown` against the config file's real directory rather
+    than against a relative `path.parent` that never becomes absolute on its own. Relative
+    `paths.state`/`paths.markdown` are then resolved against that directory before validation,
+    and `paths.state` is additionally confined to lie inside it (F7, `_check_state_confinement`)
+    -- `paths.markdown` is not. A missing file, a TOML syntax error, or a validation error each
+    become a `ConfigError` naming `path` and the underlying cause; `SchemaVersionError` passes
     through unchanged.
     """
+    path = path.resolve()
     label = str(path)
     try:
         text = path.read_text(encoding="utf-8")
@@ -306,7 +332,9 @@ def load_config(path: Path) -> Configuration:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{label}: invalid TOML: {exc}") from exc
     _resolve_relative_paths(data, path.parent)
-    return _build_configuration(data, label)
+    config = _build_configuration(data, label)
+    _check_state_confinement(config, path.parent, label)
+    return config
 
 
 EXAMPLES: dict[str, dict] = {

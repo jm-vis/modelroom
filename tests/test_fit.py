@@ -127,6 +127,18 @@ def test_non_gguf_package_is_unknown_fit():
     assert fit.reason is not None
 
 
+def test_zero_byte_weight_file_is_unknown_fit_with_reason():
+    # F4: a 0-byte weight file means the fetcher never learned a real size for it -- fit must
+    # never silently ignore the weights and compute a fake "fits everywhere" verdict.
+    package = _gguf_package(weights_bytes=0)
+    base_model = _base_model()
+
+    fit = compute_fit(package, base_model, LAPTOP, LAPTOP_MACHINE)
+
+    assert fit.fit_class == "unknown"
+    assert fit.reason == "a weight file has no size"
+
+
 # --- brief's worked examples: 8B and 9B dense packages on laptop vs. server ----------------
 
 

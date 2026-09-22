@@ -259,7 +259,10 @@ class BaseModelSpec(BaseModel):
     ollama_base: str | None = None
     ollama_tag: str | None = None
     publisher: str
-    parameters_b: float = Field(gt=0)
+    # F11: None means "not measured this run, and no previous reading exists" -- never a
+    # fabricated placeholder that could be mistaken for a real reading. A float value is still
+    # required to be a real, positive parameter count.
+    parameters_b: float | None = Field(default=None, gt=0)
     architecture: Architecture
 
     @field_validator("hf_repo")

@@ -91,11 +91,8 @@ def qwen35_transport_mapping() -> dict[tuple[str, str], Response]:
             status=200, headers={}, body=_SMALL_QWEN35_TAGS_HTML
         ),
         ("GET", manifest_url("9b")): json_response("ollama_qwen35_9b.json"),
-        ("HEAD", manifest_url("9b")): envelope_response("ollama_manifest_head_9b.json"),
         ("GET", manifest_url("9b-q4_K_M")): json_response("ollama_qwen35_9b-q4_K_M.json"),
-        ("HEAD", manifest_url("9b-q4_K_M")): Response(status=200, headers={}, body=b""),
         ("GET", manifest_url("9b-mlx-bf16")): json_response("ollama_qwen35_9b-mlx-bf16.json"),
-        ("HEAD", manifest_url("9b-mlx-bf16")): Response(status=200, headers={}, body=b""),
     }
 
 
