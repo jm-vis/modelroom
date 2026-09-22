@@ -1,8 +1,9 @@
-# modelroom
+# ModelRoom
 
 Does this model have room on your machine?
 
-`modelroom` answers two questions for a list of model families you care about:
+ModelRoom (package and command: `modelroom`) answers two questions for a list of model
+families you care about:
 
 1. **Which local packages exist?** It reads the Hugging Face API and the Ollama registry for
    the base models and packagers you allow, and records every package with its size, format,
@@ -55,7 +56,7 @@ requests are welcome.
 
 ## About
 
-`modelroom` is built and maintained by [VISCONSULT](https://vis-consult.eu), a consultancy
+ModelRoom is built and maintained by [VISCONSULT](https://vis-consult.eu), a consultancy
 in Germany that runs AI agents for its own work and for clients under EU data-protection
 rules. We use it to decide which models run on our own laptops and servers, and with clients
 to size on-premise deployments before anyone buys hardware.
