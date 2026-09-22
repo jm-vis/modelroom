@@ -246,9 +246,11 @@ def _finalize(stub: Package, provenance: str, unresolved_reason: str | None) -> 
 def _carry_forward_approval(
     stub: Package, previous_by_key: dict[tuple[str, str, str], Package]
 ) -> tuple[Package, list[Approval]]:
-    """F6: the same rule as `hf._carry_forward_approval`, see its docstring."""
+    """F6/R3: the same rule as `hf._carry_forward_approval`, see its docstring."""
     previous = previous_by_key.get(package_identity_key(stub))
     if previous is None or previous.approval is None:
+        return stub, []
+    if previous.base_model_hf_repo != stub.base_model_hf_repo:
         return stub, []
     return stub.model_copy(update={"approval": previous.approval}), [previous.approval]
 

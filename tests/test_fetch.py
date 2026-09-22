@@ -96,6 +96,40 @@ def test_run_fetch_parameters_b_falls_back_to_the_previous_snapshots_value(tmp_p
     assert result.snapshot.base_models[0].parameters_b == 42.0
 
 
+# --- R2: malformed base-model metadata must never escape run_fetch -----------------------
+
+
+def test_run_fetch_zero_safetensors_total_returns_instead_of_raising(tmp_path):
+    config = _config(tmp_path)
+    mapping = qwen35_transport_mapping()
+    mapping[("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B")] = Response(
+        status=200, headers={}, body=b'{"sha": "' + b"a" * 40 + b'", "safetensors": {"total": 0}}'
+    )
+    mapping[("GET", f"https://huggingface.co/Qwen/Qwen3.5-9B/resolve/{'a' * 40}/config.json")] = Response(
+        status=404, headers={}, body=b"{}"
+    )
+    transport = build_transport(mapping)
+
+    result = run_fetch(config, transport, RUN1, old_snapshot=None)  # must not raise
+
+    assert result.snapshot.base_models[0].parameters_b is None
+    assert isinstance(load_snapshot(result.snapshot.model_dump(mode="json")), Snapshot)
+
+
+def test_run_fetch_malformed_sha_returns_instead_of_raising(tmp_path):
+    config = _config(tmp_path)
+    mapping = qwen35_transport_mapping()
+    mapping[("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B")] = Response(
+        status=200, headers={}, body=b'{"sha": "bad"}'
+    )
+    transport = build_transport(mapping)
+
+    result = run_fetch(config, transport, RUN1, old_snapshot=None)  # must not raise
+
+    assert result.snapshot.base_models[0].architecture.kind == "unknown"
+    assert isinstance(load_snapshot(result.snapshot.model_dump(mode="json")), Snapshot)
+
+
 def test_run_fetch_a_failing_area_ends_the_run_partially_incomplete(tmp_path):
     config = _config(tmp_path)
     mapping = qwen35_transport_mapping()
@@ -207,6 +241,85 @@ def test_run_fetch_stops_making_requests_once_the_budget_is_exhausted(tmp_path):
     assert result.request_budget == 2
     assert any(area.status == "incomplete" for area in result.snapshot.areas)
     assert any("budget exhausted" in (area.error or "") for area in result.snapshot.areas)
+
+
+# --- R4: the budget is checked before each base model AND before each area -----------------
+
+
+def test_run_fetch_budget_zero_from_the_start_never_touches_any_base_model(tmp_path):
+    config = Configuration.from_dict(
+        {
+            "schema_version": 1,
+            "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-7B", "repo_aliases": []}]}],
+            "packagers": [],
+            "publishers": ["acme"],
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
+        }
+    )
+    old_architecture = Architecture(
+        source_repo="acme/Nova-7B",
+        source_revision="a" * 40,
+        kind="dense_classic",
+        num_hidden_layers=32,
+        num_key_value_heads=8,
+        head_dim=128,
+    )
+    old_spec = BaseModelSpec(
+        hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=7.0, architecture=old_architecture
+    )
+    old_snapshot = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[old_spec], packages=[])
+    transport = build_transport({})  # must never be called
+
+    result = run_fetch(config, transport, RUN2, old_snapshot=old_snapshot, budget=0)
+
+    assert result.request_used == 0
+    assert transport.calls == []
+    assert result.snapshot.base_models == [old_spec]
+    assert result.snapshot.areas, "the never-started area must still be recorded"
+    assert all(area.status == "incomplete" for area in result.snapshot.areas)
+    assert all(area.error == "budget exhausted before this area was started" for area in result.snapshot.areas)
+
+
+def test_run_fetch_budget_ending_between_two_areas_of_the_same_base_model_is_not_a_transport_error(tmp_path):
+    # R4: the budget must be checked before each area too, not only before each base model --
+    # otherwise the second area's fetcher is actually invoked, sees BudgetedTransport raise
+    # BudgetExhaustedError mid-call, and records the bare "budget exhausted" message instead of
+    # "budget exhausted before this area was started".
+    config = Configuration.from_dict(
+        {
+            "schema_version": 1,
+            "families": [
+                {
+                    "name": "nova",
+                    "base_models": [
+                        {"hf_repo": "acme/Nova-7B", "repo_aliases": [], "ollama_base": "nova", "ollama_tag": "7b"}
+                    ],
+                }
+            ],
+            "packagers": [],
+            "publishers": ["acme"],
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
+        }
+    )
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/acme/Nova-7B"): Response(status=404, headers={}, body=b"{}"),
+            ("GET", "https://huggingface.co/api/models/acme/Nova-7B-GGUF"): Response(
+                status=404, headers={}, body=b"{}"
+            ),
+        }
+    )
+
+    # budget: 1 for fetch_base_model_meta's model-info call, 1 for the HF area's only candidate
+    # (also 404) -- exhausted exactly as the HF area finishes, before the Ollama area starts.
+    result = run_fetch(config, transport, RUN1, old_snapshot=None, budget=2)
+
+    assert result.request_used == 2
+    statuses = {(area.source, area.packager): area for area in result.snapshot.areas}
+    assert statuses[("huggingface", "acme")].status == "complete"
+    ollama_area = statuses[("ollama", None)]
+    assert ollama_area.status == "incomplete"
+    assert ollama_area.error == "budget exhausted before this area was started"
 
 
 # --- F9: a base model this run never reached keeps its previous spec, never "unknown" -------

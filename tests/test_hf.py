@@ -110,6 +110,46 @@ def test_fetch_base_model_meta_repo_not_found_resolves_unknown_with_no_parameter
     assert meta.architecture.source_revision is None
 
 
+def test_fetch_base_model_meta_zero_safetensors_total_is_none_not_a_fabricated_zero():
+    # R2: safetensors.total == 0 must resolve to parameters_b=None, never a bare 0.0 that
+    # BaseModelSpec.parameters_b (gt=0) would reject once fetch.py tries to build a spec from it.
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + QWEN_SHA.encode() + b'", "safetensors": {"total": 0}}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/Qwen/Qwen3.5-9B/resolve/{QWEN_SHA}/config.json",
+            ): Response(status=404, headers={}, body=b"{}"),
+        }
+    )
+
+    meta = fetch_base_model_meta(transport, "Qwen/Qwen3.5-9B")
+
+    assert meta.parameters_b is None
+
+
+def test_fetch_base_model_meta_malformed_sha_resolves_architecture_unknown_and_never_raises():
+    # R2: a non-40-hex 'sha' must never reach Architecture.source_revision's validator -- that
+    # would raise a pydantic ValidationError straight out of fetch_base_model_meta, which its
+    # own docstring promises never happens.
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B"): Response(
+                status=200, headers={}, body=b'{"sha": "bad"}'
+            ),
+        }
+    )
+
+    meta = fetch_base_model_meta(transport, "Qwen/Qwen3.5-9B")
+
+    assert meta.architecture.kind == "unknown"
+    assert meta.architecture.source_revision is None
+
+
 def test_fetch_base_model_meta_missing_config_json_is_unknown_but_never_raises():
     transport = build_transport(
         {
@@ -667,6 +707,51 @@ def test_fetch_hf_area_approval_bound_to_an_older_revision_is_not_approved():
     refreshed = by_key[package_identity_key(previous)]
     assert refreshed.provenance != "approved"
     assert refreshed.approval == stale_approval  # kept for history, but no longer active
+
+
+def test_fetch_hf_area_approval_does_not_follow_the_package_identity_to_another_base_model():
+    # R3: an approval must be bound to the base model it was given for, not just the bare
+    # (repo, filename) identity -- the same packager repo reassembled under a different base
+    # model (e.g. a family reconfigured to a different hf_repo) must not inherit the approval.
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF"): json_response(
+                "hf_unsloth_qwen35_9b_gguf_model.json"
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF/tree/{UNSLOTH_SHA}?recursive=true",
+            ): json_response("hf_unsloth_qwen35_9b_gguf_tree.json"),
+        }
+    )
+    approval = Approval(date=date(2026, 9, 1), content=UNSLOTH_SHA, by="acme-ai-team")
+    previous = Package(
+        source="huggingface",
+        repo="unsloth/Qwen3.5-9B-GGUF",
+        revision=UNSLOTH_SHA,
+        base_model_hf_repo="SomeOther/Different-Model",  # not Qwen/Qwen3.5-9B
+        format="gguf",
+        files=[PackageFile(name="Qwen3.5-9B-Q4_1.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_1",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=approval,
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+    previous_by_key = {package_identity_key(previous): previous}
+
+    outcome = fetch_hf_area(
+        transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT, previous_by_key=previous_by_key
+    )
+
+    by_key = {package_identity_key(p): p for p in outcome.packages}
+    refreshed = by_key[package_identity_key(previous)]
+    assert refreshed.provenance != "approved"
+    assert refreshed.approval is None
 
 
 def test_fetch_hf_area_budget_exhausted_mid_area_ends_it_incomplete():

@@ -50,6 +50,10 @@ HF_API = "https://huggingface.co/api"
 _NOT_FOUND_STATUSES = (404, 401)
 
 _LINK_NEXT_RE = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
+# R2: a model-info response's 'sha' is only ever trusted as a real commit sha when it matches
+# this shape -- the same 40-hex rule Architecture.source_revision itself enforces, checked here
+# first so a malformed sha never reaches that validator and raises out of this module.
+_SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,15 @@ def fetch_base_model_meta(transport: Transport, hf_repo: str) -> BaseModelMeta:
     Takes the repo id directly, not a `BaseModelSpec`: this is what *produces* the
     `publisher`/`parameters_b`/`architecture` fields a `BaseModelSpec` needs, so the caller
     cannot have a full spec yet when it calls this.
+
+    R2: a `sha` is only used when it is a real 40-hex commit sha (never passed on to
+    `architecture_from_hf_config`/`Architecture.source_revision` otherwise, and never used to
+    build a `config.json` URL); `safetensors.total` is only used when it is a real number
+    greater than zero (a `0` would otherwise become `parameters_b=0.0`, which
+    `BaseModelSpec.parameters_b`'s own `gt=0` constraint rejects downstream in `fetch.py`). The
+    architecture build itself is wrapped in `try`/`except`: any exception it raises resolves to
+    an unknown `Architecture` instead of escaping, so a registry response this function has not
+    anticipated can never turn into an uncaught exception in `run_fetch`.
     """
     publisher = hf_repo.split("/", 1)[0]
     sha: str | None = None
@@ -100,10 +113,8 @@ def fetch_base_model_meta(transport: Transport, hf_repo: str) -> BaseModelMeta:
         except Exception:
             info = None
         if isinstance(info, dict):
-            sha = info.get("sha") if isinstance(info.get("sha"), str) else None
-            safetensors = info.get("safetensors")
-            if isinstance(safetensors, dict) and isinstance(safetensors.get("total"), (int, float)):
-                parameters_b = safetensors["total"] / 1e9
+            sha = _valid_sha(info.get("sha"))
+            parameters_b = _valid_parameters_b(info.get("safetensors"))
 
     config_data: dict | None = None
     if sha:
@@ -119,8 +130,28 @@ def fetch_base_model_meta(transport: Transport, hf_repo: str) -> BaseModelMeta:
             if isinstance(parsed, dict):
                 config_data = parsed
 
-    architecture = architecture_from_hf_config(hf_repo, sha, config_data)
+    try:
+        architecture = architecture_from_hf_config(hf_repo, sha, config_data)
+    except Exception:
+        architecture = Architecture(source_repo=hf_repo, source_revision=None, kind="unknown")
     return BaseModelMeta(publisher=publisher, parameters_b=parameters_b, architecture=architecture)
+
+
+def _valid_sha(value: object) -> str | None:
+    """`value` as a commit sha, only when it is a real 40-hex string."""
+    if isinstance(value, str) and _SHA1_RE.fullmatch(value):
+        return value
+    return None
+
+
+def _valid_parameters_b(safetensors: object) -> float | None:
+    """`safetensors.total` in billions, only when it is a real number greater than zero."""
+    if not isinstance(safetensors, dict):
+        return None
+    total = safetensors.get("total")
+    if isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0:
+        return total / 1e9
+    return None
 
 
 def _candidate_repo_names(base_model: BaseModelSpec) -> list[str]:
@@ -350,14 +381,24 @@ def _assemble_packages(
 def _carry_forward_approval(
     stub: Package, previous_by_key: dict[tuple[str, str, str], Package]
 ) -> tuple[Package, list[Approval]]:
-    """F6: attach a previous package's `Approval` to `stub` when their identity keys match.
+    """F6/R3: attach a previous package's `Approval` to `stub` when their identity keys match
+    *and* they belong to the same base model.
 
     `decide_provenance` gets `[approval]` instead of `[]`; its own content check (the approval
     still has to name the *current* revision) decides whether it actually resolves `approved`.
     The approval stays on the returned `Package` regardless -- CONTRACTS.md: "the approval
-    object stays on the package for history".
+    object stays on the package for history". R3: `package_identity_key` is only
+    `(source, repo|ollama_name, filename-or-tag)` -- it says nothing about which base model the
+    package belongs to, so a bare identity match is not enough: the same packager repo
+    reassembled under a *different* base model (a family reconfigured to a new `hf_repo`, or two
+    base models that happen to share a packager repo) must never inherit an approval that was
+    never given for it. When the base model differs, the approval is not carried at all -- not
+    even attached for history, since it never belonged to this package's lineage in the first
+    place.
     """
     previous = previous_by_key.get(package_identity_key(stub))
     if previous is None or previous.approval is None:
+        return stub, []
+    if previous.base_model_hf_repo != stub.base_model_hf_repo:
         return stub, []
     return stub.model_copy(update={"approval": previous.approval}), [previous.approval]

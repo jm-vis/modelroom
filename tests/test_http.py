@@ -19,6 +19,7 @@ from modelroom.http import (
     BudgetedTransport,
     BudgetExhaustedError,
     FixtureTransport,
+    RedirectingTransport,
     Response,
     UrllibTransport,
 )
@@ -111,21 +112,85 @@ def test_budgeted_transport_default_budget_is_400():
     assert budgeted.remaining == 400
 
 
-# --- F10: a response that followed redirects counts every hop against the budget -----------
+# --- R5: RedirectingTransport follows a chain by calling `inner` once per hop --------------
+#
+# R5 inverts F10's composition: UrllibTransport makes exactly one request per call and returns
+# a 3xx as an ordinary Response; RedirectingTransport(inner) is what follows the chain, calling
+# `inner` once per hop, so the run's request budget (BudgetedTransport) can be composed as the
+# *inner* of a RedirectingTransport and see -- and book -- every hop before it is made, failure
+# paths included. Response.requests_made and BudgetedTransport's post-call accounting are gone.
 
 
-def test_budgeted_transport_counts_every_redirect_hop_reported_by_the_response():
-    response = Response(status=200, headers={}, body=b"{}", requests_made=3)
-    inner = FixtureTransport({("GET", "https://example.test/a"): response})
+def test_redirecting_transport_follows_a_single_redirect_and_costs_two_requests():
+    inner = FixtureTransport(
+        {
+            ("GET", "https://example.test/a"): Response(status=302, headers={"Location": "https://example.test/b"}, body=b""),
+            ("GET", "https://example.test/b"): Response(status=200, headers={}, body=b'{"ok": true}'),
+        }
+    )
     budgeted = BudgetedTransport(inner, budget=10)
+    redirecting = RedirectingTransport(budgeted)
 
-    result = budgeted("GET", "https://example.test/a")
+    result = redirecting("GET", "https://example.test/a")
 
-    assert result is response
-    assert budgeted.used == 3
-    assert budgeted.remaining == 7
+    assert result.status == 200
+    assert result.json() == {"ok": True}
+    assert budgeted.used == 2
+    assert budgeted.remaining == 8
 
 
-def test_response_requests_made_defaults_to_one():
-    response = Response(status=200, headers={}, body=b"{}")
-    assert response.requests_made == 1
+def test_redirecting_transport_a_six_hop_chain_raises_and_books_only_five_requests():
+    # R5: a chain needing 6 requests to resolve exceeds MAX_REDIRECTS (5) -- exactly 5 requests
+    # are made (booked against the budget) and the would-be sixth is never made.
+    mapping = {}
+    for i in range(1, 6):
+        mapping[("GET", f"https://example.test/{i}")] = Response(
+            status=302, headers={"Location": f"https://example.test/{i + 1}"}, body=b""
+        )
+    # deliberately no entry for https://example.test/6 -- it must never be requested
+    inner = FixtureTransport(mapping)
+    budgeted = BudgetedTransport(inner, budget=10)
+    redirecting = RedirectingTransport(budgeted)
+
+    with pytest.raises(RuntimeError, match="redirect"):
+        redirecting("GET", "https://example.test/1")
+
+    assert budgeted.used == 5
+    assert ("GET", "https://example.test/6") not in inner.calls
+
+
+def test_redirecting_transport_budget_of_one_raises_budget_exhausted_on_the_second_hop():
+    inner = FixtureTransport(
+        {
+            ("GET", "https://example.test/a"): Response(status=302, headers={"Location": "https://example.test/b"}, body=b""),
+            ("GET", "https://example.test/b"): Response(status=200, headers={}, body=b"{}"),
+        }
+    )
+    budgeted = BudgetedTransport(inner, budget=1)
+    redirecting = RedirectingTransport(budgeted)
+
+    with pytest.raises(BudgetExhaustedError):
+        redirecting("GET", "https://example.test/a")
+
+    assert inner.calls == [("GET", "https://example.test/a")]  # the second hop was never made
+
+
+def test_redirecting_transport_never_follows_a_redirect_for_a_non_get_head_method():
+    inner = FixtureTransport(
+        {("POST", "https://example.test/a"): Response(status=302, headers={"Location": "https://example.test/b"}, body=b"")}
+    )
+    redirecting = RedirectingTransport(inner)
+
+    result = redirecting("POST", "https://example.test/a")
+
+    assert result.status == 302
+    assert inner.calls == [("POST", "https://example.test/a")]
+
+
+def test_redirecting_transport_a_redirect_status_without_a_location_header_is_returned_as_is():
+    inner = FixtureTransport({("GET", "https://example.test/a"): Response(status=302, headers={}, body=b"")})
+    redirecting = RedirectingTransport(inner)
+
+    result = redirecting("GET", "https://example.test/a")
+
+    assert result.status == 302

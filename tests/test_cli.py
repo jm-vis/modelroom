@@ -401,6 +401,59 @@ def test_hardware_llmfit_system_total_ram_null_is_exit_2_and_writes_nothing(tmp_
     assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
 
 
+# --- R7: invalid hardware fields must exit 2, never bypass it as an uncaught pydantic crash --
+
+
+def test_hardware_llmfit_system_gpu_name_a_list_is_exit_2_and_writes_nothing(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    runner = _llmfit_runner(
+        system_stdout=json.dumps({"system": {"total_ram_gb": 7.56, "gpu_name": []}})
+    )
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 2
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
+def test_hardware_llmfit_system_total_ram_nan_is_exit_2_and_writes_nothing(tmp_path: Path):
+    # json.loads accepts the non-standard "NaN" literal -- a runner can genuinely produce this.
+    config_path = _write_config(tmp_path)
+    runner = _llmfit_runner(system_stdout='{"system": {"total_ram_gb": NaN}}')
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 2
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
+def test_hardware_llmfit_system_unified_memory_a_string_is_exit_2_and_writes_nothing(tmp_path: Path):
+    config_path = _write_config(tmp_path)
+    runner = _llmfit_runner(
+        system_stdout=json.dumps({"system": {"total_ram_gb": 7.56, "unified_memory": "yes"}})
+    )
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=runner,
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 2
+    assert not (tmp_path / "state" / "hardware" / "workstation.json").exists()
+
+
 # --- hardware: schema-3 path ------------------------------------------------------------
 
 

@@ -24,6 +24,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from .config import ConfigError, Configuration, load_config
 from .contracts import HARDWARE_SCHEMA_VERSION, SchemaVersionError
 from .fetch import run_fetch
@@ -240,7 +242,16 @@ def hardware_with_config(
         "installed_unavailable_reason": unavailable_reason,
         "measurements": [measurement.model_dump(mode="json") for measurement in measurements],
     }
-    snapshot = write_hardware_snapshot(config, machine, data)
+    # R7: second line of defense. hardware_fields_from_llmfit_system already validates every
+    # field it produces, but a llmfit output shape neither it nor this function has anticipated
+    # must still exit 2 -- never crash with an uncaught pydantic ValidationError. Validation
+    # happens before any file is touched (write_hardware_snapshot's own convention), so nothing
+    # is written either way.
+    try:
+        snapshot = write_hardware_snapshot(config, machine, data)
+    except ValidationError as exc:
+        print(f"llmfit output did not validate as a hardware profile: {exc}", file=sys.stderr)
+        return 2
 
     if snapshot.installed is not None:
         installed_summary = f"installed: {len(snapshot.installed)}"

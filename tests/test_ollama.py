@@ -326,6 +326,36 @@ def test_fetch_ollama_area_approval_bound_to_an_older_digest_is_not_approved():
     assert by_name["qwen3.5:9b"].provenance != "approved"
 
 
+def test_fetch_ollama_area_approval_does_not_follow_the_package_identity_to_another_base_model():
+    # R3: same rule as hf.py's -- an approval is bound to the base model it was given for, not
+    # just the bare ollama_name identity.
+    transport = _happy_path_transport()
+    previous = Package(
+        source="ollama",
+        ollama_name="qwen3.5:9b",
+        manifest_digest=_MANIFEST_9B_DIGEST,
+        base_model_hf_repo="SomeOther/Different-Model",  # not Qwen/Qwen3.5-9B
+        format="gguf",
+        files=[PackageFile(name="9b.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_K_M",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=Approval(date=date(2026, 9, 1), content=_MANIFEST_9B_DIGEST, by="acme-ai-team"),
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+    previous_by_key = {package_identity_key(previous): previous}
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT, previous_by_key=previous_by_key)
+
+    by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
+    assert by_name["qwen3.5:9b"].provenance != "approved"
+    assert by_name["qwen3.5:9b"].approval is None
+
+
 def test_fetch_ollama_area_budget_exhausted_mid_area_is_incomplete():
     inner = build_transport(
         {("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>')}

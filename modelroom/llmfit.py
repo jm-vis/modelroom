@@ -11,6 +11,7 @@ nowhere in the test suite.
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 from typing import Protocol
@@ -138,13 +139,20 @@ def hardware_fields_from_llmfit_system(data: dict) -> dict:
     `system.gpu_vram_gb`/`total_ram_gb`/`available_ram_gb` are already GiB in llmfit's own
     output (division by 1024**3 in its source, e.g. 127.46 for a 128 GB machine), taken
     unchanged (CONTRACTS.md, "Local llmfit binding"). `providers` and `gpus[]` are ignored in
-    v1. `total_ram_gb` is the one field this cannot proceed without, and (F12) it must be a real
-    positive number, not just present -- `null`, a string, zero or negative all raise
-    `LlmfitError` naming the field, the same as `HardwareSnapshot.ram_gib`'s own `gt=0` would
-    eventually reject, but caught here so it becomes an ordinary exit `2`, never a pydantic
-    crash. A GPU-less machine legitimately omits `gpu_vram_gb`/`gpu_name`/`backend`, so
-    `gpu_vram_gb` defaults to `0.0` rather than raising; when present, it and `available_ram_gb`
-    must still be non-negative numbers.
+    v1. `total_ram_gb` is the one field this cannot proceed without, and (F12/R7) it must be a
+    real, finite positive number, not just present -- `null`, a string, zero, negative, `NaN` or
+    infinite all raise `LlmfitError` naming the field, the same as `HardwareSnapshot.ram_gib`'s
+    own `gt=0` would eventually reject, but caught here so it becomes an ordinary exit `2`, never
+    a pydantic crash (`gt=0`/`ge=0` alone would not catch `NaN`: every ordinary comparison
+    against `NaN` is `False`, so a naive "value <= 0 is bad" check never fires for it -- R7 checks
+    `math.isfinite` explicitly). A GPU-less machine legitimately omits
+    `gpu_vram_gb`/`gpu_name`/`backend`, so `gpu_vram_gb` defaults to `0.0` rather than raising;
+    when present, it and `available_ram_gb` must still be finite non-negative numbers. R7:
+    `gpu_name`/`backend` must be a string or `None` when present, and `unified_memory` must be a
+    real `bool` when present (never silently coerced, e.g. `bool("no")` is `True`) -- every field
+    this function passes on to `HardwareSnapshot` is validated here, so a shape problem always
+    surfaces as this function's own `LlmfitError`, never an uncaught pydantic `ValidationError`
+    from `write_hardware_snapshot` further down the line.
     """
     system = data.get("system")
     if not isinstance(system, dict) or "total_ram_gb" not in system:
@@ -155,18 +163,18 @@ def hardware_fields_from_llmfit_system(data: dict) -> dict:
         "free_ram_gib_at_measurement": _non_negative_number(
             system.get("available_ram_gb"), "system.available_ram_gb", default=None
         ),
-        "gpu_name": system.get("gpu_name"),
-        "backend": system.get("backend"),
-        "unified_memory": bool(system.get("unified_memory", False)),
+        "gpu_name": _optional_str(system.get("gpu_name"), "system.gpu_name"),
+        "backend": _optional_str(system.get("backend"), "system.backend"),
+        "unified_memory": _optional_bool(system.get("unified_memory"), "system.unified_memory"),
     }
 
 
-def _is_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def _is_finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _positive_number(value: object, field: str) -> float:
-    if not _is_number(value) or value <= 0:
+    if not _is_finite_number(value) or value <= 0:
         raise LlmfitError(f"llmfit system --json response field {field!r} is not a positive number: {value!r}")
     return value
 
@@ -174,6 +182,20 @@ def _positive_number(value: object, field: str) -> float:
 def _non_negative_number(value: object, field: str, default: float | None) -> float | None:
     if value is None:
         return default
-    if not _is_number(value) or value < 0:
+    if not _is_finite_number(value) or value < 0:
         raise LlmfitError(f"llmfit system --json response field {field!r} is not a non-negative number: {value!r}")
+    return value
+
+
+def _optional_str(value: object, field: str) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise LlmfitError(f"llmfit system --json response field {field!r} is not a string or null: {value!r}")
+    return value
+
+
+def _optional_bool(value: object, field: str) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise LlmfitError(f"llmfit system --json response field {field!r} is not a boolean: {value!r}")
     return value

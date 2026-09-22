@@ -39,16 +39,13 @@ class BudgetExhaustedError(Exception):
 class Response:
     """One HTTP response: status, headers (as given, not lower-cased) and the raw body.
 
-    `requests_made` (F10, default `1`) is how many actual HTTP requests this response cost --
-    more than one when `UrllibTransport` followed redirects to get here. `BudgetedTransport`
-    reads it to charge every hop against the run's request budget, not just the one call it
-    made into the transport.
+    A 3xx response is returned exactly like any other status (R5): following it is
+    `RedirectingTransport`'s job, never something a `Response` itself accounts for.
     """
 
     status: int
     headers: dict[str, str] = field(default_factory=dict)
     body: bytes = b""
-    requests_made: int = 1
 
     def json(self) -> object:
         return json.loads(self.body.decode("utf-8"))
@@ -75,9 +72,10 @@ MAX_REDIRECTS = 5
 class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
     """Disables `urllib.request`'s own, uncounted redirect following.
 
-    Returning `None` from `redirect_request` makes a 3xx surface as an `HTTPError` instead of
-    being silently followed -- `UrllibTransport` then follows it itself, one hop at a time, so
-    every hop can be counted into `Response.requests_made` (F10).
+    Returning `None` from `redirect_request` makes a 3xx surface as an ordinary response
+    (`status`/`headers` read off the `HTTPError`) instead of being silently followed --
+    `UrllibTransport` makes exactly one request per call either way (R5); following a chain is
+    `RedirectingTransport`'s job, composed around this transport by the caller (`run_fetch`).
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102 - stdlib override
@@ -87,11 +85,13 @@ class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
 class UrllibTransport:
     """The real transport: stdlib `urllib.request`, a fixed User-Agent, one timeout, no retries.
 
-    Redirects are followed explicitly, up to `MAX_REDIRECTS` hops, only for `GET`/`HEAD` (never
-    a method that carries a body); each hop increments `Response.requests_made` so
-    `BudgetedTransport` can charge the run's request budget for the real number of HTTP
-    requests made, not just the one call made into this transport (F10). More than
-    `MAX_REDIRECTS` hops raises `RuntimeError` rather than following forever.
+    Makes exactly one HTTP request per call (R5) and returns a 3xx response exactly like any
+    other status -- `urllib.request`'s own automatic redirect following is disabled
+    (`_NoAutoRedirect`) so a 3xx never gets silently resolved before this transport can even see
+    it. Following a redirect chain is `RedirectingTransport`'s job, not this transport's: that
+    inversion is what lets `run_fetch` compose `RedirectingTransport(BudgetedTransport(...))` so
+    every hop of a chain is booked against the run's request budget *before* it is made, failure
+    paths included, rather than only being counted after the whole chain already resolved.
     """
 
     def __init__(self, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
@@ -101,28 +101,44 @@ class UrllibTransport:
     def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
         request_headers = {"User-Agent": USER_AGENT}
         request_headers.update(headers or {})
-        hops = 0
-        while True:
-            request = urllib.request.Request(url, method=method, headers=request_headers)
-            try:
-                with self._opener.open(request, timeout=self._timeout) as response:
-                    return Response(
-                        status=response.status,
-                        headers=dict(response.headers),
-                        body=response.read(),
-                        requests_made=hops + 1,
-                    )
-            except urllib.error.HTTPError as exc:
-                location = exc.headers.get("Location") if exc.headers else None
-                if exc.code in _REDIRECT_STATUSES and method in ("GET", "HEAD") and location:
-                    hops += 1
-                    if hops > MAX_REDIRECTS:
-                        raise RuntimeError(f"{url}: more than {MAX_REDIRECTS} redirects") from exc
-                    url = urllib.parse.urljoin(url, location)
-                    continue
-                return Response(
-                    status=exc.code, headers=dict(exc.headers or {}), body=exc.read(), requests_made=hops + 1
-                )
+        request = urllib.request.Request(url, method=method, headers=request_headers)
+        try:
+            with self._opener.open(request, timeout=self._timeout) as response:
+                return Response(status=response.status, headers=dict(response.headers), body=response.read())
+        except urllib.error.HTTPError as exc:
+            return Response(status=exc.code, headers=dict(exc.headers or {}), body=exc.read())
+
+
+class RedirectingTransport:
+    """Follows a redirect chain by calling `inner` once per hop (R5).
+
+    Only a `GET`/`HEAD` response with a 3xx status in `_REDIRECT_STATUSES` and a `Location`
+    header is followed -- never a method that carries a body, and never a 3xx with no `Location`
+    to follow (both are returned to the caller exactly as received). `urllib.parse.urljoin`
+    resolves a relative `Location` against the hop it came from. A chain that has not resolved
+    within `MAX_REDIRECTS` hops (the very first request counts as hop 1) raises `RuntimeError`
+    rather than following forever; the hop that would exceed the limit is never made, since it
+    could only be discovered to be one *more* redirect by making it. Composed around a
+    `BudgetedTransport` in `run_fetch` (this class's `inner`), so every hop this class makes --
+    including the one whose response turns out to matter for `_REDIRECT_STATUSES` -- passes
+    through the budget check first, charging the run's request budget one hop at a time and
+    raising `BudgetExhaustedError` mid-chain exactly as it would for any other call.
+    """
+
+    def __init__(self, inner: Transport) -> None:
+        self._inner = inner
+
+    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
+        current_url = url
+        for _ in range(MAX_REDIRECTS):
+            response = self._inner(method, current_url, headers)
+            if response.status not in _REDIRECT_STATUSES or method not in ("GET", "HEAD"):
+                return response
+            location = response.header("Location")
+            if not location:
+                return response
+            current_url = urllib.parse.urljoin(current_url, location)
+        raise RuntimeError(f"{url}: more than {MAX_REDIRECTS} redirects")
 
 
 class FixtureTransport:
@@ -146,11 +162,11 @@ class BudgetedTransport:
 
     Every fetch run wraps its transport in one of these so the request count is enforced in
     exactly one place, regardless of which fetcher (Hugging Face, Ollama, or both) is making
-    the calls. F10: a response's `requests_made` beyond `1` (a redirect chain `UrllibTransport`
-    followed) is charged too, added to `used` *after* the call -- the pre-call check below still
-    only ever sees one call coming, so a redirect chain can overshoot the budget by at most the
-    length of that one chain (documented, not fixed further: knowing a call will redirect, and
-    by how much, before making it is not possible).
+    the calls. R5: each call is exactly one request, charged before it is made -- a redirect
+    chain is `RedirectingTransport`'s job (composed as this transport's *outer* layer in
+    `run_fetch`: `RedirectingTransport(BudgetedTransport(...))`), so every hop of a chain already
+    arrives here as its own separate call and is booked (and can exhaust the budget) one hop at a
+    time, never charged only after the fact.
     """
 
     def __init__(self, inner: Transport, budget: int = DEFAULT_REQUEST_BUDGET) -> None:
@@ -166,6 +182,4 @@ class BudgetedTransport:
         if self.used >= self._budget:
             raise BudgetExhaustedError()
         self.used += 1
-        response = self._inner(method, url, headers)
-        self.used += response.requests_made - 1
-        return response
+        return self._inner(method, url, headers)

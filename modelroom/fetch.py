@@ -23,7 +23,7 @@ from .config import BaseModelConfig, Configuration
 from .contracts import Architecture, BaseModelSpec, Package, Snapshot
 from .fetch_types import AreaOutcome
 from .hf import BaseModelMeta, candidate_owners, fetch_base_model_meta, fetch_hf_area
-from .http import DEFAULT_REQUEST_BUDGET, BudgetedTransport, Transport
+from .http import DEFAULT_REQUEST_BUDGET, BudgetedTransport, RedirectingTransport, Transport
 from .ollama import fetch_ollama_area
 from .quantization import package_identity_key
 from .state import merge_snapshot
@@ -47,6 +47,10 @@ def run_fetch(
 ) -> FetchResult:
     """Fetch every configured base model on both sources and merge the result against `old_snapshot`."""
     budgeted = BudgetedTransport(transport, budget)
+    # R5: RedirectingTransport is the *outer* layer -- every hop of a redirect chain arrives at
+    # budgeted as its own separate call, so each hop is checked and booked against the run's
+    # request budget before it is made, failure paths included, rather than only afterwards.
+    redirecting = RedirectingTransport(budgeted)
     old_base_models_by_repo = {bm.hf_repo: bm for bm in (old_snapshot.base_models if old_snapshot else [])}
     # F6: every package identity this project has ever seen, so a fetcher can carry an existing
     # Approval forward when it reassembles the same package this run.
@@ -56,28 +60,36 @@ def run_fetch(
 
     base_models: list[BaseModelSpec] = []
     area_outcomes: list[AreaOutcome] = []
-    budget_exhausted = False
 
     for family in config.families:
         for base_model_config in family.base_models:
-            if budget_exhausted:
+            # R4: checked before this base model is even started, not only after the previous
+            # one finished -- a budget that is already exhausted (or exhausted by a request made
+            # earlier in this very base model's own areas) must never let fetch_base_model_meta
+            # or a fetcher run at all; each of those would otherwise see BudgetedTransport raise
+            # BudgetExhaustedError and quietly resolve to an "unknown"/empty result instead of
+            # never having been attempted.
+            if budgeted.remaining <= 0:
                 base_model = _carried_over_base_model_spec(base_model_config, old_base_models_by_repo)
                 base_models.append(base_model)
                 area_outcomes.extend(_budget_exhausted_areas(config, base_model_config, base_model))
                 continue
 
-            meta = fetch_base_model_meta(budgeted, base_model_config.hf_repo)
+            meta = fetch_base_model_meta(redirecting, base_model_config.hf_repo)
             base_model = _build_base_model_spec(base_model_config, meta, old_base_models_by_repo)
             base_models.append(base_model)
 
             for owner in candidate_owners(config, base_model):
-                area_outcomes.append(fetch_hf_area(budgeted, base_model, owner, run_at, previous_by_key))
+                if budgeted.remaining <= 0:
+                    area_outcomes.append(_budget_exhausted_hf_area(base_model, owner))
+                    continue
+                area_outcomes.append(fetch_hf_area(redirecting, base_model, owner, run_at, previous_by_key))
 
             if base_model.ollama_base and base_model.ollama_tag:
-                area_outcomes.append(fetch_ollama_area(budgeted, base_model, run_at, previous_by_key))
-
-            if budgeted.remaining <= 0:
-                budget_exhausted = True
+                if budgeted.remaining <= 0:
+                    area_outcomes.append(_budget_exhausted_ollama_area(base_model))
+                else:
+                    area_outcomes.append(fetch_ollama_area(redirecting, base_model, run_at, previous_by_key))
 
     snapshot = merge_snapshot(old_snapshot, run_at, area_outcomes, base_models)
     return FetchResult(snapshot=snapshot, request_used=budgeted.used, request_budget=budget)
@@ -124,32 +136,37 @@ def _carried_over_base_model_spec(
     )
 
 
+def _budget_exhausted_hf_area(base_model: BaseModelSpec, owner: str) -> AreaOutcome:
+    """R4: the `incomplete` outcome for one Hugging Face area the budget ran out before starting."""
+    return AreaOutcome(
+        source="huggingface",
+        base_model_hf_repo=base_model.hf_repo,
+        packager=owner,
+        status="incomplete",
+        error=_BUDGET_EXHAUSTED_MESSAGE,
+        packages=[],
+    )
+
+
+def _budget_exhausted_ollama_area(base_model: BaseModelSpec) -> AreaOutcome:
+    """R4: the `incomplete` outcome for the Ollama area the budget ran out before starting."""
+    return AreaOutcome(
+        source="ollama",
+        base_model_hf_repo=base_model.hf_repo,
+        packager=None,
+        status="incomplete",
+        error=_BUDGET_EXHAUSTED_MESSAGE,
+        packages=[],
+    )
+
+
 def _budget_exhausted_areas(
     config: Configuration, base_model_config: BaseModelConfig, base_model: BaseModelSpec
 ) -> list[AreaOutcome]:
     """F9: one `incomplete` `AreaOutcome` per area this run would have attempted, had the
     budget not already run out before this base model was ever reached.
     """
-    outcomes = [
-        AreaOutcome(
-            source="huggingface",
-            base_model_hf_repo=base_model.hf_repo,
-            packager=owner,
-            status="incomplete",
-            error=_BUDGET_EXHAUSTED_MESSAGE,
-            packages=[],
-        )
-        for owner in candidate_owners(config, base_model)
-    ]
+    outcomes = [_budget_exhausted_hf_area(base_model, owner) for owner in candidate_owners(config, base_model)]
     if base_model_config.ollama_base and base_model_config.ollama_tag:
-        outcomes.append(
-            AreaOutcome(
-                source="ollama",
-                base_model_hf_repo=base_model.hf_repo,
-                packager=None,
-                status="incomplete",
-                error=_BUDGET_EXHAUSTED_MESSAGE,
-                packages=[],
-            )
-        )
+        outcomes.append(_budget_exhausted_ollama_area(base_model))
     return outcomes

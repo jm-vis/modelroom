@@ -101,7 +101,10 @@ All notable changes to this project are documented in this file. The format foll
   - **F11** `BaseModelSpec.parameters_b` is now `float | None` (`None` = not measured this run
     and no previous reading exists); the `1.0` placeholder is gone.
     `modelroom/provenance.py::_decide_ollama` resolves `("unresolved", "parameters_unknown")`
-    when it is `None`, before the size-token tolerance check ever runs.
+    when it is `None`, before the size-token tolerance check ever runs. A snapshot written
+    before this change may still carry the placeholder `1.0` for a base model whose parameter
+    count Hugging Face does not expose; the carry-over rule would keep it. Rebuild such a
+    snapshot once (delete `modelroom.json`, run `fetch`) -- there is no automatic migration.
   - **F12** `modelroom/llmfit.py::check_llmfit_version`/`fetch_llmfit_system` catch
     `subprocess.TimeoutExpired`/`OSError` from the runner and a non-zero `--version` exit code
     as `LlmfitError`; `hardware_fields_from_llmfit_system` now validates that
@@ -130,3 +133,49 @@ All notable changes to this project are documented in this file. The format foll
   function `_cmd_fetch` delegates to, for a programmatic caller that already holds a
   `Configuration`. Documented in `CONTRACTS.md` under "Ollama size-token tolerance" and
   "Package file-stem naming conventions".
+- Fix-round 2, seven confirmed review findings against AP3+AP4:
+  - **R1** `modelroom/state.py::acquire_lock`'s stale-lock takeover claims the existing file
+    first with an atomic `os.replace(path, <path>.stale.<token>)` rename (only one of two racing
+    processes can ever win it) instead of write-then-reread, which had a real window letting two
+    processes each see their own token (measured directly on Windows as an intermittent
+    `PermissionError`); capped at three attempts before raising `LockHeldError`. `release_lock`
+    is symmetrically a claim-then-decide (`os.replace(path, <path>.release.<token>)`) instead of
+    a check-then-unlink, which had the same kind of window.
+  - **R2** `modelroom/hf.py::fetch_base_model_meta` now accepts a model-info `sha` only when it
+    is a real 40-hex commit sha and `safetensors.total` only when it is a real number greater
+    than zero, and wraps the architecture build in `try`/`except` -- a malformed `sha` or a
+    `safetensors.total` of `0` could previously raise a pydantic `ValidationError` straight out
+    of `run_fetch`, contradicting this function's own "never raises" docstring promise.
+  - **R3** `modelroom/hf.py`/`modelroom/ollama.py::_carry_forward_approval` now also require
+    `previous.base_model_hf_repo == stub.base_model_hf_repo` -- `package_identity_key` alone
+    says nothing about which base model a package belongs to, so an approval could otherwise
+    follow the bare `(repo, filename)`/`ollama_name` identity to an unrelated base model that
+    happens to share a packager repo or tag.
+  - **R4** `modelroom/fetch.py::run_fetch` checks `budgeted.remaining <= 0` before each base
+    model *and* before each of its areas, not only after a base model finishes -- a budget
+    already exhausted at the start of the run (or exhausted between two areas of the same base
+    model) previously still let `fetch_base_model_meta`/a fetcher be called once more, silently
+    resolving into a fresh budget-starved reading or a bare `"budget exhausted"` area error
+    instead of `"budget exhausted before this area was started"`.
+  - **R5** Inverts F10's redirect-following composition: `modelroom/http.py::UrllibTransport`
+    makes exactly one request per call and returns a 3xx like any other status;
+    `RedirectingTransport(inner)` now follows a chain by calling `inner` once per hop (up to
+    `MAX_REDIRECTS = 5`), and `run_fetch` composes `RedirectingTransport(BudgetedTransport(...))`
+    so every hop is checked and booked against the run's request budget *before* it is made,
+    failure paths included, rather than `BudgetedTransport` charging the extra hops only after a
+    chain already resolved. `Response.requests_made` and `BudgetedTransport`'s post-call
+    accounting are removed.
+  - **R6** No code change: a snapshot written before F11 landed may still carry the `1.0`
+    placeholder for a base model Hugging Face reports no parameter count for; documented as a
+    one-time manual rebuild (delete `modelroom.json`, run `fetch`), not an automatic migration,
+    since the package is unreleased and the only existing snapshot is the operator's own.
+  - **R7** `modelroom/llmfit.py::hardware_fields_from_llmfit_system` now rejects a non-finite
+    number (`math.isfinite`, catching `NaN`/infinity that a naive `<= 0` check lets slip
+    through), a `gpu_name`/`backend` that is not a string or `None`, and a `unified_memory` that
+    is not a real `bool` (previously silently coerced by `bool(...)`, e.g. `bool("no")` is
+    `True`). Second line of defense: `modelroom/cli.py::hardware_with_config` catches a pydantic
+    `ValidationError` from `write_hardware_snapshot` and maps it to exit `2`, so an llmfit output
+    shape neither validator has anticipated still exits cleanly instead of crashing.
+
+  Documented in `CONTRACTS.md` under "Lock file", "Approval carry-forward across fetch runs",
+  "Request budget" and "`parameters_b` when Hugging Face has no answer this run".

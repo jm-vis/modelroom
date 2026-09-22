@@ -186,3 +186,38 @@ def test_hardware_fields_from_llmfit_system_rejects_a_negative_gpu_vram_gb():
 def test_hardware_fields_from_llmfit_system_rejects_a_negative_available_ram_gb():
     with pytest.raises(LlmfitError):
         hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "available_ram_gb": -1.0}})
+
+
+# --- R7: every field this function passes on is validated, never trusted by shape alone -----
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_nan_total_ram_gb():
+    # nan is neither > 0 nor <= 0, so a naive "value <= 0 is bad" check lets it slip through --
+    # math.isfinite must reject it explicitly.
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": float("nan")}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_an_infinite_gpu_vram_gb():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "gpu_vram_gb": float("inf")}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_non_string_gpu_name():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "gpu_name": []}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_non_string_backend():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "backend": 42}})
+
+
+def test_hardware_fields_from_llmfit_system_rejects_a_non_bool_unified_memory():
+    with pytest.raises(LlmfitError):
+        hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "unified_memory": "yes"}})
+
+
+def test_hardware_fields_from_llmfit_system_accepts_a_true_unified_memory():
+    fields = hardware_fields_from_llmfit_system({"system": {"total_ram_gb": 7.56, "unified_memory": True}})
+    assert fields["unified_memory"] is True

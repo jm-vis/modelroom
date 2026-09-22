@@ -28,6 +28,12 @@ from .quantization import package_identity_key
 
 LOCK_MAX_AGE = timedelta(hours=2)
 
+# R1: how many times acquire_lock retries a stale-lock takeover before giving up. A retry is
+# only ever needed when this attempt's own claim rename loses a race to a concurrent takeover
+# (see acquire_lock's docstring); three attempts is generous headroom over the one retry that
+# race can actually cause.
+MAX_TAKEOVER_ATTEMPTS = 3
+
 
 class LockHeldError(Exception):
     """Another process holds the lock and it is not old enough to be considered stale."""
@@ -46,43 +52,65 @@ def acquire_lock(path: Path, command: str, now: datetime) -> str:
     Uses `os.open` with `O_CREAT | O_EXCL` so the create-or-fail is one atomic syscall, never a
     `path.exists()` check followed by a separate write (a window a second process could win).
     On `FileExistsError` the existing holder is read: younger than `LOCK_MAX_AGE` blocks
-    immediately with `LockHeldError` -- this project never waits for a lock. Stale (or
-    unreadable) content is taken over by replacing it with our own and then re-reading it: only
-    when the re-read content still carries the random `token` we just wrote did our takeover
-    win the race against a concurrent one; otherwise `LockHeldError` is raised instead. Returns
-    the token the caller must pass to `release_lock`.
+    immediately with `LockHeldError` -- this project never waits for a lock.
+
+    A stale (or unreadable) holder is taken over by claiming it first: `os.replace(path,
+    <path>.stale.<token>)` atomically renames the existing file away -- of two processes racing
+    the same stale file, only one rename can ever succeed (the other gets `FileNotFoundError`
+    and loops back to retry the `O_EXCL` create, see below), so the claim itself can never be
+    won twice (R1: the previous "write our content, then re-read to check whose token survived"
+    approach let two processes each see their own token when the other's write landed between
+    this process's own write and its re-read -- an atomic rename has no such window). Only the
+    process that won the claim then creates the lock fresh with `O_CREAT | O_EXCL` and unlinks
+    the claimed file; if that create itself loses a race to a third party, the loop retries (up
+    to `MAX_TAKEOVER_ATTEMPTS`) rather than assuming success. Returns the token the caller must
+    pass to `release_lock`.
     """
     token = secrets.token_hex(16)
     content = json.dumps(
         {"pid": os.getpid(), "command": command, "started_at": now.isoformat(), "token": token}
     )
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    for _ in range(MAX_TAKEOVER_ATTEMPTS):
+        if _create_lock_file(path, content):
+            return token
+
+        holder = _read_lock(path)
+        if holder is not None and now - holder["started_at"] < LOCK_MAX_AGE:
+            raise LockHeldError(
+                f"{path}: locked by pid {holder['pid']} running '{holder['command']}' since "
+                f"{holder['started_at'].isoformat()} (younger than {LOCK_MAX_AGE})"
+            )
+
+        claim_path = path.with_name(f"{path.name}.stale.{token}")
+        try:
+            os.replace(path, claim_path)
+        except FileNotFoundError:
+            continue  # another process's takeover claimed (or removed) it first; retry from the top
+
+        try:
+            if _create_lock_file(path, content):
+                return token
+        finally:
+            claim_path.unlink(missing_ok=True)
+        # Our claim won the rename race but a third party's create won the next one; loop back
+        # and let the next O_EXCL attempt see whatever is there now.
+
+    raise LockHeldError(f"{path}: lock takeover did not succeed after {MAX_TAKEOVER_ATTEMPTS} attempts")
+
+
+def _create_lock_file(path: Path, content: str) -> bool:
+    """Create `path` exclusively with `content`, or return `False` if it already exists."""
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
-        pass
-    else:
-        try:
-            os.write(fd, content.encode("utf-8"))
-        finally:
-            os.close(fd)
-        return token
-
-    holder = _read_lock(path)
-    if holder is not None and now - holder["started_at"] < LOCK_MAX_AGE:
-        raise LockHeldError(
-            f"{path}: locked by pid {holder['pid']} running '{holder['command']}' since "
-            f"{holder['started_at'].isoformat()} (younger than {LOCK_MAX_AGE})"
-        )
-
-    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp_path.write_text(content, encoding="utf-8")
-    os.replace(tmp_path, path)
-
-    winner = _read_lock(path)
-    if winner is None or winner["token"] != token:
-        raise LockHeldError(f"{path}: lock takeover was raced by another process")
-    return token
+        return False
+    try:
+        os.write(fd, content.encode("utf-8"))
+    finally:
+        os.close(fd)
+    return True
 
 
 def _read_lock(path: Path) -> dict | None:
@@ -101,17 +129,25 @@ def _read_lock(path: Path) -> dict | None:
 def release_lock(path: Path, token: str) -> None:
     """Remove the lock file, but only when its content still carries `token`.
 
-    A no-op if the file is already gone, or if it now carries a different token -- e.g. another
-    process took the lock over as stale while we still held what we thought was ours; deleting
-    it then would release a lock we no longer own.
+    A no-op if the file is already gone. R1: releasing is a claim-then-decide, not a
+    check-then-unlink -- `os.replace(path, <path>.release.<token>)` atomically claims whatever
+    is currently there (a concurrent stale-lock takeover in `acquire_lock` can never land
+    between our read and our unlink, because there is no such window any more). Once claimed,
+    its content decides the outcome: if it still carries `token`, it is ours and gets unlinked;
+    otherwise -- another process took the lock over as stale while we still held what we
+    thought was ours -- it is not ours to delete, so it is given back under its original name.
     """
-    holder = _read_lock(path)
-    if holder is None or holder["token"] != token:
-        return
+    claim_path = path.with_name(f"{path.name}.release.{token}")
     try:
-        path.unlink()
+        os.replace(path, claim_path)
     except FileNotFoundError:
-        pass
+        return
+
+    holder = _read_lock(claim_path)
+    if holder is not None and holder["token"] == token:
+        claim_path.unlink(missing_ok=True)
+    else:
+        os.replace(claim_path, path)
 
 
 # --- atomic writes ------------------------------------------------------------------------

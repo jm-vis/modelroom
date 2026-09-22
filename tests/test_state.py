@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -152,6 +154,82 @@ def test_release_lock_with_a_foreign_token_does_not_delete(tmp_path: Path):
     release_lock(lock_path, "not-the-real-token")
 
     assert lock_path.exists()
+
+
+def test_release_lock_with_a_foreign_token_leaves_no_leftover_release_claim_file(tmp_path: Path):
+    # R1: release_lock's atomic claim (os.replace(lock, lock.release.<token>)) must always give
+    # the file back under its original name when the token does not match -- never leave the
+    # renamed claim file lying around.
+    lock_path = tmp_path / "modelroom.lock"
+    real_token = acquire_lock(lock_path, "fetch", RUN1)
+
+    release_lock(lock_path, "not-the-real-token")
+
+    assert lock_path.exists()
+    assert list(tmp_path.glob(f"{lock_path.name}.release.*")) == []
+    data = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert data["token"] == real_token
+
+
+_RACE_SCRIPT = """
+import sys, time
+from pathlib import Path
+from datetime import datetime
+from modelroom.state import acquire_lock, LockHeldError
+
+lock_path = Path(sys.argv[1])
+go_path = Path(sys.argv[2])
+now = datetime.fromisoformat(sys.argv[3])
+
+while not go_path.exists():
+    time.sleep(0.001)
+
+try:
+    won_token = acquire_lock(lock_path, "fetch", now)
+    print(f"acquired:{won_token}")
+except LockHeldError:
+    print("held")
+"""
+
+
+def test_acquire_lock_stale_takeover_is_exclusive_across_real_processes(tmp_path: Path):
+    # R1: two real processes race the takeover of the same stale lock. The old
+    # write-then-reread implementation could let both see their own token (a race between one
+    # process's os.replace and its own re-read, with the other process's replace landing in
+    # between); the atomic rename-based claim must never let more than one process win.
+    script_path = tmp_path / "race_acquire.py"
+    script_path.write_text(_RACE_SCRIPT, encoding="utf-8")
+    stale_started = (RUN1 - timedelta(hours=3)).isoformat()
+
+    for i in range(5):
+        lock_path = tmp_path / f"race-{i}.lock"
+        go_path = tmp_path / f"go-{i}"
+        lock_path.write_text(
+            json.dumps({"pid": 999999, "command": "fetch", "started_at": stale_started, "token": "stale-token"}),
+            encoding="utf-8",
+        )
+
+        procs = [
+            subprocess.Popen(
+                [sys.executable, str(script_path), str(lock_path), str(go_path), RUN1.isoformat()],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            for _ in range(2)
+        ]
+        go_path.write_text("go", encoding="utf-8")
+        outputs = [proc.communicate(timeout=10)[0].strip() for proc in procs]
+
+        acquired = [line for line in outputs if line.startswith("acquired:")]
+        held = [line for line in outputs if line == "held"]
+        assert len(acquired) == 1, f"round {i}: expected exactly one 'acquired', got {outputs!r}"
+        assert len(held) == 1, f"round {i}: expected exactly one 'held', got {outputs!r}"
+
+        winner_token = acquired[0].split(":", 1)[1]
+        data = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert data["token"] == winner_token
+        # no leftover claim files from either process's takeover attempt
+        assert list(tmp_path.glob(f"{lock_path.name}.stale.*")) == []
 
 
 def test_lock_is_released_after_an_exception_in_the_caller(tmp_path: Path):

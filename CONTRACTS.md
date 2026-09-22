@@ -773,19 +773,39 @@ own `fetch` runs, exactly as `AGENTS.md` already scoped them.
 
 A plain JSON object, `{"pid": <int>, "command": <str>, "started_at": <ISO 8601 UTC>, "token":
 <str>}`, written by `modelroom/state.py::acquire_lock` before any package command (today, only
-`fetch`) does anything else, and removed by `release_lock` in a `finally` block regardless of
-how the command ends. `acquire_lock` creates the file with `os.open(path, O_CREAT | O_EXCL |
-O_WRONLY)` -- one atomic syscall, never a `path.exists()` check followed by a separate write,
-which would leave a window two concurrent processes could both pass through (fix-round 1,
-F1). A lock younger than two hours blocks the new run immediately with `LockHeldError` -- this
-project never waits for a lock, it fails fast with a message naming the holder's pid, command
-and start time. A lock at or beyond two hours, or one whose content cannot be parsed, is
-treated as abandoned by a crashed process and taken over: the taking-over process writes its
-own content (including a fresh random `token`) and re-reads the file after `os.replace`, only
-proceeding when that content is still its own -- otherwise another process won the same
-takeover race and this one raises `LockHeldError` instead. `acquire_lock` returns the `token`
-it wrote; `release_lock(path, token)` removes the file only when its current content still
-carries that exact `token`, so a caller can never delete a lock it no longer holds.
+`fetch`) does anything else, and removed by `release_lock` regardless of how the command ends
+(the caller wraps it in a `finally` block). `acquire_lock` creates the file with
+`os.open(path, O_CREAT | O_EXCL | O_WRONLY)` -- one atomic syscall, never a `path.exists()`
+check followed by a separate write, which would leave a window two concurrent processes could
+both pass through (fix-round 1, F1). A lock younger than two hours blocks the new run
+immediately with `LockHeldError` -- this project never waits for a lock, it fails fast with a
+message naming the holder's pid, command and start time.
+
+**Stale takeover (fix-round 2, R1).** A lock at or beyond two hours, or one whose content cannot
+be parsed, is treated as abandoned by a crashed process and taken over by *claiming* it first:
+`os.replace(path, <path>.stale.<token>)` atomically renames the existing file away. Of two
+processes racing the same stale file, only one rename can ever succeed -- the loser gets
+`FileNotFoundError` and loops back to retry the `O_EXCL` create from the top (finding the
+winner's now-young lock and raising `LockHeldError`), so the claim step itself can never be won
+twice. Only the process that won the claim then creates the lock fresh with `O_CREAT | O_EXCL`
+and unlinks the claimed file; if that create itself loses a race to a third party, the loop
+retries, capped at three attempts before raising `LockHeldError`. This replaces fix-round 1's
+"write our content, then re-read to check whose token survived" takeover: that approach had a
+real window in which two processes could each see their own token when the other's write landed
+between this process's own write and its re-read (there is no atomicity between a write and a
+later read of the same file), so both would return success while only one had actually written
+the content now on disk -- measured directly on Windows as an intermittent `PermissionError`
+when both processes' `os.replace` calls raced. An atomic rename has no such window. `acquire_lock`
+returns the `token` it wrote.
+
+`release_lock(path, token)` is symmetric: it claims whatever is currently at `path` with
+`os.replace(path, <path>.release.<token>)` (a no-op if the file is already gone), then decides
+from the claimed content -- carries `token` -> unlink it; otherwise (another process took the
+lock over as stale while we still held what we thought was ours) it is not ours to delete, so it
+is given back under its original name with `os.replace(<claim>, path)`. This is a claim-then-
+decide, not fix-round 1's check-then-unlink, which had the same kind of window: a takeover could
+land between the read and the unlink, and the unlink would then delete a lock this process no
+longer owns.
 
 **Ordering (fix-round 1, F13):** `fetch_with_config` checks the existing snapshot's
 `schema_version` *before* calling `acquire_lock` at all -- an unsupported version exits `3`
@@ -878,6 +898,23 @@ the request; the fetcher in progress catches it exactly like any other failure a
 *current* area `incomplete` with that message. Areas already completed before the budget ran
 out keep their results.
 
+**Checked before each base model and before each area (fix-round 2, R4).**
+`modelroom/fetch.py::run_fetch` reads `budgeted.remaining` before starting `fetch_base_model_meta`
+for the next base model *and* before starting each of that base model's own areas -- not only
+after a base model finishes. Before R4, the budget was only re-checked once a base model had
+already finished all its areas, so a budget already at zero at the very start of the run (or one
+that ran out partway through a base model's own areas) still let `fetch_base_model_meta` or a
+fetcher be called at least once more: `BudgetedTransport` would then raise
+`BudgetExhaustedError` for that call, which `fetch_base_model_meta` (never raises by contract,
+see below) or the fetcher in progress would catch and silently resolve into a fresh, budget-
+starved "unknown"/empty result -- overwriting a real previous reading, or recording a bare
+`"budget exhausted"` transport error instead of the `"budget exhausted before this area was
+started"` message a caller expects for an area that was never actually attempted. With the
+pre-check in place, a base model or area the budget has already run out for never calls into the
+transport at all, so it always gets exactly the `"budget exhausted before this area was
+started"` outcome (below), whether the budget ran out before this run even reached that base
+model or between two of that same base model's own areas.
+
 **A base model this run never even started reading** (fix-round 1, F9: the budget ran out
 before its turn came up in the family/base-model loop) is different from one that was
 *attempted* and ran out mid-area: `modelroom/fetch.py::run_fetch` stops calling
@@ -891,10 +928,19 @@ read them*; a base model the run never reached is the one exception, and keeps i
 spec. A base model that *was* attempted and merely ran out of budget mid-area still gets a
 fresh spec from whatever `fetch_base_model_meta` managed to read, exactly as before.
 
-A redirect chain `modelroom/http.py::UrllibTransport` follows (F10, see "Redirects" in the
-`http.py` module docs) costs one request per hop; `BudgetedTransport` charges every hop, not
-just the one call made into it, so a chain can overshoot the budget by at most its own length --
-documented, not eliminated, since the hop count is only known after the chain is followed.
+**Redirect chains are booked hop by hop (fix-round 2, R5, superseding F10).** F10 had
+`UrllibTransport` follow a redirect chain internally and report how many requests it cost via
+`Response.requests_made`, with `BudgetedTransport` charging the extra hops *after* the call
+already returned -- so a chain could overshoot the budget by up to its own length, and a chain
+that failed partway through was never booked for the hops it did make. R5 inverts the
+composition instead: `UrllibTransport` makes exactly one request per call and returns a 3xx
+exactly like any other status; `modelroom/http.py::RedirectingTransport(inner)` is what follows
+a chain, calling `inner` once per hop (up to `MAX_REDIRECTS = 5` hops, the first request already
+counting as hop 1; more hops raise `RuntimeError` before the hop that would exceed the limit is
+ever made). `run_fetch` composes `RedirectingTransport(BudgetedTransport(transport, budget))` --
+`BudgetedTransport` as the *inner* layer -- so every hop of a chain arrives at the budget check
+as its own separate call, checked and booked (or raising `BudgetExhaustedError`) before it is
+made, failure paths included, never only after the fact.
 
 ### Merge rule (building this run's `Snapshot`)
 
@@ -956,6 +1002,16 @@ still decides whether it actually resolves `"approved"` (the content still has t
 longer active. `merge_snapshot` needed no change for this: the freshly built package already
 carries the right `approval`/`provenance` by the time it reaches the merge.
 
+**Same base model required (fix-round 2, R3).** `package_identity_key` is only
+`(source, repo|ollama_name, filename-or-tag)` -- it says nothing about which base model the
+package belongs to. The carry-forward is therefore only performed when
+`previous.base_model_hf_repo == stub.base_model_hf_repo` in addition to the identity match:
+the same packager repo (or the same Ollama tag) reassembled under a *different* base model --
+a family reconfigured to a new `hf_repo`, or two base models that happen to share a packager
+repo -- must never inherit an approval that was never given for it. When the base model
+differs, the approval is not carried forward at all, not even attached to the new package for
+history, since it never belonged to that package's lineage in the first place.
+
 ### `parameters_b` when Hugging Face has no answer this run
 
 **Rewritten in fix-round 1 (F11).** `BaseModelSpec.parameters_b` is `float | None`: `None`
@@ -973,6 +1029,12 @@ budget" above, F9) rather than going through this fallback at all. Every consume
 sections below cannot run without a real number to compare against. Reading the real count
 from a packager's GGUF metadata (`gguf.total` in a Hugging Face model-info response) instead of
 only the publisher's `safetensors.total` is left for a later work package.
+
+**Fix-round 2 (R6), no migration.** A snapshot written before this change may still carry the
+placeholder `1.0` for a base model whose parameter count Hugging Face does not expose; the
+carry-over rule would keep it. Rebuild such a snapshot once (delete `modelroom.json`, run
+`fetch`) -- there is no automatic migration. No migration code was written: the package is
+unreleased and the only existing snapshot is the operator's own, which will be rebuilt.
 
 ### Ollama packages: files and `default_context`
 
