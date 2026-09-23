@@ -15,6 +15,18 @@ consumer build against the same expectations.
 - Producers validate before they write. A file on disk that does not validate is a bug in the
   producer, not something readers repair.
 
+## Language standard
+
+Every field value, message and paragraph in this file is US English and uses the word list in
+`AGENTS.md`, section "Language standard": `latest`, `legacy` (with its `successor`) and
+`unknown` for where a model stands in its family; `measured`, `entered` and `computed` for
+where a value came from; `publisher`, `listed packager` and `other` for who owns a repository,
+which is a class and never a verdict; `unknown` for a fact with no evidence behind it;
+`not comparable` for measurements taken under different scenarios. Schema names, field names
+and literal values are contract: they are never changed for a language reason, so a value like
+`unified_memory` keeps its spelling even where the prose around it is rewritten.
+`tests/test_language_standard.py` holds the rule in executable form.
+
 ## The three persisted forms
 
 | Form | File | Written by | Read by |
@@ -56,7 +68,7 @@ second line of defense for callers that build one another way.
 ## Identity
 
 Package identity is the repository identifier as the registry spells it (`hf_repo` for
-Hugging Face, `ollama_base` plus tag for Ollama). The package never normalises, canonicalises
+Hugging Face, `ollama_base` plus tag for Ollama). The package never normalizes, canonicalizes
 or merges model names on its own; whoever integrates it maps identities on their side. Every
 recorded fact is bound to the revision it was observed at: the commit SHA on Hugging Face,
 the manifest digest on Ollama.
@@ -141,7 +153,7 @@ One publisher base model that packagers build GGUF/tensor packages from.
 | `repo_aliases` | `list[str]` | repo *names*, non-empty, never `owner/name` | further exact packager repo names that count as this base model |
 | `ollama_base` | `str \| None` | both set or both `None` with `ollama_tag` | the Ollama library model name, when one exists |
 | `ollama_tag` | `str \| None` | both set or both `None` with `ollama_base` | the Ollama library tag naming this base model's size |
-| `publisher` | `str` | -- | the organisation that trained the model |
+| `publisher` | `str` | -- | the organization that trained the model |
 | `parameters_b` | `float \| None` | `None`, or `> 0` | parameter count, in billions; `None` means not measured this run and no previous reading exists (fix-round 1, F11) |
 | `architecture` | `Architecture` | -- | the transformer shape, from the publisher's `config.json` |
 
@@ -225,7 +237,7 @@ and never take part in quantization parsing or shard-completeness.
 
 ### Approval
 
-A human decision that a specific package content is trustworthy, despite what its metadata
+A human decision that vouches for a specific package content, despite what its metadata
 says. An approval is bound to the exact content it was given for; once that content moves on
 (a new commit, a new manifest digest) the approval is void and `decide_provenance` falls back
 to the metadata rules, never a blanket `metadata_ok`.
@@ -1244,7 +1256,7 @@ unreleased and the only existing snapshot is the operator's own, which will be r
 An Ollama manifest's weight layer(s) become one `PackageFile` per `application/vnd.ollama.
 image.model` layer (role `weights`, the registry's own digest, `format="gguf"`). A
 tensor-only manifest (only `application/vnd.ollama.image.tensor` layers, no `.image.model`
-layer -- an MLX-style build) can carry hundreds of per-tensor layers; rather than modelling
+layer -- an MLX-style build) can carry hundreds of per-tensor layers; rather than modeling
 one `PackageFile` per tensor, `modelroom/ollama.py` aggregates them into a single synthetic
 file (summed size, no digest, `format="tensor"`), since a tensor package is always
 `("unresolved", "format")` regardless of its individual tensor layout, which is not part of
@@ -2119,7 +2131,7 @@ publisher's own page `https://huggingface.co/<publisher>` or one of its collecti
 page is no evidence), and
 `latest_checked`, the date the maintainer confirmed it. Both are set exactly when `latest` is
 true. `latest` is never derived from a number, a line or a family: a newer version number in
-the same line does not make an older model `legacy`, only an explicit `successor` does. `Catalog.age_of(hf_repo)` returns `latest`, `legacy` with its successor, or
+the same line does not make an earlier model `legacy`, only an explicit `successor` does. `Catalog.age_of(hf_repo)` returns `latest`, `legacy` with its successor, or
 `unknown`. A model with a successor is never `latest`; successors stay under the family's
 publisher and never form a cycle, within a family or across families; family names and
 `hf_repo` are unique across the catalog.

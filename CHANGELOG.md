@@ -16,11 +16,20 @@ All notable changes to this project are documented in this file. The format foll
 - `modelroom migrate --config <file>`: moves schema-1 hardware profiles and configuration to
   schema 2 under the lock, keeps `*.v1.bak` backups, and says `nothing to do` on a second run.
 - `run_fetch` accepts a `RequestBudget` shared with the caller's own requests.
+- Language standard (`AGENTS.md`, "Language standard"): US English and one word per idea, with
+  `tests/test_language_standard.py` as the guard over every module under `modelroom/` and the
+  prose files. It reports British spellings from a fixed list, a model's age stated as a
+  comparison (`older`, `newer`, `outdated` -- the status is `latest`, `legacy` or `unknown`), a
+  verdict on a packager (`untrusted`, `trustworthy` -- only the owner class is stated) and
+  German, and carries a reasoned exception list for text being changed elsewhere.
 
 ### Changed
 
 - Configuration schema 2: `repos`, `[machines.<name>].profile`, `[defaults]`, `[updates]`,
   `[guided]`; `families` may be empty. Schema 1 still reads; the shipped example is schema 2.
+- Prose converted to the language standard in `AGENTS.md`, `README.md`, `CONTRACTS.md` and
+  `modelroom/contracts.py`: US spellings, and the `Approval` shape described as a human
+  vouching for an exact content. No schema name, field name or literal value changed.
 
 ## [0.1.0] - 2026-09-23
 

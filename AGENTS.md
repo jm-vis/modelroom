@@ -16,11 +16,39 @@ are versioned contracts (`CONTRACTS.md`), layout and fit rules may still change.
 Python (3.11 or newer), because the catalog logic and Pydantic contracts it integrates with are
 Python and the run has to be platform neutral. Dependencies are kept to the standard library
 plus `pydantic`; `llmfit` is an external tool called as a subprocess, never vendored. Everything
-in this repository is English: identifiers, comments, commit messages, documentation.
+in this repository is English; the next section says which English, and which words.
 
 Package manager is `uv`. `uv.lock` is committed and is the truth for dependency versions;
 install with `uv sync --frozen`. To raise a dependency: `uv lock --upgrade-package <name>`,
 run the tests, commit the lock.
+
+## Language standard
+
+**US English**, everywhere: identifiers, messages, docstrings, comments, commit messages,
+documentation. A British spelling is a finding, not a style choice -- write `color`,
+`behavior`, `initialize`, `optimize`, `normalize`, `center`, `catalog`, `analyze`, `favor`,
+`license` (noun and verb alike), `modeling`, `labeled`. No German ever reaches a user of the
+package, so none of it is written here either.
+
+One word per idea, so that a message, a field value and a paragraph of documentation say the
+same thing in the same way:
+
+| Write | For | Never |
+|---|---|---|
+| `latest`, `legacy` (with its `successor`), `unknown` | where a model stands in its family | `older`, `newer`, `outdated` |
+| `measured`, `entered`, `computed` | where a value came from | "detected", "estimated", "real" |
+| `publisher`, `listed packager`, `other` | who owns a repository | `untrusted`, `trustworthy`, or any other verdict on a packager; only the class is stated |
+| `unknown` | a fact with no evidence behind it | an empty cell, `n/a`, or a plausible guess |
+| `not comparable` | two measurements from different scenarios | "slower", "worse" |
+| `display adapter only` | a GPU that is present but cannot carry a fit | "no GPU" |
+| `none known` | no Ollama name is mapped to this package | "missing", "not available" |
+
+An age statement is always positive evidence about one model (a successor named at the
+publisher's repository, or the shipped catalog), never a comparison of two version numbers.
+
+`tests/test_language_standard.py` is this section in executable form: it reads every module
+under `modelroom/` and the prose files, and names file, line, word and replacement. Its
+exception list carries a reason per entry and has to shrink, never grow quietly.
 
 ## Working rules
 
@@ -51,7 +79,7 @@ This repository is public. Nothing operator-specific belongs in it:
 
 - No secrets, ever. Not in code, not in tests, not in fixtures, not in the history.
 - No personal names, no e-mail addresses, no absolute paths from anyone's machine. The only
-  organisation named is the maintainer, in `README.md`, `LICENSE` and `pyproject.toml`.
+  organization named is the maintainer, in `README.md`, `LICENSE` and `pyproject.toml`.
 - No references to an internal workspace, its folder layout, its personas or its chronicle.
   `tests/test_public_hygiene.py` enforces a negative list over every tracked file and runs
   from the git hooks in `.githooks/`.
@@ -86,7 +114,8 @@ genre folder carries a `README.md` index with one line per entry. `docs/README.m
 Attack surface of this tool: outbound HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`,
 HTTP to a local Ollama daemon, a subprocess call to `llmfit`, and file writes under the
 configured state directory. No user-facing web surface, no uploads, no HTML rendering of
-untrusted input. The tests therefore have to prove, with a deliberately broken input each:
+whatever a registry returns. The tests therefore have to prove, with a deliberately broken
+input each:
 
 - a configuration that points the state directory outside its own folder tree is rejected
   before anything is written;

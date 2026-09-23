@@ -325,7 +325,7 @@ class PackageFile(BaseModel):
 
 
 class Approval(BaseModel):
-    """A human decision that a specific package content is trustworthy, despite its metadata."""
+    """A human decision that vouches for a specific package content, despite its metadata."""
 
     model_config = ConfigDict(extra="forbid")
 

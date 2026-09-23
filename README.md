@@ -104,7 +104,7 @@ VRAM minus its reserve, or with its RAM minus its reserve when it does not fit t
 
 What it does not say: the class is arithmetic, not a measurement. It makes no statement about
 tokens per second, output quality or whether a runtime actually loads the package. It is
-labelled "fit (computed, v1)" in the output for that reason.
+labeled "fit (computed, v1)" in the output for that reason.
 
 ## Limits of fit v1
 
@@ -114,7 +114,7 @@ labelled "fit (computed, v1)" in the output for that reason.
   `no recommendation: <reason>` instead of guessing a package.
 - Only complete GGUF packages are judged; other formats are `unknown`.
 - A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
-- Unified memory is not modelled. The profile records llmfit's `unified_memory` flag, but the
+- Unified memory is not modeled. The profile records llmfit's `unified_memory` flag, but the
   fit treats the reported VRAM and RAM as two separate pools. A result for such a machine has
   not been validated.
 
