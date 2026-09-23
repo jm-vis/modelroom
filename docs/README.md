@@ -25,4 +25,4 @@ docs/rfc/  docs/adr/  docs/plans/  docs/slo/  docs/runbooks/  docs/postmortems/
 
 An ADR is immutable; a changed situation gets a new ADR that supersedes the old one.
 
-No entries yet.
+No entries yet. `assets/` holds the repository images (banner, social preview) and is not a genre.
