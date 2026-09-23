@@ -20,7 +20,7 @@ consumer build against the same expectations.
 | Form | File | Written by | Read by |
 |---|---|---|---|
 | Configuration | `modelroom.toml` (or a `Configuration` object) | the user | every command |
-| Snapshot | `<state>/modelroom.json` | `fetch` | `render`, `check` |
+| Snapshot | `<state>/modelroom.json` | `fetch` | `render` (and any operator-side freshness check) |
 | Hardware profile | `<state>/hardware/<machine>.json` | `hardware`, on that machine | `render` |
 
 Runtime-only files in the state directory (`modelroom.lock`, `run-status.json`, `*.tmp`) are
@@ -63,7 +63,7 @@ it is the tag part of `ollama_name` after the colon.
 | Code | Meaning |
 |---|---|
 | `0` | success: every fetch area is `complete` (`render`: the document was written, even when its rating source failed) |
-| `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first writes nothing |
+| `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first leaves the snapshot, the hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated, because the lock is taken before the staleness checks (`cli.py`) |
 | `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration; or a required external tool (`llmfit`) is missing or below the minimum version |
 | `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version`, is not valid JSON, or does not match its model (fix-round 5, P2-3: `cli.py`'s own `_read_snapshot`/`_read_hardware_snapshot` catch `json.JSONDecodeError`/pydantic `ValidationError` at every load site and name the file in the message, the same exit code as an unsupported `schema_version`) |
 

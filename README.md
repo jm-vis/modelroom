@@ -9,44 +9,128 @@ families you care about:
    the base models and packagers you allow, and records every package with its size, format,
    quantization and the exact revision it was seen at.
 2. **Which of them fit a given machine?** It measures a machine with
-   [llmfit](https://github.com/AlexsJones/llmfit) and computes, per package and context
-   length, whether weights plus KV cache plus a configured reserve fit into the memory that
-   machine actually has.
+   [llmfit](https://github.com/AlexsJones/llmfit) and computes, per package, whether weights
+   plus KV cache plus a configured reserve fit into the memory that machine has.
 
-The result is a JSON snapshot you can commit and a rendered Markdown table with one fit
-column per configured machine. Nothing in the tool is tied to a specific operator: you bring
-a configuration file with your families, packagers and machines, run it on the machine you
-want to size, and keep the snapshot wherever you keep your notes.
+The result is a JSON snapshot, one hardware profile per machine and a rendered Markdown table
+with one fit column per configured machine. Nothing in the tool is tied to a specific
+operator: you bring a configuration file with your families, packagers and machines, run it
+on the machine you want to size, and keep the files wherever you keep your notes.
 
 ## Status
 
-Pre-alpha. The repository holds the scaffold, the contract discipline and the hygiene tests.
-Contracts, fetchers, the hardware probe and the renderer follow in that order; see
-`CHANGELOG.md` for what has landed.
+Alpha, version 0.1.0, no release yet (everything in `CHANGELOG.md` is still under
+"Unreleased"). The three commands `fetch`, `hardware` and `render` work end to end; the data
+shapes are versioned contracts (see `CONTRACTS.md`). Expect changes to the rendered layout and to the fit rules before a first
+release. `CHANGELOG.md` lists what has landed.
 
-## Planned usage
+## Requirements
+
+- Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
+- `llmfit` 1.1.16 or newer on `PATH`, for `hardware` only. The minimum is set in the
+  configuration (`[llmfit] min_version`).
+- Internet access for `fetch` only. `hardware` also reads a local Ollama daemon at
+  `http://127.0.0.1:11434` when one is running; without it the profile records the installed
+  models as unknown and the command still succeeds.
+
+## Quick start
+
+From a clone of this repository, after `uv sync --frozen`:
 
 ```bash
-uv tool install modelroom      # or: pipx install modelroom
-llmfit --version               # 1.1.16 or newer is required for the hardware probe
-
-modelroom hardware --machine laptop --config modelroom.toml
-modelroom fetch    --config modelroom.toml
-modelroom render   --config modelroom.toml
-modelroom check    --config modelroom.toml
+cp modelroom.example.toml modelroom.toml
+uv run --frozen modelroom hardware --config modelroom.toml --machine workstation
+uv run --frozen modelroom fetch --config modelroom.toml --machine workstation
+uv run --frozen modelroom render --config modelroom.toml
+cat docs/models.md
 ```
 
-The configuration file names your model families with their exact base models, the
-packagers you trust, your machines with their memory reserves, and where the snapshot and
-the rendered table go. Working offline is a first-class case: a snapshot brought from
-elsewhere is a pure catalog without any machine state, and `hardware` adds the local
-measurement on site.
+1. The example configuration names three families, the packagers and publishers it allows,
+   two machines (`workstation`, a writer, and `inference-server`) and two paths. Relative
+   paths resolve against the configuration file's own directory, never the current working
+   directory. Edit the copy for your own models and machines.
+2. `hardware` measures the machine it runs on and writes `state/hardware/<machine>.json`.
+   The machine only has to be configured. Run it once on every machine you want to size.
+3. `fetch` queries the registries and writes the snapshot `state/modelroom.json`. The named
+   machine has to be marked `writer = true`.
+4. `render` reads the snapshot and every machine's hardware profile and writes the Markdown
+   table to `paths.markdown` (`docs/models.md` in the example). It takes no `--machine`.
+5. Read the table. Only active, complete packages with `metadata_ok` or `approved`
+   provenance are shown. For each base model and packager, every machine picks the largest
+   quantization that fits it `good` or better (else the smallest package it could judge).
+   The table shows one row per picked package and one `fit (computed, v1): <machine>`
+   column per configured machine.
+
+`--config` is required by every command; there is no default path.
+
+## Files
+
+Under `paths.state`:
+
+| File | Written by | Kind |
+|---|---|---|
+| `modelroom.json` | `fetch` | snapshot, versioned contract |
+| `hardware/<machine>.json` | `hardware`, on that machine | hardware profile, versioned contract |
+| `modelroom.lock` | `fetch`, `render` | runtime only, not a contract |
+| `run-status.json` | `fetch` | runtime only, not a contract |
+
+The snapshot and the hardware profiles carry a `schema_version` and can be kept under version
+control. The lock file and `run-status.json` are operating data of one deployment. The lock
+file is never deleted: the lock is a kernel lock on it, which the operating system releases
+when its holder exits, and a second `fetch` or `render` against the same state directory
+stops at it instead of waiting.
+
+## What the fit class means
+
+For a judged fit, the cell reads `<class> (<mode>, need <n> / pool <n> GiB)`. The class is
+computed from a memory formula: weights plus 10 %, plus a 16-bit KV cache for the package's stated context
+(8192 when the package states none), plus 0.5 GiB. The result is compared with the machine's
+VRAM minus its reserve, or with its RAM minus its reserve when it does not fit the GPU.
+`perfect` needs at most 60 % of that pool, `good` 85 %, `marginal` 98 %; anything above is
+`too_tight`. Off the GPU the class is capped at `good`. The full rule is in `CONTRACTS.md`,
+"Fit contract v1".
+
+What it does not say: the class is arithmetic, not a measurement. It makes no statement about
+tokens per second, output quality or whether a runtime actually loads the package. It is
+labelled "fit (computed, v1)" in the output for that reason.
+
+## Limits of fit v1
+
+- Only dense transformer architectures are judged. A hybrid or mixture-of-experts
+  architecture comes back `unknown` with the reason "architecture not covered by v1". When no
+  machine can judge any package of a group, the table shows one row with
+  `no recommendation: <reason>` instead of guessing a package.
+- Only complete GGUF packages are judged; other formats are `unknown`.
+- A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
+- Unified memory is not modelled. The profile records llmfit's `unified_memory` flag, but the
+  fit treats the reported VRAM and RAM as two separate pools. A result for such a machine has
+  not been validated.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | success: every fetch area complete; `hardware` measured and wrote the profile (also when no local Ollama daemon answered); `render` wrote the document (also when its rating source failed) |
+| `1` | at least one fetch area incomplete (complete areas are still written); or another process holds the lock; or this `fetch` is not newer than the stored snapshot; or `render` has no snapshot; or the existing document was rendered from a newer snapshot. Every case but the first leaves the snapshot, hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated |
+| `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); or `llmfit` is missing, older than the minimum, fails, or returns invalid output |
+| `3` | an unsupported `schema_version` in the configuration, the snapshot or a hardware profile; or a snapshot or hardware profile that is not valid JSON or does not match its model |
+
+Source: `CONTRACTS.md`, "Exit codes", and `AGENTS.md`.
+
+## Network access
+
+Requests go only to `huggingface.co`, `ollama.com` and `registry.ollama.ai` over HTTPS and to
+the local Ollama daemon at `127.0.0.1:11434` over HTTP; every redirect and pagination link is
+checked against the same list before it is followed. `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` from the environment are honored, but a proxy only changes how an allowed request
+travels, never which targets are allowed. Details: `CONTRACTS.md`, "Transport security and
+proxying".
 
 ## Language choice
 
-Python, because the catalog logic, canonicalisation and Pydantic contracts it has to
-integrate with are Python, and the run has to be platform neutral (Windows, Linux, macOS).
-Everything in this repository, from identifiers to documentation, is English.
+Python, because the catalog logic and Pydantic contracts it integrates with are Python, and the
+run has to be platform neutral (Windows, Linux, macOS). Everything in this repository, from
+identifiers to documentation, is English.
 
 ## Contributing and conventions
 
@@ -56,10 +140,10 @@ requests are welcome.
 
 ## About
 
-ModelRoom is built and maintained by [VISCONSULT](https://vis-consult.eu), a consultancy
-in Germany that runs AI agents for its own work and for clients under EU data-protection
-rules. We use it to decide which models run on our own laptops and servers, and with clients
-to size on-premise deployments before anyone buys hardware.
+ModelRoom is built and maintained by [VISCONSULT](https://vis-consult.eu), a consultancy in
+Germany that runs AI agents for its own work and for clients under EU data-protection rules.
+We use it to decide which models run on our own laptops and servers, and with clients to size
+on-premise deployments before anyone buys hardware.
 
 ## License
 

@@ -8,7 +8,8 @@ ever appear) import this one and stay thin; the truth lives here.
 `modelroom` finds the local packages (GGUF and tensor builds) that exist for an allow-list of
 model families on Hugging Face and in the Ollama registry, and computes whether each package
 fits a measured machine. It is a command-line tool and a small library, published under MIT.
-Status: pre-alpha, scaffold and contract discipline in place.
+Status: alpha, no release yet; `fetch`, `hardware` and `render` work end to end, the data shapes
+are versioned contracts (`CONTRACTS.md`), layout and fit rules may still change.
 
 ## Stack and language choice
 
@@ -82,7 +83,7 @@ genre folder carries a `README.md` index with one line per entry. `docs/README.m
 
 ## Security, definition of done
 
-Attack surface of this tool: outbound HTTPS to `huggingface.co` and `registry.ollama.ai`,
+Attack surface of this tool: outbound HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`,
 HTTP to a local Ollama daemon, a subprocess call to `llmfit`, and file writes under the
 configured state directory. No user-facing web surface, no uploads, no HTML rendering of
 untrusted input. The tests therefore have to prove, with a deliberately broken input each:

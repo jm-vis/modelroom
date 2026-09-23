@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Documentation
+
+- README brought to the current state: status alpha, requirements, a five-command quick start
+  with the real flags (the planned `check` verb is gone), state files, the meaning and limits of
+  the fit class, exit codes and network access, each taken from `CONTRACTS.md`/`AGENTS.md`.
+
 ### Added
 
 - Render (AP5): the `modelroom render --config ...` command (`modelroom/cli.py`,
