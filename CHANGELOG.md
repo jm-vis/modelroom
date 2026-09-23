@@ -63,6 +63,19 @@ All notable changes to this project are documented in this file. The format foll
   package that used to reach `metadata_ok` on the tag alone is now `relation_unknown` until a
   human `Approval` says otherwise.
 
+### Fixed
+
+- `merge_snapshot`: a repository that moved from one base model to another between two runs
+  could end up deactivated under its old base model when the old base model's area was merged
+  after the new one; the stale step now leaves an identity alone that another area of the same
+  run has published, so the result no longer depends on area order.
+- `validate_hf_repo` (every `owner/name` in the contracts and the configuration) requires each
+  half to start with a letter or digit; `Qwen/..`, `../x` or `Qwen/-a` used to pass and became
+  path segments of the URLs this package builds.
+- A configuration file that is not valid UTF-8 is a `ConfigError` naming the path (exit 2)
+  instead of a traceback; a measurement file nested beyond what the JSON parser carries is listed
+  as unreadable instead of crashing the reader.
+
 ## [0.1.0] - 2026-09-23
 
 First release.

@@ -546,6 +546,8 @@ def load_config(path: Path) -> Configuration:
         raise ConfigError(f"{label}: config file not found") from exc
     except OSError as exc:
         raise ConfigError(f"{label}: cannot read config file: {exc}") from exc
+    except UnicodeDecodeError as exc:  # a ValueError, not an OSError: needs its own clause
+        raise ConfigError(f"{label}: config file is not UTF-8: {exc}") from exc
     return config_from_text(text, path)
 
 

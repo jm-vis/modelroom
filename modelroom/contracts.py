@@ -25,7 +25,9 @@ HARDWARE_SCHEMA_VERSION = 1
 # fetch snapshot version independently of each other.
 HARDWARE_SCHEMA_RANGE: tuple[int, int] = (1, 2)
 
-_HF_REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
+# Each half starts with a letter or digit (the Hub's own rule): `Qwen/..`, `../x` or `Qwen/-a`
+# would otherwise pass the character class and become a path segment of a URL this package builds.
+_HF_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$")
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 _MANIFEST_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _APPROVAL_CONTENT_RE = re.compile(r"^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")

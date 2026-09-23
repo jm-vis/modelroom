@@ -419,7 +419,7 @@ def read_measurements(state_dir: Path, profile_id: str) -> MeasurementReadResult
     for path in sorted(folder.glob("*.json")):
         try:
             record = MeasurementRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, ValueError) as exc:  # ValueError: bad UTF-8/JSON, over-long integers, ValidationError
+        except (OSError, ValueError, RecursionError) as exc:  # ValueError: bad UTF-8/JSON, over-long integers, ValidationError; RecursionError: nesting beyond the parser
             result.unreadable.append((path, str(exc)))
             continue
         if record.measurement_id != path.stem or record.profile_id != profile_id:

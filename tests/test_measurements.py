@@ -306,6 +306,21 @@ def test_write_measurement_never_overwrites(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8")) == _record_model().model_dump(mode="json")
 
 
+def test_read_measurements_lists_a_file_nested_too_deep_for_the_json_parser_as_unreadable(tmp_path):
+    """`json.loads` raises `RecursionError` (neither `ValueError` nor `OSError`) at extreme
+    nesting; such a file is listed like any other broken one, never a crash of the reader."""
+    state = tmp_path / "state"
+    folder = state / "measurements" / PROFILE_ID
+    folder.mkdir(parents=True)
+    good = _record_model()
+    (folder / f"{good.measurement_id}.json").write_text(json.dumps(good.model_dump(mode="json")), encoding="utf-8")
+    depth = 100_000
+    (folder / "20260923T090000Z-22222222.json").write_text("[" * depth + "]" * depth, encoding="utf-8")
+    result = read_measurements(state, PROFILE_ID)
+    assert result.records == [good]
+    assert [p.name for p, _ in result.unreadable] == ["20260923T090000Z-22222222.json"]
+
+
 def test_read_measurements_lists_broken_and_misplaced_files_as_unreadable(tmp_path):
     state = tmp_path / "state"
     folder = state / "measurements" / PROFILE_ID

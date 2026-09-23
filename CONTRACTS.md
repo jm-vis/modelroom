@@ -149,7 +149,7 @@ One publisher base model that packagers build GGUF/tensor packages from.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `hf_repo` | `str` | `owner/name` | the publisher's exact Hugging Face repo, the base model's identity |
+| `hf_repo` | `str` | `owner/name`, each half starting with a letter or digit (`contracts.validate_hf_repo`, the one rule for every `owner/name` in this file) | the publisher's exact Hugging Face repo, the base model's identity |
 | `repo_aliases` | `list[str]` | repo *names*, non-empty, never `owner/name` | further exact packager repo names that count as this base model |
 | `ollama_base` | `str \| None` | both set or both `None` with `ollama_tag` | the Ollama library model name, when one exists |
 | `ollama_tag` | `str \| None` | both set or both `None` with `ollama_base` | the Ollama library tag naming this base model's size |
@@ -1183,7 +1183,10 @@ decision, never something this package decides on its own.
   not found this run is kept with `active=False` rather than deleted, so its history survives.
   A package's `observed_at` is carried over from `old` when the same package identity
   (`quantization.package_identity_key`) already existed; `last_seen` is always bumped to
-  `run_at`.
+  `run_at`. The identity key carries no base model, so a repository that moved from base
+  model A to base model B between two runs is "not found" by A's area and "found" by B's: the
+  stale step of an area never touches an identity that another area of this run has already
+  published, so the result is the same whichever area is processed first.
 - **An `incomplete` area** leaves every package that belonged to it in `old` completely
   untouched (not even `last_seen` moves) and records `status="incomplete"`, `error`, and the
   *old* `Area.last_success` (never bumped, since nothing was actually confirmed this run).

@@ -38,6 +38,7 @@ from modelroom.contracts import (
     architecture_from_hf_config,
     check_schema_version,
     load_hardware_snapshot,
+    validate_hf_repo,
     load_snapshot,
     shards_complete,
 )
@@ -912,3 +913,22 @@ def test_rating_rejects_an_extra_field():
     payload["extra_field"] = "nope"
     with pytest.raises(ValidationError):
         Rating.model_validate(payload)
+
+
+# --- validate_hf_repo: the one rule for every owner/name ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Qwen/Qwen3.5-9B", "unsloth/Qwen3.5-9B-GGUF", "ggml-org/gemma-3-4b-it-GGUF", "lmstudio-community/x", "a/b"],
+)
+def test_validate_hf_repo_accepts_real_repo_ids(value):
+    assert validate_hf_repo(value) == value
+
+
+@pytest.mark.parametrize("value", ["Qwen/..", "Qwen/.", "../x", "Qwen/-a", "-a/b", ".hidden/x", "Qwen", "Qwen/a/b", ""])
+def test_validate_hf_repo_rejects_a_path_segment_that_is_no_repo_id(value):
+    """Every one of these became a path segment of a URL this package builds; the Hub's own rule
+    is that each half starts with a letter or digit."""
+    with pytest.raises(ValueError, match="owner/name"):
+        validate_hf_repo(value)

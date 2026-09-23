@@ -707,6 +707,15 @@ def test_load_config_toml_syntax_error_raises_config_error(tmp_path):
         load_config(config_path)
 
 
+def test_load_config_file_that_is_not_utf8_raises_config_error_naming_the_path(tmp_path):
+    """`UnicodeDecodeError` is a `ValueError`, not an `OSError`: without its own clause it left
+    every command that reads the configuration as a traceback."""
+    config_path = tmp_path / "modelroom.toml"
+    config_path.write_bytes(b"schema_version = 2\n# \xff\xfe not UTF-8\n")
+    with pytest.raises(ConfigError, match=r"modelroom\.toml.*UTF-8"):
+        load_config(config_path)
+
+
 def test_load_config_wrong_schema_version_raises_schema_version_error_before_field_errors(tmp_path):
     config_path = tmp_path / "modelroom.toml"
     config_path.write_text(

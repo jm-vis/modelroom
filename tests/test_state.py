@@ -582,6 +582,36 @@ def test_merge_snapshot_complete_area_deactivates_a_package_that_disappeared():
     assert snapshot.areas[0].last_success == RUN2
 
 
+@pytest.mark.parametrize("order", ["moved-to first", "moved-from first"])
+def test_merge_snapshot_never_deactivates_a_package_another_area_published_this_run(order):
+    """A repository that moves from base model A to base model B between two runs, while A keeps
+    another target of the same owner: A's area no longer finds the moved package and would mark
+    it stale, but B's area published it this run. The result must not depend on the order of the
+    two areas (the identity key carries no base model)."""
+    shared_repo = "packager/Shared-GGUF"
+    moved = _hf_package(repo=shared_repo, filename="Nova-7B-Q4_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
+    kept = _hf_package(repo="packager/Nova-7B-GGUF", filename="Nova-7B-Q5_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
+    old = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[_base_model()], packages=[moved, kept])
+    reassigned = moved.model_copy(update={"base_model_hf_repo": "other/Nebula-9B"})
+    area_b = AreaOutcome(
+        source="huggingface", base_model_hf_repo="other/Nebula-9B", packager="packager", status="complete", error=None, packages=[reassigned]
+    )
+    area_a = AreaOutcome(
+        source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", error=None, packages=[kept]
+    )
+    outcomes = [area_b, area_a] if order == "moved-to first" else [area_a, area_b]
+    base_models = [_base_model(), _base_model(hf_repo="other/Nebula-9B", publisher="other", repo_aliases=[])]
+
+    snapshot = merge_snapshot(old, RUN2, outcomes, base_models)
+
+    shared = [p for p in snapshot.packages if p.repo == shared_repo]
+    assert len(shared) == 1
+    assert shared[0].base_model_hf_repo == "other/Nebula-9B"
+    assert shared[0].active is True
+    assert shared[0].last_seen == RUN2
+    assert shared[0].observed_at == RUN1
+
+
 def test_merge_snapshot_complete_area_keeps_observed_at_and_bumps_last_seen_for_a_still_present_package():
     old_package = _hf_package(repo="packager/Nova-7B-GGUF", filename="Nova-7B-Q4_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
     old = Snapshot(

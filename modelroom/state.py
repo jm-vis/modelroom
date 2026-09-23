@@ -425,6 +425,11 @@ def merge_snapshot(
                 )
             for stale_key in old_keys_in_area - new_keys:
                 previous = old_packages_by_key[stale_key]
+                current = result_packages.get(stale_key)
+                if current is not None and _area_key_of_package(current) != area_key:
+                    # Another area published this identity this run (the repository moved to a
+                    # different base model); its fresh record wins regardless of area order.
+                    continue
                 if previous.active:
                     result_packages[stale_key] = previous.model_copy(update={"active": False})
             new_areas.append(
