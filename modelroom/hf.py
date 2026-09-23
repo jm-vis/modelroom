@@ -5,14 +5,14 @@ Two independent operations, matching CONTRACTS.md's area semantics:
 - `fetch_base_model_meta` reads one base model's publisher repo (model info + `config.json`)
   and always returns a result -- a repo that cannot be reached resolves to an unknown
   architecture and no parameter count, it never raises and never affects package fetching.
-- `fetch_hf_area` covers one (base model, packager-owner) area: it probes every candidate
-  repo name for that owner, assembles a `Package` per quantization group found in each
-  candidate's file tree, and only ever ends `incomplete` on a genuine failure (a status other
-  than 200/404/401, a network error, an unparseable response, a tree entry or weight-file size
-  in an unexpected shape, or the run's request budget running out) -- a candidate repo that
-  simply does not exist is not an error. Package assembly runs inside the same error handling
-  as the tree fetch itself, so a shape problem in one candidate ends only this area, never the
-  whole run (F3/F4).
+- `fetch_hf_area` covers one (base model, packager-owner) area: it works through every package
+  target of that owner (`config.package_targets`, grouped by owner with `target_owners`),
+  assembles a `Package` per quantization group found in each target's file tree, and only ever
+  ends `incomplete` on a genuine failure (a status other than 200/404/401, a network error, an
+  unparseable response, a tree entry or weight-file size in an unexpected shape, or the run's
+  request budget running out) -- a target repo that simply does not exist is not an error.
+  Package assembly runs inside the same error handling as the tree fetch itself, so a shape
+  problem in one target ends only this area, never the whole run (F3/F4).
 
 Everything here is bound to the revision it was observed at, per CONTRACTS.md's identity
 rules: a repo's `sha` from its model-info response is threaded through to the tree fetch and
@@ -25,9 +25,8 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Sequence
 
-from .config import Configuration
 from .contracts import (
     Approval,
     Architecture,
@@ -75,22 +74,18 @@ class BaseModelMeta:
     architecture: Architecture
 
 
-def candidate_owners(config: Configuration, base_model: BaseModelSpec) -> list[str]:
-    """Every owner to probe for `base_model`'s packages: configured packagers, plus its own.
+def target_owners(targets: Sequence[str]) -> list[str]:
+    """The owners a base model's package targets name, each once, in the targets' own order.
 
-    A base model's own owner counts as a packager of its own models (CONTRACTS.md/AGENTS.md).
-    The result is filtered to `config.allowed_owners()` and de-duplicated, order preserved --
-    an owner outside that positive list is never returned, and therefore never fetched.
+    One area per owner, so this is the list `fetch.run_fetch` iterates. The targets come from
+    `config.package_targets`, the one set the collision validator, the fetch and provenance
+    share: the configured `packagers` and the base model's own owner crossed with the
+    `<name>-GGUF`/`repo_aliases` names, plus the owner-bound `repos` entries. An owner that
+    appears only through a `repos` entry is therefore fetched too -- a full `owner/name` in the
+    configuration is the user naming that one repository, not an open door for the owner's other
+    repositories, which the generated names never reach.
     """
-    own_owner = base_model.hf_repo.split("/", 1)[0]
-    allowed = config.allowed_owners()
-    seen: set[str] = set()
-    owners: list[str] = []
-    for owner in (*config.packagers, own_owner):
-        if owner in allowed and owner not in seen:
-            seen.add(owner)
-            owners.append(owner)
-    return owners
+    return list(dict.fromkeys(target.split("/", 1)[0] for target in targets))
 
 
 def fetch_base_model_meta(transport: Transport, hf_repo: str) -> BaseModelMeta:
@@ -176,18 +171,6 @@ def _valid_parameters_b(safetensors: object) -> float | None:
     return result if math.isfinite(result) and result > 0 else None
 
 
-def _candidate_repo_names(base_model: BaseModelSpec) -> list[str]:
-    base_name = base_model.hf_repo.split("/", 1)[1]
-    names = [f"{base_name}-GGUF", *base_model.repo_aliases]
-    seen: set[str] = set()
-    result: list[str] = []
-    for name in names:
-        if name not in seen:
-            seen.add(name)
-            result.append(name)
-    return result
-
-
 def _incomplete(base_model: BaseModelSpec, owner: str, error: str) -> AreaOutcome:
     return AreaOutcome(
         source="huggingface",
@@ -203,10 +186,21 @@ def fetch_hf_area(
     transport: Transport,
     base_model: BaseModelSpec,
     owner: str,
+    targets: Sequence[str],
     run_at: datetime,
     previous_by_key: dict[tuple[str, str, str], Package] | None = None,
 ) -> AreaOutcome:
-    """Fetch every candidate repo under `owner` for `base_model` and assemble their packages.
+    """Fetch every target of `base_model` that belongs to `owner` and assemble their packages.
+
+    `targets` is the base model's whole package target set (`config.package_targets`); this
+    area covers exactly those of them under `owner`, one after the other. The area is `complete`
+    only when every one of them was worked through -- a target that simply does not exist counts
+    as worked through -- and `incomplete` with the *first* genuine failure otherwise, which
+    leaves the owner's previous stock untouched (`state.merge_snapshot`). That is why a whole
+    owner is one area rather than one target: the merge identifies an area by
+    `(source, base_model, owner)` and, on `complete`, deactivates every package of that area it
+    does not contain, so two targets of one owner reported separately would deactivate each
+    other. The full set is also what `decide_provenance` checks a repository against.
 
     `previous_by_key` (F6, default `None`) maps a package identity key to that package as it
     stood in the previous snapshot; when a freshly assembled package shares its identity with
@@ -214,8 +208,7 @@ def fetch_hf_area(
     an approval bound to still-current content survives this fetch.
     """
     packages: list[Package] = []
-    for name in _candidate_repo_names(base_model):
-        repo = f"{owner}/{name}"
+    for repo in [target for target in targets if target.split("/", 1)[0] == owner]:
         try:
             info_response = transport("GET", f"{HF_API}/models/{repo}")
         except Exception as exc:
@@ -239,12 +232,21 @@ def fetch_hf_area(
         # downstream.
         if not _SHA1_RE.fullmatch(sha):
             return _incomplete(base_model, owner, f"{repo}: model info 'sha' is not a 40-hex commit sha: {sha!r}")
-        tags = info.get("tags") if isinstance(info.get("tags"), list) else []
+        # The relation the provenance check needs is declared in `tags` or in `cardData`; both
+        # arrive in this same model-info answer, so reading it costs no further request. They are
+        # passed on **exactly as the registry sent them**, never cleaned up: `check_relation` is
+        # what judges a shape the Hub does not publish, and turning a malformed `tags` into `[]`
+        # or a malformed `cardData` into `None` here would hide that judgement -- a repository the
+        # search shows as `metadata_conflict` would reach `metadata_ok` in the fetch.
+        tags = info.get("tags")
+        card_data = info.get("cardData")
 
         try:
             entries = _fetch_tree(transport, repo, sha)
             packages.extend(
-                _assemble_packages(repo, sha, base_model, tags, entries, run_at, previous_by_key or {})
+                _assemble_packages(
+                    repo, sha, base_model, tags, card_data, targets, entries, run_at, previous_by_key or {}
+                )
             )
         except BudgetExhaustedError as exc:
             # P3-12 (fix-round 5): CONTRACTS.md, "Request budget", promises the area's error is
@@ -416,7 +418,11 @@ def _assemble_packages(
     repo: str,
     sha: str,
     base_model: BaseModelSpec,
-    tags: list[str],
+    # `tags` and `card_data` are the registry's raw values, of whatever shape it sent; the
+    # relation check is what decides whether a shape is one the Hub actually publishes.
+    tags: object,
+    card_data: object,
+    targets: Sequence[str],
     entries: list[dict],
     run_at: datetime,
     previous_by_key: dict[tuple[str, str, str], Package],
@@ -450,7 +456,9 @@ def _assemble_packages(
             active=True,
         )
         stub, approvals = _carry_forward_approval(stub, previous_by_key)
-        provenance, unresolved_reason = decide_provenance(stub, base_model, tags, approvals)
+        provenance, unresolved_reason = decide_provenance(
+            stub, base_model, tags, approvals, hf_card_data=card_data, hf_targets=targets
+        )
         packages.append(_finalize(stub, provenance, unresolved_reason))
     return packages
 

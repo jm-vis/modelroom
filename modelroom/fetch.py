@@ -19,10 +19,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .config import BaseModelConfig, Configuration
+from .config import BaseModelConfig, Configuration, package_targets
 from .contracts import Architecture, BaseModelSpec, Package, Snapshot
 from .fetch_types import AreaOutcome
-from .hf import BaseModelMeta, candidate_owners, fetch_base_model_meta, fetch_hf_area
+from .hf import BaseModelMeta, fetch_base_model_meta, fetch_hf_area, target_owners
 from .http import DEFAULT_REQUEST_BUDGET, BudgetedTransport, RedirectingTransport, RequestBudget, Transport
 from .ollama import fetch_ollama_area
 from .quantization import package_identity_key
@@ -86,11 +86,19 @@ def run_fetch(
             base_model = _build_base_model_spec(base_model_config, meta, old_base_models_by_repo)
             base_models.append(base_model)
 
-            for owner in candidate_owners(config, base_model):
+            # AP9-B: one area per owner of this base model's package target set, never one per
+            # target -- `state.merge_snapshot` identifies an area by `(source, base_model,
+            # owner)` and, on `complete`, deactivates every package of that area it does not
+            # contain, so two targets of the same owner reported as two areas would deactivate
+            # each other's packages.
+            targets = package_targets(config, base_model_config)
+            for owner in target_owners(targets):
                 if budgeted.remaining <= 0:
                     area_outcomes.append(_budget_exhausted_hf_area(base_model, owner))
                     continue
-                area_outcomes.append(fetch_hf_area(redirecting, base_model, owner, run_at, previous_by_key))
+                area_outcomes.append(
+                    fetch_hf_area(redirecting, base_model, owner, targets, run_at, previous_by_key)
+                )
 
             if base_model.ollama_base and base_model.ollama_tag:
                 if budgeted.remaining <= 0:
@@ -173,7 +181,10 @@ def _budget_exhausted_areas(
     """F9: one `incomplete` `AreaOutcome` per area this run would have attempted, had the
     budget not already run out before this base model was ever reached.
     """
-    outcomes = [_budget_exhausted_hf_area(base_model, owner) for owner in candidate_owners(config, base_model)]
+    outcomes = [
+        _budget_exhausted_hf_area(base_model, owner)
+        for owner in target_owners(package_targets(config, base_model_config))
+    ]
     if base_model_config.ollama_base and base_model_config.ollama_tag:
         outcomes.append(_budget_exhausted_ollama_area(base_model))
     return outcomes

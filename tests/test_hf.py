@@ -14,9 +14,9 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from modelroom.config import Configuration
+from modelroom.config import Configuration, package_targets
 from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile
-from modelroom.hf import _MAX_TREE_PAGES, _files_from_tree, candidate_owners, fetch_base_model_meta, fetch_hf_area
+from modelroom.hf import _MAX_TREE_PAGES, _files_from_tree, fetch_base_model_meta, fetch_hf_area, target_owners
 from modelroom.http import Response
 from modelroom.quantization import package_identity_key
 
@@ -68,6 +68,14 @@ def _base_config(**overrides) -> dict:
     )
     defaults.update(overrides)
     return Configuration.from_dict(defaults)
+
+
+def _targets(base_model: BaseModelSpec, owner: str, *extra: str) -> list[str]:
+    """The package targets `config.package_targets` produces for `owner`: `<name>-GGUF` and the
+    aliases, plus any owner-bound `repos` entry a test adds explicitly."""
+    base_name = base_model.hf_repo.split("/", 1)[1]
+    names = dict.fromkeys([f"{base_name}-GGUF", *base_model.repo_aliases])
+    return [*(f"{owner}/{name}" for name in names), *extra]
 
 
 # --- fetch_base_model_meta --------------------------------------------------------------
@@ -215,26 +223,49 @@ def test_fetch_base_model_meta_missing_config_json_is_unknown_but_never_raises()
     assert meta.parameters_b == pytest.approx(9653104368 / 1e9)
 
 
-# --- candidate_owners --------------------------------------------------------------------
+# --- target_owners: the owners of a base model's package target set ------------------------
 
 
-def test_candidate_owners_is_configured_packagers_plus_the_base_models_own_owner():
-    config = _base_config()
-    owners = candidate_owners(config, _qwen35_9b())
+def _config_targets(config: Configuration) -> list[str]:
+    base_model = config.families[0].base_models[0]
+    return package_targets(config, base_model)
+
+
+def test_target_owners_is_configured_packagers_plus_the_base_models_own_owner():
+    owners = target_owners(_config_targets(_base_config()))
     assert owners == ["unsloth", "bartowski", "Qwen"]
 
 
-def test_candidate_owners_never_includes_an_owner_outside_the_allow_list():
-    config = _base_config(packagers=["unsloth"])
-    owners = candidate_owners(config, _qwen35_9b())
-    assert "SomeRandomOwner" not in owners
-    assert set(owners) <= config.allowed_owners()
-
-
-def test_candidate_owners_deduplicates_when_the_base_owner_is_also_a_packager():
-    config = _base_config(packagers=["unsloth", "Qwen"])
-    owners = candidate_owners(config, _qwen35_9b())
+def test_target_owners_deduplicates_when_the_base_owner_is_also_a_packager():
+    owners = target_owners(_config_targets(_base_config(packagers=["unsloth", "Qwen"])))
     assert owners == ["unsloth", "Qwen"]
+
+
+def test_target_owners_includes_an_owner_that_only_an_owner_bound_repos_entry_names():
+    config = _base_config(
+        families=[
+            {
+                "name": "qwen3.5",
+                "base_models": [
+                    {
+                        "hf_repo": "Qwen/Qwen3.5-9B",
+                        "repo_aliases": ["Qwen3.5-9B-GGUF"],
+                        "repos": ["community-user/Qwen3.5-9B-Q4-GGUF"],
+                    }
+                ],
+            }
+        ],
+        packagers=["unsloth"],
+    )
+
+    owners = target_owners(_config_targets(config))
+
+    assert owners == ["unsloth", "Qwen", "community-user"]
+    assert "community-user" not in config.allowed_owners()
+
+
+def test_target_owners_keeps_the_order_of_the_targets():
+    assert target_owners(["b/one", "a/two", "b/three"]) == ["b", "a"]
 
 
 # --- fetch_hf_area: happy path, real fixtures ---------------------------------------------
@@ -253,7 +284,7 @@ def test_fetch_hf_area_assembles_one_package_per_quantization_from_the_tree():
         }
     )
 
-    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", targets=_targets(_qwen35_9b(), "unsloth"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert outcome.error is None
@@ -289,7 +320,7 @@ def test_fetch_hf_area_mmproj_and_other_files_never_take_a_quantization():
         }
     )
 
-    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", targets=_targets(_qwen35_9b(), "unsloth"), run_at=RUN_AT)
 
     mmproj_names = {f.name for pkg in outcome.packages for f in pkg.files if f.role == "mmproj"}
     assert mmproj_names == {"mmproj-BF16.gguf", "mmproj-F16.gguf", "mmproj-F32.gguf"}
@@ -326,7 +357,7 @@ def test_fetch_hf_area_follows_link_header_pagination_across_tree_pages():
         hf_repo="synthetic/Big-Repo", repo_aliases=["Big-Repo-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert {pkg.quantization for pkg in outcome.packages} == {"Q4_K_M", "Q8_0"}
@@ -358,7 +389,7 @@ def test_fetch_hf_area_tree_pagination_stops_at_a_hard_cap():
         hf_repo="synthetic/Forever", repo_aliases=["Forever-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert str(_MAX_TREE_PAGES) in outcome.error
@@ -386,7 +417,7 @@ def test_fetch_hf_area_rejects_a_malformed_sha_before_fetching_the_tree():
     )
     base_model = _qwen35_9b(hf_repo="acme/Nova-7B", repo_aliases=[], ollama_base=None, ollama_tag=None, publisher="acme")
 
-    outcome = fetch_hf_area(transport, base_model, owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="unsloth", targets=_targets(base_model, "unsloth"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert "sha" in outcome.error
@@ -407,7 +438,7 @@ def test_fetch_hf_area_candidate_repo_not_found_leaves_the_area_complete_and_emp
     )
     base_model = _qwen35_9b(hf_repo="unsloth/Does-Not-Exist", repo_aliases=[], ollama_base=None, ollama_tag=None)
 
-    outcome = fetch_hf_area(transport, base_model, owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="unsloth", targets=_targets(base_model, "unsloth"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert outcome.error is None
@@ -426,7 +457,10 @@ def test_fetch_hf_area_finds_a_package_only_under_its_alias_repo():
             ("GET", "https://huggingface.co/api/models/packager/Nova-7B-Legacy-GGUF"): Response(
                 status=200,
                 headers={},
-                body=b'{"sha": "' + b"a" * 40 + b'", "tags": ["base_model:acme/Nova-7B"]}',
+                body=(
+                    b'{"sha": "' + b"a" * 40 + b'", "tags": ["base_model:acme/Nova-7B", '
+                    b'"base_model:quantized:acme/Nova-7B"]}'
+                ),
             ),
             (
                 "GET",
@@ -451,13 +485,64 @@ def test_fetch_hf_area_finds_a_package_only_under_its_alias_repo():
         architecture=_unknown_architecture("acme/Nova-7B"),
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="packager", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="packager", targets=_targets(base_model, "packager"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert len(outcome.packages) == 1
     package = outcome.packages[0]
     assert package.repo == "packager/Nova-7B-Legacy-GGUF"
     assert package.provenance == "metadata_ok"
+
+
+# --- fetch_hf_area: malformed metadata reaches the relation check unchanged ---------------
+
+
+@pytest.mark.parametrize(
+    "info_body",
+    [
+        # `tags` in a shape the Hub never sends, next to a card that alone would pass
+        b'{"sha": "%s", "tags": {}, "cardData": {"base_model": ["acme/Nova-7B"], '
+        b'"base_model_relation": "quantized"}}',
+        # `cardData` in a shape the Hub never sends, next to tags that alone would pass
+        b'{"sha": "%s", "tags": ["base_model:acme/Nova-7B", "base_model:quantized:acme/Nova-7B"], '
+        b'"cardData": []}',
+    ],
+)
+def test_fetch_hf_area_malformed_metadata_is_a_conflict_not_silently_dropped(info_body):
+    # The fetch must hand the registry's own values to `check_relation`, not a cleaned-up
+    # version of them: dropping a malformed field turns a `metadata_conflict` into a pass, so
+    # search and fetch would disagree about the very same repository.
+    sha = "a" * 40
+    base_model = BaseModelSpec(
+        hf_repo="acme/Nova-7B",
+        repo_aliases=[],
+        publisher="acme",
+        parameters_b=7.0,
+        architecture=_unknown_architecture("acme/Nova-7B"),
+    )
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/packager/Nova-7B-GGUF"): Response(
+                status=200, headers={}, body=info_body % sha.encode()
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/packager/Nova-7B-GGUF/tree/{sha}?recursive=true",
+            ): Response(
+                status=200,
+                headers={},
+                body=b'[{"type": "file", "path": "Nova-7B-Q4_K_M.gguf", "size": 123}]',
+            ),
+        }
+    )
+
+    outcome = fetch_hf_area(
+        transport, base_model, owner="packager", targets=_targets(base_model, "packager"), run_at=RUN_AT
+    )
+
+    assert outcome.status == "complete"
+    assert [p.provenance for p in outcome.packages] == ["unresolved"]
+    assert [p.unresolved_reason for p in outcome.packages] == ["metadata_conflict"]
 
 
 # --- fetch_hf_area: errors other than 404/401 end the area incomplete --------------------
@@ -476,7 +561,7 @@ def test_fetch_hf_area_tree_failure_ends_the_area_incomplete_with_no_packages():
         }
     )
 
-    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", targets=_targets(_qwen35_9b(), "unsloth"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -492,7 +577,7 @@ def test_fetch_hf_area_model_info_server_error_ends_the_area_incomplete():
         }
     )
 
-    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", targets=_targets(_qwen35_9b(), "unsloth"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -531,7 +616,7 @@ def test_fetch_hf_area_mmproj_marker_anywhere_in_the_basename_is_role_mmproj():
         hf_repo="synthetic/Marker-Repo", repo_aliases=["Marker-Repo-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert len(outcome.packages) == 1
@@ -575,7 +660,7 @@ def test_fetch_hf_area_imatrix_file_is_an_extra_not_its_own_weight_package():
         hf_repo="synthetic/MiniMax-M3", repo_aliases=["MiniMax-M3-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert len(outcome.packages) == 1
@@ -617,7 +702,7 @@ def test_fetch_hf_area_qwen_split_shard_suffix_is_role_weights_shard_and_one_pac
         hf_repo="synthetic/Split-Repo", repo_aliases=["Split-Repo-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert len(outcome.packages) == 1
@@ -649,7 +734,7 @@ def test_fetch_hf_area_tree_entry_not_a_dict_ends_area_incomplete():
         hf_repo="synthetic/Null-Entry", repo_aliases=["Null-Entry-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -683,7 +768,7 @@ def test_fetch_hf_area_weight_file_without_size_ends_area_incomplete():
         hf_repo="synthetic/No-Size", repo_aliases=["No-Size-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -719,7 +804,7 @@ def test_fetch_hf_area_non_weight_file_without_size_still_completes():
         hf_repo="synthetic/Extra-No-Size", repo_aliases=["Extra-No-Size-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "complete"
     assert len(outcome.packages) == 1
@@ -766,7 +851,7 @@ def test_fetch_hf_area_weight_file_size_far_too_large_ends_area_incomplete():
         hf_repo="synthetic/Huge-Size", repo_aliases=["Huge-Size-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -802,7 +887,7 @@ def test_fetch_hf_area_file_entry_with_a_non_string_path_ends_area_incomplete():
         hf_repo="synthetic/Bad-Path", repo_aliases=["Bad-Path-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -840,7 +925,7 @@ def test_fetch_hf_area_tree_entry_with_no_type_field_ends_area_incomplete():
         hf_repo="synthetic/No-Type", repo_aliases=["No-Type-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -881,7 +966,7 @@ def test_fetch_hf_area_tree_entry_with_an_unknown_type_ends_area_incomplete():
         hf_repo="synthetic/Odd-Type", repo_aliases=["Odd-Type-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert "type" in outcome.error
@@ -911,7 +996,7 @@ def test_fetch_hf_area_file_entry_with_an_empty_path_ends_area_incomplete():
         hf_repo="synthetic/Empty-Path", repo_aliases=["Empty-Path-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error
@@ -954,7 +1039,12 @@ def test_fetch_hf_area_carries_forward_an_approval_bound_to_the_current_revision
     previous_by_key = {package_identity_key(previous): previous}
 
     outcome = fetch_hf_area(
-        transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT, previous_by_key=previous_by_key
+        transport,
+        _qwen35_9b(),
+        owner="unsloth",
+        targets=_targets(_qwen35_9b(), "unsloth"),
+        run_at=RUN_AT,
+        previous_by_key=previous_by_key,
     )
 
     by_key = {package_identity_key(p): p for p in outcome.packages}
@@ -996,7 +1086,12 @@ def test_fetch_hf_area_approval_bound_to_an_older_revision_is_not_approved():
     previous_by_key = {package_identity_key(previous): previous}
 
     outcome = fetch_hf_area(
-        transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT, previous_by_key=previous_by_key
+        transport,
+        _qwen35_9b(),
+        owner="unsloth",
+        targets=_targets(_qwen35_9b(), "unsloth"),
+        run_at=RUN_AT,
+        previous_by_key=previous_by_key,
     )
 
     by_key = {package_identity_key(p): p for p in outcome.packages}
@@ -1041,7 +1136,12 @@ def test_fetch_hf_area_approval_does_not_follow_the_package_identity_to_another_
     previous_by_key = {package_identity_key(previous): previous}
 
     outcome = fetch_hf_area(
-        transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT, previous_by_key=previous_by_key
+        transport,
+        _qwen35_9b(),
+        owner="unsloth",
+        targets=_targets(_qwen35_9b(), "unsloth"),
+        run_at=RUN_AT,
+        previous_by_key=previous_by_key,
     )
 
     by_key = {package_identity_key(p): p for p in outcome.packages}
@@ -1063,7 +1163,7 @@ def test_fetch_hf_area_budget_exhausted_mid_area_ends_it_incomplete():
     budgeted = BudgetedTransport(inner, budget=1)
     budgeted("GET", "https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF")  # spend the only slot
 
-    outcome = fetch_hf_area(budgeted, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(budgeted, _qwen35_9b(), owner="unsloth", targets=_targets(_qwen35_9b(), "unsloth"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     # P3-12 (fix-round 5): exact text, not a substring -- CONTRACTS.md, "Request budget", says
@@ -1102,7 +1202,7 @@ def test_fetch_hf_area_budget_exhausted_mid_tree_fetch_ends_it_incomplete_with_t
         hf_repo="synthetic/Budget", repo_aliases=["Budget-GGUF"], ollama_base=None, ollama_tag=None
     )
 
-    outcome = fetch_hf_area(budgeted, base_model, owner="synthetic", run_at=RUN_AT)
+    outcome = fetch_hf_area(budgeted, base_model, owner="synthetic", targets=_targets(base_model, "synthetic"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error == "budget exhausted"
@@ -1118,7 +1218,7 @@ def test_fetch_hf_area_treats_a_message_less_transport_exception_as_a_real_error
     def transport(method, url, headers=None):
         raise Exception()  # no message at all -- str(Exception()) == ""
 
-    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, _qwen35_9b(), owner="unsloth", targets=_targets(_qwen35_9b(), "unsloth"), run_at=RUN_AT)
 
     assert outcome.status == "incomplete"
     assert outcome.error  # must be truthy, never ""

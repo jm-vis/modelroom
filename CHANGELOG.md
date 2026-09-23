@@ -30,6 +30,17 @@ All notable changes to this project are documented in this file. The format foll
   comparison (`older`, `newer`, `outdated` -- the status is `latest`, `legacy` or `unknown`), a
   verdict on a packager (`untrusted`, `trustworthy` -- only the owner class is stated) and
   German, and carries a reasoned exception list for text being changed elsewhere.
+- `modelroom/search.py`: the Hugging Face search behind the guided mode, over the transport this
+  package already has and with no SDK dependency (CONTRACTS.md, "Search over the Hugging Face
+  API"). One pinned request answers everything the resolution needs; a hit resolves only when
+  the relation check proves it a `quantized` build of exactly one base model whose account the
+  catalog knows as a publisher, and every unresolved hit is shown with its reason instead of
+  being dropped. `decide_age` states `latest`/`legacy` from positive evidence only -- a valid
+  `new_version` at the publisher repository, else the catalog's own statement, else `unknown`
+  (CONTRACTS.md, "Latest and legacy evidence"). `apply_hits` turns resolved hits into families
+  and owner-bound `repos` targets, `write_configuration` writes that configuration under the
+  state lock once it reads back unchanged. Search, resolution, successor lookups and the fetch
+  share one request budget, `DEFAULT_GUIDED_BUDGET = 60`.
 
 ### Changed
 
@@ -38,6 +49,19 @@ All notable changes to this project are documented in this file. The format foll
 - Prose converted to the language standard in `AGENTS.md`, `README.md`, `CONTRACTS.md` and
   `modelroom/contracts.py`: US spellings, and the `Approval` shape described as a human
   vouching for an exact content. No schema name, field name or literal value changed.
+- `fetch` works from the shared target set `config.package_targets`, grouped by owner
+  (`hf.py::target_owners`, replacing `candidate_owners`): one area per (base model, owner)
+  covering all of that owner's targets, `complete` only when every one of them was worked
+  through, otherwise `incomplete` with the first failure and the owner's previous stock
+  untouched. An owner-bound `repos` target is fetched even when its owner is no configured
+  packager. CONTRACTS.md, "Target set and areas".
+- `decide_provenance` checks a Hugging Face package against that same target set and against
+  `relation.check_relation`: a repository outside the set stays `unresolved (repo_name)`, and a
+  repository that does not declare itself a `quantized` build of exactly this base model carries
+  the relation check's own status as its reason (`base_model_tag`, `relation_unknown`,
+  `derivative`, `metadata_conflict`). A `base_model:` tag alone is no longer enough, so a
+  package that used to reach `metadata_ok` on the tag alone is now `relation_unknown` until a
+  human `Approval` says otherwise.
 
 ## [0.1.0] - 2026-09-23
 

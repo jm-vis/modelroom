@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import date, datetime, timezone
 
 from modelroom.config import Configuration
@@ -441,3 +442,167 @@ def test_run_fetch_budget_end_never_touches_a_base_model_it_did_not_reach(tmp_pa
     assert other_areas, "the never-reached base model must still get an incomplete area entry"
     assert all(a.status == "incomplete" for a in other_areas)
     assert all(a.error == "budget exhausted before this area was started" for a in other_areas)
+
+
+# --- AP9-B: the target set, grouped by owner, is one area per (base model, owner) ----------
+
+
+def _two_repo_config(tmp_path) -> Configuration:
+    """One base model with two packager repos under the *same* owner, plus one under another."""
+    return Configuration.from_dict(
+        {
+            "schema_version": 2,
+            "families": [
+                {
+                    "name": "nova",
+                    "base_models": [
+                        {
+                            "hf_repo": "acme/Nova-7B",
+                            "repos": ["packager/Nova-7B-GGUF", "packager/Nova-7B-i1-GGUF"],
+                        }
+                    ],
+                }
+            ],
+            "packagers": [],
+            "publishers": ["acme"],
+            "machines": {"workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True}},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
+        }
+    )
+
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def _repo_info(sha: str, base: str = "acme/Nova-7B") -> Response:
+    payload = {
+        "sha": sha,
+        "tags": [f"base_model:{base}", f"base_model:quantized:{base}"],
+        "cardData": {"base_model": [base]},
+    }
+    return Response(status=200, headers={}, body=json.dumps(payload).encode("utf-8"))
+
+
+def _tree(filename: str) -> Response:
+    entry = [{"type": "file", "path": filename, "size": 4_000_000_000}]
+    return Response(status=200, headers={}, body=json.dumps(entry).encode("utf-8"))
+
+
+def _two_repo_mapping() -> dict:
+    return {
+        ("GET", "https://huggingface.co/api/models/acme/Nova-7B"): Response(
+            status=200, headers={}, body=b'{"sha": "' + _SHA_A.encode() + b'"}'
+        ),
+        ("GET", f"https://huggingface.co/acme/Nova-7B/resolve/{_SHA_A}/config.json"): Response(
+            status=404, headers={}, body=b"{}"
+        ),
+        ("GET", "https://huggingface.co/api/models/packager/Nova-7B-GGUF"): _repo_info(_SHA_A),
+        (
+            "GET",
+            f"https://huggingface.co/api/models/packager/Nova-7B-GGUF/tree/{_SHA_A}?recursive=true",
+        ): _tree("Nova-7B-Q4_K_M.gguf"),
+        ("GET", "https://huggingface.co/api/models/packager/Nova-7B-i1-GGUF"): _repo_info(_SHA_B),
+        (
+            "GET",
+            f"https://huggingface.co/api/models/packager/Nova-7B-i1-GGUF/tree/{_SHA_B}?recursive=true",
+        ): _tree("Nova-7B-Q4_K_S.gguf"),
+        ("GET", "https://huggingface.co/api/models/acme/Nova-7B-GGUF"): Response(
+            status=401, headers={}, body=b"{}"
+        ),
+    }
+
+
+def test_two_repos_of_one_owner_share_a_single_area_and_both_stay_active(tmp_path):
+    config = _two_repo_config(tmp_path)
+
+    result = run_fetch(config, build_transport(_two_repo_mapping()), RUN1, old_snapshot=None)
+
+    hf_areas = [area for area in result.snapshot.areas if area.source == "huggingface"]
+    packager_areas = [area for area in hf_areas if area.packager == "packager"]
+    assert len(packager_areas) == 1
+    assert packager_areas[0].status == "complete"
+    packages = [p for p in result.snapshot.packages if p.repo and p.repo.startswith("packager/")]
+    assert {p.repo for p in packages} == {"packager/Nova-7B-GGUF", "packager/Nova-7B-i1-GGUF"}
+    assert all(p.active for p in packages)
+    assert all(p.provenance == "metadata_ok" for p in packages)
+
+
+def test_a_repos_target_is_fetched_even_though_its_owner_is_no_configured_packager(tmp_path):
+    config = _two_repo_config(tmp_path)
+
+    result = run_fetch(config, build_transport(_two_repo_mapping()), RUN1, old_snapshot=None)
+
+    assert config.packagers == []
+    assert any(area.packager == "packager" for area in result.snapshot.areas)
+
+
+def test_a_failure_on_the_second_target_leaves_the_owners_whole_area_incomplete(tmp_path):
+    config = _two_repo_config(tmp_path)
+    first = run_fetch(config, build_transport(_two_repo_mapping()), RUN1, old_snapshot=None)
+    broken = _two_repo_mapping()
+    broken[("GET", "https://huggingface.co/api/models/packager/Nova-7B-i1-GGUF")] = Response(
+        status=500, headers={}, body=b""
+    )
+
+    result = run_fetch(config, build_transport(broken), RUN2, old_snapshot=first.snapshot)
+
+    area = next(a for a in result.snapshot.areas if a.packager == "packager")
+    assert area.status == "incomplete"
+    assert "500" in (area.error or "")
+    # The whole owner's previous stock survives *byte for byte*, both repos included -- not just
+    # the repo names and the active flag: an `incomplete` area must not refresh `last_seen` or
+    # any other field of a package it could not read this run.
+    before = {p.repo: p.model_dump(mode="json") for p in first.snapshot.packages}
+    after = {p.repo: p.model_dump(mode="json") for p in result.snapshot.packages}
+    assert after == before
+
+
+def test_a_target_that_disappears_is_deactivated_when_the_owners_area_completes(tmp_path):
+    config = _two_repo_config(tmp_path)
+    first = run_fetch(config, build_transport(_two_repo_mapping()), RUN1, old_snapshot=None)
+    gone = _two_repo_mapping()
+    gone[("GET", "https://huggingface.co/api/models/packager/Nova-7B-i1-GGUF")] = Response(
+        status=401, headers={}, body=b"{}"
+    )
+
+    result = run_fetch(config, build_transport(gone), RUN2, old_snapshot=first.snapshot)
+
+    by_repo = {p.repo: p for p in result.snapshot.packages}
+    assert by_repo["packager/Nova-7B-GGUF"].active is True
+    assert by_repo["packager/Nova-7B-i1-GGUF"].active is False
+
+
+def test_a_budget_that_runs_out_between_two_targets_of_one_owner_keeps_the_previous_stock(tmp_path):
+    # The budget is a whole-run resource, so running out at the second target of an owner is a
+    # failure of that owner's *area*: `incomplete`, the error exactly "budget exhausted", and the
+    # previous stock of both targets untouched -- not a half-read area published as complete.
+    config = _two_repo_config(tmp_path)
+    first = run_fetch(config, build_transport(_two_repo_mapping()), RUN1, old_snapshot=None)
+    # 2 for the base model (info + config.json), 1 for the not-found own-owner candidate,
+    # 2 for the first target (info + tree), then nothing left for the second target.
+    budget = RequestBudget(5)
+
+    result = run_fetch(
+        config, build_transport(_two_repo_mapping()), RUN2, old_snapshot=first.snapshot, budget=budget
+    )
+
+    area = next(a for a in result.snapshot.areas if a.packager == "packager")
+    assert area.status == "incomplete"
+    assert area.error == "budget exhausted"
+    before = {p.repo: p.model_dump(mode="json") for p in first.snapshot.packages}
+    after = {p.repo: p.model_dump(mode="json") for p in result.snapshot.packages}
+    assert after == before
+    assert budget.remaining == 0
+
+
+def test_a_budget_that_runs_out_before_an_owner_names_that_owners_area(tmp_path):
+    config = _two_repo_config(tmp_path)
+
+    result = run_fetch(config, build_transport(_two_repo_mapping()), RUN1, old_snapshot=None, budget=0)
+
+    owners = {area.packager for area in result.snapshot.areas if area.source == "huggingface"}
+    assert owners == {"packager", "acme"}
+    assert all(
+        area.error == "budget exhausted before this area was started" for area in result.snapshot.areas
+    )

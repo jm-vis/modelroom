@@ -16,6 +16,21 @@ change with them until someone re-records them on purpose.
   carry sizes, so this fills them in for size-based ordering tests.
 - `hf_qwen_qwen35_9b_model.json` -- `GET https://huggingface.co/api/models/Qwen/Qwen3.5-9B`.
   The publisher repo; `sha` is its current revision (`c202236235762e1c871ad0ccb60c8ee5ba337b9a`).
+- `hf_search_qwen_gguf.json` -- the pinned answer for the guided search's one request,
+  `GET https://huggingface.co/api/models?search=qwen&filter=gguf&sort=createdAt&direction=-1&limit=50&expand=cardData&expand=createdAt&expand=safetensors&expand=tags`.
+  **Real shape, curated entries.** The live request was made once, 2026-09-23, and its answer
+  settled the shape this file follows: 50 objects, each carrying `_id`, `id`, `createdAt` and
+  `tags`, 42 of them a `cardData`, 3 a `safetensors`, none an `author`, `sha` or top-level
+  `license`; 36 stated the relation in `tags` and 10 in `cardData`, which is why
+  `expand=tags` is part of the request. That live answer itself is **not** committed: sorted by
+  creation date it is 50 unrelated third-party accounts that say nothing about this project's
+  own cases, and it would go stale within the hour. The seven entries here are built from it
+  instead, and are what the pinned run needs to be repeatable: the real `unsloth/Qwen3.5-9B-GGUF`
+  entry (resolved, `listed packager`), the publisher's own `Qwen/Qwen3.5-9B-GGUF` (resolved,
+  `publisher`, with a real `safetensors.total`), a third resolved entry whose base model the
+  catalog lists *without* an Ollama assignment (`unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF`, the
+  `none known` case), and one `community-user/...` entry per unresolved reason -- `derivative`,
+  `base_model_tag`, `relation_unknown`, `publisher_unknown` and `metadata_conflict`.
 - `hf_qwen_qwen35_9b_config.json` -- `GET https://huggingface.co/Qwen/Qwen3.5-9B/resolve/main/config.json`
   (redirects to the resolve-cache; fetched with `curl -L`). The language-model fields sit
   under `text_config`, and `text_config.layer_types` mixes `"linear_attention"` and
@@ -42,6 +57,13 @@ The manifest bodies carry the facts the tests actually need:
 - `9b-mlx-bf16` lists only `application/vnd.ollama.image.tensor` layers (no `.image.model`
   layer at all) -- the tensor-format case that `decide_provenance` resolves to
   `("unresolved", "format")` regardless of its tag.
+
+There is no fixture for a manifest's `params` layer, and no test that reads one: measured
+2026-09-23, `GET registry.ollama.ai/v2/library/qwen3.5/blobs/sha256:9371364b...` (the `9b`
+manifest's `params` layer) answers `307` with a signed `Location` on an object-storage host
+that `modelroom/http.py` is not allowed to open. `Package.default_context` therefore stays
+`None` -- see `modelroom/ollama.py`'s module docstring and CONTRACTS.md, "Ollama packages:
+files and `default_context`".
 
 ## Synthetic fixtures
 

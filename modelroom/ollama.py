@@ -13,6 +13,16 @@ request is made at all** (F5): measured 2026-09-22 against the real registry
 (`registry.ollama.ai/v2/library/qwen3.5/manifests/9b`, 709 bytes), hashing the `GET` body gives
 exactly the same digest the registry's `ollama-content-digest` `HEAD` header used to state (see
 tests/fixtures/README.md), so the extra request bought nothing and is dropped.
+
+`Package.default_context` (Ollama's own `num_ctx`) stays `None`: reading it means fetching the
+manifest's `params` layer by digest, and that endpoint does not serve the blob itself. Measured
+2026-09-23 against the real registry: `GET registry.ollama.ai/v2/library/qwen3.5/blobs/sha256:
+9371364b...` answers `307` with a signed `Location` on an object-storage host that is not one of
+the three hosts this package is allowed to open (`http.py::_ALLOWED_HTTPS_HOSTS`, and AGENTS.md's
+own attack-surface promise). Following it would mean widening that allow-list to a host whose
+name is not fixed -- a decision about the attack surface, not a detail of this module, so the
+field stays `None` until that decision is taken (CONTRACTS.md, "Ollama packages: files and
+`default_context`"). The scenario a ranking uses never reads it anyway: it is display only.
 """
 
 from __future__ import annotations
@@ -266,7 +276,7 @@ def _package_files(tag: str, layers: list[dict]) -> tuple[Literal["gguf", "tenso
     if tensor_layers:
         # A tensor image can carry hundreds of per-tensor layers; it is always unresolved by
         # format regardless of quantization or file layout, so they are aggregated into one
-        # synthetic file rather than modelled one-for-one (documented in CONTRACTS.md).
+        # synthetic file rather than modeled one for one (documented in CONTRACTS.md).
         total_size = sum(_weight_layer_size(layer) for layer in tensor_layers)
         return "tensor", [PackageFile(name=f"{tag}.safetensors", role="weights", size_bytes=total_size, digest=None)]
     return "unknown", []

@@ -1,17 +1,20 @@
 """Decide whether a package's link to its base model can be trusted.
 
-A package is trustworthy either because a human approved its exact content (an approval
+A package's link holds either because a human approved its exact content (an approval
 survives only as long as the content it names is still current) or because its own metadata
-proves the link on its own: a packager naming convention plus a `base_model:` tag on Hugging
-Face, or a name/tag convention in the Ollama library. Anything else is left `unresolved`,
-never guessed.
+proves the link on its own: on Hugging Face, the repository has to be one of the base model's
+package targets *and* declare itself a `quantized` build of exactly that base model
+(`relation.check_relation`, the one relation check search and fetch share); in the Ollama
+library, a name/tag convention. Anything else is left `unresolved`, never guessed, and no
+automatic rule ever reaches further than `metadata_ok` -- `approved` needs a human `Approval`.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from .quantization import SIZE_TOKEN_RE, match_base_prefix, stem_basename
+from .relation import check_relation
 
 if TYPE_CHECKING:
     from .contracts import Approval, BaseModelSpec, Package
@@ -20,8 +23,11 @@ if TYPE_CHECKING:
 def decide_provenance(
     package: "Package",
     base_model: "BaseModelSpec",
-    hf_tags: list[str] | None,
+    hf_tags: object,
     approvals: list["Approval"],
+    *,
+    hf_card_data: object = None,
+    hf_targets: Sequence[str] = (),
 ) -> tuple[str, str | None]:
     """Return `(provenance, unresolved_reason)` for `package` against `base_model`.
 
@@ -31,6 +37,11 @@ def decide_provenance(
        makes it `("approved", None)`. An approval bound to older content is void: it never
        falls back to `metadata_ok` by itself, the metadata rules below decide instead.
     3. Otherwise the metadata rules for the package's source decide.
+
+    `hf_card_data` and `hf_targets` belong to the Hugging Face path only: the repository's
+    `cardData` (the second place a relation can be declared) and the base model's whole
+    package target set (`config.package_targets`), the same set the collision validator and
+    the fetch use. An Ollama package ignores both.
     """
     if package.format != "gguf":
         return "unresolved", "format"
@@ -41,14 +52,30 @@ def decide_provenance(
             return "approved", None
 
     if package.source == "huggingface":
-        return _decide_huggingface(package, base_model, hf_tags or [])
+        return _decide_huggingface(package, base_model, hf_tags, hf_card_data, hf_targets)
     return _decide_ollama(package, base_model)
 
 
 def _decide_huggingface(
-    package: "Package", base_model: "BaseModelSpec", hf_tags: list[str]
+    package: "Package",
+    base_model: "BaseModelSpec",
+    hf_tags: object,
+    card_data: object,
+    targets: Sequence[str],
 ) -> tuple[str, str | None]:
-    """Decide provenance for a Hugging Face package: repo name, `base_model:` tag, file stem.
+    """Decide provenance for a Hugging Face package: target set, relation, file stem.
+
+    The repository must be one of `targets`, the base model's package target set -- an
+    owner-bound `repos` entry counts exactly like a generated `<base>-GGUF` name, and a
+    repository outside the set is `("unresolved", "repo_name")` whatever it declares.
+
+    The relation is `relation.check_relation`'s verdict, which search and fetch share: exactly
+    one declared base, equal to this base model, with relation `quantized`. Its status is the
+    `unresolved_reason` as it stands (`base_model_tag`, `relation_unknown`, `derivative`,
+    `metadata_conflict`), so a reader sees the same word in a search hit and in a package.
+    `hf_tags` and `card_data` are the registry's raw values of whatever shape, handed on
+    untouched: a caller that cleaned them up first would turn a shape the Hub never publishes
+    into a pass, which is exactly what `metadata_conflict` exists to prevent.
 
     The file-stem check (`quantization.match_base_prefix`) matches each weight file's own
     *basename*, never the packager's folder layout -- unsloth ships per-quant subfolders
@@ -58,14 +85,13 @@ def _decide_huggingface(
     and mradermacher's `<base>.<QUANT>` one.
     """
     base_name = base_model.hf_repo.split("/", 1)[1]
-    repo_name = package.repo.split("/", 1)[1] if package.repo and "/" in package.repo else package.repo
 
-    name_ok = repo_name == f"{base_name}-GGUF" or repo_name in base_model.repo_aliases
-    if not name_ok:
+    if package.repo not in targets:
         return "unresolved", "repo_name"
 
-    if f"base_model:{base_model.hf_repo}" not in hf_tags:
-        return "unresolved", "base_model_tag"
+    status, _reason = check_relation(hf_tags, card_data, base_model.hf_repo)
+    if status != "quantized":
+        return "unresolved", status
 
     weight_files = [f for f in package.files if f.role in ("weights", "weights_shard")]
     if not weight_files:

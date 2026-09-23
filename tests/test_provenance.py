@@ -27,6 +27,21 @@ def _unknown_architecture(source_repo: str) -> Architecture:
     return Architecture(source_repo=source_repo, source_revision=None, kind="unknown")
 
 
+# The whole package target set `config.package_targets` produces for `acme/Nova-7B` with
+# `packagers = ["packager"]`: the generated `<base>-GGUF` name and the alias under both
+# owners. Provenance accepts a repository only when it is one of these.
+_NOVA_TARGETS = (
+    "packager/Nova-7B-GGUF",
+    "packager/Nova-7B-Legacy-GGUF",
+    "acme/Nova-7B-GGUF",
+)
+
+
+def _quantized_tags(base: str = "acme/Nova-7B") -> list[str]:
+    """The two tags a real packager repo carries for a quantization of `base`."""
+    return [f"base_model:{base}", f"base_model:quantized:{base}"]
+
+
 def _nova_base_model(**overrides) -> BaseModelSpec:
     defaults = dict(
         hf_repo="acme/Nova-7B",
@@ -128,7 +143,14 @@ def test_real_unsloth_repo_is_metadata_ok():
         last_seen=_NOW,
         active=True,
     )
-    provenance, reason = decide_provenance(package, _qwen_base_model(), model["tags"], approvals=[])
+    provenance, reason = decide_provenance(
+        package,
+        _qwen_base_model(),
+        model["tags"],
+        approvals=[],
+        hf_card_data=model["cardData"],
+        hf_targets=[model["id"]],
+    )
     assert (provenance, reason) == ("metadata_ok", None)
 
 
@@ -154,7 +176,14 @@ def test_real_unsloth_repo_ud_quant_file_stem_is_metadata_ok():
         last_seen=_NOW,
         active=True,
     )
-    provenance, reason = decide_provenance(package, _qwen_base_model(), model["tags"], approvals=[])
+    provenance, reason = decide_provenance(
+        package,
+        _qwen_base_model(),
+        model["tags"],
+        approvals=[],
+        hf_card_data=model["cardData"],
+        hf_targets=[model["id"]],
+    )
     assert (provenance, reason) == ("metadata_ok", None)
 
 
@@ -165,7 +194,9 @@ def test_tensor_format_is_always_unresolved_format():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-F16.gguf", format_="tensor")
     base_model = _nova_base_model()
     approval = Approval(date=date(2026, 9, 1), content=package.revision, by="acme-ai-team")
-    provenance, reason = decide_provenance(package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[approval])
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=_quantized_tags(), approvals=[approval], hf_targets=_NOVA_TARGETS
+    )
     assert (provenance, reason) == ("unresolved", "format")
 
 
@@ -176,7 +207,7 @@ def test_alias_repo_name_is_metadata_ok():
     package = _hf_package(repo="packager/Nova-7B-Legacy-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("metadata_ok", None)
 
@@ -188,7 +219,7 @@ def test_correct_tag_but_wrong_file_stem_is_unresolved():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-finetuned-Q4_K_M.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("unresolved", "file_stem")
 
@@ -196,7 +227,9 @@ def test_correct_tag_but_wrong_file_stem_is_unresolved():
 def test_missing_base_model_tag_is_unresolved():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
     base_model = _nova_base_model()
-    provenance, reason = decide_provenance(package, base_model, hf_tags=[], approvals=[])
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=[], approvals=[], hf_targets=_NOVA_TARGETS
+    )
     assert (provenance, reason) == ("unresolved", "base_model_tag")
 
 
@@ -204,7 +237,7 @@ def test_unrelated_repo_name_is_unresolved():
     package = _hf_package(repo="packager/SomethingElse-GGUF", weight_filename="SomethingElse-Q4_K_M.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("unresolved", "repo_name")
 
@@ -225,7 +258,7 @@ def test_stale_approval_falls_back_to_metadata_ok_when_metadata_still_fits():
     base_model = _nova_base_model()
     stale_approval = Approval(date=date(2026, 1, 1), content=_HF_REVISION_OLD, by="acme-ai-team")
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[stale_approval]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[stale_approval], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("metadata_ok", None)
 
@@ -234,7 +267,9 @@ def test_stale_approval_with_missing_tag_now_is_unresolved():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf", revision=_HF_REVISION_NEW)
     base_model = _nova_base_model()
     stale_approval = Approval(date=date(2026, 1, 1), content=_HF_REVISION_OLD, by="acme-ai-team")
-    provenance, reason = decide_provenance(package, base_model, hf_tags=[], approvals=[stale_approval])
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=[], approvals=[stale_approval], hf_targets=_NOVA_TARGETS
+    )
     assert (provenance, reason) == ("unresolved", "base_model_tag")
 
 
@@ -353,7 +388,7 @@ def test_mmproj_only_package_is_unresolved_no_weights():
     )
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("unresolved", "no_weights")
 
@@ -430,7 +465,7 @@ def test_unsloth_per_quant_subfolder_file_stem_is_metadata_ok():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="BF16/Nova-7B-BF16.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("metadata_ok", None)
 
@@ -442,7 +477,7 @@ def test_draft_model_in_a_foreign_subfolder_stays_unresolved_file_stem():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="MTP/mtp-Nova-7B-BF16.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("unresolved", "file_stem")
 
@@ -454,7 +489,7 @@ def test_mradermacher_dot_convention_file_stem_is_metadata_ok():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B.Q4_K_M.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
-        package, base_model, hf_tags=["base_model:acme/Nova-7B"], approvals=[]
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("metadata_ok", None)
 
@@ -498,8 +533,9 @@ def test_qwen_split_shard_stem_mismatch_stays_unresolved_file_stem():
     provenance, reason = decide_provenance(
         package,
         base_model,
-        hf_tags=["base_model:Qwen/Qwen3-VL-235B-A22B-Instruct"],
+        hf_tags=_quantized_tags("Qwen/Qwen3-VL-235B-A22B-Instruct"),
         approvals=[],
+        hf_targets=["packager/Qwen3-VL-235B-A22B-Instruct-GGUF"],
     )
     assert (provenance, reason) == ("unresolved", "file_stem")
 
@@ -547,3 +583,126 @@ def test_ollama_size_token_declared_size_far_outside_tolerance_is_unresolved():
     base_model = _nova_base_model(parameters_b=7.0, ollama_tag="70b")
     provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
     assert (provenance, reason) == ("unresolved", "size_token")
+
+
+# --- AP9-B: the target set and the relation check decide the Hugging Face path -------------
+
+
+def test_a_repo_outside_the_target_set_is_unresolved_repo_name():
+    package = _hf_package(repo="stranger/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=_quantized_tags(),
+        approvals=[],
+        hf_card_data=None,
+        hf_targets=_NOVA_TARGETS,
+    )
+
+    assert verdict == ("unresolved", "repo_name")
+
+
+def test_an_owner_bound_target_the_name_rules_never_generate_is_metadata_ok():
+    # The search finds repos under accounts the packager list does not name; they reach the
+    # fetch as `repos` entries, so provenance has to accept exactly the same target set.
+    package = _hf_package(repo="community-user/Nova-7B-Q4-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=_quantized_tags(),
+        approvals=[],
+        hf_targets=(*_NOVA_TARGETS, "community-user/Nova-7B-Q4-GGUF"),
+    )
+
+    assert verdict == ("metadata_ok", None)
+
+
+def test_a_base_model_tag_without_a_relation_is_unresolved_relation_unknown():
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=["base_model:acme/Nova-7B"],
+        approvals=[],
+        hf_targets=_NOVA_TARGETS,
+    )
+
+    assert verdict == ("unresolved", "relation_unknown")
+
+
+def test_a_finetune_relation_is_unresolved_derivative():
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=["base_model:acme/Nova-7B", "base_model:finetune:acme/Nova-7B"],
+        approvals=[],
+        hf_targets=_NOVA_TARGETS,
+    )
+
+    assert verdict == ("unresolved", "derivative")
+
+
+def test_tags_and_card_naming_different_bases_is_unresolved_metadata_conflict():
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=_quantized_tags(),
+        approvals=[],
+        hf_card_data={"base_model": ["other/Nebula-9B"]},
+        hf_targets=_NOVA_TARGETS,
+    )
+
+    assert verdict == ("unresolved", "metadata_conflict")
+
+
+def test_the_relation_may_come_from_the_card_alone():
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=[],
+        approvals=[],
+        hf_card_data={"base_model": ["acme/Nova-7B"], "base_model_relation": "quantized"},
+        hf_targets=_NOVA_TARGETS,
+    )
+
+    assert verdict == ("metadata_ok", None)
+
+
+def test_a_human_approval_still_outranks_a_missing_relation():
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+    approval = Approval(date=date(2026, 9, 1), content=package.revision, by="acme-ai-team")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=["base_model:acme/Nova-7B"],
+        approvals=[approval],
+        hf_targets=_NOVA_TARGETS,
+    )
+
+    assert verdict == ("approved", None)
+
+
+def test_the_relation_must_name_this_base_model_not_merely_be_quantized():
+    # M3: `base_model_relation == "quantized"` carries no target of its own; the declared base
+    # has to be exactly this base model.
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
+
+    verdict = decide_provenance(
+        package,
+        _nova_base_model(),
+        hf_tags=["base_model:other/Nebula-9B", "base_model:quantized:other/Nebula-9B"],
+        approvals=[],
+        hf_targets=_NOVA_TARGETS,
+    )
+
+    assert verdict == ("unresolved", "base_model_tag")

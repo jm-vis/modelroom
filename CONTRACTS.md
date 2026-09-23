@@ -640,9 +640,9 @@ fetch time and live only in the snapshot, never here.
 
 **Package targets (schema 2).** `package_targets(config, base_model)` returns every packager repo
 that belongs to a base model, each once, in a stable order: (`packagers` plus the base model's
-own owner) x (`<name>-GGUF` plus `repo_aliases`), then `repos`. The collision check below uses
-exactly this set; fetch, owner selection and provenance switch to it in a later work package, so
-the three can never disagree about which repos a base model claims. For the example below the
+own owner) x (`<name>-GGUF` plus `repo_aliases`), then `repos`. The collision check below, the
+fetch, the owner grouping and provenance all use exactly this set, so none of them can disagree
+about which repos a base model claims (see "Target set and areas"). For the example below the
 targets are `packager/Nova-7B-GGUF`, `packager/Nova-7B-Instruct-GGUF`, `acme/Nova-7B-GGUF`,
 `acme/Nova-7B-Instruct-GGUF`, `community/Nova-7B-GGUF`.
 
@@ -808,8 +808,10 @@ The whole `modelroom.toml`: families, allow-listed owners, machines, paths, tool
 names are unique, `hf_repo` is unique across every family's base models, and the owner part of
 every `hf_repo` must appear in `publishers` (the error names the missing owner). `packagers`
 and `publishers` are each non-empty owner names, unique within their own list. `allowed_owners()`
-returns `frozenset(packagers) | frozenset(publishers)` -- the positive list a package's repo
-owner must belong to. No two base models may claim the same package target (see
+returns `frozenset(packagers) | frozenset(publishers)` -- the positive list the *generated*
+package targets stay inside. An owner-bound `repos` entry may name any account: it is the user
+writing down one exact repository, and only that repository is ever fetched under that account
+(see "Target set and areas"). No two base models may claim the same package target (see
 `BaseModelConfig`, "Package targets"); the error names the repo and both base models.
 
 | Field | Type | Constraint | Meaning |
@@ -1035,12 +1037,13 @@ An "area" (the `Area` model, already defined above) is one Hugging Face packager
 candidate repos for one base model, or one base model's whole Ollama library entry:
 
 - **Hugging Face**: one area per `(base_model.hf_repo, owner)`, where `owner` ranges over
-  `modelroom/hf.py::candidate_owners` -- every configured `packagers` entry plus the base
-  model's own owner (a publisher counts as a packager of its own models), filtered to
-  `config.allowed_owners()`. Every candidate repo name under that owner (`<base_name>-GGUF`
-  plus every `repo_aliases` entry, exact names, de-duplicated) is probed within the same area;
-  a candidate that does not exist does not end the area, only a genuine failure does (see
-  below). `Area.packager` is that owner.
+  `modelroom/hf.py::target_owners(package_targets(config, base_model))` -- the owners of the
+  base model's package target set, in the order that set produces them: every configured
+  `packagers` entry plus the base model's own owner (a publisher counts as a packager of its
+  own models), and any further owner an owner-bound `repos` entry names. Every target of that
+  owner is fetched within the same area; a target that does not exist does not end the area,
+  only a genuine failure does (see below). `Area.packager` is that owner. See "Target set and
+  areas" for why a whole owner is one area rather than one area per target.
 - **Ollama**: one area per base model that configures both `ollama_base` and `ollama_tag`;
   `Area.packager` is always `None`. **P3-2 (fix-round 5, clarified):** `modelroom/fetch.py::
   run_fetch` only ever calls `fetch_ollama_area` when a base model configures *both*
@@ -1262,9 +1265,17 @@ file (summed size, no digest, `format="tensor"`), since a tensor package is alwa
 `("unresolved", "format")` regardless of its individual tensor layout, which is not part of
 this catalog's contract. A weight layer with no non-negative integer `size` is a shape error
 that ends the area `incomplete`, not a silent `0` (fix-round 1, F4 -- see "Area semantics"
-above). `Package.default_context` (Ollama's `num_ctx`) is always `None` in this work package --
-reading it means downloading the manifest's `params` layer by digest, one more request per
-tag, left for a later work package.
+above).
+
+`Package.default_context` (Ollama's `num_ctx`) is always `None`, and stays so until a decision
+about this package's attack surface is taken. Reading it means fetching the manifest's `params`
+layer by digest, and the registry does not serve that blob itself: measured 2026-09-23,
+`GET registry.ollama.ai/v2/library/qwen3.5/blobs/sha256:9371364b...` answers `307` with a signed
+`Location` on an object-storage host whose name is not fixed. `modelroom/http.py` opens exactly
+three HTTPS hosts (AGENTS.md, "Security, definition of done"); following that redirect means
+widening the allow-list to a host that cannot be named up front. Nothing else depends on the
+field: a ranking's context is `scenario.context_requested`, never a package's own declared one,
+which is shown ("package declares 4096") and never computed with.
 
 **`manifest_digest` (fix-round 1, F5, superseding the original `HEAD`-request design):**
 `modelroom/ollama.py::_fetch_manifest` computes the digest as `sha256:` plus the sha256 of the
@@ -2457,3 +2468,121 @@ is at most 240 characters.
 that has already spent requests (the search, the resolution) passes what is left into the
 fetch; `FetchResult.request_used` and `request_budget` report that shared budget's totals. `BudgetExhaustedError`
 and the area outcome `budget exhausted` are unchanged.
+
+`modelroom/search.py::DEFAULT_GUIDED_BUDGET` is `60`: one guided run -- search, resolution,
+successor lookups, tree pages and the fetch -- shares that many requests unless the caller
+passes its own `RequestBudget`. `run_fetch`'s own default stays `400` for a plain `modelroom
+fetch`, which has no search in front of it.
+
+### Search over the Hugging Face API
+
+`modelroom/search.py::search_url(name)` is the one request the search makes, over the transport
+this package already has -- there is no Hugging Face SDK dependency:
+
+```
+GET https://huggingface.co/api/models?search=<name>&filter=gguf&sort=createdAt&direction=-1
+    &limit=50&expand=cardData&expand=createdAt&expand=safetensors&expand=tags
+```
+
+`expand` is repeated once per field, not sent as a list. One request answers everything the
+resolution needs, so no hit costs a request of its own. Measured against the live API
+2026-09-23 (50 hits for `qwen`): every entry carries `_id`, `id`, `createdAt` and `tags`, 42 of
+50 a `cardData`, 3 of 50 a `safetensors` (a GGUF repo usually has no tensor index), and none an
+`author`, `sha` or `license` of its own -- so `parameters_b` and `license` are commonly
+`unknown`, and `expand=tags` is what makes the relation readable at all: 36 of the 50 stated
+their relation in `tags`, 10 in `cardData`.
+
+`limit=50` is the whole answer; the summary line says so rather than pretending the list is
+complete: `"N repositories, M resolved, K unresolved, budget used/limit"`
+(`SearchOutcome.summary_line`).
+
+A hit becomes a `SearchHit` (above). It is `resolved` only when both hold:
+
+1. `relation.check_relation` returns `quantized` for the one base the repository declares -- the
+   same check the fetch uses, so the *relation* verdict is the same in both places. That is not a
+   promise that this repository's packages will resolve later: provenance additionally requires
+   the repository to be in the target set and every weight file's stem to match the base name, so
+   a resolved hit can still yield `unresolved (file_stem)` packages. A hit that declares no base,
+   more than one, or one that is not a repository id gets `base_model_tag`; the other statuses
+   pass through as they are (`derivative`, `relation_unknown`, `metadata_conflict`);
+2. the catalog knows that base model's account as a publisher (`Catalog.is_publisher`),
+   otherwise `publisher_unknown`.
+
+An unresolved hit is shown with its reason and gets no fit, no age and no Ollama name -- it is
+never silently dropped, and never treated as a package of the family. `search.py::owner_class`
+labels an account `publisher`, `listed packager` or `other`; the same three labels are used for
+a fetch target's owner. They place an account, they never judge it. `DEFAULT_PACKAGERS` is the
+shipped positive list of packager accounts, the same one `modelroom.example.toml` carries.
+
+An Ollama name comes from the catalog or from a line the user types
+(`parse_ollama_entry("ollama: <name:tag>")`, which wins over the catalog); a resolved model with
+neither is shown as `none known` (`ollama_label`). The search never infers one from a name.
+
+`search.py::apply_hits(config, hits, catalog=...)` is the pure step
+`configuration + resolution -> configuration`: each resolved hit's base model becomes (or joins)
+a family, its account joins `publishers`, and the hit's own repository is added to that base
+model's `repos` -- an owner-bound target, because the search finds repositories under accounts
+the packager list does not name. Repeating the same hits changes nothing.
+`write_configuration(path, config, now=...)` renders that configuration with
+`toml_writer.dump_toml`, proves it reads back unchanged *before* touching the disk, and writes
+it under `modelroom.lock`, the same lock every other writer takes. No backup is kept: the guided
+mode has the user confirm the change first.
+
+### Target set and areas
+
+`config.package_targets(config, base_model)` is the one set of packager repositories a base
+model claims: (`packagers` plus the base model's own owner) x (`<name>-GGUF` plus
+`repo_aliases`), then the owner-bound `repos`, each entry once. Four places use exactly this
+set, so none of them can disagree with another:
+
+- the collision validator, which rejects a target two base models would claim;
+- `fetch.run_fetch`, which groups the set by owner (`hf.py::target_owners`);
+- `hf.fetch_hf_area`, which fetches the targets of its own owner;
+- `provenance.decide_provenance`, which accepts a package only when its repository is in the
+  set (`unresolved_reason` `repo_name` otherwise).
+
+An owner that only a `repos` entry names is fetched too. That is the user naming one
+repository, not an open door: the generated `<name>-GGUF`/alias names are never probed under
+such an owner, only the exact `owner/name` written down.
+
+**One area per (base model, owner), never per target.** `state.merge_snapshot` identifies an
+area by `(source, base_model, owner)` and, when the area is `complete`, deactivates every
+package of that area this run did not report. Two targets of the same owner published as two
+areas would therefore deactivate each other's packages. So all of an owner's targets are worked
+through one after the other inside one area, and the area is
+
+- `complete` only when every one of them was worked through -- a target that does not exist
+  (`401`/`404`) counts as worked through -- in which case its packages replace the area's
+  previous stock;
+- `incomplete` with the **first** genuine failure otherwise, in which case the owner's whole
+  previous stock stays untouched, including the targets that were already read this run.
+
+### Latest and legacy evidence
+
+`search.py::decide_age(transport, catalog, hf_repo)` says whether a publisher model is the
+current one, a superseded one, or neither. Positive evidence only -- a missing statement is
+never evidence:
+
+1. the publisher repository's own card carries a `new_version` (one request) whose target is a
+   well-formed repository of the **same account**, is not the repository itself, and really
+   exists (one request, and the answer has to **name that repository** in its `id`/`modelId` --
+   the transport follows redirects and the Hub answers a moved repository's path with the one it
+   moved to, so without that check a target under another account, or the repository itself, could
+   satisfy the request and defeat both the account rule and the cycle check): `legacy`, with that
+   target as `successor`. At most
+   `MAX_SUCCESSOR_EDGES = 2` edges are followed, and the second one only to name a younger
+   successor: the verdict stays `legacy` when that second edge is missing, invalid, a cycle or
+   out of budget;
+2. no `new_version` (absent, or not a string): the catalog decides -- `latest` when the catalog
+   states it for this one model with its evidence, `legacy` with the catalog's `successor`,
+   `unknown` when it states neither or does not list the model. A publisher repository that
+   cannot be read at all is treated the same way: it said nothing;
+3. a `new_version` whose target is malformed, under another account, the repository itself, or
+   unreachable -- and a budget that ends before the first edge can be checked: `unknown`. A
+   broken pointer is not evidence for the catalog's statement either, so it never falls back to
+   it.
+
+`age` is a statement about the **base model**, so a packager's hit shows the age of the
+publisher model it resolved to; an unresolved hit is always `unknown`. `decide_age` is called
+once per distinct resolved base model in a search, not once per hit. `repo_created_at` is
+labeled "repo created" and is never read as a release date or as an age.
