@@ -133,19 +133,10 @@ RULES = (
 # elsewhere at the same time. The count is what keeps the entry from covering a second, new
 # violation of the same kind: occurrence number two is reported like any other finding, and
 # `test_every_exception_still_exempts_something` turns red once the count is too high.
-PENDING = {
-    ("modelroom/provenance.py", "packager valuation", "trustworthy"): (
-        1,
-        "this module's text is being changed elsewhere; converted with that change",
-    ),
-    ("modelroom/guided_contracts.py", "British spelling", "labelled"): (
-        1,
-        "this module's text is being changed elsewhere; converted with that change",
-    ),
-    ("modelroom/ollama.py", "British spelling", "modelled"): (
-        1,
-        "this module's text is being changed elsewhere; converted with that change",
-    ),
+PENDING: dict[tuple[str, str, str], tuple[int, str]] = {
+    # Empty since the search work package converted `provenance.py` and `ollama.py` and the
+    # merge converted `guided_contracts.py`. An entry looks like
+    # ("modelroom/<file>.py", "<rule name>", "<word>"): (<count>, "<reason>").
 }
 
 CODE_SPAN = re.compile(r"``[^`]*``|`[^`]*`")

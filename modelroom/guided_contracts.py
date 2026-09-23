@@ -24,7 +24,7 @@ UNKNOWN = "unknown"
 class SearchHit(BaseModel):
     """One Hugging Face repository from the search, as the selection list shows it.
 
-    Every field but `repo` may be unknown: `None`, or the literal `unknown` for the labelled
+    Every field but `repo` may be unknown: `None`, or the literal `unknown` for the labeled
     fields. `resolved` means exactly one publisher base model was proven (relation `quantized`,
     publisher per catalog); an unresolved hit carries its reason and gets no fit and no Ollama
     name. `repo_created_at` is shown as "repo created", never as the model's release date.
