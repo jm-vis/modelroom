@@ -16,7 +16,7 @@ import pytest
 
 from modelroom.config import Configuration
 from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile
-from modelroom.hf import _MAX_TREE_PAGES, candidate_owners, fetch_base_model_meta, fetch_hf_area
+from modelroom.hf import _MAX_TREE_PAGES, _files_from_tree, candidate_owners, fetch_base_model_meta, fetch_hf_area
 from modelroom.http import Response
 from modelroom.quantization import package_identity_key
 
@@ -800,6 +800,44 @@ def test_fetch_hf_area_file_entry_with_a_non_string_path_ends_area_incomplete():
     )
     base_model = _qwen35_9b(
         hf_repo="synthetic/Bad-Path", repo_aliases=["Bad-Path-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- R7-9 (fix-round 6): a tree entry with no 'type' at all must be a shape error, never
+# silently treated as "not a file" (a directory) -- `entry.get("type") != "file"` was `True` for
+# `{}` too (`None != "file"`), so a tree of nothing but shapeless objects looked like a
+# genuinely-empty, complete area, deactivating every one of the old area's packages (the exact
+# hazard F7 above closed for a *present* `type: "file"` entry with a bad path).
+
+
+def test_files_from_tree_rejects_an_entry_with_no_type_field():
+    with pytest.raises(ValueError):
+        _files_from_tree([{}])
+
+
+def test_fetch_hf_area_tree_entry_with_no_type_field_ends_area_incomplete():
+    sha = "5" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/No-Type-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/No-Type"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/No-Type-GGUF/tree/{sha}?recursive=true",
+            ): Response(status=200, headers={}, body=b"[{}]"),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/No-Type", repo_aliases=["No-Type-GGUF"], ollama_base=None, ollama_tag=None
     )
 
     outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)

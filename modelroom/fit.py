@@ -42,15 +42,29 @@ def compute_fit(
         # never silently compute as an empty, "fits everywhere" package.
         return _unknown("a weight file has no size")
 
-    weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
     context = package.default_context or DEFAULT_CONTEXT
     context_assumed = package.default_context is None
-
     arch = base_model.architecture
-    kv_gib = (
-        2 * arch.num_hidden_layers * arch.num_key_value_heads * arch.head_dim * KV_BYTES_PER_ELEMENT * context
-    ) / GIB
-    need_gib = weights_gib * WEIGHTS_OVERHEAD_RATIO + kv_gib + FIXED_OVERHEAD_GIB
+
+    # R7-10 (fix-round 6): `Architecture`'s own numeric fields are bounded (`le=2**31 - 1`,
+    # `contracts.py`), but `Package.default_context` is not, and `PackageFile.size_bytes` is
+    # bounded only by the fetcher that produced it (`hf.py`/`ollama.py`), not by the contract
+    # itself -- a package built some other way (a hand-built `Package`, a future fetcher) could
+    # still carry an implausible value here. Every multiplication below stays an exact Python
+    # `int` (arbitrary precision, never overflows); only the final `/ GIB` converts to `float`,
+    # which raises `OverflowError` for a product too large to represent (probe: `num_hidden_layers
+    # = 10**400` -- now caught before this point by the contract bound -- or, still possible
+    # today, an implausible `default_context`/`size_bytes` combined with in-bound architecture
+    # values). Caught here as the second line of defense: this one package ends `fit_class ==
+    # "unknown"`, never the whole render.
+    try:
+        weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
+        kv_gib = (
+            2 * arch.num_hidden_layers * arch.num_key_value_heads * arch.head_dim * KV_BYTES_PER_ELEMENT * context
+        ) / GIB
+        need_gib = weights_gib * WEIGHTS_OVERHEAD_RATIO + kv_gib + FIXED_OVERHEAD_GIB
+    except OverflowError:
+        return _unknown("architecture values out of range")
 
     mode, pool_gib, reserve_gib, cap_at_good = _choose_pool(need_gib, hardware, machine_config)
     fit_class = _classify(need_gib, pool_gib, cap_at_good)

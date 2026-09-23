@@ -92,11 +92,20 @@ interpreted: a dense decoder does not carry these fields at all.
 | `source_repo` | `str` | -- | the publisher repo the config was read from |
 | `source_revision` | `str \| None` | 40-hex commit sha, or `None` | the commit the config was read at |
 | `kind` | `"dense_classic" \| "unknown"` | see above | whether the shape is a plain decoder-only transformer |
-| `num_hidden_layers` | `int \| None` | `> 0`; required when `kind == "dense_classic"` | transformer block count |
-| `num_key_value_heads` | `int \| None` | `> 0`; required when `kind == "dense_classic"` | KV heads (for GQA/MQA KV-cache sizing) |
-| `head_dim` | `int \| None` | `> 0`; required when `kind == "dense_classic"` | per-head dimension |
+| `num_hidden_layers` | `int \| None` | `0 < n <= 2**31 - 1`; required when `kind == "dense_classic"` | transformer block count |
+| `num_key_value_heads` | `int \| None` | `0 < n <= 2**31 - 1`; required when `kind == "dense_classic"` | KV heads (for GQA/MQA KV-cache sizing) |
+| `head_dim` | `int \| None` | `0 < n <= 2**31 - 1`; required when `kind == "dense_classic"` | per-head dimension |
 | `layer_types` | `list[str] \| None` | `None` or all `"full_attention"` when `kind == "dense_classic"` | per-layer attention kind, when the config states one |
-| `max_context` | `int \| None` | `> 0` | the model's trained maximum context length |
+| `max_context` | `int \| None` | `0 < n <= 2**31 - 1` | the model's trained maximum context length |
+
+**Upper bound `2**31 - 1` (R7-10, fix-round 6).** `> 0` alone never bounded the top end: a
+publisher `config.json` value like `10**400` (which `json.loads` parses without complaint)
+validated fine and then overflowed `fit.py::compute_fit`'s arithmetic (`OverflowError: integer
+division result too large for a float`), aborting the whole render instead of ending that one
+package's fit `"unknown"`. `compute_fit` also catches `OverflowError` directly, as a second line
+of defense against a combination of otherwise in-bound values (or an unrelated, unbounded field
+such as `Package.default_context`) that still overflows the float conversion together; that path
+returns `Fit(fit_class="unknown", reason="architecture values out of range")`.
 
 ```json
 {
@@ -880,9 +889,16 @@ mode (re-run the command) does not need.
 
 ### Run status (`run-status.json`)
 
-Written by `modelroom/state.py::write_run_status` at the end of every `fetch` run, including
-one that ends exit `1` -- it is the one file a caller can always read to see what happened,
-whether or not the snapshot changed.
+Written by `modelroom/state.py::write_run_status` at the end of every `fetch` run that got past
+the lock and the stale-run check -- including one that then ends exit `1` because at least one
+area came back incomplete, since `write_run_status` runs before that exit code is even decided
+(`cli.py::_run_locked`). **Not** written when the lock is held by another process, or when this
+run is not newer than the stored snapshot (`state.check_run_is_newer` raising `StaleRunError`):
+both of those also exit `1`, but before `run_fetch`/`write_run_status` are ever reached, so the
+previous `run-status.json` (if any) is left completely untouched (corrected R7-13, fix-round 6;
+the fix-round 5 CHANGELOG entry for this correction is still accurate -- it was this doc section
+that had drifted, not the code). It is still the one file a caller can always read to see what a
+run that actually executed did, whether or not the snapshot changed.
 
 ```json
 {
@@ -1007,6 +1023,32 @@ ever made). `run_fetch` composes `RedirectingTransport(BudgetedTransport(transpo
 `BudgetedTransport` as the *inner* layer -- so every hop of a chain arrives at the budget check
 as its own separate call, checked and booked (or raising `BudgetExhaustedError`) before it is
 made, failure paths included, never only after the fact.
+
+### Transport security and proxying
+
+`modelroom/http.py::UrllibTransport` opens exactly the URLs AGENTS.md's attack-surface promise
+names: HTTPS to `huggingface.co`/`ollama.com`/`registry.ollama.ai`, HTTP to the local Ollama
+daemon. `_check_allowed(url, allowed_https_hosts, allowed_http_origins)` runs before anything is
+opened, against every URL this package ever hands a `Transport` -- including a redirect's
+`Location` header and a paginated Hugging Face tree's `Link` header, both of which loop back
+through this same check on the next hop (`RedirectingTransport`).
+
+**The local allow-list is an origin, `(host, port)`, not a bare host (R7-4, fix-round 6).**
+`_ALLOWED_HTTP_ORIGINS` is exactly `{("127.0.0.1", 11434)}`, the real Ollama daemon
+(`modelroom/ollama_local.py::DEFAULT_BASE_URL`); a URL with no explicit port, or a loopback port
+other than `11434`, is refused -- a poisoned `Location`/`Link` header naming a different local
+port a caller happens to have something listening on is not "the local Ollama daemon" and must
+not be treated as one.
+
+**A proxy is honored, but never widens what this transport will reach (R7-5, fix-round 6).**
+`_build_opener` registers `urllib.request.ProxyHandler()` (its stdlib default: reads
+`HTTP_PROXY`/`HTTPS_PROXY` from the environment, honors `NO_PROXY`) alongside the handlers that
+enforce the allow-list. `_check_allowed` in `UrllibTransport.__call__` runs against the request's
+own TARGET url *before* the opener ever consults a proxy -- a proxy can only change how an
+already-allowed request reaches its target, never add a target that was not already on the
+allow-list. An operator who wants the local Ollama daemon reached directly even when a proxy is
+configured for everything else sets `NO_PROXY=127.0.0.1` in the environment; that is a deployment
+decision, never something this package decides on its own.
 
 ### Merge rule (building this run's `Snapshot`)
 
@@ -1333,12 +1375,17 @@ The source is called once per base model that has at least one row in the Packag
 once per package.
 
 **Lock and ordering.** `render` acquires the same lock `fetch` uses
-(`acquire_lock(config.paths.lock_file, "render", now)`), reads the snapshot only after the lock
-is held, and releases it in `finally` -- lock held elsewhere exits `1`. Same ordering as `fetch`
-(F13): the snapshot's `schema_version` is checked *before* the lock is taken; unsupported exits
-`3` with nothing written, not even a lock file. A hardware file with an unsupported
-`schema_version` also exits `3` (checked once the lock is held, before anything is written). No
-snapshot at all exits `1` with "nothing to render, run fetch first"; nothing is written.
+(`acquire_lock(config.paths.lock_file, "render", now)`) and releases it in `finally` -- lock held
+elsewhere exits `1`. Same ordering as `fetch` (F13): the snapshot's `schema_version` is checked
+*before* the lock is taken; unsupported exits `3` with nothing written, not even a lock file. A
+hardware file with an unsupported `schema_version` also exits `3` (checked once the lock is held,
+before anything is written). **No snapshot at all exits `1` with "nothing to render, run fetch
+first" *before* the lock is taken (R7-12, fix-round 6)** -- `acquire_lock` creates the state
+directory and the lock file as a side effect of opening it, so a render with nothing to do must
+never call it: the same pre-read that decides the schema-version gate is reused for this check,
+and the snapshot is read again once the lock is held (a concurrent `fetch` could have written or
+changed it between the two reads), so nothing is written and the state directory is never even
+created when there was never anything to render.
 
 **Header and the newer-document refusal.** Every rendered document starts with a fixed header
 line:
@@ -1363,6 +1410,15 @@ rather than raising `UnicodeDecodeError` out of `render`. The write itself is at
 (`state.atomic_write_text`, the same `.pid.tmp` + `os.replace` convention as
 `atomic_write_json`) and, like every file this package writes, uses LF line endings on every
 platform. `run-status.json` is never touched by `render` -- it belongs to `fetch`.
+
+**Two configurations sharing a `paths.markdown` (R7-6, fix-round 6, decided, no guard).** One
+state directory owns exactly one markdown document; the newer-document refusal above protects
+against an older snapshot under the *same* state directory's lock only. Two configurations with
+different `paths.state` but the same `paths.markdown` are unsupported by this contract and not
+guarded by a second lock -- a lock file next to the document would land in the documentation tree
+of the consuming repo, not in either configuration's own state directory. Nothing else changes;
+`paths.markdown` colliding with `paths.state` itself is a configuration error (R7-1, `config.py`,
+`PathsConfig`), a different case from this one.
 
 **What is rendered.** A fixed header block (title, snapshot run time, rendered time, the number
 of base models / packages -- `fetch`'s own request budget is never shown here, it belongs to

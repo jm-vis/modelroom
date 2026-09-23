@@ -46,6 +46,7 @@ from .render import RatingSource, build_document, parse_header_line
 from .state import (
     LockHeldError,
     StaleRunError,
+    StateFileShapeError,
     acquire_lock,
     atomic_write_text,
     check_run_is_newer,
@@ -62,15 +63,17 @@ from .state import (
 class _UnreadableStateFileError(Exception):
     """A stored snapshot/hardware file is not valid JSON, or does not match its model (P2-3).
 
-    `state.load_existing_snapshot`/`load_existing_hardware_snapshot` let `json.JSONDecodeError`
-    and pydantic `ValidationError` propagate unchanged (only `SchemaVersionError` is their own);
-    `_read_snapshot`/`_read_hardware_snapshot` below catch those two and re-raise this instead,
-    naming the file, so every load site in `cli.py` maps it to exit `3` exactly like
-    `SchemaVersionError` -- a corrupt or wrong-shape file must never crash `main()` with an
-    uncaught exception (probe: a naive `Snapshot.run_at`, before P2-3's contract fix, validated
-    fine and then blew up `state.check_run_is_newer` with an uncaught `TypeError` instead; a
-    truncated file or one missing required fields did the same via `JSONDecodeError`/
-    `ValidationError`).
+    `state.load_existing_snapshot`/`load_existing_hardware_snapshot` let `json.JSONDecodeError`,
+    pydantic `ValidationError`, `state.StateFileShapeError` and `UnicodeDecodeError` propagate
+    unchanged (only `SchemaVersionError` is their own); `_read_snapshot`/`_read_hardware_snapshot`
+    below catch those four and re-raise this instead, naming the file, so every load site in
+    `cli.py` maps it to exit `3` exactly like `SchemaVersionError` -- a corrupt or wrong-shape
+    file must never crash `main()` with an uncaught exception (probe: a naive `Snapshot.run_at`,
+    before P2-3's contract fix, validated fine and then blew up `state.check_run_is_newer` with
+    an uncaught `TypeError` instead; a truncated file or one missing required fields did the same
+    via `JSONDecodeError`/`ValidationError`; R7-3/fix-round 6: a JSON root of `[]`/`null`/a bare
+    string did the same via an uncaught `AttributeError` inside `contracts.load_snapshot`, and a
+    file that is not valid UTF-8 at all via an uncaught `UnicodeDecodeError`).
     """
 
 
@@ -78,7 +81,7 @@ def _read_snapshot(config: Configuration) -> Snapshot | None:
     """`load_existing_snapshot`, wrapping a corrupt/wrong-shape file with its path (P2-3)."""
     try:
         return load_existing_snapshot(config)
-    except (json.JSONDecodeError, ValidationError) as exc:
+    except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError) as exc:
         raise _UnreadableStateFileError(f"{config.paths.snapshot_file}: cannot read snapshot: {exc}") from exc
 
 
@@ -86,7 +89,7 @@ def _read_hardware_snapshot(config: Configuration, machine: str) -> HardwareSnap
     """`load_existing_hardware_snapshot`, wrapping a corrupt/wrong-shape file with its path (P2-3)."""
     try:
         return load_existing_hardware_snapshot(config, machine)
-    except (json.JSONDecodeError, ValidationError) as exc:
+    except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError) as exc:
         path = hardware_snapshot_path(config, machine)
         raise _UnreadableStateFileError(f"{path}: cannot read hardware profile: {exc}") from exc
 
@@ -338,10 +341,21 @@ def render_with_config(
     # snapshot runs before the lock is taken -- an unsupported version exits 3 with nothing
     # written, not even a lock file.
     try:
-        _read_snapshot(config)
+        pre_read_snapshot = _read_snapshot(config)
     except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
+
+    # R7-12 (fix-round 6): "nothing to render" is decided from this same pre-read, still before
+    # the lock -- `acquire_lock` creates the state directory and the lock file as a side effect
+    # of opening it (`Path.mkdir` + `os.open(..., O_CREAT)`), so a render that has nothing to do
+    # must never call it at all. `_render_locked` re-reads the snapshot itself once the lock is
+    # held (a concurrent `fetch` could have written one, or changed it, between this read and
+    # that one), so this is a short-circuit on the common case, never a replacement for that
+    # re-read.
+    if pre_read_snapshot is None:
+        print("nothing to render, run fetch first", file=sys.stderr)
+        return 1
 
     try:
         handle = acquire_lock(config.paths.lock_file, "render", rendered_at)

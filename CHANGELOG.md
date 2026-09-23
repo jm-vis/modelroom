@@ -391,3 +391,84 @@ All notable changes to this project are documented in this file. The format foll
   Documented in `CONTRACTS.md` under "Exit codes", `check_aware_utc`'s own docstring, "Render
   (AP5)" (header/no-recommendation-row/fit-cell paragraphs), "Area semantics", "Request budget"
   and a new "Atomic writes: atomicity, not durability" subsection.
+- Fix-round 6, thirteen findings against `0920f5a` (Codex round 7, verified one by one):
+  - **R7-1** `config.py::PathsConfig` gained a model validator: `paths.markdown` must not equal
+    and must not lie inside `paths.state`'s resolved directory tree -- probe: `paths.markdown`
+    set to the state directory's own snapshot or lock file validated fine, which would have let a
+    render silently corrupt state a `fetch`/`hardware` run depends on. `load_config` additionally
+    rejects `paths.markdown` equal to the config file itself.
+  - **R7-2** `llmfit.py::SubprocessRunner`'s default `which` is now `_default_which`, an explicit
+    `PATH` walk, replacing `shutil.which` -- on Python 3.11 on Windows, `shutil.which` prepends
+    the current working directory to the search list regardless of the `path` argument
+    (`_win_path_needs_curdir` was only added in 3.12), reopening exactly the same-named-CWD-shim
+    hole F9b (fix-round 5) was written to close. Only absolute `PATH` directories are searched (a
+    relative entry is dropped, not resolved against the current directory); Windows tries each
+    `PATHEXT` extension plus the bare name per directory.
+  - **R7-3** A stored snapshot or hardware file whose JSON root is not an object (`[]`, `null`, a
+    bare string) used to raise an uncaught `AttributeError` out of `contracts.load_snapshot`/
+    `load_hardware_snapshot` (`data.get("schema_version")` assumes a `dict`); `state.py` gained
+    `StateFileShapeError(ValueError)`, raised by `load_existing_snapshot`/
+    `load_existing_hardware_snapshot` before either loader runs. `cli.py`'s
+    `_read_snapshot`/`_read_hardware_snapshot` now also catch it and `UnicodeDecodeError` (a file
+    that is not valid UTF-8 at all), mapping both to exit `3` with the file path, exactly like
+    `JSONDecodeError`/`ValidationError` already did.
+  - **R7-4** `http.py`'s local allow-list is now an origin, `(host, port)`
+    (`_ALLOWED_HTTP_ORIGINS = {("127.0.0.1", 11434)}`), not a bare host -- probe:
+    `http://127.0.0.1:59999/x` was accepted with the production defaults, so a poisoned
+    `Location`/`Link` header could reach any local port, not only the real Ollama daemon. A URL
+    with no explicit port is refused rather than matching "any port".
+    `UrllibTransport`'s constructor parameter is renamed `allowed_http_origins` to match.
+  - **R7-5** `http.py::_build_opener` registers `urllib.request.ProxyHandler()` again -- the
+    explicit handler list `_build_opener` replaced `build_opener(_NoAutoRedirect)` with (P2-1,
+    fix-round 5) dropped the `ProxyHandler` that `build_opener`'s auto-fill used to add for free,
+    silently losing `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support. The allow-list check still runs
+    against the request's own target URL before the opener ever consults a proxy, so a proxy can
+    change how an already-allowed request is reached but never widen what is reachable.
+  - **R7-6** (decided, no code) Two configurations with different `paths.state` but the same
+    `paths.markdown` are unsupported by contract and not guarded by a second lock -- documented in
+    CONTRACTS.md, "Render (AP5)": one state directory owns exactly one markdown document, the
+    newer-document refusal protects only against an older snapshot under the *same* state
+    directory's lock.
+  - **R7-7** `config.py::Configuration` gained a model validator: two base models sharing an
+    `ollama_base` may not claim equal or prefix-overlapping `ollama_tag`s -- probe:
+    `ollama_base="nova"` with `ollama_tag="7b"` on two different base models validated fine, but
+    `ollama._keep_relevant_tags` keeps `tag == ollama_tag or tag.startswith(ollama_tag + "-")`, so
+    both would resolve packages under the identity `nova:7b`, and the later-processed area would
+    silently overwrite the other's package (the same P3-6 hazard, for Ollama instead of Hugging
+    Face packager names).
+  - **R7-8** `config.py::_check_repo_names_do_not_collide_across_base_models` (P3-6, fix-round 5)
+    now compares the full `owner/name` candidate, not the bare repo name -- probe: `acme/Nova` and
+    `other/Nova` with `packagers = []` were wrongly rejected (`'Nova-GGUF' is claimed by both`),
+    even though `hf.py::fetch_hf_area` would probe `acme/Nova-GGUF` and `other/Nova-GGUF`, never
+    the same repo. A collision sharing a configured packager still fails, unchanged.
+  - **R7-9** `hf.py::_files_from_tree`: a tree entry with no `type` field at all (`{}`) was
+    silently treated as "not a file" (a directory) and skipped, exactly the "genuinely empty,
+    complete area" hazard F7 (fix-round 5) closed for a bad `path` -- `type` must now be a
+    non-empty string before it is compared to `"file"`. `ollama.py::_validated_layer`: a manifest
+    layer with no `mediaType`/`digest` at all (`{}`) passed through unchanged, and `_build_package`
+    built an empty `format="unknown", complete=False` stub under the tag's real identity, silently
+    replacing a previously valid package -- both fields are now required, non-empty strings.
+  - **R7-10** `contracts.py::Architecture`'s `num_hidden_layers`/`num_key_value_heads`/`head_dim`/
+    `max_context` gained an upper bound, `le=2**31 - 1` -- probe: `num_hidden_layers = 10**400`
+    validated fine, then `fit.py::compute_fit` raised `OverflowError: integer division result too
+    large for a float`, aborting the whole render. `compute_fit` also now catches `OverflowError`
+    directly around its arithmetic, returning `fit_class="unknown",
+    reason="architecture values out of range"` -- a second line of defense against an unrelated,
+    unbounded field (`Package.default_context`) combined with otherwise in-bound values.
+  - **R7-11** `render.py` gained a shared `_cell(value)` helper -- escapes `|` and collapses any
+    `\r\n`/`\n`/`\r` to a single space -- applied to every cell carrying external text: area
+    error, base model repo, packager, quantization/format labels, hardware `gpu_name`/`backend`/
+    `installed_unavailable_reason`, fit/no-recommendation reasons, and a `RatingSource`'s error
+    message. Probe: an `Area.error` of `"boom | extra\nsecond line"` produced 4 physical lines and
+    an extra column in the areas table instead of the one row it should have been.
+  - **R7-12** `cli.py::render_with_config`'s pre-lock snapshot read now also decides "nothing to
+    render, run fetch first" (exit `1`) *before* `acquire_lock` is ever called -- previously the
+    pre-read result was discarded and the check only ran again inside `_render_locked`, after the
+    lock (and therefore the state directory and the lock file, both `acquire_lock` side effects)
+    had already been created for a render that had nothing to do.
+  - **R7-13** CONTRACTS.md's "Run status" section still said `run-status.json` is written "at the
+    end of every fetch run, including one that ends exit 1" -- P3-1 (fix-round 5) had already
+    concluded this needed rewording, but the correction was never actually applied to this
+    section. Reworded to say explicitly what the code (`cli.py::fetch_with_config`/`_run_locked`)
+    already did: written at the end of every run that got past the lock and the stale-run check;
+    not written when the lock is held or a newer run is detected. No code change.

@@ -13,6 +13,7 @@ from modelroom.llmfit import (
     FixtureRunner,
     LlmfitError,
     SubprocessRunner,
+    _default_which,
     check_llmfit_version,
     fetch_llmfit_system,
     hardware_fields_from_llmfit_system,
@@ -289,9 +290,18 @@ def test_subprocess_runner_prefers_the_path_entry_over_a_same_named_file_in_the_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """F9b: a same-named `llmfit` shim placed only in the current working directory must never
-    be the one that runs -- `which` (real `shutil.which` here, via `SubprocessRunner`'s own
-    default) only ever searches `PATH`, and `SubprocessRunner` invokes the exact resolved path,
-    never the bare name, so the current directory is never consulted at all.
+    be the one that runs -- `which` (`_default_which`, `SubprocessRunner`'s own default since
+    R7-2/fix-round 6) only ever searches `PATH`, and `SubprocessRunner` invokes the exact
+    resolved path, never the bare name, so the current directory is never consulted at all.
+
+    R7-2 (fix-round 6): the default used to be `shutil.which`, which is not enough on its own --
+    on Python 3.11 on Windows it prepends the current directory to the search list regardless of
+    the `path` argument, so this same scenario could have passed a same-named CWD impostor
+    straight through on that interpreter (3.12 changed this, gating the prepend on
+    `NeedCurrentDirectoryForExePath`, which is why this test alone cannot prove the 3.11 bug on a
+    3.12 interpreter -- `test_default_which_ignores_a_relative_path_entry` below proves the
+    general property the explicit walk enforces instead: only absolute `PATH` directories are
+    ever consulted, so the current directory is searched only if `PATH` itself names it).
     """
     on_path = tmp_path / "on_path"
     _write_llmfit_shim(on_path, "llmfit 1.1.16")
@@ -305,6 +315,59 @@ def test_subprocess_runner_prefers_the_path_entry_over_a_same_named_file_in_the_
 
     assert "llmfit 1.1.16" in result.stdout
     assert "9.9.9" not in result.stdout
+
+
+# --- R7-2 (fix-round 6): `_default_which`, an explicit PATH walk replacing `shutil.which` ---
+#
+# `shutil.which` on Python 3.11/Windows prepends the current directory to the search list
+# regardless of the `path` argument (3.12 gated that on `NeedCurrentDirectoryForExePath`), so it
+# is not a safe default resolver on its own. `_default_which` walks `PATH` by hand instead.
+
+
+def test_default_which_ignores_a_shim_in_the_cwd_that_is_not_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    planted_cwd = tmp_path / "planted_cwd"
+    _write_llmfit_shim(planted_cwd, "llmfit 9.9.9")
+    empty_on_path = tmp_path / "empty_on_path"
+    empty_on_path.mkdir()
+
+    monkeypatch.chdir(planted_cwd)
+    monkeypatch.setenv("PATH", str(empty_on_path))
+
+    assert _default_which("llmfit") is None
+
+
+def test_default_which_finds_a_shim_in_a_path_directory_with_its_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    on_path = tmp_path / "on_path"
+    _write_llmfit_shim(on_path, "llmfit 1.1.16")
+    expected = on_path / ("llmfit.bat" if sys.platform == "win32" else "llmfit")
+
+    monkeypatch.setenv("PATH", str(on_path))
+
+    result = _default_which("llmfit")
+
+    assert result is not None
+    assert os.path.isabs(result)
+    # Windows filesystems are case-insensitive: `PATHEXT`'s `.BAT` may not match the shim's own
+    # `.bat` casing byte-for-byte, but both name the same file.
+    assert os.path.samefile(result, expected)
+
+
+def test_default_which_ignores_a_relative_path_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A relative `PATH` entry would still resolve against the current working directory --
+    the same trust problem the whole fix exists to close, in a different disguise -- so it must
+    be dropped rather than followed, even when the file genuinely exists there.
+    """
+    relative_dir_name = "on_path"
+    _write_llmfit_shim(tmp_path / relative_dir_name, "llmfit 1.1.16")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", relative_dir_name)
+
+    assert _default_which("llmfit") is None
 
 
 def test_subprocess_runner_decodes_output_as_utf8_with_replace_on_undecodable_bytes(tmp_path: Path):

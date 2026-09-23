@@ -29,7 +29,12 @@ DEFAULT_REQUEST_BUDGET = 400
 # Ollama daemon as the one legitimate HTTP (not HTTPS) destination, at
 # `ollama_local.py::DEFAULT_BASE_URL`'s host.
 _ALLOWED_HTTPS_HOSTS: frozenset[str] = frozenset({"huggingface.co", "ollama.com", "registry.ollama.ai"})
-_ALLOWED_HTTP_HOSTS: frozenset[str] = frozenset({"127.0.0.1"})
+# R7-4 (fix-round 6): an origin (host, port), not just a host -- `_check_allowed` used to accept
+# any port on `127.0.0.1` (probe: `http://127.0.0.1:59999/x` was accepted), so a poisoned
+# `Location`/`Link` header could reach any local port a caller happened to have something
+# listening on, not only the real Ollama daemon. `ollama_local.py::DEFAULT_BASE_URL` names the
+# same origin (`test_ollama_local_default_base_url_is_in_the_production_http_allow_list`).
+_ALLOWED_HTTP_ORIGINS: frozenset[tuple[str | None, int | None]] = frozenset({("127.0.0.1", 11434)})
 
 
 class TransportSecurityError(Exception):
@@ -49,14 +54,21 @@ class TransportSecurityError(Exception):
     """
 
 
-def _check_allowed(url: str, allowed_https_hosts: frozenset[str], allowed_http_hosts: frozenset[str]) -> None:
+def _check_allowed(
+    url: str, allowed_https_hosts: frozenset[str], allowed_http_origins: frozenset[tuple[str | None, int | None]]
+) -> None:
     """Raise `TransportSecurityError` unless `url` is `https://<allowed host>` or `http://<allowed
-    loopback host>` -- checked before `UrllibTransport` ever opens a connection.
+    loopback origin>` -- checked before `UrllibTransport` ever opens a connection.
+
+    R7-4 (fix-round 6): the local allow-list is matched as an origin, `(hostname, port)`, not by
+    hostname alone -- a URL with no explicit port parses to `parsed.port is None`, which is not a
+    member of `allowed_http_origins` (every entry names an explicit port), so it is refused
+    rather than silently matching "any port".
     """
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme == "https" and parsed.hostname in allowed_https_hosts:
         return
-    if parsed.scheme == "http" and parsed.hostname in allowed_http_hosts:
+    if parsed.scheme == "http" and (parsed.hostname, parsed.port) in allowed_http_origins:
         return
     raise TransportSecurityError(
         f"refusing to open {url!r}: scheme {parsed.scheme!r} / host {parsed.hostname!r} is not on the allow-list"
@@ -75,9 +87,21 @@ def _build_opener() -> urllib.request.OpenerDirector:
     and registering only `HTTPHandler`/`HTTPSHandler`/`_NoAutoRedirect`/`HTTPErrorProcessor` has
     no such auto-fill: a `file://`/`ftp://`/`data:` URL is structurally impossible here even if
     `_check_allowed` were ever bypassed, never merely rejected by a check that a bug could skip.
+
+    R7-5 (fix-round 6): the old `build_opener(_NoAutoRedirect)` call also added a `ProxyHandler`
+    for free (one of `build_opener`'s auto-filled defaults); this explicit handler list dropped
+    that too, silently losing proxy support. `urllib.request.ProxyHandler()` (constructed with no
+    arguments, its stdlib default: reads `HTTP_PROXY`/`HTTPS_PROXY` from the environment, honors
+    `NO_PROXY`) is added back explicitly. `_check_allowed` in `__call__` below still runs against
+    the request's own TARGET url, before `self._opener.open` ever consults a proxy, so a proxy
+    can never widen this transport's allow-list -- it can only change how an already-allowed
+    request reaches its target. An operator who wants the local Ollama daemon reached directly
+    even behind a proxy sets `NO_PROXY=127.0.0.1`; that is a deployment decision, never one this
+    package makes on its own.
     """
     opener = urllib.request.OpenerDirector()
     for handler_class in (
+        urllib.request.ProxyHandler,
         urllib.request.HTTPHandler,
         urllib.request.HTTPSHandler,
         _NoAutoRedirect,
@@ -167,8 +191,8 @@ class UrllibTransport:
     against the allow-list again, so a poisoned redirect target is refused on the hop that would
     have followed it, never only on the first.
 
-    `allowed_https_hosts`/`allowed_http_hosts` default to the production allow-list
-    (`_ALLOWED_HTTPS_HOSTS`/`_ALLOWED_HTTP_HOSTS`); a caller overrides them only to relax the
+    `allowed_https_hosts`/`allowed_http_origins` default to the production allow-list
+    (`_ALLOWED_HTTPS_HOSTS`/`_ALLOWED_HTTP_ORIGINS`); a caller overrides them only to relax the
     check for a test (e.g. a loopback server on a non-default port), always as an explicit
     constructor argument here, never through an environment variable or a module global.
     """
@@ -177,15 +201,15 @@ class UrllibTransport:
         self,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         allowed_https_hosts: frozenset[str] = _ALLOWED_HTTPS_HOSTS,
-        allowed_http_hosts: frozenset[str] = _ALLOWED_HTTP_HOSTS,
+        allowed_http_origins: frozenset[tuple[str | None, int | None]] = _ALLOWED_HTTP_ORIGINS,
     ) -> None:
         self._timeout = timeout
         self._allowed_https_hosts = allowed_https_hosts
-        self._allowed_http_hosts = allowed_http_hosts
+        self._allowed_http_origins = allowed_http_origins
         self._opener = _build_opener()
 
     def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
-        _check_allowed(url, self._allowed_https_hosts, self._allowed_http_hosts)
+        _check_allowed(url, self._allowed_https_hosts, self._allowed_http_origins)
         request_headers = {"User-Agent": USER_AGENT}
         request_headers.update(headers or {})
         request = urllib.request.Request(url, method=method, headers=request_headers)

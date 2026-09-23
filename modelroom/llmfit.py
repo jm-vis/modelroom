@@ -12,18 +12,58 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
-import shutil
 import subprocess
+import sys
 from typing import Callable, Protocol
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 # F9b (fix-round 5): `Which = (name) -> absolute path | None`, the same dependency-injection
-# shape `Transport`/`Runner` already use -- the real implementation is `shutil.which`. Only
-# `SubprocessRunner` takes one (a test never constructs it -- see its own docstring -- so this
-# never touches a `FixtureRunner`-based test): a test that needs to prove which resolved path
-# `SubprocessRunner` invoked injects a fake resolver instead of needing a real binary on `PATH`.
+# shape `Transport`/`Runner` already use -- the real implementation is `_default_which` (an
+# explicit PATH walk, see its own docstring). Only `SubprocessRunner` takes one (a test never
+# constructs it -- see its own docstring -- so this never touches a `FixtureRunner`-based test):
+# a test that needs to prove which resolved path `SubprocessRunner` invoked injects a fake
+# resolver instead of needing a real binary on `PATH`.
 Which = Callable[[str], "str | None"]
+
+# The documented Windows default when `PATHEXT` is unset.
+_DEFAULT_PATHEXT = ".EXE;.CMD;.BAT;.COM"
+
+
+def _default_which(name: str) -> str | None:
+    """R7-2 (fix-round 6): resolve `name` on `PATH` with an explicit walk, never via `shutil.which`.
+
+    On Python 3.11 on Windows, `shutil.which` prepends the current working directory to the
+    search list regardless of the `path` argument (`_win_path_needs_curdir` was only added in
+    3.12, gated on `NeedCurrentDirectoryForExePath`) -- silently reopening exactly the hole F9b
+    was written to close: a same-named file placed in the current working directory could run
+    instead of the real one `PATH` points to. This walks `os.environ["PATH"]` by hand instead,
+    so the current directory is consulted only if it is itself listed there.
+
+    Only absolute directory entries are searched -- a relative `PATH` entry would still resolve
+    against the current working directory (the same trust problem in a different disguise), so
+    it is dropped rather than followed. On Windows, each `PATHEXT` extension (the documented
+    default `.EXE;.CMD;.BAT;.COM` when the variable is unset) is tried per directory, plus the
+    bare name. Returns the first candidate that is a regular file and passes
+    `os.access(..., os.X_OK)`, else `None`.
+    """
+    path_value = os.environ.get("PATH", os.defpath)
+    directories = [entry for entry in path_value.split(os.pathsep) if entry and os.path.isabs(entry)]
+
+    if sys.platform == "win32":
+        pathext_value = os.environ.get("PATHEXT") or _DEFAULT_PATHEXT
+        extensions = [ext for ext in pathext_value.split(os.pathsep) if ext]
+        candidate_names = [name + ext for ext in extensions] + [name]
+    else:
+        candidate_names = [name]
+
+    for directory in directories:
+        for candidate_name in candidate_names:
+            candidate = os.path.join(directory, candidate_name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
 
 # `llmfit --help` (checked 2026-09-22) prints no install line of its own; this names the
 # project's own documented source instead (README.md, "Planned usage").
@@ -59,7 +99,7 @@ class SubprocessRunner:
 
     F9b (fix-round 5): resolves `args[0]` (always the bare name `"llmfit"`, from
     `check_llmfit_version`/`fetch_llmfit_system`) to its absolute location via `which`
-    (`shutil.which` by default) *before* calling `subprocess.run`, rather than passing the bare
+    (`_default_which` by default) *before* calling `subprocess.run`, rather than passing the bare
     name straight through -- an unqualified executable name's search order on Windows checks the
     current working directory before `PATH`, so a same-named file placed in the CWD could
     otherwise run instead of the real one `PATH` points to. `which` returning `None` raises
@@ -67,9 +107,14 @@ class SubprocessRunner:
     cannot find at all -- `check_llmfit_version` already turns that into `LlmfitError` naming an
     install hint, `fetch_llmfit_system` into one via its broader `OSError` catch
     (`FileNotFoundError` is an `OSError` subclass).
+
+    R7-2 (fix-round 6): the default was `shutil.which` through fix-round 5; on Python 3.11 on
+    Windows it prepends the current directory to the search list regardless of any `path`
+    argument, reopening the same hole. `_default_which` (module-level) is an explicit PATH walk
+    that never does that.
     """
 
-    def __init__(self, timeout: float = DEFAULT_TIMEOUT_SECONDS, which: Which = shutil.which) -> None:
+    def __init__(self, timeout: float = DEFAULT_TIMEOUT_SECONDS, which: Which = _default_which) -> None:
         self._timeout = timeout
         self._which = which
 

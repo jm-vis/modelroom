@@ -199,6 +199,34 @@ def test_paths_config_relative_markdown_is_rejected():
         PathsConfig.model_validate(payload)
 
 
+def test_paths_config_markdown_equal_to_snapshot_file_is_rejected(tmp_path):
+    state_dir = tmp_path / "state"
+    payload = {"state": str(state_dir), "markdown": str(state_dir / "modelroom.json")}
+    with pytest.raises(ValidationError, match="markdown"):
+        PathsConfig.model_validate(payload)
+
+
+def test_paths_config_markdown_equal_to_lock_file_is_rejected(tmp_path):
+    state_dir = tmp_path / "state"
+    payload = {"state": str(state_dir), "markdown": str(state_dir / "modelroom.lock")}
+    with pytest.raises(ValidationError, match="markdown"):
+        PathsConfig.model_validate(payload)
+
+
+def test_paths_config_markdown_inside_hardware_dir_is_rejected(tmp_path):
+    state_dir = tmp_path / "state"
+    payload = {"state": str(state_dir), "markdown": str(state_dir / "hardware" / "workstation.json")}
+    with pytest.raises(ValidationError, match="markdown"):
+        PathsConfig.model_validate(payload)
+
+
+def test_paths_config_markdown_equal_to_state_dir_is_rejected(tmp_path):
+    state_dir = tmp_path / "state"
+    payload = {"state": str(state_dir), "markdown": str(state_dir)}
+    with pytest.raises(ValidationError, match="markdown"):
+        PathsConfig.model_validate(payload)
+
+
 def test_paths_config_derived_properties(tmp_path):
     state_dir = tmp_path / "state"
     paths = PathsConfig.model_validate({"state": str(state_dir), "markdown": str(tmp_path / "models.md")})
@@ -299,12 +327,93 @@ def test_configuration_rejects_a_default_gguf_name_colliding_with_another_base_m
         Configuration.model_validate(payload)
 
 
+# --- R7-8 (fix-round 6): the collision check compares full "owner/name" candidates, not name
+# alone -- P3-6's own check compared bare repo names, so two base models with the same *name*
+# under two different owners (no shared packager) were wrongly rejected even though
+# `hf.py::fetch_hf_area` would never probe the same `owner/name` combination for them.
+#
+# Probe (fix-round 6 brief): `acme/Nova` + `other/Nova` with `packagers = []` was rejected
+# ("packager repo name 'Nova-GGUF' is claimed by both"), although the two repos actually probed
+# are `acme/Nova-GGUF` and `other/Nova-GGUF` -- distinct owners, no collision.
+
+
+def _minimal_two_owner_payload(packagers: list[str]) -> dict:
+    return {
+        "schema_version": 1,
+        "families": [
+            {"name": "nova", "base_models": [{"hf_repo": "acme/Nova", "repo_aliases": []}]},
+            {"name": "nova-other", "base_models": [{"hf_repo": "other/Nova", "repo_aliases": []}]},
+        ],
+        "packagers": packagers,
+        "publishers": ["acme", "other"],
+        "paths": dict(EXAMPLES["Configuration"]["paths"]),
+    }
+
+
+def test_configuration_accepts_the_same_repo_name_under_two_different_owners_with_no_shared_packager():
+    Configuration.model_validate(_minimal_two_owner_payload(packagers=[]))  # must not raise
+
+
+def test_configuration_still_rejects_the_same_repo_name_when_a_packager_is_shared():
+    """The probe case above must pass with no packager in common -- but a *shared* packager
+    still makes both base models probe the same `packager/Nova-GGUF` candidate, which is a real
+    collision (P3-6's original hazard), so this must still fail.
+    """
+    with pytest.raises(ValidationError):
+        Configuration.model_validate(_minimal_two_owner_payload(packagers=["packager"]))
+
+
+# --- R7-7 (fix-round 6): two base models on the same ollama_base must not claim colliding
+# ollama_tag identities -- `ollama._keep_relevant_tags` keeps `tag == ollama_tag or
+# tag.startswith(ollama_tag + "-")`, so `ollama_tag="7b"` also owns a real registry tag
+# `"7b-instruct"`; two base models configured that way would both resolve packages under the
+# *same* Ollama identity (`nova:7b`), and `state.merge_snapshot` lets whichever is processed last
+# silently overwrite the other's package, exactly like P3-6 for Hugging Face packager names.
+
+
+def _second_base_model_payload(hf_repo: str, ollama_base: str, ollama_tag: str) -> dict:
+    return {
+        "name": "other-family",
+        "base_models": [
+            {"hf_repo": hf_repo, "repo_aliases": [], "ollama_base": ollama_base, "ollama_tag": ollama_tag}
+        ],
+    }
+
+
+def test_configuration_rejects_equal_ollama_tags_on_the_same_ollama_base():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["families"].append(_second_base_model_payload("acme/Other-7B", "nova", "7b"))
+    with pytest.raises(ValidationError):
+        Configuration.model_validate(payload)
+
+
+def test_configuration_rejects_an_ollama_tag_that_is_a_prefix_of_another():
+    """Probe (fix-round 6 brief): `nova:7b` also owns the real registry tag `7b-instruct` --
+    configuring a second base model with `ollama_tag="7b-instruct"` on the same `ollama_base`
+    must be rejected exactly like an equal tag would be.
+    """
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["families"].append(_second_base_model_payload("acme/Other-7B", "nova", "7b-instruct"))
+    with pytest.raises(ValidationError):
+        Configuration.model_validate(payload)
+
+
+def test_configuration_accepts_distinct_non_overlapping_ollama_tags_on_the_same_ollama_base():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["families"].append(_second_base_model_payload("acme/Other-14B", "nova", "14b"))
+    Configuration.model_validate(payload)  # must not raise
+
+
 def test_configuration_accepts_distinct_repo_aliases_across_base_models():
     payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
     second_family = json.loads(json.dumps(payload["families"][0]))
     second_family["name"] = "other-family"
     second_family["base_models"][0]["hf_repo"] = "acme/Other-7B"
     second_family["base_models"][0]["repo_aliases"] = ["Other-7B-Instruct-GGUF"]
+    # R7-7 (fix-round 6): the first base model already claims ollama_base "nova"/tag "7b" -- a
+    # distinct tag on the same base keeps this test about repo_aliases only, not an (also
+    # correctly rejected) ollama identity collision.
+    second_family["base_models"][0]["ollama_tag"] = "14b"
     payload["families"].append(second_family)
     Configuration.model_validate(payload)  # must not raise
 
@@ -518,6 +627,34 @@ def test_load_config_rejects_a_symlinked_state_path_pointing_outside(tmp_path):
 
 
 # --- F8: a relative --config path must still resolve paths.state absolutely ----------------
+
+
+# --- R7-1: paths.markdown must not collide with the config file itself --------------------
+
+
+def test_load_config_rejects_markdown_equal_to_the_config_file(tmp_path):
+    config_path = tmp_path / "modelroom.toml"
+    config_path.write_text(
+        """
+schema_version = 1
+packagers = ["packager"]
+publishers = ["acme"]
+
+[[families]]
+name = "nova"
+
+  [[families.base_models]]
+  hf_repo = "acme/Nova-7B"
+
+[paths]
+state = "state"
+markdown = "modelroom.toml"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="markdown"):
+        load_config(config_path)
 
 
 def test_load_config_with_a_relative_config_path_resolves_state_absolutely(tmp_path):

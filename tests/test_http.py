@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.parse
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -31,10 +32,11 @@ from modelroom.http import (
     Response,
     TransportSecurityError,
     UrllibTransport,
-    _ALLOWED_HTTP_HOSTS,
+    _ALLOWED_HTTP_ORIGINS,
     _ALLOWED_HTTPS_HOSTS,
     _check_allowed,
 )
+from modelroom.ollama_local import DEFAULT_BASE_URL
 
 
 class _RedirectHandler(BaseHTTPRequestHandler):
@@ -136,20 +138,57 @@ def test_default_allow_list_accepts_exactly_the_three_hosts_this_package_talks_t
         "https://ollama.com/library/nova/tags",
         "https://registry.ollama.ai/v2/library/nova/manifests/7b",
     ):
-        _check_allowed(url, _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_HOSTS)  # must not raise
+        _check_allowed(url, _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_ORIGINS)  # must not raise
 
     with pytest.raises(TransportSecurityError):
-        _check_allowed("https://huggingface.co.evil.example/x", _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_HOSTS)
+        _check_allowed("https://huggingface.co.evil.example/x", _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_ORIGINS)
 
 
-def test_urllib_transport_rejects_loopback_http_without_the_explicit_relaxation():
-    """The local Ollama daemon's `http://127.0.0.1:11434` is a *production* default host (F1
-    text), but a caller that wants a *different* loopback host/port for a test must say so
-    explicitly -- never via an environment variable or a module global.
+# --- R7-4 (fix-round 6): the local HTTP allow-list is an origin (host + port), not just a host -
+#
+# Probe: `_check_allowed("http://127.0.0.1:59999/x", ...)` was accepted with the production
+# defaults -- a poisoned `Location`/`Link` header could reach any local port, not only the real
+# Ollama daemon's `11434`.
+
+
+def test_check_allowed_refuses_a_loopback_port_other_than_11434_with_production_defaults():
+    with pytest.raises(TransportSecurityError):
+        _check_allowed("http://127.0.0.1:59999/x", _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_ORIGINS)
+
+
+def test_check_allowed_accepts_the_real_ollama_daemon_origin_with_production_defaults():
+    _check_allowed("http://127.0.0.1:11434/api/tags", _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_ORIGINS)  # must not raise
+
+
+def test_check_allowed_refuses_a_loopback_url_with_no_explicit_port():
+    """A missing port must never fall back to matching by host alone."""
+    with pytest.raises(TransportSecurityError):
+        _check_allowed("http://127.0.0.1/api/tags", _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_ORIGINS)
+
+
+def test_ollama_local_default_base_url_is_in_the_production_http_allow_list():
+    """`ollama_local.DEFAULT_BASE_URL` and `_ALLOWED_HTTP_ORIGINS` must name the same origin, or
+    the daemon `hardware` actually talks to would be refused by `UrllibTransport`'s own default.
     """
-    transport = UrllibTransport(allowed_http_hosts=frozenset())
-    with pytest.raises(TransportSecurityError):
-        transport("GET", "http://127.0.0.1:59999/api/tags")
+    parsed = urllib.parse.urlsplit(DEFAULT_BASE_URL)
+    assert (parsed.hostname, parsed.port) in _ALLOWED_HTTP_ORIGINS
+
+
+def test_urllib_transport_rejects_loopback_http_on_a_port_other_than_11434_with_production_defaults():
+    """The local Ollama daemon's `http://127.0.0.1:11434` is the *only* production default
+    loopback origin (F1 text/R7-4): a real server on a different port -- the loopback server
+    fixture gives one by construction, since the OS assigns an ephemeral port -- is refused with
+    no explicit relaxation, while an allowed HTTPS host still passes the same check.
+    """
+    with _loopback_server() as (base_url, _requests_seen):
+        port = urllib.parse.urlsplit(base_url).port
+        assert port != 11434
+        transport = UrllibTransport()  # production defaults, no relaxation
+
+        with pytest.raises(TransportSecurityError):
+            transport("GET", f"{base_url}/a")
+
+        _check_allowed("https://huggingface.co/api/models/acme/Nova-7B", _ALLOWED_HTTPS_HOSTS, _ALLOWED_HTTP_ORIGINS)
 
 
 # --- P2-2: a real loopback server proves _NoAutoRedirect actually stops urllib's own following,
@@ -158,7 +197,8 @@ def test_urllib_transport_rejects_loopback_http_without_the_explicit_relaxation(
 
 def test_urllib_transport_returns_a_302_raw_instead_of_following_it():
     with _loopback_server() as (base_url, requests_seen):
-        transport = UrllibTransport(allowed_http_hosts=frozenset({"127.0.0.1"}))
+        port = urllib.parse.urlsplit(base_url).port
+        transport = UrllibTransport(allowed_http_origins=frozenset({("127.0.0.1", port)}))
 
         response = transport("GET", f"{base_url}/a")
 
@@ -169,7 +209,8 @@ def test_urllib_transport_returns_a_302_raw_instead_of_following_it():
 
 def test_redirecting_transport_over_a_real_server_refuses_a_file_url_location():
     with _loopback_server(redirect_target="file:///etc/passwd") as (base_url, requests_seen):
-        transport = UrllibTransport(allowed_http_hosts=frozenset({"127.0.0.1"}))
+        port = urllib.parse.urlsplit(base_url).port
+        transport = UrllibTransport(allowed_http_origins=frozenset({("127.0.0.1", port)}))
         redirecting = RedirectingTransport(transport)
 
         with pytest.raises(TransportSecurityError, match="file"):
@@ -181,13 +222,58 @@ def test_redirecting_transport_over_a_real_server_refuses_a_file_url_location():
 
 def test_redirecting_transport_over_a_real_server_refuses_a_foreign_host_location():
     with _loopback_server(redirect_target="https://evil.example/x") as (base_url, requests_seen):
-        transport = UrllibTransport(allowed_http_hosts=frozenset({"127.0.0.1"}))
+        port = urllib.parse.urlsplit(base_url).port
+        transport = UrllibTransport(allowed_http_origins=frozenset({("127.0.0.1", port)}))
         redirecting = RedirectingTransport(transport)
 
         with pytest.raises(TransportSecurityError, match="evil.example"):
             redirecting("GET", f"{base_url}/a")
 
         assert requests_seen == ["/a"]
+
+
+# --- R7-5 (fix-round 6): `_build_opener` honors HTTP_PROXY/HTTPS_PROXY/NO_PROXY from the
+# environment -- `build_opener` (the previous implementation) added a `ProxyHandler` for free;
+# the explicit handler list `_build_opener` replaced it with (P2-1/fix-round 5) dropped that,
+# silently losing proxy support. The allow-list check still runs against the TARGET url, before
+# the proxy is ever consulted (`UrllibTransport.__call__`: `_check_allowed` first, `opener.open`
+# second) -- a proxy can never widen what this transport is willing to reach.
+
+
+def test_urllib_transport_honors_the_http_proxy_env_var(monkeypatch: pytest.MonkeyPatch):
+    """A real loopback server stands in for the proxy: when `urllib.request` actually proxies an
+    HTTP request, it sends the request line with the absolute target URL (not a bare path) -- the
+    one thing a direct request could never produce, so `requests_seen` capturing the absolute URL
+    proves the proxy was used, not just reachable.
+    """
+    with _loopback_server() as (proxy_base_url, proxy_requests_seen):
+        monkeypatch.setenv("HTTP_PROXY", proxy_base_url)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        # An address in TEST-NET-1 (RFC 5737, guaranteed unroutable): if this were ever connected
+        # to directly instead of through the proxy, the request would time out, not succeed.
+        target_url = "http://192.0.2.1:80/somepath"
+        transport = UrllibTransport(allowed_http_origins=frozenset({("192.0.2.1", 80)}))
+
+        response = transport("GET", target_url)
+
+        assert response.status == 200
+        assert proxy_requests_seen == [target_url]
+
+
+def test_no_proxy_env_var_bypasses_the_proxy_for_the_target_host(monkeypatch: pytest.MonkeyPatch):
+    with _loopback_server() as (proxy_base_url, proxy_requests_seen):
+        with _loopback_server() as (target_base_url, target_requests_seen):
+            monkeypatch.setenv("HTTP_PROXY", proxy_base_url)
+            monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+            target_port = urllib.parse.urlsplit(target_base_url).port
+            transport = UrllibTransport(allowed_http_origins=frozenset({("127.0.0.1", target_port)}))
+
+            response = transport("GET", f"{target_base_url}/direct")
+
+            assert response.status == 200
+            assert target_requests_seen == ["/direct"]
+            assert proxy_requests_seen == []  # the proxy was never contacted at all
 
 
 # --- FixtureTransport -----------------------------------------------------------------------

@@ -328,12 +328,21 @@ def _files_from_tree(entries: list[dict]) -> list[PackageFile]:
     path). Silently dropping every entry this way made a tree that is entirely malformed look
     like a genuinely empty, `complete` area, which `state.merge_snapshot` then reads as "this
     area really has zero files now" and deactivates every one of its old packages.
+
+    R7-9 (fix-round 6): `entry.get("type") != "file"` was `True` for an entry with no `type`
+    field at all (`{}`), so it was silently skipped exactly like a real directory entry --
+    `_files_from_tree([{}])` returned `[]`, the same "genuinely empty, complete area" hazard F7
+    closed for a bad `path`. `type` must now be a non-empty string before it is even compared to
+    `"file"`; only an entry that genuinely *names* a non-file type (a real directory) is skipped.
     """
     files: list[PackageFile] = []
     for entry in entries:
         if not isinstance(entry, dict):
             raise ValueError(f"tree entry is not an object: {entry!r}")
-        if entry.get("type") != "file":
+        entry_type = entry.get("type")
+        if not isinstance(entry_type, str) or not entry_type:
+            raise ValueError(f"tree entry 'type' is missing, empty or not a string: {entry_type!r}")
+        if entry_type != "file":
             continue
         name = entry.get("path")
         if not isinstance(name, str) or not name:

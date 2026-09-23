@@ -274,7 +274,7 @@ def _fit_cell(package: Package, base_model: BaseModelSpec, machine_config, hardw
         return "no profile"
     fit = compute_fit(package, base_model, hardware, machine_config)
     if fit.fit_class == "unknown":
-        return f"unknown: {fit.reason}"
+        return f"unknown: {_cell(fit.reason)}" if fit.reason else "unknown"
     return f"{fit.fit_class} ({fit.mode}, need {fit.need_gib:.1f} / pool {fit.pool_gib:.1f} GiB)"
 
 
@@ -333,8 +333,24 @@ def _summary_lines(snapshot: Snapshot, rendered_at: datetime, rating_failed: boo
         f"Base models / packages: {len(snapshot.base_models)} / {len(snapshot.packages)}",
     ]
     if rating_failed:
-        lines.append(f"Market rating unavailable: {rating_error}")
+        lines.append(f"Market rating unavailable: {_cell(rating_error)}")
     return lines
+
+
+def _cell(value: str) -> str:
+    """Sanitize one Markdown table cell's external text (R7-11, fix-round 6).
+
+    Applied to every cell that can carry text this package does not itself control the shape of
+    -- an area's error message, a base model or packager repo name, a quantization/format label,
+    hardware-reported `gpu_name`/`backend`/`installed_unavailable_reason`, a fit or
+    no-recommendation reason, a `RatingSource`'s error message. Escapes `|` (a literal pipe would
+    otherwise read as a new column boundary) and collapses any `\\r\\n`/`\\n`/`\\r` to a single
+    space (a raw newline would otherwise split one logical row across multiple physical lines).
+    Probe: an `Area.error` of `"boom | extra\\nsecond line"` produced 4 physical lines and an
+    extra column in the areas table instead of the one row it should have been.
+    """
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ")
+    return normalized.replace("|", "\\|").strip()
 
 
 def _render_areas_table(areas: list[Area]) -> str:
@@ -342,9 +358,11 @@ def _render_areas_table(areas: list[Area]) -> str:
     lines = [header]
     for area in areas:
         last_success = area.last_success.isoformat() if area.last_success else "–"
+        packager = _cell(area.packager) if area.packager else "–"
+        error = _cell(area.error) if area.error else ""
         lines.append(
-            f"| {area.source} | {area.base_model_hf_repo} | {area.packager or '–'} | {area.status} | "
-            f"{last_success} | {area.error or ''} |"
+            f"| {area.source} | {_cell(area.base_model_hf_repo)} | {packager} | {area.status} | "
+            f"{last_success} | {error} |"
         )
     return "\n".join(lines)
 
@@ -352,7 +370,7 @@ def _render_areas_table(areas: list[Area]) -> str:
 def _installed_summary(hardware: HardwareSnapshot) -> str:
     if hardware.installed is not None:
         return str(len(hardware.installed))
-    return f"unknown ({hardware.installed_unavailable_reason})"
+    return f"unknown ({_cell(hardware.installed_unavailable_reason)})"
 
 
 def _machine_row(name: str, machine_config, hardware: HardwareSnapshot | None, rendered_at: datetime) -> str:
@@ -364,7 +382,9 @@ def _machine_row(name: str, machine_config, hardware: HardwareSnapshot | None, r
             f"| {name} | {no_profile} | {no_profile} | {reserve_vram} | {reserve_ram} | {no_profile} | "
             f"{no_profile} | {no_profile} | {no_profile} |"
         )
-    backend_gpu = f"{hardware.backend or '–'} / {hardware.gpu_name or '–'}"
+    backend = _cell(hardware.backend) if hardware.backend else "–"
+    gpu_name = _cell(hardware.gpu_name) if hardware.gpu_name else "–"
+    backend_gpu = f"{backend} / {gpu_name}"
     age_days = (rendered_at - hardware.measured_at).days
     return (
         f"| {name} | {hardware.vram_gib:.2f} | {hardware.ram_gib:.2f} | {reserve_vram} | {reserve_ram} | "
@@ -400,15 +420,15 @@ def _no_recommendation_row_line(
     """
     assert row.no_recommendation is not None  # only ever built alongside a no-recommendation row
     cells = [
-        row.base_model_hf_repo,
+        _cell(row.base_model_hf_repo),
         _stars_cell(ratings.get(row.base_model_hf_repo), rating_failed),
-        row.packager,
+        _cell(row.packager),
         "–",  # Quant
         "–",  # Format
         "–",  # Size GiB
         "–",  # Context
     ]
-    cells += [f"no recommendation: {row.no_recommendation[name]}" for name in machine_names]
+    cells += [f"no recommendation: {_cell(row.no_recommendation[name])}" for name in machine_names]
     cells.append("–")  # Installed
     cells.append("–")  # Speed
     cells.append("–")  # Provenance
@@ -424,11 +444,11 @@ def _package_row_line(
         return _no_recommendation_row_line(row, ratings, rating_failed, machine_names)
     package = row.package
     cells = [
-        package.base_model_hf_repo,
+        _cell(package.base_model_hf_repo),
         _stars_cell(ratings.get(row.base_model_hf_repo), rating_failed),
-        row.packager,
-        package.quantization or "–",
-        package.format,
+        _cell(row.packager),
+        _cell(package.quantization) if package.quantization else "–",
+        _cell(package.format),
         f"{_weights_gib(package):.2f}",
         _context_cell(package),
     ]

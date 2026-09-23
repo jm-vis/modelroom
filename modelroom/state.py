@@ -251,16 +251,33 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+class StateFileShapeError(ValueError):
+    """R7-3 (fix-round 6): a stored state file's JSON root is not an object.
+
+    `load_snapshot`/`load_hardware_snapshot` (`contracts.py`) both start with
+    `data.get("schema_version")`, which assumes `data` is a `dict`. A root of `[]`, `null` or a
+    bare string parses without complaint (`json.loads` accepts any JSON value at the top level)
+    and then raises an uncaught `AttributeError` instead of the ordinary "corrupt file" error
+    every other shape problem produces. Raised by `load_existing_snapshot`/
+    `load_existing_hardware_snapshot` before either loader is called; `cli.py`'s
+    `_read_snapshot`/`_read_hardware_snapshot` catch it (alongside `UnicodeDecodeError`, for a
+    file that is not valid UTF-8 at all) and map it to exit code 3, the same as
+    `json.JSONDecodeError`/`ValidationError`.
+    """
+
+
 def load_existing_snapshot(config: Configuration) -> Snapshot | None:
     """The current snapshot, or `None` if `fetch` has never run against this state directory.
 
     `SchemaVersionError` propagates unchanged, exactly like `load_config` -- the CLI maps it
-    to exit code 3.
+    to exit code 3. `StateFileShapeError` propagates for a JSON root that is not an object.
     """
     path = config.paths.snapshot_file
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise StateFileShapeError(f"{path}: expected a JSON object at the root, got {type(data).__name__}")
     return load_snapshot(data)
 
 
@@ -316,12 +333,15 @@ def load_existing_hardware_snapshot(config: Configuration, machine: str) -> Hard
     """The current hardware profile for `machine`, or `None` if `hardware` never ran there.
 
     `SchemaVersionError` propagates unchanged, exactly like `load_existing_snapshot` -- the CLI
-    maps it to exit code 3.
+    maps it to exit code 3. `StateFileShapeError` propagates for a JSON root that is not an
+    object.
     """
     path = hardware_snapshot_path(config, machine)
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise StateFileShapeError(f"{path}: expected a JSON object at the root, got {type(data).__name__}")
     return load_hardware_snapshot(data)
 
 

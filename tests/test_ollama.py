@@ -17,9 +17,11 @@ from __future__ import annotations
 import hashlib
 from datetime import date, datetime, timezone
 
+import pytest
+
 from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile
 from modelroom.http import BudgetedTransport, Response
-from modelroom.ollama import fetch_ollama_area, parse_library_tags
+from modelroom.ollama import _validated_layers, fetch_ollama_area, parse_library_tags
 from modelroom.quantization import package_identity_key
 
 from fixture_support import FIXTURES, build_transport, json_response
@@ -257,6 +259,36 @@ def test_fetch_ollama_area_rejects_a_tag_with_invalid_characters_before_fetching
 
 def test_fetch_ollama_area_manifest_layer_not_a_dict_ends_area_incomplete():
     body = b'{"schemaVersion":2,"layers":[null]}'
+    transport = build_transport(
+        {
+            ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),
+            ("GET", _manifest_url("9b")): Response(status=200, headers={}, body=body),
+        }
+    )
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error
+    assert outcome.packages == []
+
+
+# --- R7-9 (fix-round 6): a manifest layer with no 'mediaType'/'digest' at all must be a shape
+# error -- `_validated_layer` only checked the type of a *present* mediaType/digest, so a bare
+# `{}` layer (both fields absent) passed through unchanged. `_package_files` then found it in
+# neither `model_layers` nor `tensor_layers`, and `_build_package` built a `format="unknown",
+# complete=False, files=[]` stub under the tag's real identity -- silently replacing a previously
+# valid package instead of ending the area incomplete (the same "genuinely empty, complete-
+# looking" hazard F6 below closes for a manifest missing 'layers' entirely).
+
+
+def test_validated_layers_rejects_a_layer_with_no_mediatype_or_digest():
+    with pytest.raises(ValueError):
+        _validated_layers("nova", "7b", {"layers": [{}]})
+
+
+def test_fetch_ollama_area_manifest_layer_with_no_mediatype_or_digest_ends_area_incomplete():
+    body = b'{"schemaVersion":2,"layers":[{}]}'
     transport = build_transport(
         {
             ("GET", TAGS_URL): Response(status=200, headers={}, body=b'<a href="/library/qwen3.5:9b"></a>'),

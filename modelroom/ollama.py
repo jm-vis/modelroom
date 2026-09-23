@@ -202,14 +202,24 @@ def _validated_layers(base: str, tag: str, manifest: dict) -> list[dict]:
 
 
 def _validated_layer(base: str, tag: str, layer: object) -> dict:
+    """R7-9 (fix-round 6): `mediaType`/`digest` are required, non-empty strings, not merely
+    "a string when present".
+
+    The real registry always sends both on every layer (measured 2026-09-22: every layer in
+    `tests/fixtures/ollama_qwen35_9b.json`, model/license/params alike, carries both). Before
+    R7-9, a layer missing them entirely (`{}`) passed through unchanged: `_package_files` then
+    matched it against neither the model nor the tensor `mediaType`, and `_build_package` built a
+    `format="unknown", complete=False, files=[]` stub under the tag's real identity -- silently
+    replacing a previously valid package instead of the manifest being recognized as malformed.
+    """
     if not isinstance(layer, dict):
         raise ValueError(f"{base}:{tag}: manifest layer is not an object: {layer!r}")
     media_type = layer.get("mediaType")
-    if media_type is not None and not isinstance(media_type, str):
-        raise ValueError(f"{base}:{tag}: manifest layer mediaType is not a string: {media_type!r}")
+    if not isinstance(media_type, str) or not media_type:
+        raise ValueError(f"{base}:{tag}: manifest layer mediaType is missing, empty or not a string: {media_type!r}")
     digest = layer.get("digest")
-    if digest is not None and not isinstance(digest, str):
-        raise ValueError(f"{base}:{tag}: manifest layer digest is not a string: {digest!r}")
+    if not isinstance(digest, str) or not digest:
+        raise ValueError(f"{base}:{tag}: manifest layer digest is missing, empty or not a string: {digest!r}")
     return layer
 
 

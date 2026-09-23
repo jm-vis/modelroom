@@ -483,7 +483,7 @@ def test_write_snapshot_then_load_existing_snapshot_round_trips(tmp_path: Path):
             "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-7B", "repo_aliases": []}]}],
             "packagers": ["packager"],
             "publishers": ["acme"],
-            "paths": {"state": str(tmp_path), "markdown": str(tmp_path / "models.md")},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
         }
     )
     snapshot = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[_base_model()], packages=[])
@@ -506,7 +506,7 @@ def test_load_existing_snapshot_returns_none_when_no_file_exists(tmp_path: Path)
             "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-7B", "repo_aliases": []}]}],
             "packagers": ["packager"],
             "publishers": ["acme"],
-            "paths": {"state": str(tmp_path), "markdown": str(tmp_path / "models.md")},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
         }
     )
     assert load_existing_snapshot(config) is None
@@ -711,7 +711,7 @@ def test_write_run_status_lists_every_area_with_run_at_budget_and_candidates(tmp
             "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-7B", "repo_aliases": []}]}],
             "packagers": ["packager"],
             "publishers": ["acme"],
-            "paths": {"state": str(tmp_path), "markdown": str(tmp_path / "models.md")},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
         }
     )
     snapshot = Snapshot(
@@ -748,7 +748,7 @@ def _config(tmp_path: Path):
             "packagers": ["packager"],
             "publishers": ["acme"],
             "machines": {"workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True}},
-            "paths": {"state": str(tmp_path), "markdown": str(tmp_path / "models.md")},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
         }
     )
 

@@ -142,6 +142,23 @@ def test_zero_byte_weight_file_is_unknown_fit_with_reason():
     assert fit.reason == "a weight file has no size"
 
 
+# --- R7-10 (fix-round 6): an implausible combination that overflows the float arithmetic ends
+# only this package unknown, never crashes the whole render. `Architecture`'s own numeric fields
+# are now bounded (`le=2**31 - 1`), but `Package.default_context` carries no upper bound at all
+# (`gt=0` only) -- so a package built with an implausible `default_context` still reaches this
+# arithmetic with otherwise ordinary, in-bound architecture values.
+
+
+def test_implausible_default_context_overflows_gracefully_to_unknown_fit():
+    package = _gguf_package(weights_bytes=5 * GIB, default_context=10**400)
+    base_model = _base_model()  # ordinary, in-bound architecture values
+
+    fit = compute_fit(package, base_model, LAPTOP, LAPTOP_MACHINE)
+
+    assert fit.fit_class == "unknown"
+    assert fit.reason == "architecture values out of range"
+
+
 # --- brief's worked examples: 8B and 9B dense packages on laptop vs. server ----------------
 
 

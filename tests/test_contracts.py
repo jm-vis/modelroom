@@ -240,6 +240,42 @@ def test_unknown_kind_allows_no_numeric_fields():
     Architecture(source_repo="acme/Nova-7B", kind="unknown")
 
 
+# --- R7-10 (fix-round 6): an implausibly huge numeric field is rejected before it can overflow
+# fit.py::compute_fit's arithmetic -- probe: num_hidden_layers = 10**400 validated fine (`gt=0`
+# alone never bounds the top end), then `compute_fit` raised `OverflowError: integer division
+# result too large for a float`, aborting the whole render instead of ending this one package
+# `fit_class="unknown"`.
+
+_INT32_MAX = 2**31 - 1
+
+
+@pytest.mark.parametrize("field", ["num_hidden_layers", "num_key_value_heads", "head_dim", "max_context"])
+def test_architecture_numeric_field_at_the_int32_bound_is_accepted(field):
+    kwargs = {"num_hidden_layers": 32, "num_key_value_heads": 8, "head_dim": 128}
+    kwargs[field] = _INT32_MAX
+    Architecture(source_repo="acme/Nova-7B", kind="dense_classic", **kwargs)
+
+
+@pytest.mark.parametrize("field", ["num_hidden_layers", "num_key_value_heads", "head_dim", "max_context"])
+def test_architecture_numeric_field_beyond_the_int32_bound_is_rejected(field):
+    kwargs = {"num_hidden_layers": 32, "num_key_value_heads": 8, "head_dim": 128}
+    kwargs[field] = _INT32_MAX + 1
+    with pytest.raises(ValidationError):
+        Architecture(source_repo="acme/Nova-7B", kind="dense_classic", **kwargs)
+
+
+def test_architecture_num_hidden_layers_at_10_pow_400_is_rejected():
+    """The exact probe value from the fix-round 6 brief."""
+    with pytest.raises(ValidationError):
+        Architecture(
+            source_repo="acme/Nova-7B",
+            kind="dense_classic",
+            num_hidden_layers=10**400,
+            num_key_value_heads=8,
+            head_dim=128,
+        )
+
+
 # --- shards_complete -------------------------------------------------------------------------
 
 

@@ -27,6 +27,7 @@ from modelroom.contracts import (
 )
 from modelroom.render import (
     RatingUnavailableError,
+    _cell,
     build_document,
     format_header_line,
     parse_header_line,
@@ -560,3 +561,86 @@ def test_machine_without_a_profile_renders_no_hardware_profile_yet():
     document = _render([_hf_package()], hardware_by_machine={"workstation": None})
     assert "no hardware profile yet" in document
     assert "no profile" in document  # the package row's fit cell
+
+
+# --- R7-11 (fix-round 6): unescaped cell content breaks the Markdown tables -----------------
+#
+# Probe: an `Area.error` of `"boom | extra\nsecond line"` produced 4 physical lines and an extra
+# column in the areas table instead of the one row it should have been -- a literal `|` reads as
+# a new column boundary, a raw newline splits one logical row across multiple physical lines.
+
+
+def test_cell_escapes_pipes_and_collapses_newlines():
+    assert _cell("boom | extra\nsecond line") == "boom \\| extra second line"
+
+
+def test_cell_collapses_crlf_and_lone_cr():
+    assert _cell("a\r\nb\rc") == "a b c"
+
+
+def test_render_areas_table_escapes_the_probe_case():
+    config = _config()
+    snapshot = Snapshot(
+        schema_version=1,
+        run_at=NOW,
+        areas=[
+            Area(
+                source="huggingface",
+                base_model_hf_repo="acme/Nova-8B",
+                packager="packager",
+                status="incomplete",
+                last_success=None,
+                error="boom | extra\nsecond line",
+            )
+        ],
+        base_models=[_base_model()],
+        packages=[],
+    )
+
+    document = build_document(config, snapshot, {"workstation": _hardware()}, RENDERED_AT)
+
+    areas_section = document.split("## Areas")[1].split("## Machines")[0].strip()
+    lines = areas_section.splitlines()
+    assert len(lines) == 3  # header, separator, exactly one data row -- never split into two
+    data_row = lines[2]
+    # 6 columns -> 7 pipe delimiters, plus the one escaped `\|` literal from the error text
+    # (kept, but no longer read as a column boundary) -- never an extra *column*.
+    assert data_row.count("|") == 8
+    assert data_row.count(" | ") == 5  # exactly 5 real column boundaries for 6 columns
+    assert "boom \\| extra second line" in data_row
+
+
+def test_render_machines_table_escapes_a_pipe_in_gpu_name():
+    hardware = HardwareSnapshot(
+        schema_version=1,
+        machine="workstation",
+        measured_at=NOW,
+        llmfit_version="1.1.16",
+        vram_gib=11.94,
+        ram_gib=127.46,
+        free_ram_gib_at_measurement=None,
+        gpu_name="Nova | Ultra GPU",
+        backend="CUDA",
+        unified_memory=False,
+        installed=None,
+        installed_unavailable_reason="not queried in this test",
+        measurements=[],
+    )
+    document = _render([_hf_package()], hardware_by_machine={"workstation": hardware})
+
+    machines_section = document.split("## Machines")[1].split("## Packages")[0].strip()
+    lines = machines_section.splitlines()
+    assert len(lines) == 3  # header, separator, exactly one machine row
+    data_row = lines[2]
+    # 9 columns -> 10 pipe delimiters, plus the one escaped `\|` literal from the gpu name.
+    assert data_row.count("|") == 11
+    assert data_row.count(" | ") == 8  # exactly 8 real column boundaries for 9 columns
+    assert "CUDA / Nova \\| Ultra GPU" in data_row
+
+
+def test_cell_helper_backs_the_fit_reason_cell_against_a_newline():
+    """`fit.py::compute_fit` only ever sets a fixed, safe `reason` string today -- this proves the
+    shared `_cell` helper `_fit_cell` relies on actually collapses a newline, the property that
+    matters if a future fit reason (or any other caller) ever carried one.
+    """
+    assert _cell("architecture not covered\nby v1") == "architecture not covered by v1"

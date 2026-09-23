@@ -14,6 +14,8 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from modelroom.cli import fetch_with_config, hardware_with_config, main, render_with_config
 from modelroom.config import Configuration
 from modelroom.contracts import load_hardware_snapshot, load_snapshot
@@ -144,6 +146,32 @@ def test_fetch_snapshot_with_wrong_shape_is_exit_3(tmp_path: Path, capsys):
     state_dir.mkdir(parents=True)
     snapshot_path = state_dir / "modelroom.json"
     snapshot_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")  # missing run_at etc.
+
+    code = main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1)
+
+    assert code == 3
+    assert str(snapshot_path) in capsys.readouterr().err
+
+
+# --- R7-3 (fix-round 6): a structurally-broken state file (non-object root, or undecodable
+# bytes) is exit 3, not an uncaught AttributeError/UnicodeDecodeError. `[]` and `null` both
+# reach `state.load_snapshot`'s `data.get("schema_version")` -- a list/`None` has no `.get`.
+
+_MALFORMED_STATE_PAYLOADS = [
+    pytest.param(b"[]", id="list-root"),
+    pytest.param(b"null", id="null-root"),
+    pytest.param(b'"just a string"', id="string-root"),
+    pytest.param(b"\xff\xfe{", id="invalid-utf8"),
+]
+
+
+@pytest.mark.parametrize("payload", _MALFORMED_STATE_PAYLOADS)
+def test_fetch_snapshot_with_malformed_shape_is_exit_3_and_names_the_file(tmp_path: Path, capsys, payload: bytes):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    snapshot_path = state_dir / "modelroom.json"
+    snapshot_path.write_bytes(payload)
 
     code = main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1)
 
@@ -598,6 +626,25 @@ def test_hardware_existing_snapshot_with_wrong_shape_is_exit_3(tmp_path: Path, c
     assert str(hardware_path) in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("payload", _MALFORMED_STATE_PAYLOADS)
+def test_hardware_existing_snapshot_with_malformed_shape_is_exit_3(tmp_path: Path, capsys, payload: bytes):
+    config_path = _write_config(tmp_path)
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    hardware_path = hardware_dir / "workstation.json"
+    hardware_path.write_bytes(payload)
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--machine", "workstation"],
+        runner=_llmfit_runner(),
+        transport=_ollama_transport(),
+        now=RUN1,
+    )
+
+    assert code == 3
+    assert str(hardware_path) in capsys.readouterr().err
+
+
 # --- hardware: end-to-end against the fixture runner/transport ------------------------------
 
 
@@ -730,6 +777,10 @@ def test_render_no_snapshot_is_exit_1_and_writes_nothing(tmp_path: Path):
 
     assert code == 1
     assert not (tmp_path / "models.md").exists()
+    # R7-12 (fix-round 6): "nothing to render" must be decided BEFORE the lock is ever taken --
+    # `state.acquire_lock` creates the state directory and the lock file as a side effect of
+    # opening it, so a render that never gets past "no snapshot" must never call it at all.
+    assert not (tmp_path / "state").exists()
 
 
 def test_render_snapshot_with_unsupported_schema_version_is_exit_3(tmp_path: Path):
@@ -789,6 +840,21 @@ def test_render_snapshot_with_wrong_shape_is_exit_3(tmp_path: Path, capsys):
     assert str(snapshot_path) in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("payload", _MALFORMED_STATE_PAYLOADS)
+def test_render_snapshot_with_malformed_shape_is_exit_3(tmp_path: Path, capsys, payload: bytes):
+    config_path = _write_config(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    snapshot_path = state_dir / "modelroom.json"
+    snapshot_path.write_bytes(payload)
+
+    code = main(["render", "--config", str(config_path)], now=RUN1)
+
+    assert code == 3
+    assert not (tmp_path / "models.md").exists()
+    assert str(snapshot_path) in capsys.readouterr().err
+
+
 def test_render_hardware_with_truncated_json_is_exit_3_and_names_the_file(tmp_path: Path, capsys):
     config_path = _write_config(tmp_path)
     assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
@@ -796,6 +862,22 @@ def test_render_hardware_with_truncated_json_is_exit_3_and_names_the_file(tmp_pa
     hardware_dir.mkdir(parents=True)
     hardware_path = hardware_dir / "workstation.json"
     hardware_path.write_text('{"schema_version": 1, "machine": ', encoding="utf-8")  # truncated
+
+    code = main(["render", "--config", str(config_path)], now=RUN2)
+
+    assert code == 3
+    assert not (tmp_path / "models.md").exists()
+    assert str(hardware_path) in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("payload", _MALFORMED_STATE_PAYLOADS)
+def test_render_hardware_with_malformed_shape_is_exit_3(tmp_path: Path, capsys, payload: bytes):
+    config_path = _write_config(tmp_path)
+    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
+    hardware_dir = tmp_path / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    hardware_path = hardware_dir / "workstation.json"
+    hardware_path.write_bytes(payload)
 
     code = main(["render", "--config", str(config_path)], now=RUN2)
 

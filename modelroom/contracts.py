@@ -166,11 +166,18 @@ class Architecture(BaseModel):
     source_repo: str
     source_revision: str | None = None
     kind: Literal["dense_classic", "unknown"]
-    num_hidden_layers: int | None = Field(default=None, gt=0)
-    num_key_value_heads: int | None = Field(default=None, gt=0)
-    head_dim: int | None = Field(default=None, gt=0)
+    # R7-10 (fix-round 6): `le=2**31 - 1` bounds every numeric field -- `gt=0` alone never
+    # bounded the top end, so an implausible value like `10**400` (which `json.loads` parses
+    # without complaint) validated fine and then overflowed `fit.py::compute_fit`'s arithmetic
+    # (`OverflowError: integer division result too large for a float`), aborting the whole
+    # render instead of ending this one package's fit `"unknown"`. The bound is documented in
+    # CONTRACTS.md ("Fit contract v1"); `compute_fit` also catches `OverflowError` directly as a
+    # second line of defense for a combination of in-bound values that still overflows together.
+    num_hidden_layers: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    num_key_value_heads: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    head_dim: int | None = Field(default=None, gt=0, le=2**31 - 1)
     layer_types: list[str] | None = None
-    max_context: int | None = Field(default=None, gt=0)
+    max_context: int | None = Field(default=None, gt=0, le=2**31 - 1)
 
     @field_validator("source_revision")
     @classmethod

@@ -140,6 +140,26 @@ class PathsConfig(BaseModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _check_markdown_does_not_collide_with_state(self) -> "PathsConfig":
+        """R7-1 (fix-round 6): the rendered document must not land inside the state directory.
+
+        `paths.state` holds the snapshot, the lock file, the run-status file and the hardware
+        profiles -- all of them internal, machine-written files. If `paths.markdown` resolved
+        to one of them, or anywhere inside `paths.state`, a render would silently corrupt state
+        the next `fetch` or `hardware` run depends on. Resolved with `strict=False` so this
+        catches the collision even before the directories exist.
+        """
+        state_resolved = self.state.resolve(strict=False)
+        markdown_resolved = self.markdown.resolve(strict=False)
+        if markdown_resolved == state_resolved or markdown_resolved.is_relative_to(state_resolved):
+            raise ValueError(
+                f"paths.markdown ({self.markdown}) must not equal and must not lie inside "
+                f"paths.state ({self.state}) -- the state directory holds the snapshot, the "
+                "lock file, the run-status file and the hardware profiles"
+            )
+        return self
+
     @property
     def snapshot_file(self) -> Path:
         return self.state / "modelroom.json"
@@ -230,29 +250,77 @@ class Configuration(BaseModel):
 
     @model_validator(mode="after")
     def _check_repo_names_do_not_collide_across_base_models(self) -> "Configuration":
-        """P3-6 (fix-round 5): no two base models may claim the same packager repo name.
+        """P3-6 (fix-round 5), corrected by R7-8 (fix-round 6): no two base models may claim the
+        same packager repo, `owner/name`.
 
         `hf.py::fetch_hf_area` probes `<owner>/<name>-GGUF` and every `repo_aliases` entry, for
         every base model, under every owner in `packagers` (global to the whole configuration)
-        plus that base model's own owner -- so a repo name shared by two base models would be
-        fetched into two areas that both produce a `Package` under the *same* identity key
-        (`CONTRACTS.md`, "Identity": identity never carries `base_model_hf_repo`), and
-        `state.merge_snapshot`'s `result_packages` dict would let whichever area is processed
-        last silently overwrite the other's package with no error and no trace. Caught here,
-        at configuration load, instead of at merge time.
+        plus that base model's own owner -- so a full `owner/name` candidate shared by two base
+        models would be fetched into two areas that both produce a `Package` under the *same*
+        identity key (`CONTRACTS.md`, "Identity": identity never carries `base_model_hf_repo`),
+        and `state.merge_snapshot`'s `result_packages` dict would let whichever area is processed
+        last silently overwrite the other's package with no error and no trace. Caught here, at
+        configuration load, instead of at merge time.
+
+        R7-8: P3-6's own check compared the bare repo *name* only, ignoring the owner -- so
+        `acme/Nova` and `other/Nova` (distinct owners, `packagers = []`) were wrongly rejected as
+        `'Nova-GGUF' is claimed by both`, even though `fetch_hf_area` would probe `acme/Nova-GGUF`
+        and `other/Nova-GGUF`, never the same repo. Fixed by comparing the full `owner/name`
+        candidate: for each base model, `owners` is `packagers` plus its own owner, `names` is
+        its default `<name>-GGUF` plus `repo_aliases`, and a collision is only real when the same
+        `owner/name` is produced by two *different* base models.
         """
         claimed_by: dict[str, str] = {}
         for family in self.families:
             for base_model in family.base_models:
+                own_owner = base_model.hf_repo.split("/", 1)[0]
+                owners = {*self.packagers, own_owner}
                 default_name = f"{base_model.hf_repo.split('/', 1)[1]}-GGUF"
-                for candidate in (default_name, *base_model.repo_aliases):
-                    existing = claimed_by.get(candidate)
-                    if existing is not None and existing != base_model.hf_repo:
+                names = {default_name, *base_model.repo_aliases}
+                for owner in owners:
+                    for name in names:
+                        candidate = f"{owner}/{name}"
+                        existing = claimed_by.get(candidate)
+                        if existing is not None and existing != base_model.hf_repo:
+                            raise ValueError(
+                                f"packager repo {candidate!r} is claimed by both {existing!r} "
+                                f"and {base_model.hf_repo!r} -- a repo must name at most one base model"
+                            )
+                        claimed_by[candidate] = base_model.hf_repo
+        return self
+
+    @model_validator(mode="after")
+    def _check_ollama_tags_do_not_collide_across_base_models(self) -> "Configuration":
+        """R7-7 (fix-round 6): two base models sharing an `ollama_base` must not claim
+        colliding `ollama_tag` identities.
+
+        `ollama.py::_keep_relevant_tags` keeps `tag == ollama_tag or tag.startswith(ollama_tag +
+        "-")`, so a base model configured with `ollama_tag="7b"` also owns any real registry tag
+        like `"7b-instruct"`. Two base models on the same `ollama_base` with equal tags, or with
+        one tag a `"<tag>-"`-prefix of the other, would both resolve packages under the *same*
+        Ollama identity (`<ollama_base>:<tag>`) -- `quantization.package_identity_key` does not
+        carry `base_model_hf_repo`, so `state.merge_snapshot`'s `result_packages` dict lets
+        whichever base model's area is processed last silently overwrite the other's package,
+        exactly the P3-6 hazard this closes for Ollama instead of Hugging Face packager names.
+        Caught here, at configuration load, instead of at merge time.
+        """
+        tags_by_base: dict[str, list[tuple[str, str]]] = {}
+        for family in self.families:
+            for base_model in family.base_models:
+                if base_model.ollama_base is None:
+                    continue
+                tags_by_base.setdefault(base_model.ollama_base, []).append(
+                    (base_model.ollama_tag, base_model.hf_repo)
+                )
+        for ollama_base, entries in tags_by_base.items():
+            for index, (tag, hf_repo) in enumerate(entries):
+                for other_tag, other_hf_repo in entries[index + 1 :]:
+                    if tag == other_tag or tag.startswith(f"{other_tag}-") or other_tag.startswith(f"{tag}-"):
                         raise ValueError(
-                            f"packager repo name {candidate!r} is claimed by both {existing!r} "
-                            f"and {base_model.hf_repo!r} -- a repo name must name at most one base model"
+                            f"ollama identity collision on ollama_base {ollama_base!r}: "
+                            f"{hf_repo!r} (tag {tag!r}) and {other_hf_repo!r} (tag {other_tag!r}) "
+                            "would resolve packages under the same or overlapping Ollama identity"
                         )
-                    claimed_by[candidate] = base_model.hf_repo
         return self
 
     @model_validator(mode="after")
@@ -333,6 +401,18 @@ def _check_state_confinement(config: Configuration, config_dir: Path, label: str
         ) from None
 
 
+def _check_markdown_not_the_config_file(config: Configuration, config_path: Path, label: str) -> None:
+    """R7-1 (fix-round 6): `paths.markdown` must not resolve to the config file itself.
+
+    `PathsConfig` already refuses a `markdown` that collides with `paths.state`; this closes
+    the remaining collision that only `load_config` can see -- the config file it just read.
+    """
+    if config.paths.markdown.resolve(strict=False) == config_path.resolve(strict=False):
+        raise ConfigError(
+            f"{label}: paths.markdown ({config.paths.markdown}) must not be the config file itself"
+        )
+
+
 def load_config(path: Path) -> Configuration:
     """Read, parse and validate a `modelroom.toml` configuration file.
 
@@ -361,6 +441,7 @@ def load_config(path: Path) -> Configuration:
     _resolve_relative_paths(data, path.parent)
     config = _build_configuration(data, label)
     _check_state_confinement(config, path.parent, label)
+    _check_markdown_not_the_config_file(config, path, label)
     return config
 
 
