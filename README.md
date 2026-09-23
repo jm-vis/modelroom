@@ -19,9 +19,8 @@ on the machine you want to size, and keep the files wherever you keep your notes
 
 ## Status
 
-Alpha, version 0.1.0, no release yet (everything in `CHANGELOG.md` is still under
-"Unreleased"). The three commands `fetch`, `hardware` and `render` work end to end; the data
-shapes are versioned contracts (see `CONTRACTS.md`). Expect changes to the rendered layout and to the fit rules before a first
+Alpha, version 0.1.0, the first release (see `CHANGELOG.md`). The three commands `fetch`, `hardware` and `render` work end to end; the data
+shapes are versioned contracts (see `CONTRACTS.md`). Expect changes to the rendered layout and to the fit rules before a stable
 release. `CHANGELOG.md` lists what has landed.
 
 ## Requirements
@@ -32,6 +31,19 @@ release. `CHANGELOG.md` lists what has landed.
 - Internet access for `fetch` only. `hardware` also reads a local Ollama daemon at
   `http://127.0.0.1:11434` when one is running; without it the profile records the installed
   models as unknown and the command still succeeds.
+
+## Installation
+
+As a command-line tool from the Python Package Index, with either installer:
+
+```bash
+uv tool install modelroom
+pipx install modelroom
+```
+
+Both put `modelroom` on `PATH` in an environment of its own. Then copy
+`modelroom.example.toml` from this repository as your configuration and follow the quick start
+below with `modelroom` in place of `uv run --frozen modelroom`.
 
 ## Quick start
 
@@ -131,6 +143,21 @@ proxying".
 Python, because the catalog logic and Pydantic contracts it integrates with are Python, and the
 run has to be platform neutral (Windows, Linux, macOS). Everything in this repository, from
 identifiers to documentation, is English.
+
+## Release
+
+For maintainers, from a clean clone at the commit to be released:
+
+```bash
+uv run --frozen python scripts/release-check.py
+uv run --frozen python scripts/release-smoke.py
+```
+
+The first is the release gate (clean tree, version and changelog, public hygiene over the files,
+the history and the commit metadata, content of wheel and sdist); with `--tag vX.Y.Z` it also
+checks the release tag. The second installs the built wheel into a fresh environment and runs
+`hardware`, an offline `fetch` and `render` against it. Both must end with exit `0`; the full
+procedure is in `AGENTS.md`, "Versioning and releases".
 
 ## Contributing and conventions
 

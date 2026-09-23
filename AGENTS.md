@@ -8,7 +8,7 @@ ever appear) import this one and stay thin; the truth lives here.
 `modelroom` finds the local packages (GGUF and tensor builds) that exist for an allow-list of
 model families on Hugging Face and in the Ollama registry, and computes whether each package
 fits a measured machine. It is a command-line tool and a small library, published under MIT.
-Status: alpha, no release yet; `fetch`, `hardware` and `render` work end to end, the data shapes
+Status: alpha, first release 0.1.0; `fetch`, `hardware` and `render` work end to end, the data shapes
 are versioned contracts (`CONTRACTS.md`), layout and fit rules may still change.
 
 ## Stack and language choice
@@ -102,6 +102,10 @@ untrusted input. The tests therefore have to prove, with a deliberately broken i
 
 One version source: `[project] version` in `pyproject.toml`, Semver, starting at `0.1.0`.
 `modelroom.__version__` reads it from package metadata; a test fails if a second version
-literal appears anywhere. Releases are annotated tags `vX.Y.Z` on `main`. Every release runs
-the public hygiene check over the tracked files and over the full history before the tag is
-pushed; the procedure lives in `docs/runbooks/` from the first release on.
+literal appears anywhere. Releases are annotated tags `vX.Y.Z` on `main`. Release procedure:
+
+1. Gate: `uv run --frozen python scripts/release-check.py` ends with `RELEASE-CHECK: OK <version>`.
+2. Smoke: `uv run --frozen python scripts/release-smoke.py` ends with `RELEASE-SMOKE: OK`.
+3. Tag: `git tag -a vX.Y.Z -m "modelroom X.Y.Z"`, then the gate again with `--tag vX.Y.Z`.
+4. Review: an independent second-model review of the release diff, findings closed or answered.
+5. Upload: `uv build` into an empty folder and `uv publish` by the maintainer, then push the tag.

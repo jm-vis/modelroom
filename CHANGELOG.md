@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-23
+
+First release.
+
+### Release
+
+- `scripts/release-check.py`: the release gate. Checks a clean working tree, a valid PEP 440
+  version without a local part with its own section in this file and, with `--tag`, an
+  annotated tag `v<version>` on HEAD; runs the negative list of `tests/test_public_hygiene.py`
+  (the same module, not a copy) over every file of HEAD, every line ever added in the history
+  (binary files as text, renames as additions) and the raw commit and tag objects; builds wheel
+  and sdist offline from HEAD and checks their content and file classes. Findings name place
+  and class, never the text found. Commit metadata may carry noreply addresses and the
+  maintainer's own address, taken from `git config user.email` or
+  `MODELROOM_RELEASE_MAINTAINER_EMAIL` at run time and never written into the repository. Exit
+  `0` free, `1` findings, `2` cannot check.
+- `scripts/release-smoke.py`: the delivery smoke test. Installs the built wheel into a fresh venv
+  outside the repository, derives a customer configuration from `modelroom.example.toml`, runs
+  `hardware`, `fetch` with the network blocked through an unreachable proxy (every area
+  incomplete, exit `1`, packages kept, lock free) and `render` of a snapshot built from the
+  recorded fixtures.
+- README: installation from the package index and the two release commands; `AGENTS.md`: the
+  release procedure. Neither script ships in the wheel or the sdist.
+
 ### Documentation
 
 - README brought to the current state: status alpha, requirements, a five-command quick start
