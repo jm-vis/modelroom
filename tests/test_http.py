@@ -48,14 +48,32 @@ def _no_proxy_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     on Unix a lowercase `http_proxy`/`no_proxy` wins over the uppercase spelling a test sets --
     so a developer machine or CI runner with a proxy configured would route the loopback tests
     through a foreign proxy, or make the proxy tests below pass or fail for the wrong reason.
-    Each proxy test sets exactly the variables it needs on top of this clean slate. (On Windows,
-    with no environment proxies at all, urllib falls back to the registry proxy settings; those
-    are outside this fixture's reach and are the operator's `NO_PROXY` concern, see CONTRACTS.md
-    "Transport security and proxying".)
+    Each proxy test sets exactly the variables it needs on top of this clean slate.
+
+    R9-1 (fix-round 8): clearing alone is not a clean slate -- with *no* `*_proxy` variable at
+    all, `urllib.request.getproxies()` falls back to the Windows registry / macOS system proxy
+    settings, so a developer machine with a system proxy would still route the loopback tests
+    through it. `NO_PROXY="*"` keeps `getproxies_environment()` non-empty (so the platform
+    fallback is never consulted) while bypassing every host; the two proxy tests below override
+    or delete it deliberately. `REQUEST_METHOD` is removed as well: urllib treats its presence as
+    "running under CGI" and drops `HTTP_PROXY` (the `httpoxy` guard), which would silently turn
+    the positive proxy test into a direct connection.
     """
     for name in list(os.environ):
         if name.lower().endswith("_proxy"):
             monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("REQUEST_METHOD", raising=False)
+    monkeypatch.setenv("NO_PROXY", "*")
+
+
+def test_the_clean_test_environment_bypasses_every_proxy():
+    """Regression guard for the autouse fixture above: no platform proxy fallback, every host
+    bypassed. (Cannot be shown red on a machine without a system proxy -- it pins the mechanism.)
+    """
+    assert urllib.request.getproxies().get("http") is None
+    assert urllib.request.getproxies().get("https") is None
+    assert urllib.request.proxy_bypass("192.0.2.1")
+    assert urllib.request.proxy_bypass("127.0.0.1")
 
 
 class _RedirectHandler(BaseHTTPRequestHandler):

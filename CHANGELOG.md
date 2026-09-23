@@ -487,3 +487,13 @@ All notable changes to this project are documented in this file. The format foll
     model's `ollama_base`/`ollama_tag` onto the second, so the R7-7 Ollama collision validator
     would have raised the expected `ValidationError` even with the HF check broken; the copy now
     carries no Ollama mapping and the tests match the HF message (`packager repo`). Test-only.
+- Fix-round 8, one remaining finding against `1a7d5b4` (Codex round 9, verified with a probe):
+  - **R9-1** The `tests/test_http.py` autouse fixture now also sets `NO_PROXY="*"` and removes
+    `REQUEST_METHOD` after clearing every `*_proxy` variable -- probe: with no proxy variable at
+    all `urllib.request.getproxies()` is empty and falls back to the Windows registry / macOS
+    system proxy on those platforms (`getproxies_environment() or getproxies_registry()`), while
+    `NO_PROXY="*"` alone keeps the environment dict non-empty (`{'no': '*'}`) and bypasses every
+    host; `REQUEST_METHOD` present makes urllib drop `HTTP_PROXY` (`{}` from `{'http': …}`),
+    which would have turned the positive proxy test into a direct connection. The two proxy
+    tests override or delete `NO_PROXY` themselves. A regression test pins the clean-slate
+    mechanism. Test-only.
