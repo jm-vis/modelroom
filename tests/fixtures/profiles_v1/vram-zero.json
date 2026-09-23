@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "machine": "office-pc",
+  "measured_at": "2026-09-22T18:30:12Z",
+  "llmfit_version": "1.1.16",
+  "vram_gib": 0.0,
+  "ram_gib": 15.6,
+  "free_ram_gib_at_measurement": 7.9,
+  "gpu_name": "Intel(R) UHD Graphics",
+  "backend": "CPU (x86_64)",
+  "unified_memory": false,
+  "installed": [],
+  "installed_unavailable_reason": null,
+  "measurements": []
+}

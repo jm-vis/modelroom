@@ -1,0 +1,32 @@
+# A schema-1 configuration with two machines, as a deployment wrote it before schema 2.
+# Paths are relative to this file's folder.
+schema_version = 1
+
+packagers = ["packager"]
+publishers = ["acme"]
+
+[[families]]
+name = "nova"
+
+  [[families.base_models]]
+  hf_repo = "acme/Nova-7B"
+  repo_aliases = ["Nova-7B-Instruct-GGUF"]
+  ollama_base = "nova"
+  ollama_tag = "7b"
+
+[machines.laptop]
+reserve_ram_gib = 8.0
+reserve_vram_gib = 1.0
+writer = true
+
+[machines.server]
+reserve_ram_gib = 4.0
+reserve_vram_gib = 0.0
+writer = false
+
+[paths]
+state = "state"
+markdown = "docs/models.md"
+
+[llmfit]
+min_version = "1.1.16"

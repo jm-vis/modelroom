@@ -7,6 +7,7 @@ model for readers and repeats `EXAMPLES` verbatim under its "Configuration" sect
 
 from __future__ import annotations
 
+import copy
 import re
 import tomllib
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .contracts import (
+    PROFILE_ID_RE,
     SchemaVersionError,
     check_schema_version,
     validate_hf_repo,
@@ -23,10 +25,14 @@ from .contracts import (
     validate_repo_aliases,
 )
 
-CONFIG_SCHEMA_VERSION = 1
+CONFIG_SCHEMA_VERSION = 2
 # Half-open range: a reader accepts schema_version >= low and < high, same convention as the
-# snapshot's SNAPSHOT_SCHEMA_RANGE. Readers accept exactly schema_version 1 for now.
-CONFIG_SCHEMA_RANGE: tuple[int, int] = (1, 2)
+# snapshot's SNAPSHOT_SCHEMA_RANGE. Readers accept schema_version 1 (normalized to 2 in memory by
+# `normalize_config_v1`) and 2; 3 and above are refused before any field is validated.
+CONFIG_SCHEMA_RANGE: tuple[int, int] = (1, 3)
+
+DEFAULT_RESERVE_RAM_GIB = 8.0
+DEFAULT_RESERVE_VRAM_GIB = 1.0
 
 _FAMILY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
 _MIN_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -66,6 +72,10 @@ class BaseModelConfig(BaseModel):
 
     hf_repo: str
     repo_aliases: list[str] = Field(default_factory=list)
+    # Schema 2: full, owner-bound packager repo targets (`owner/name`), e.g. a repo the guided
+    # search found under an owner that is not in `packagers`. `repo_aliases` stays a list of
+    # names probed under every candidate owner; each `repos` entry names exactly one repo.
+    repos: list[str] = Field(default_factory=list)
     ollama_base: str | None = None
     ollama_tag: str | None = None
 
@@ -78,6 +88,15 @@ class BaseModelConfig(BaseModel):
     @classmethod
     def _check_repo_aliases(cls, value: list[str]) -> list[str]:
         return validate_repo_aliases(value)
+
+    @field_validator("repos")
+    @classmethod
+    def _check_repos(cls, value: list[str]) -> list[str]:
+        for repo in value:
+            validate_hf_repo(repo)
+        if len(value) != len(set(value)):
+            raise ValueError("repos must not repeat an entry")
+        return value
 
     @model_validator(mode="after")
     def _check_ollama_pair(self) -> "BaseModelConfig":
@@ -113,6 +132,53 @@ class MachineConfig(BaseModel):
     reserve_ram_gib: float = Field(ge=0)
     reserve_vram_gib: float = Field(ge=0)
     writer: bool
+    # Schema 2: the `profile_id` of this machine's hardware profile (`<state>/hardware/
+    # <profile_id>.json`), set by `modelroom migrate` or a guided run; `None` until then.
+    profile: str | None = None
+
+    @field_validator("profile")
+    @classmethod
+    def _check_profile(cls, value: str | None) -> str | None:
+        if value is not None and not PROFILE_ID_RE.fullmatch(value):
+            raise ValueError(f"profile must be a profile_id of 16 lowercase hex characters: {value!r}")
+        return value
+
+
+class DefaultsConfig(BaseModel):
+    """Schema 2: reserves for a machine that joins without its own `[machines.<name>]` table
+    (an imported profile). Such a machine is never a writer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reserve_ram_gib: float = Field(default=DEFAULT_RESERVE_RAM_GIB, ge=0)
+    reserve_vram_gib: float = Field(default=DEFAULT_RESERVE_VRAM_GIB, ge=0)
+
+
+class UpdatesConfig(BaseModel):
+    """Schema 2: whether the guided mode may look up a newer release (`check = false` turns it off)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    check: bool = True
+
+
+class GuidedConfig(BaseModel):
+    """Schema 2: the results folder the guided mode recorded when it wrote this configuration.
+
+    `results` is resolved against the configuration file's own directory by `load_config`,
+    exactly like `paths.state`; `None` means no guided run wrote this file.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    results: Path | None = None
+
+    @field_validator("results")
+    @classmethod
+    def _check_absolute(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
+            raise ValueError(f"guided.results must be an absolute path (load_config resolves relative ones): {value}")
+        return value
 
 
 class PathsConfig(BaseModel):
@@ -202,12 +268,17 @@ class Configuration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int
-    families: list[FamilyConfig] = Field(min_length=1)
+    # Schema 2: may be empty -- the guided mode writes a configuration first and fills the
+    # families from its search. Schema 1 still requires one (`normalize_config_v1`).
+    families: list[FamilyConfig] = Field(default_factory=list)
     packagers: list[str] = Field(default_factory=list)
     publishers: list[str] = Field(default_factory=list)
     machines: dict[str, MachineConfig] = Field(default_factory=dict)
     paths: PathsConfig
     llmfit: LlmfitConfig = Field(default_factory=LlmfitConfig)
+    defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    updates: UpdatesConfig = Field(default_factory=UpdatesConfig)
+    guided: GuidedConfig = Field(default_factory=GuidedConfig)
 
     @field_validator("packagers")
     @classmethod
@@ -249,9 +320,14 @@ class Configuration(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_repo_names_do_not_collide_across_base_models(self) -> "Configuration":
+    def _check_package_targets_do_not_collide_across_base_models(self) -> "Configuration":
         """P3-6 (fix-round 5), corrected by R7-8 (fix-round 6): no two base models may claim the
         same packager repo, `owner/name`.
+
+        Schema 2: checked over the whole target set `package_targets` returns -- generated
+        `<owner>/<name>-GGUF` names, `repo_aliases` under every candidate owner and the
+        owner-bound `repos` -- so the validator and the fetcher can never disagree about which
+        repos a base model claims.
 
         `hf.py::fetch_hf_area` probes `<owner>/<name>-GGUF` and every `repo_aliases` entry, for
         every base model, under every owner in `packagers` (global to the whole configuration)
@@ -273,20 +349,14 @@ class Configuration(BaseModel):
         claimed_by: dict[str, str] = {}
         for family in self.families:
             for base_model in family.base_models:
-                own_owner = base_model.hf_repo.split("/", 1)[0]
-                owners = {*self.packagers, own_owner}
-                default_name = f"{base_model.hf_repo.split('/', 1)[1]}-GGUF"
-                names = {default_name, *base_model.repo_aliases}
-                for owner in owners:
-                    for name in names:
-                        candidate = f"{owner}/{name}"
-                        existing = claimed_by.get(candidate)
-                        if existing is not None and existing != base_model.hf_repo:
-                            raise ValueError(
-                                f"packager repo {candidate!r} is claimed by both {existing!r} "
-                                f"and {base_model.hf_repo!r} -- a repo must name at most one base model"
-                            )
-                        claimed_by[candidate] = base_model.hf_repo
+                for candidate in package_targets(self, base_model):
+                    existing = claimed_by.get(candidate)
+                    if existing is not None and existing != base_model.hf_repo:
+                        raise ValueError(
+                            f"packager repo {candidate!r} is claimed by both {existing!r} "
+                            f"and {base_model.hf_repo!r} -- a repo must name at most one base model"
+                        )
+                    claimed_by[candidate] = base_model.hf_repo
         return self
 
     @model_validator(mode="after")
@@ -351,18 +421,59 @@ class Configuration(BaseModel):
         return _build_configuration(data, "config")
 
 
-def _validate_schema_version(data: dict, label: str) -> None:
+def package_targets(config: Configuration, base_model: BaseModelConfig) -> list[str]:
+    """Every packager repo (`owner/name`) that belongs to `base_model`, each exactly once.
+
+    ({`packagers`} plus the base model's own owner) x ({`<name>-GGUF`} plus `repo_aliases`),
+    then the owner-bound `repos`. Order is stable (owners in configuration order with the own
+    owner last, the default name first), duplicates removed. The collision validator uses it
+    today; fetch, owner selection and provenance switch to it in a later work package.
+    """
+    own_owner, base_name = base_model.hf_repo.split("/", 1)
+    owners = list(dict.fromkeys([*config.packagers, own_owner]))
+    names = list(dict.fromkeys([f"{base_name}-GGUF", *base_model.repo_aliases]))
+    generated = [f"{owner}/{name}" for owner in owners for name in names]
+    return list(dict.fromkeys([*generated, *base_model.repos]))
+
+
+def read_config_schema_version(data: dict, label: str) -> int:
+    """The `schema_version` of a raw configuration dict; `SchemaVersionError` when it is
+    missing, not an integer, or outside `CONFIG_SCHEMA_RANGE`."""
     version = data.get("schema_version")
     if not isinstance(version, int) or isinstance(version, bool):
         raise SchemaVersionError(f"{label}: schema_version is missing or not an integer: {version!r}")
     check_schema_version(version, CONFIG_SCHEMA_RANGE, label)
+    return version
+
+
+def normalize_config_v1(data: dict) -> dict:
+    """A schema-1 configuration dict as the equivalent schema-2 dict; `data` is left unchanged.
+
+    Pure and lossless: every schema-1 field keeps its value, `schema_version` becomes 2 and the
+    new `[defaults]` and `[updates]` sections are added with their default values (`[guided]`
+    stays absent: no guided run wrote this file). No machine gets a `profile` here -- that is
+    `modelroom migrate`'s job, once the profile files exist. Schema 1's own rule that at least
+    one family is configured is checked here, since schema 2 drops it. No writer rule is added:
+    a schema-1 file without a writer or without machines stays valid, and `fetch` alone checks
+    for a writer, as before.
+    """
+    families = data.get("families")
+    if not isinstance(families, list) or not families:
+        raise ValueError("schema_version 1 requires at least one entry in families")
+    normalized = copy.deepcopy(data)
+    normalized["schema_version"] = CONFIG_SCHEMA_VERSION
+    normalized.setdefault("defaults", DefaultsConfig().model_dump(mode="json"))
+    normalized.setdefault("updates", UpdatesConfig().model_dump(mode="json"))
+    return normalized
 
 
 def _build_configuration(data: dict, label: str) -> Configuration:
-    _validate_schema_version(data, label)
+    version = read_config_schema_version(data, label)
     try:
+        if version == 1:
+            data = normalize_config_v1(data)
         return Configuration.model_validate(data)
-    except ValidationError as exc:
+    except (ValidationError, ValueError) as exc:
         raise ConfigError(f"{label}: invalid configuration: {exc}") from exc
 
 
@@ -373,13 +484,14 @@ def _resolve_relative_paths(data: dict, base_dir: Path) -> None:
     file's own directory, never the process' working directory -- and it runs only for
     `load_config`; `Configuration.from_dict` requires paths to already be absolute.
     """
-    paths = data.get("paths")
-    if not isinstance(paths, dict):
-        return
-    for key in ("state", "markdown"):
-        value = paths.get(key)
-        if isinstance(value, str) and not Path(value).is_absolute():
-            paths[key] = str(base_dir / value)
+    for section, keys in (("paths", ("state", "markdown")), ("guided", ("results",))):
+        table = data.get(section)
+        if not isinstance(table, dict):
+            continue
+        for key in keys:
+            value = table.get(key)
+            if isinstance(value, str) and not Path(value).is_absolute():
+                table[key] = str(base_dir / value)
 
 
 def _check_state_confinement(config: Configuration, config_dir: Path, label: str) -> None:
@@ -434,6 +546,17 @@ def load_config(path: Path) -> Configuration:
         raise ConfigError(f"{label}: config file not found") from exc
     except OSError as exc:
         raise ConfigError(f"{label}: cannot read config file: {exc}") from exc
+    return config_from_text(text, path)
+
+
+def config_from_text(text: str, path: Path) -> Configuration:
+    """Validate `text` as the content of the configuration file at `path` (absolute).
+
+    Everything `load_config` does after reading the file: TOML parsing, the schema-version
+    gate, path resolution against `path`'s directory and both path checks. `modelroom migrate`
+    uses it to validate a rewritten configuration before writing it.
+    """
+    label = str(path)
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -442,13 +565,24 @@ def load_config(path: Path) -> Configuration:
     config = _build_configuration(data, label)
     _check_state_confinement(config, path.parent, label)
     _check_markdown_not_the_config_file(config, path, label)
+    _check_config_not_a_state_file(config, path, label)
     return config
+
+
+def _check_config_not_a_state_file(config: Configuration, config_path: Path, label: str) -> None:
+    """The configuration file must not be one of the files modelroom writes into `paths.state`;
+    the lock alone would overwrite and then empty it."""
+    paths = config.paths
+    state_files = (paths.snapshot_file, paths.lock_file, paths.run_status_file)
+    if config_path.resolve(strict=False) in {p.resolve(strict=False) for p in state_files}:
+        raise ConfigError(f"{label}: the config file must not be a state file of paths.state ({paths.state})")
 
 
 EXAMPLES: dict[str, dict] = {
     "BaseModelConfig": {
         "hf_repo": "acme/Nova-7B",
         "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+        "repos": ["community/Nova-7B-GGUF"],
         "ollama_base": "nova",
         "ollama_tag": "7b",
     },
@@ -458,6 +592,7 @@ EXAMPLES: dict[str, dict] = {
             {
                 "hf_repo": "acme/Nova-7B",
                 "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+                "repos": ["community/Nova-7B-GGUF"],
                 "ollama_base": "nova",
                 "ollama_tag": "7b",
             }
@@ -467,6 +602,17 @@ EXAMPLES: dict[str, dict] = {
         "reserve_ram_gib": 8.0,
         "reserve_vram_gib": 1.0,
         "writer": True,
+        "profile": "3f9a0c21d4e6b870",
+    },
+    "DefaultsConfig": {
+        "reserve_ram_gib": 8.0,
+        "reserve_vram_gib": 1.0,
+    },
+    "UpdatesConfig": {
+        "check": True,
+    },
+    "GuidedConfig": {
+        "results": "//models/modelroom",
     },
     "PathsConfig": {
         "state": "//models/modelroom/state",
@@ -476,7 +622,7 @@ EXAMPLES: dict[str, dict] = {
         "min_version": "1.1.16",
     },
     "Configuration": {
-        "schema_version": 1,
+        "schema_version": 2,
         "families": [
             {
                 "name": "nova",
@@ -484,6 +630,7 @@ EXAMPLES: dict[str, dict] = {
                     {
                         "hf_repo": "acme/Nova-7B",
                         "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+                        "repos": ["community/Nova-7B-GGUF"],
                         "ollama_base": "nova",
                         "ollama_tag": "7b",
                     }
@@ -493,12 +640,20 @@ EXAMPLES: dict[str, dict] = {
         "packagers": ["packager"],
         "publishers": ["acme"],
         "machines": {
-            "workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True},
+            "workstation": {
+                "reserve_ram_gib": 8.0,
+                "reserve_vram_gib": 1.0,
+                "writer": True,
+                "profile": "3f9a0c21d4e6b870",
+            },
         },
         "paths": {
             "state": "//models/modelroom/state",
             "markdown": "//models/modelroom/docs/models.md",
         },
         "llmfit": {"min_version": "1.1.16"},
+        "defaults": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0},
+        "updates": {"check": True},
+        "guided": {"results": "//models/modelroom"},
     },
 }

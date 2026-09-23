@@ -1092,10 +1092,11 @@ def test_fetch_hf_area_budget_exhausted_mid_tree_fetch_ends_it_incomplete_with_t
             ),
         }
     )
-    from modelroom.http import BudgetedTransport
+    from modelroom.http import BudgetedTransport, RequestBudget
 
-    budgeted = BudgetedTransport(inner, budget=2)
-    budgeted.used = 1  # one slot already spent elsewhere -- the model-info call below spends the
+    shared = RequestBudget(2)
+    shared.charge()  # one slot already spent elsewhere -- the model-info call below spends the
+    budgeted = BudgetedTransport(inner, budget=shared)
     # second (last) one, so the tree-fetch call after it is refused before it is ever made.
     base_model = _qwen35_9b(
         hf_repo="synthetic/Budget", repo_aliases=["Budget-GGUF"], ollama_base=None, ollama_tag=None

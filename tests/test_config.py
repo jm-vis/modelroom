@@ -17,11 +17,16 @@ from modelroom.config import (
     BaseModelConfig,
     ConfigError,
     Configuration,
+    DefaultsConfig,
     FamilyConfig,
+    GuidedConfig,
     LlmfitConfig,
     MachineConfig,
     PathsConfig,
+    UpdatesConfig,
     load_config,
+    normalize_config_v1,
+    package_targets,
 )
 from modelroom.contracts import SchemaVersionError
 
@@ -32,6 +37,9 @@ MODEL_CLASSES = {
     "BaseModelConfig": BaseModelConfig,
     "FamilyConfig": FamilyConfig,
     "MachineConfig": MachineConfig,
+    "DefaultsConfig": DefaultsConfig,
+    "UpdatesConfig": UpdatesConfig,
+    "GuidedConfig": GuidedConfig,
     "PathsConfig": PathsConfig,
     "LlmfitConfig": LlmfitConfig,
     "Configuration": Configuration,
@@ -345,7 +353,7 @@ def test_configuration_rejects_a_default_gguf_name_colliding_with_another_base_m
 
 def _minimal_two_owner_payload(packagers: list[str]) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "families": [
             {"name": "nova", "base_models": [{"hf_repo": "acme/Nova", "repo_aliases": []}]},
             {"name": "nova-other", "base_models": [{"hf_repo": "other/Nova", "repo_aliases": []}]},
@@ -416,6 +424,9 @@ def test_configuration_accepts_distinct_repo_aliases_across_base_models():
     second_family["name"] = "other-family"
     second_family["base_models"][0]["hf_repo"] = "acme/Other-7B"
     second_family["base_models"][0]["repo_aliases"] = ["Other-7B-Instruct-GGUF"]
+    # Schema 2: the copied owner-bound `repos` entry would be a real collision; this test is
+    # about repo_aliases only.
+    second_family["base_models"][0]["repos"] = []
     # R7-7 (fix-round 6): the first base model already claims ollama_base "nova"/tag "7b" -- a
     # distinct tag on the same base keeps this test about repo_aliases only, not an (also
     # correctly rejected) ollama identity collision.
@@ -430,11 +441,162 @@ def test_configuration_accepts_empty_machines():
     Configuration.model_validate(payload)
 
 
-def test_configuration_wrong_schema_version_is_rejected():
+@pytest.mark.parametrize("version", [1, 3])
+def test_configuration_model_accepts_only_schema_2(version):
+    # Schema 1 reaches the model only through `normalize_config_v1`; the model itself is v2.
     payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
-    payload["schema_version"] = 2
+    payload["schema_version"] = version
     with pytest.raises(ValidationError):
         Configuration.model_validate(payload)
+
+
+def test_configuration_schema_2_accepts_empty_families():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["families"] = []
+    assert Configuration.model_validate(payload).families == []
+
+
+def test_configuration_rejects_an_owner_bound_repo_shared_by_two_base_models():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["families"].append(
+        {
+            "name": "other-family",
+            "base_models": [{"hf_repo": "acme/Other-7B", "repos": ["community/Nova-7B-GGUF"]}],
+        }
+    )
+    with pytest.raises(ValidationError, match="community/Nova-7B-GGUF"):
+        Configuration.model_validate(payload)
+
+
+def test_configuration_rejects_a_repo_listed_twice_in_repos():
+    payload = json.loads(json.dumps(EXAMPLES["BaseModelConfig"]))
+    payload["repos"] = ["community/Nova-7B-GGUF", "community/Nova-7B-GGUF"]
+    with pytest.raises(ValidationError):
+        BaseModelConfig.model_validate(payload)
+
+
+def test_configuration_rejects_a_repos_entry_without_owner():
+    payload = json.loads(json.dumps(EXAMPLES["BaseModelConfig"]))
+    payload["repos"] = ["Nova-7B-GGUF"]
+    with pytest.raises(ValidationError):
+        BaseModelConfig.model_validate(payload)
+
+
+def test_machine_config_rejects_a_profile_that_is_not_a_profile_id():
+    payload = dict(EXAMPLES["MachineConfig"])
+    payload["profile"] = "workstation"
+    with pytest.raises(ValidationError):
+        MachineConfig.model_validate(payload)
+
+
+def test_defaults_updates_and_guided_have_their_documented_defaults():
+    config = Configuration.model_validate({"schema_version": 2, "paths": EXAMPLES["PathsConfig"]})
+    assert (config.defaults.reserve_ram_gib, config.defaults.reserve_vram_gib) == (8.0, 1.0)
+    assert config.updates.check is True
+    assert config.guided.results is None
+
+
+# --- package_targets: one target set for the collision check (and later fetch/provenance) ----
+
+
+def test_package_targets_is_owners_times_names_then_owner_bound_repos_without_duplicates():
+    config = Configuration.model_validate(EXAMPLES["Configuration"])
+    base_model = config.families[0].base_models[0]
+    assert package_targets(config, base_model) == [
+        "packager/Nova-7B-GGUF",
+        "packager/Nova-7B-Instruct-GGUF",
+        "acme/Nova-7B-GGUF",
+        "acme/Nova-7B-Instruct-GGUF",
+        "community/Nova-7B-GGUF",
+    ]
+
+
+def test_package_targets_lists_a_repo_once_when_repos_repeats_a_generated_target():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["families"][0]["base_models"][0]["repos"] = ["packager/Nova-7B-GGUF"]
+    config = Configuration.model_validate(payload)
+    targets = package_targets(config, config.families[0].base_models[0])
+    assert targets.count("packager/Nova-7B-GGUF") == 1
+
+
+def test_package_targets_counts_the_own_owner_once_when_it_is_also_a_packager():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["packagers"] = ["acme"]
+    config = Configuration.model_validate(payload)
+    targets = package_targets(config, config.families[0].base_models[0])
+    assert targets.count("acme/Nova-7B-GGUF") == 1
+
+
+# --- schema 1 -> 2 in memory (normalize_config_v1) -------------------------------------------
+
+
+def _schema_1_payload() -> dict:
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["schema_version"] = 1
+    for key in ("defaults", "updates", "guided"):
+        del payload[key]
+    del payload["machines"]["workstation"]["profile"]
+    del payload["families"][0]["base_models"][0]["repos"]
+    return payload
+
+
+def test_normalize_config_v1_is_lossless_and_leaves_its_input_unchanged():
+    legacy = _schema_1_payload()
+    before = json.loads(json.dumps(legacy))
+    normalized = normalize_config_v1(legacy)
+    assert legacy == before
+    assert normalized["schema_version"] == 2
+    for key, value in legacy.items():
+        if key != "schema_version":
+            assert normalized[key] == value
+    assert normalized["defaults"] == {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0}
+    assert normalized["updates"] == {"check": True}
+    assert "guided" not in normalized
+    Configuration.model_validate(normalized)
+
+
+def test_normalize_config_v1_keeps_schema_1s_rule_of_at_least_one_family():
+    legacy = _schema_1_payload()
+    legacy["families"] = []
+    with pytest.raises(ValueError, match="at least one"):
+        normalize_config_v1(legacy)
+
+
+def test_from_dict_reads_a_schema_1_dict_as_schema_2():
+    config = Configuration.from_dict(_schema_1_payload())
+    assert config.schema_version == 2
+    assert config.machines["workstation"].profile is None
+
+
+def test_from_dict_schema_1_without_families_is_a_config_error():
+    legacy = _schema_1_payload()
+    legacy["families"] = []
+    with pytest.raises(ConfigError, match="at least one"):
+        Configuration.from_dict(legacy)
+
+
+def test_shipped_example_file_is_written_as_schema_2():
+    import tomllib
+
+    assert tomllib.loads(EXAMPLE_TOML.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_schema_1_fixture_with_two_machines_still_loads():
+    config = load_config(REPO / "tests" / "fixtures" / "config_v1" / "modelroom.toml")
+    assert config.schema_version == 2
+    assert set(config.machines) == {"laptop", "server"}
+    assert all(machine.profile is None for machine in config.machines.values())
+
+
+def test_load_config_resolves_a_relative_guided_results_path(tmp_path):
+    config_path = tmp_path / "modelroom.toml"
+    config_path.write_text(
+        'schema_version = 2\n\n[paths]\nstate = "state"\nmarkdown = "docs/models.md"\n\n'
+        '[guided]\nresults = "results"\n',
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    assert config.guided.results == tmp_path / "results"
 
 
 def test_allowed_owners_is_the_union_of_packagers_and_publishers():
@@ -460,9 +622,29 @@ def test_from_dict_rejects_relative_paths():
         Configuration.from_dict(payload)
 
 
+@pytest.mark.parametrize("name", ["modelroom.lock", "modelroom.json", "run-status.json"])
+def test_load_config_refuses_a_configuration_that_is_a_state_file(tmp_path, name):
+    # A configuration inside <state>/hardware or <state>/measurements is already outside the
+    # confinement of paths.state; only the files directly in <state> need this check.
+    config_path = tmp_path / name
+    config_path.write_text(
+        f'schema_version = 2\n[paths]\nstate = "."\nmarkdown = "{tmp_path.parent.as_posix()}/models.md"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="state file"):
+        load_config(config_path)
+
+
+def test_from_dict_rejects_a_relative_guided_results_path():
+    payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
+    payload["guided"] = {"results": "results"}
+    with pytest.raises((ConfigError, ValidationError), match="absolute"):
+        Configuration.from_dict(payload)
+
+
 def test_from_dict_wrong_schema_version_raises_schema_version_error_before_field_errors():
     payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
     payload["publishers"] = []  # would also fail field validation, but must never get there
     with pytest.raises(SchemaVersionError):
         Configuration.from_dict(payload)
@@ -529,7 +711,7 @@ def test_load_config_wrong_schema_version_raises_schema_version_error_before_fie
     config_path = tmp_path / "modelroom.toml"
     config_path.write_text(
         """
-schema_version = 2
+schema_version = 3
 publishers = []
 
 [paths]
@@ -567,8 +749,8 @@ markdown = "docs/models.md"
 
 
 def test_config_schema_range_matches_snapshot_convention():
-    assert CONFIG_SCHEMA_RANGE == (1, 2)
-    assert CONFIG_SCHEMA_VERSION == 1
+    assert CONFIG_SCHEMA_RANGE == (1, 3)
+    assert CONFIG_SCHEMA_VERSION == 2
 
 
 # --- F7: paths.state must be confined to the config file's own directory tree --------------

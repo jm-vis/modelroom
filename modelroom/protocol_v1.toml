@@ -1,0 +1,31 @@
+# Speed measurement protocol, version 1.
+#
+# The load test sends exactly this request to the local Ollama daemon: one warm-up run, then
+# three measured runs, each `POST /api/generate` with `raw = true` (no template, no system prompt
+# stored in the model) and `stream = false`. `num_ctx` is not fixed here: it is the ranking's
+# `context_requested`. A measurement is valid only when every measured run meets every rule in
+# [validity]; any miss is stored as `invalid` with its reason and never ranked.
+
+protocol_version = 1
+warmup_runs = 1
+measured_runs = 3
+prompt = """Write a detailed, factual description of how a public library organizes its books, \
+from the moment a new book arrives until a reader borrows it. Cover cataloging, shelving, \
+classification numbers, the reading room, returns and repairs. Use plain sentences."""
+
+[options]
+raw = true
+stream = false
+num_predict = 128
+temperature = 0.0
+seed = 42
+
+[validity]
+# every measured run must end because it reached num_predict, not for any other reason
+done_reason = "length"
+# eval_count equals num_predict
+require_full_eval_count = true
+# eval_duration is above zero
+require_positive_eval_duration = true
+# prompt_eval_count + num_predict <= num_ctx
+require_context_headroom = true

@@ -280,17 +280,42 @@ class BudgetedTransport:
     time, never charged only after the fact.
     """
 
-    def __init__(self, inner: Transport, budget: int = DEFAULT_REQUEST_BUDGET) -> None:
+    def __init__(self, inner: Transport, budget: "int | RequestBudget" = DEFAULT_REQUEST_BUDGET) -> None:
         self._inner = inner
-        self._budget = budget
+        self.budget = budget if isinstance(budget, RequestBudget) else RequestBudget(budget)
+
+    @property
+    def used(self) -> int:
+        return self.budget.used
+
+    @property
+    def remaining(self) -> int:
+        return self.budget.remaining
+
+    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
+        self.budget.charge()
+        return self._inner(method, url, headers)
+
+
+class RequestBudget:
+    """One request budget that several steps share (search, resolution, fetch).
+
+    A `BudgetedTransport` built on the same `RequestBudget` books against the same count, so
+    a caller can pass the budget left over from its own requests into `run_fetch`.
+    """
+
+    def __init__(self, limit: int = DEFAULT_REQUEST_BUDGET) -> None:
+        if limit < 0:
+            raise ValueError(f"limit must not be negative: {limit}")
+        self.limit = limit
         self.used = 0
 
     @property
     def remaining(self) -> int:
-        return self._budget - self.used
+        return self.limit - self.used
 
-    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
-        if self.used >= self._budget:
+    def charge(self) -> None:
+        """Book one request before it is made; `BudgetExhaustedError` when none is left."""
+        if self.used >= self.limit:
             raise BudgetExhaustedError()
         self.used += 1
-        return self._inner(method, url, headers)

@@ -31,6 +31,10 @@ _MANIFEST_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _APPROVAL_CONTENT_RE = re.compile(r"^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")
 _OLLAMA_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MACHINE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# A hardware profile's identity (profile v2, `modelroom/profile.py`): 16 lowercase hex
+# characters, random, created once per profile file. Defined here because the configuration's
+# `[machines.<name>].profile` refers to it too.
+PROFILE_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 # Qwen's own convention inserts an extra `-split` marker before the counter
 # (`Qwen3VL-235B-A22B-Instruct-F16-split-00001-of-00010.gguf`); the counter itself is otherwise
 # identical to every other packager's `-NNNNN-of-NNNNN` suffix.
@@ -75,6 +79,13 @@ def validate_repo_aliases(value: list[str]) -> list[str]:
             raise ValueError("repo_aliases entries must be non-empty")
         if "/" in alias:
             raise ValueError(f"repo_aliases holds repo names, not 'owner/name': {alias!r}")
+    return value
+
+
+def validate_ollama_name(value: str) -> str:
+    """Validate an Ollama model name `<base>:<tag>`; shared by `Package` and the guided shapes."""
+    if not _OLLAMA_NAME_RE.fullmatch(value):
+        raise ValueError(f"ollama name must look like '<base>:<tag>': {value!r}")
     return value
 
 

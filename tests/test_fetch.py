@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from modelroom.config import Configuration
 from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile, Snapshot, load_snapshot
 from modelroom.fetch import run_fetch
-from modelroom.http import Response
+from modelroom.http import RequestBudget, Response
 from modelroom.quantization import package_identity_key
 
 from fixture_support import (
@@ -280,6 +280,35 @@ def test_run_fetch_stops_making_requests_once_the_budget_is_exhausted(tmp_path):
     assert result.request_used == 2
     assert result.request_budget == 2
     assert any(area.status == "incomplete" for area in result.snapshot.areas)
+    assert any("budget exhausted" in (area.error or "") for area in result.snapshot.areas)
+
+
+# --- AP9-K: a budget object shared with the caller's own requests ---------------------------
+
+
+def test_run_fetch_books_against_a_shared_budget_the_caller_already_spent_on(tmp_path):
+    config = _config(tmp_path)
+    fresh = run_fetch(config, build_transport(qwen35_transport_mapping()), RUN1, old_snapshot=None)
+    shared = RequestBudget(400)
+    for _ in range(10):  # e.g. the guided search's own requests
+        shared.charge()
+
+    result = run_fetch(config, build_transport(qwen35_transport_mapping()), RUN1, old_snapshot=None, budget=shared)
+
+    assert result.request_budget == 400
+    assert result.request_used == 10 + fresh.request_used
+    assert shared.used == result.request_used
+
+
+def test_run_fetch_ends_where_the_shared_budget_ends(tmp_path):
+    config = _config(tmp_path)
+    shared = RequestBudget(3)
+    shared.charge()
+
+    result = run_fetch(config, build_transport(qwen35_transport_mapping()), RUN1, old_snapshot=None, budget=shared)
+
+    assert shared.used == 3 and shared.remaining == 0
+    assert result.request_used == 3
     assert any("budget exhausted" in (area.error or "") for area in result.snapshot.areas)
 
 

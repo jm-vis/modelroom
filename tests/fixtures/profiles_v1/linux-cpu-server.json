@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "machine": "server",
+  "measured_at": "2026-09-22T21:02:40Z",
+  "llmfit_version": "1.1.16",
+  "vram_gib": 0.0,
+  "ram_gib": 62.8,
+  "free_ram_gib_at_measurement": 51.3,
+  "gpu_name": null,
+  "backend": "CPU (x86_64)",
+  "unified_memory": false,
+  "installed": null,
+  "installed_unavailable_reason": "ollama daemon not reachable",
+  "measurements": []
+}

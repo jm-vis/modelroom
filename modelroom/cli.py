@@ -41,6 +41,7 @@ from .llmfit import (
     fetch_llmfit_system,
     hardware_fields_from_llmfit_system,
 )
+from .migrate import MigrationError, migrate
 from .ollama_local import fetch_installed_models
 from .render import RatingSource, build_document, parse_header_line
 from .state import (
@@ -115,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
 
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="Move schema-1 hardware profiles and configuration to schema 2 (backups are kept)."
+    )
+    migrate_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
+
     return parser
 
 
@@ -132,6 +138,8 @@ def main(
         return _cmd_hardware(args, runner, transport, now)
     if args.command == "render":
         return _cmd_render(args, now)
+    if args.command == "migrate":
+        return _cmd_migrate(args, now)
     parser.error(f"unknown command: {args.command}")
     return 2  # pragma: no cover - argparse.error already exits
 
@@ -392,6 +400,26 @@ def _render_locked(config: Configuration, rendered_at: datetime, rating: RatingS
 
     document = build_document(config, snapshot, hardware_by_machine, rendered_at, rating)
     atomic_write_text(config.paths.markdown, document)
+    return 0
+
+
+def _cmd_migrate(args: argparse.Namespace, now: datetime | None) -> int:
+    """`migrate`: exit 0 migrated or nothing to do, 1 lock held, 2 configuration invalid, 3 a
+    file has an unsupported schema version or cannot be read -- nothing written in 1, 2, 3."""
+    started_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
+    try:
+        lines = migrate(args.config, started_at)
+    except (SchemaVersionError, MigrationError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except LockHeldError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    for line in lines:
+        print(line)
     return 0
 
 

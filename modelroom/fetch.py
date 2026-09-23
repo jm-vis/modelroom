@@ -23,7 +23,7 @@ from .config import BaseModelConfig, Configuration
 from .contracts import Architecture, BaseModelSpec, Package, Snapshot
 from .fetch_types import AreaOutcome
 from .hf import BaseModelMeta, candidate_owners, fetch_base_model_meta, fetch_hf_area
-from .http import DEFAULT_REQUEST_BUDGET, BudgetedTransport, RedirectingTransport, Transport
+from .http import DEFAULT_REQUEST_BUDGET, BudgetedTransport, RedirectingTransport, RequestBudget, Transport
 from .ollama import fetch_ollama_area
 from .quantization import package_identity_key
 from .state import merge_snapshot
@@ -43,10 +43,17 @@ def run_fetch(
     transport: Transport,
     run_at: datetime,
     old_snapshot: Snapshot | None,
-    budget: int = DEFAULT_REQUEST_BUDGET,
+    budget: int | RequestBudget = DEFAULT_REQUEST_BUDGET,
 ) -> FetchResult:
-    """Fetch every configured base model on both sources and merge the result against `old_snapshot`."""
-    budgeted = BudgetedTransport(transport, budget)
+    """Fetch every configured base model on both sources and merge the result against `old_snapshot`.
+
+    `budget` is either a limit (a fresh budget for this run, the default as before) or a
+    `RequestBudget` the caller already spent on (e.g. its search): the run then books against
+    that same count and stops where the shared budget ends. `request_used`/`request_budget` in
+    the result are the shared budget's totals.
+    """
+    shared = budget if isinstance(budget, RequestBudget) else RequestBudget(budget)
+    budgeted = BudgetedTransport(transport, shared)
     # R5: RedirectingTransport is the *outer* layer -- every hop of a redirect chain arrives at
     # budgeted as its own separate call, so each hop is checked and booked against the run's
     # request budget before it is made, failure paths included, rather than only afterwards.
@@ -92,7 +99,7 @@ def run_fetch(
                     area_outcomes.append(fetch_ollama_area(redirecting, base_model, run_at, previous_by_key))
 
     snapshot = merge_snapshot(old_snapshot, run_at, area_outcomes, base_models)
-    return FetchResult(snapshot=snapshot, request_used=budgeted.used, request_budget=budget)
+    return FetchResult(snapshot=snapshot, request_used=shared.used, request_budget=shared.limit)
 
 
 def _build_base_model_spec(

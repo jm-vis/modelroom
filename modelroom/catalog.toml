@@ -1,0 +1,40 @@
+# Shipped catalog: per family, the publisher account, its base models, which of them are the
+# publisher's current models (`latest = true`, a positive statement), successor links and the
+# Ollama name. Every model row names its evidence in `source`. Maintained in this repository;
+# a missing statement is never evidence: a model with neither `latest` nor `successor` is shown
+# with age `unknown`.
+
+schema_version = 1
+
+[[families]]
+name = "qwen3.5"
+publisher = "Qwen"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.5-9B"
+  ollama_base = "qwen3.5"
+  ollama_tag = "9b"
+  source = "https://huggingface.co/Qwen/Qwen3.5-9B"
+
+[[families]]
+name = "deepseek-r1"
+publisher = "deepseek-ai"
+
+  [[families.models]]
+  hf_repo = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+  source = "https://huggingface.co/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+
+[[families]]
+name = "eurollm"
+publisher = "utter-project"
+
+  # The model card of EuroLLM-9B-Instruct-2512 calls itself "an improved version of
+  # utter-project/EuroLLM-9B-Instruct".
+  [[families.models]]
+  hf_repo = "utter-project/EuroLLM-9B-Instruct"
+  successor = "utter-project/EuroLLM-9B-Instruct-2512"
+  source = "https://huggingface.co/utter-project/EuroLLM-9B-Instruct-2512"
+
+  [[families.models]]
+  hf_repo = "utter-project/EuroLLM-9B-Instruct-2512"
+  source = "https://huggingface.co/utter-project/EuroLLM-9B-Instruct-2512"

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "machine": "studio",
+  "measured_at": "2026-09-22T19:45:00Z",
+  "llmfit_version": "1.1.16",
+  "vram_gib": 48.0,
+  "ram_gib": 64.0,
+  "free_ram_gib_at_measurement": 40.1,
+  "gpu_name": "Apple M2 Max",
+  "backend": "Metal",
+  "unified_memory": true,
+  "installed": [],
+  "installed_unavailable_reason": null,
+  "measurements": []
+}

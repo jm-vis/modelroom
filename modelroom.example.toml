@@ -3,8 +3,11 @@
 # Copy this file to `modelroom.toml` and adjust the families, allow-listed owners, machines
 # and paths for your own setup. `paths.state` and `paths.markdown`, when relative, resolve
 # against this file's own directory -- never the current working directory.
+#
+# Schema 2. A schema-1 file still reads; `modelroom migrate --config <file>` rewrites it as
+# schema 2 and keeps the original next to it as `<file>.v1.bak`.
 
-schema_version = 1
+schema_version = 2
 
 # Hugging Face organisations that publish quantized packager repos (GGUF builds). A package's
 # repo owner has to be one of these, or one of `publishers` below.
@@ -14,6 +17,9 @@ packagers = ["unsloth", "bartowski", "mradermacher", "lmstudio-community", "ggml
 # owner below must appear here.
 publishers = ["Qwen", "deepseek-ai", "utter-project"]
 
+# Families and their base models. `repo_aliases` are further packager repo names probed under
+# every owner in `packagers`; `repos` (optional) lists full `owner/name` packager repos that
+# belong to exactly one base model, e.g. under an owner that is not in `packagers`.
 [[families]]
 name = "qwen3.5"
 
@@ -38,7 +44,8 @@ name = "eurollm"
   repo_aliases = ["EuroLLM-9B-Instruct-2512-GGUF"]
 
 # Machines that run `hardware` (and, for a writer, `fetch`). Reserved headroom is subtracted
-# before a package is judged to fit.
+# before a package is judged to fit. `profile` (the machine's hardware profile id) is set by
+# `modelroom migrate` or the guided mode; leave it out when you write this file by hand.
 [machines.workstation]
 reserve_ram_gib = 8
 reserve_vram_gib = 1
@@ -57,3 +64,13 @@ markdown = "docs/models.md"
 
 [llmfit]
 min_version = "1.1.16"
+
+# Reserves for a machine that joins without its own [machines.<name>] table (an imported
+# profile); such a machine is never a writer.
+[defaults]
+reserve_ram_gib = 8
+reserve_vram_gib = 1
+
+# Whether the guided mode may look up a newer modelroom release.
+[updates]
+check = true

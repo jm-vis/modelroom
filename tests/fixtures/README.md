@@ -108,3 +108,29 @@ Both real commands here were run on the same reference laptop, 2026-09-22.
   changes nothing the fetcher or its tests depend on. Every entry's `digest` is the daemon's
   **bare hex, with no `sha256:` prefix** (measured 2026-09-22) -- `fetch_installed_models`
   normalizes it before building `InstalledModel` (CONTRACTS.md, "Local Ollama inventory").
+
+## Schema 2 and migration (AP9-K)
+
+All hand-written, fictitious machines and models (`acme/Nova-*`, `packager/*`); no real host
+names, paths or people. Written 2026-09-23.
+
+- `profiles_v1/` -- four schema-1 hardware profiles as `hardware` wrote them, one per case the
+  migration has to handle without guessing: `windows-nvidia-laptop.json` (one GPU with VRAM,
+  two embedded measurements), `linux-cpu-server.json` (no GPU, VRAM 0, Ollama not reachable),
+  `unified-memory.json` (`unified_memory = true`) and `vram-zero.json` (an integrated adapter,
+  VRAM 0). The laptop's second measurement has `tps_mean` 21.0 below its `tps_range` of
+  21.5..23.0 on purpose: schema 1 never checked the range against the mean, and the migration
+  carries such a value over unchanged.
+- `config_v1/modelroom.toml` -- a schema-1 configuration with two machines (`laptop` writer,
+  `server`), paths relative to its own folder; `tests/test_migrate.py` copies it next to
+  `profiles_v1/` into a temporary folder.
+- `catalog_excerpt.toml` -- a catalog in the shipped format with one `latest`, one `legacy`
+  (with successor) and one `unknown` model.
+- `export_v1.json` -- an export object: the `HardwareProfile` example plus two measurements,
+  one protocol `v1` and one migrated (`protocol: none`) from the laptop fixture.
+- `measurement_v2_invalid.json` -- a protocol-v1 measurement stored as `invalid` (run 2 ended
+  with `done_reason: stop`), with its reason.
+
+The export and the invalid measurement were generated from `modelroom/examples.py` and
+validated before they were written; the relation check's positive case uses the recorded
+`hf_unsloth_qwen35_9b_gguf_model.json` above (relation only in `tags`).

@@ -23,6 +23,17 @@ consumer build against the same expectations.
 | Snapshot | `<state>/modelroom.json` | `fetch` | `render` (and any operator-side freshness check) |
 | Hardware profile | `<state>/hardware/<machine>.json` | `hardware`, on that machine | `render` |
 
+Schema 2 (see "Schema 2: profiles, measurements, guided mode" at the end) adds four forms and
+renames the profile file:
+
+| Form | File | Written by | Read by |
+|---|---|---|---|
+| Hardware profile v2 | `<state>/hardware/<profile_id>.json` | `modelroom migrate`; the measuring step on that machine (later work package) | fit, ranking |
+| Measurement | `<state>/measurements/<profile_id>/<measurement_id>.json` | `modelroom migrate`; the load test (later work package) | ranking |
+| Export | any file the user moves between machines | export (later work package) | import (later work package) |
+| Pointer file | `~/.modelroom/guided.json` (per user, outside the state) | the guided mode | the guided mode |
+| Catalog | `modelroom/catalog.toml`, shipped in the package | this repository | the search |
+
 Runtime-only files in the state directory (`modelroom.lock`, `run-status.json`, `*.tmp`) are
 not contracts; they are documented with the command that owns them.
 
@@ -611,13 +622,23 @@ fetch time and live only in the snapshot, never here.
 |---|---|---|---|
 | `hf_repo` | `str` | `owner/name`, same rule as `BaseModelSpec.hf_repo` | the publisher's exact Hugging Face repo |
 | `repo_aliases` | `list[str]` | same rule as `BaseModelSpec.repo_aliases` | further exact packager repo names that count as this base model |
+| `repos` | `list[str]` | schema 2; each `owner/name`, unique; default `[]` | owner-bound packager repos (e.g. found by the guided search under an owner that is not in `packagers`); each entry names exactly one repo |
 | `ollama_base` | `str \| None` | both set or both `None` with `ollama_tag` | the Ollama library model name, when one exists |
 | `ollama_tag` | `str \| None` | both set or both `None` with `ollama_base` | the Ollama library tag naming this base model's size |
+
+**Package targets (schema 2).** `package_targets(config, base_model)` returns every packager repo
+that belongs to a base model, each once, in a stable order: (`packagers` plus the base model's
+own owner) x (`<name>-GGUF` plus `repo_aliases`), then `repos`. The collision check below uses
+exactly this set; fetch, owner selection and provenance switch to it in a later work package, so
+the three can never disagree about which repos a base model claims. For the example below the
+targets are `packager/Nova-7B-GGUF`, `packager/Nova-7B-Instruct-GGUF`, `acme/Nova-7B-GGUF`,
+`acme/Nova-7B-Instruct-GGUF`, `community/Nova-7B-GGUF`.
 
 ```json
 {
   "hf_repo": "acme/Nova-7B",
   "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+  "repos": ["community/Nova-7B-GGUF"],
   "ollama_base": "nova",
   "ollama_tag": "7b"
 }
@@ -639,6 +660,7 @@ A family name and the base models it resolves to, as the user configures it.
     {
       "hf_repo": "acme/Nova-7B",
       "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+      "repos": ["community/Nova-7B-GGUF"],
       "ollama_base": "nova",
       "ollama_tag": "7b"
     }
@@ -657,12 +679,64 @@ there (`^[a-z0-9][a-z0-9-]*$`) against every key at once.
 | `reserve_ram_gib` | `float` | `>= 0` | system RAM to leave unused when judging fit |
 | `reserve_vram_gib` | `float` | `>= 0` | GPU VRAM to leave unused when judging fit |
 | `writer` | `bool` | -- | whether this machine runs `fetch` and writes the shared state |
+| `profile` | `str \| None` | schema 2; 16 lowercase hex characters; default `None` | the `profile_id` of this machine's hardware profile (`<state>/hardware/<profile_id>.json`), set by `modelroom migrate` or a guided run |
 
 ```json
 {
   "reserve_ram_gib": 8.0,
   "reserve_vram_gib": 1.0,
-  "writer": true
+  "writer": true,
+  "profile": "3f9a0c21d4e6b870"
+}
+```
+
+#### DefaultsConfig
+
+Schema 2. Reserves for a machine that joins without its own `[machines.<name>]` table (an
+imported profile); such a machine is never a writer. The defaults are the values the shipped
+example uses for a workstation.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `reserve_ram_gib` | `float` | `>= 0`, default `8.0` | system RAM to leave unused |
+| `reserve_vram_gib` | `float` | `>= 0`, default `1.0` | GPU VRAM to leave unused |
+
+```json
+{
+  "reserve_ram_gib": 8.0,
+  "reserve_vram_gib": 1.0
+}
+```
+
+#### UpdatesConfig
+
+Schema 2. Whether the guided mode may look up a newer modelroom release; `check = false` turns
+the lookup off.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `check` | `bool` | default `true` | look up a newer release at the start of a guided run |
+
+```json
+{
+  "check": true
+}
+```
+
+#### GuidedConfig
+
+Schema 2. The results folder the guided mode recorded when it wrote this configuration.
+`load_config` resolves a relative `results` against the configuration file's own directory,
+exactly like `paths.state`; it is not confined. `Configuration.from_dict` requires it absolute,
+like `paths`. `None` (the table absent) means no guided run wrote this file.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `results` | `Path \| None` | default `None` | the folder the guided mode keeps its configuration and results in |
+
+```json
+{
+  "results": "//models/modelroom"
 }
 ```
 
@@ -684,7 +758,10 @@ outside) is a `ConfigError` naming both paths, raised before anything is written
 confinement is enforced only by `load_config`, the file reader -- a programmatic caller
 (`Configuration.from_dict`) is trusted to already have confined its own paths and is not
 checked. **`paths.markdown` is deliberately not confined** -- it may live elsewhere by design
-(e.g. a shared docs tree outside the state directory).
+(e.g. a shared docs tree outside the state directory). The config file itself must not be one of
+the state files (`modelroom.json`, `modelroom.lock`, `run-status.json` in `paths.state`): the lock
+alone would overwrite and then empty it. `load_config` raises `ConfigError` before anything is
+written.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
@@ -720,21 +797,34 @@ names are unique, `hf_repo` is unique across every family's base models, and the
 every `hf_repo` must appear in `publishers` (the error names the missing owner). `packagers`
 and `publishers` are each non-empty owner names, unique within their own list. `allowed_owners()`
 returns `frozenset(packagers) | frozenset(publishers)` -- the positive list a package's repo
-owner must belong to.
+owner must belong to. No two base models may claim the same package target (see
+`BaseModelConfig`, "Package targets"); the error names the repo and both base models.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `schema_version` | `int` | must equal `CONFIG_SCHEMA_VERSION` (currently `1`) | the configuration's schema version |
-| `families` | `list[FamilyConfig]` | at least one, names unique, `hf_repo` unique across all | the families this configuration knows |
+| `schema_version` | `int` | the model accepts only `CONFIG_SCHEMA_VERSION` (`2`); readers also accept `1`, see below | the configuration's schema version |
+| `families` | `list[FamilyConfig]` | may be empty (schema 2), names unique, `hf_repo` unique across all | the families this configuration knows |
 | `packagers` | `list[str]` | non-empty, no `/`, unique | Hugging Face owners that publish packager (GGUF) repos |
 | `publishers` | `list[str]` | non-empty, no `/`, unique | Hugging Face owners that publish base models |
 | `machines` | `dict[str, MachineConfig]` | keys `^[a-z0-9][a-z0-9-]*$`; may be empty | this deployment's machines, keyed by name |
 | `paths` | `PathsConfig` | -- | where state and rendered output live |
 | `llmfit` | `LlmfitConfig` | default `LlmfitConfig()` | the minimum required `llmfit` version |
+| `defaults` | `DefaultsConfig` | schema 2, default `DefaultsConfig()` | reserves for an imported machine without its own table |
+| `updates` | `UpdatesConfig` | schema 2, default `UpdatesConfig()` | the release lookup switch |
+| `guided` | `GuidedConfig` | schema 2, default `GuidedConfig()` | the guided mode's results folder |
+
+**Reading schema 1.** `CONFIG_SCHEMA_RANGE` is `(1, 3)`: `load_config` and
+`Configuration.from_dict` accept schema 1 and 2 and refuse 3 and above with `SchemaVersionError`
+before any field is looked at. A schema-1 dict is turned into the equivalent schema-2 dict in
+memory by `normalize_config_v1` before validation: every field keeps its value, `schema_version`
+becomes `2`, `[defaults]` and `[updates]` are added with their defaults, `[guided]` stays absent,
+no machine gets a `profile`. Schema 1's own rule "at least one family" is checked there (a
+`ConfigError`), because schema 2 drops it. No writer rule is added. The file on disk is changed
+only by `modelroom migrate` (see "Migration").
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "families": [
     {
       "name": "nova",
@@ -742,6 +832,7 @@ owner must belong to.
         {
           "hf_repo": "acme/Nova-7B",
           "repo_aliases": ["Nova-7B-Instruct-GGUF"],
+          "repos": ["community/Nova-7B-GGUF"],
           "ollama_base": "nova",
           "ollama_tag": "7b"
         }
@@ -751,13 +842,16 @@ owner must belong to.
   "packagers": ["packager"],
   "publishers": ["acme"],
   "machines": {
-    "workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": true}
+    "workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": true, "profile": "3f9a0c21d4e6b870"}
   },
   "paths": {
     "state": "//models/modelroom/state",
     "markdown": "//models/modelroom/docs/models.md"
   },
-  "llmfit": {"min_version": "1.1.16"}
+  "llmfit": {"min_version": "1.1.16"},
+  "defaults": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0},
+  "updates": {"check": true},
+  "guided": {"results": "//models/modelroom"}
 }
 ```
 
@@ -1499,3 +1593,759 @@ matches anywhere.
 lock is held, there is no snapshot to render, or the existing document was rendered from a
 newer snapshot (all three write nothing), `2` the configuration is missing or invalid, `3` the
 snapshot's or a hardware file's `schema_version` is unsupported.
+
+## Schema 2: profiles, measurements, guided mode
+
+The contracts below are what the guided mode builds on. This work package defines them, their
+readers and `modelroom migrate`; nothing in `fetch`, provenance or `render` uses them yet (those
+switch over in later work packages). Each subject has its own module -- `profile.py`,
+`measurements.py`, `binding.py`, `catalog.py`, `relation.py`, `ranking.py`,
+`guided_contracts.py` -- instead of growing `contracts.py`; the rules are the same: Pydantic v2,
+`extra="forbid"`, validators for coupled fields, examples in `modelroom/examples.py` repeated
+here verbatim under `### <ModelName>` and checked by `tests/test_contracts.py`.
+
+**Vocabulary.** User-facing words are fixed: a model's age is `latest`, `legacy` or `unknown`;
+a value's origin is `measured`, `entered` or `computed`; a repo owner is a `publisher`, a
+`listed packager` or `other`; a value nobody could establish is `unknown`; two measurements that
+must not be compared are `not comparable`.
+
+### Hardware profile v2
+
+One machine's hardware, `<state>/hardware/<profile_id>.json`, schema 2. `profile_id` is 16
+random lowercase hex characters (`new_profile_id`), never derived from the machine: it stays
+the same when the machine is renamed, and two machines can never collide on it. `display_name`
+is what the user reads; the machine name in the configuration points to the profile through
+`[machines.<name>].profile`.
+
+`os_fingerprint` is the first 16 hex characters of SHA-256 over the raw OS identifier (Windows
+`MachineGuid`, Linux `/etc/machine-id`, macOS platform UUID) followed by the salt `modelroom`
+(`os_fingerprint`); the raw identifier never leaves the machine. It tells a clone from the same
+machine (see "Profile binding"). `os_fingerprint_source` names where it came from; `none` (not
+readable, or an `entered` profile) and `legacy` (migrated) store the fingerprint `none`.
+
+Every memory value says where it came from. `ram_physical_gib` is physical RAM (`os` or
+`llmfit`); `ram_limit_gib` with `ram_limit_scope` is a process or container limit (cgroup, job
+object), a note only and never a fit input; `vram_gib` is `nvidia-smi`, `llmfit`, `none` (no
+GPU: `0`) or `unknown` (`None`). A graphics adapter's own reported memory is never taken as VRAM.
+
+`gpu_state` decides whether the fit computes at all:
+
+| `gpu_state` | Meaning | Fit |
+|---|---|---|
+| `none` | no GPU; `vram_source` `none`, `vram_gib` `0` | computes, CPU mode |
+| `measured` | one GPU, VRAM measured (`> 0`) | computes |
+| `present_unmeasured` | an adapter is present, its memory was not measured | `unknown` |
+| `multi_gpu_not_covered` | more than one GPU | `unknown` |
+| `unified_memory` | CPU and GPU share memory | `unknown` |
+| `unsupported_platform` | this platform is not measured yet | `unknown` |
+| `legacy_unknown` | migrated from schema 1, GPU layout not recorded | `unknown` until measured again |
+
+**Cross-check with llmfit.** Only like with like: physical RAM against llmfit `total_ram_gb`,
+VRAM against llmfit `gpu_vram_gb`. `crosscheck(own, llmfit)` is `confirmed` when
+`|own - llmfit| / max(own, llmfit) <= 0.05` (both zero is `confirmed`), `deviation` otherwise,
+`absent` when llmfit gave no reading, `error` when llmfit failed. The own reading is the
+authority; a `deviation` blocks the fit until the user measures again or enters the value.
+`fit_block_reason(profile)` returns the reason the fit must not compute (GPU state, unknown RAM,
+a deviation), or `None`.
+
+**Reading schema 1.** `read_profile_document` validates schema 1 as `HardwareSnapshot` and
+schema 2 as `HardwareProfile`; 3 and above raise `SchemaVersionError` (exit 3) before any
+field is looked at. `normalize_profile_v1(legacy, profile_id)` converts without guessing:
+`display_name` is the old machine key, fingerprint source `legacy`, RAM and VRAM keep their
+llmfit values with source `llmfit`, `gpu_state` is `unified_memory` when the old file said so and
+`legacy_unknown` otherwise (a positive VRAM did not prove a single GPU, a zero did not prove
+none), both cross-checks `absent`. The schema-1 `installed` list is not carried over: it is a
+point-in-time observation the next measurement records again.
+
+### CrossCheck
+
+One cross-check of one quantity. `confirmed`/`deviation` carry both values and must agree with
+the 5 % rule for them (a stored `confirmed` with a larger gap is refused; the bound is inclusive
+and compared with a float tolerance, so exactly 5 % such as 8.0 against 7.6 is `confirmed`); `absent`/`error`
+carry no llmfit value. `own_gib` must equal the profile's own value for that quantity.
+
+```json
+{
+  "status": "confirmed",
+  "own_gib": 31.7,
+  "llmfit_gib": 31.9
+}
+```
+
+### LlmfitCrosscheck
+
+The two cross-checked quantities of one profile.
+
+```json
+{
+  "ram_physical": {
+    "status": "confirmed",
+    "own_gib": 31.7,
+    "llmfit_gib": 31.9
+  },
+  "vram": {
+    "status": "confirmed",
+    "own_gib": 8.0,
+    "llmfit_gib": 8.0
+  }
+}
+```
+
+### HardwareProfile
+
+| Field | Type | Constraint |
+|---|---|---|
+| `schema_version` | `int` | `2` |
+| `profile_id` | `str` | 16 lowercase hex |
+| `display_name` | `str` | 1 to 128 characters |
+| `os_fingerprint` | `str` | 16 lowercase hex, or `none` exactly when the source is `none` or `legacy` |
+| `os_fingerprint_source` | `windows_machineguid \| linux_machine_id \| macos_platform_uuid \| none \| legacy` | `entered` profiles: `none` |
+| `origin` | `measured \| entered` | -- |
+| `recorded_at` | UTC timestamp | timezone-aware |
+| `ram_physical_gib` | `float \| None` | `> 0`; `None` exactly when the source is `unknown` |
+| `ram_physical_source` | `os \| llmfit \| unknown` | -- |
+| `ram_limit_gib` | `float \| None` | `> 0`; `None` exactly when `ram_limit_scope` is `none` |
+| `ram_limit_scope` | `str` | e.g. `none`, `cgroup`, `job_object` |
+| `vram_gib` | `float \| None` | `>= 0`; `None` exactly when the source is `unknown`; `0` for source `none` |
+| `vram_source` | `nvidia-smi \| llmfit \| none \| unknown` | `gpu_state` `none` requires `none` |
+| `gpu_state` | see the table above | `measured` requires a measured VRAM above 0; `legacy_unknown` only with source `legacy` |
+| `gpu_name` | `str \| None` | display only |
+| `llmfit_crosscheck` | `LlmfitCrosscheck` | -- |
+| `llmfit_version` | `str \| None` | -- |
+
+```json
+{
+  "schema_version": 2,
+  "profile_id": "3f9a0c21d4e6b870",
+  "display_name": "workstation",
+  "os_fingerprint": "9d2f4b6a8c0e1357",
+  "os_fingerprint_source": "windows_machineguid",
+  "origin": "measured",
+  "recorded_at": "2026-09-23T08:00:00Z",
+  "ram_physical_gib": 31.7,
+  "ram_physical_source": "os",
+  "ram_limit_gib": null,
+  "ram_limit_scope": "none",
+  "vram_gib": 8.0,
+  "vram_source": "nvidia-smi",
+  "gpu_state": "measured",
+  "gpu_name": "Nova GPU",
+  "llmfit_crosscheck": {
+    "ram_physical": {
+      "status": "confirmed",
+      "own_gib": 31.7,
+      "llmfit_gib": 31.9
+    },
+    "vram": {
+      "status": "confirmed",
+      "own_gib": 8.0,
+      "llmfit_gib": 8.0
+    }
+  },
+  "llmfit_version": "1.1.16"
+}
+```
+
+### Scenario
+
+What one ranking assumes, for every package in it: `context_requested` (the context the user
+chose; `context_origin` `default` for 8192, `entered`, or `legacy` from a migrated measurement),
+the KV cache type and the number of concurrent requests. The daemon's KV cache type is not
+readable over its API, so `kv_type` is `f16` (Ollama's default) and `kv_type_assumed` is always
+`true`; `context_origin` `default` always means 8192.
+A measurement always runs one request; `requests` above 1 appears only in the reverse
+calculation (`Requirement`). `default_scenario()` is 8192, `f16` assumed, one request.
+
+```json
+{
+  "context_requested": 8192,
+  "context_origin": "default",
+  "kv_type": "f16",
+  "kv_type_assumed": true,
+  "requests": 1
+}
+```
+
+### PackageRef
+
+The exact package content a measurement ran, same field rules as the schema-1 `Measurement`:
+`ollama` needs `ollama_manifest_digest` and no `hf_*` field; `huggingface` needs `hf_repo`,
+a 40-hex `hf_revision` and `hf_file_digest`, and no manifest digest.
+
+```json
+{
+  "content_source": "huggingface",
+  "ollama_manifest_digest": null,
+  "hf_repo": "packager/Nova-7B-GGUF",
+  "hf_revision": "0123456789abcdef0123456789abcdef01234567",
+  "hf_file_digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+}
+```
+
+### RunCounters
+
+The raw counters of one measured `/api/generate` run, in nanoseconds as the daemon returns
+them. Tokens per second is `eval_count / (eval_duration / 1e9)`.
+
+```json
+{
+  "done_reason": "length",
+  "eval_count": 128,
+  "eval_duration": 2560000000,
+  "prompt_eval_count": 42,
+  "prompt_eval_duration": 90000000,
+  "load_duration": 12000000
+}
+```
+
+### LoadState
+
+The machine's load read just before the measured runs. Load during the runs is not measurable
+and is never claimed.
+
+```json
+{
+  "gpu_utilization_percent": 3.0,
+  "cpu_load": 0.4
+}
+```
+
+### Measurement protocol v1
+
+Shipped as `modelroom/protocol_v1.toml` and read by `load_protocol()`/`shipped_protocol()`:
+one warm-up run, then three measured runs, each `POST /api/generate` with `raw = true` (no
+template, no system prompt stored in the model), `stream = false`, `num_predict = 128`,
+`temperature = 0.0`, `seed = 42`, a neutral English prompt of a few sentences, and `num_ctx`
+equal to the scenario's `context_requested`. A measured run is valid when `done_reason` is
+`length`, `eval_count` equals `num_predict`, `eval_duration` is above zero and
+`prompt_eval_count + num_predict <= num_ctx` (`run_invalid_reason`); a measurement is valid when
+it has exactly `measured_runs` runs and every one is valid (`measurement_invalid_reason`). An
+invalid measurement is stored with its reason and never ranked. A change to the protocol is a
+new protocol version, never an edit of version 1.
+
+### MeasurementRecord
+
+One speed measurement of one package on one profile, schema 2, never changed once written.
+
+- `measurement_id` is `<measured_at as YYYYMMDDTHHMMSSZ>-<8 hex>` and must agree with
+  `measured_at`; `new_measurement_id` draws the 8 hex characters at random.
+- `protocol` is `v1` for a load test after the protocol above, `none` for a measurement migrated
+  from a schema-1 profile. `none` requires `validity` `unchecked`, no runs and
+  `comparable = false`. `v1` is `valid` or `invalid`; `valid` is checked against the protocol
+  rule and requires the speeds.
+- `tps_mean`, `tps_min`, `tps_max` are all set or all `None`, `tps_mean > 0`,
+  `tps_min <= tps_max`. With protocol `v1`, `0 < tps_min <= tps_mean <= tps_max` and they are the
+  mean, minimum and maximum over `runs`, so a `v1` record without runs carries none. A migrated schema-1 range is carried over unchanged
+  (schema 1 only required `low <= high`, so `0.0` or a range that misses the mean stays as it
+  was).
+- `comparable` is decided by the load test (daemon digest and `context_length` equal to the
+  package and the scenario at every observation). `validity_reason` is set exactly when the
+  measurement is not `valid`, `comparable_reason` exactly when it is not comparable.
+- `scenario.requests` is always `1`.
+
+```json
+{
+  "schema_version": 2,
+  "measurement_id": "20260923T083000Z-5c1e9a07",
+  "profile_id": "3f9a0c21d4e6b870",
+  "protocol": "v1",
+  "measured_at": "2026-09-23T08:30:00Z",
+  "package": {
+    "content_source": "ollama",
+    "ollama_manifest_digest": "sha256:abababababababababababababababababababababababababababababababab",
+    "hf_repo": null,
+    "hf_revision": null,
+    "hf_file_digest": null
+  },
+  "ollama_name": "nova:7b",
+  "daemon_version": "0.12.3",
+  "scenario": {
+    "context_requested": 8192,
+    "context_origin": "default",
+    "kv_type": "f16",
+    "kv_type_assumed": true,
+    "requests": 1
+  },
+  "runs": [
+    {
+      "done_reason": "length",
+      "eval_count": 128,
+      "eval_duration": 2560000000,
+      "prompt_eval_count": 42,
+      "prompt_eval_duration": 90000000,
+      "load_duration": 12000000
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 128,
+      "eval_duration": 2500000000,
+      "prompt_eval_count": 42,
+      "prompt_eval_duration": 90000000,
+      "load_duration": 12000000
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 128,
+      "eval_duration": 2560000000,
+      "prompt_eval_count": 42,
+      "prompt_eval_duration": 90000000,
+      "load_duration": 12000000
+    }
+  ],
+  "tps_mean": 50.4,
+  "tps_min": 50.0,
+  "tps_max": 51.2,
+  "validity": "valid",
+  "validity_reason": null,
+  "comparable": true,
+  "comparable_reason": null,
+  "load_state": {
+    "gpu_utilization_percent": 3.0,
+    "cpu_load": 0.4
+  }
+}
+```
+
+### Measurement files and import rule
+
+A measurement is its own file, `<state>/measurements/<profile_id>/<measurement_id>.json`.
+`write_measurement(state_dir, record, lock)` requires the held `modelroom.lock` of that state
+folder, checks under the lock that no file with this id exists (`MeasurementExistsError`
+otherwise) and writes with `atomic_write_json`; a measurement is never overwritten.
+`read_measurements` returns every readable record of one profile, oldest id first, and lists a
+file that is not valid JSON, fails validation, or whose name or folder disagree with its own
+`measurement_id`/`profile_id` as unreadable instead of loading it; the other files are still
+read (a run counter too large to compute a speed from is a validation failure, too, and so is
+an integer literal too long for Python to convert).
+
+Import rule (`classify_measurement_import`, `plan_measurement_import`): an unknown id is `new`;
+the same id with the same content is `idempotent` (nothing to do); the same id with other
+content is a `conflict`, listed and never imported.
+
+### ExportObject
+
+What one machine hands to another: its profile and all of its measurements, schema 1.
+`measurement_id` is unique within the export and every measurement belongs to the exported
+profile. `load_export` checks `schema_version` first (`SchemaVersionError`, exit 3).
+
+```json
+{
+  "schema_version": 1,
+  "profile": {
+    "schema_version": 2,
+    "profile_id": "3f9a0c21d4e6b870",
+    "display_name": "workstation",
+    "os_fingerprint": "9d2f4b6a8c0e1357",
+    "os_fingerprint_source": "windows_machineguid",
+    "origin": "measured",
+    "recorded_at": "2026-09-23T08:00:00Z",
+    "ram_physical_gib": 31.7,
+    "ram_physical_source": "os",
+    "ram_limit_gib": null,
+    "ram_limit_scope": "none",
+    "vram_gib": 8.0,
+    "vram_source": "nvidia-smi",
+    "gpu_state": "measured",
+    "gpu_name": "Nova GPU",
+    "llmfit_crosscheck": {
+      "ram_physical": {
+        "status": "confirmed",
+        "own_gib": 31.7,
+        "llmfit_gib": 31.9
+      },
+      "vram": {
+        "status": "confirmed",
+        "own_gib": 8.0,
+        "llmfit_gib": 8.0
+      }
+    },
+    "llmfit_version": "1.1.16"
+  },
+  "measurements": [
+    {
+      "schema_version": 2,
+      "measurement_id": "20260923T083000Z-5c1e9a07",
+      "profile_id": "3f9a0c21d4e6b870",
+      "protocol": "v1",
+      "measured_at": "2026-09-23T08:30:00Z",
+      "package": {
+        "content_source": "ollama",
+        "ollama_manifest_digest": "sha256:abababababababababababababababababababababababababababababababab",
+        "hf_repo": null,
+        "hf_revision": null,
+        "hf_file_digest": null
+      },
+      "ollama_name": "nova:7b",
+      "daemon_version": "0.12.3",
+      "scenario": {
+        "context_requested": 8192,
+        "context_origin": "default",
+        "kv_type": "f16",
+        "kv_type_assumed": true,
+        "requests": 1
+      },
+      "runs": [
+        {
+          "done_reason": "length",
+          "eval_count": 128,
+          "eval_duration": 2560000000,
+          "prompt_eval_count": 42,
+          "prompt_eval_duration": 90000000,
+          "load_duration": 12000000
+        },
+        {
+          "done_reason": "length",
+          "eval_count": 128,
+          "eval_duration": 2500000000,
+          "prompt_eval_count": 42,
+          "prompt_eval_duration": 90000000,
+          "load_duration": 12000000
+        },
+        {
+          "done_reason": "length",
+          "eval_count": 128,
+          "eval_duration": 2560000000,
+          "prompt_eval_count": 42,
+          "prompt_eval_duration": 90000000,
+          "load_duration": 12000000
+        }
+      ],
+      "tps_mean": 50.4,
+      "tps_min": 50.0,
+      "tps_max": 51.2,
+      "validity": "valid",
+      "validity_reason": null,
+      "comparable": true,
+      "comparable_reason": null,
+      "load_state": {
+        "gpu_utilization_percent": 3.0,
+        "cpu_load": 0.4
+      }
+    }
+  ]
+}
+```
+
+### Profile binding
+
+Which profile is "this machine" in a results folder is recorded outside that folder, in the
+per-user pointer file `~/.modelroom/guided.json` (`default_pointer_path`): `current` is the
+results folder the guided mode used last, `bindings` maps each results folder to this machine's
+`profile_id` there. A missing pointer file reads as empty; a broken one raises
+`PointerFileError`, an unsupported version `SchemaVersionError`.
+
+`resolve_profile_target(home_binding, config_profile, profiles, local_fingerprint,
+fresh_profile_id, new_identity=False)` is the takeover rule, without I/O:
+
+1. `new_identity` (a later `hardware --new-identity`, or "a clone" in the guided mode): `new`.
+2. The home binding for this results folder: `bound`.
+3. Else the selected configuration machine's `profile`: `adopt_config` (it becomes the binding).
+4. Else: `new` (a new profile, bound and written to the configuration).
+
+A bound or configured profile that is missing from the results folder, or whose
+`os_fingerprint` differs from this machine's, is `ask_clone`: the guided mode asks "same machine
+or a clone?", automation stops and names `--new-identity`. A fingerprint `none` on either side
+never differs (a migrated profile, or a machine whose identifier is unreadable). In this work
+package the rule is a function with the parameter `new_identity`; the `hardware --new-identity`
+flag is wired by the work package that rewrites `hardware`.
+
+### GuidedPointer
+
+Keys of `bindings` and `current` are absolute folder paths; values are `profile_id`s.
+
+```json
+{
+  "schema_version": 1,
+  "current": "//models/modelroom",
+  "bindings": {
+    "//models/modelroom": "3f9a0c21d4e6b870"
+  }
+}
+```
+
+### Migration to schema 2
+
+`modelroom migrate --config <file>` turns a schema-1 deployment into schema 2, in one run under
+`modelroom.lock`:
+
+- every schema-1 profile `<state>/hardware/<name>.json` becomes `<profile_id>.json` with a new
+  random `profile_id` (`normalize_profile_v1`); its embedded measurements become measurement
+  files with `protocol: none` (`legacy_measurement_record`, whose 8 hex characters come from the
+  SHA-256 of the old measurement, so the same input always gives the same id); the old file is
+  moved to `<name>.json.v1.bak`;
+- a schema-1 `modelroom.toml` becomes schema 2 (`normalize_config_v1`) with
+  `[machines.<name>].profile` set for every migrated profile of that name; the rewritten text is
+  validated like `load_config` would before it is written, the original bytes are kept as
+  `modelroom.toml.v1.bak`. The rewritten file carries no comments; the backup keeps them.
+
+The whole run is planned and checked before the lock is taken, and again under the lock, before
+anything is written: every file is read and version-checked, every profile and measurement is
+converted, and every file the run would write -- the new profile, each measurement file, each
+backup -- must be absent or identical, and no existing part of its folder path may be a file. The new `profile_id`s are drawn once, before the first
+check, so both checks look at the paths the run writes. Under the lock the configuration is read
+again; if its `[paths]` changed meanwhile, the run stops (exit 3) without writing anything but
+the lock file. A file of schema 3 or later is exit 3; a conversion that
+fails, a target or backup that exists with other content or cannot be read (a folder at a backup
+path, for instance), or two schema-1 files for the same
+machine is exit 3 as well; in every case nothing is written and no lock file is created. A run
+that finds everything at schema 2 prints `nothing to do` and exits 0. A run that stopped halfway
+converges on the next run: a schema-2 profile with fingerprint source `legacy` and the same
+`display_name` keeps its `profile_id`, and files that are already there (identical, as checked)
+are left as they are. A schema-2 configuration is not rewritten: when it sits next to schema-1
+profiles, the profiles are migrated and `[machines.<name>].profile` is left to the guided mode.
+
+| Exit | Meaning |
+|---|---|
+| `0` | migrated, or `nothing to do` |
+| `1` | another process holds the lock |
+| `2` | the configuration is missing or invalid |
+| `3` | a file has an unsupported `schema_version`, a hardware profile does not read, validate or convert, two schema-1 files name the same machine, a target, measurement file or backup with other content or that cannot be read is in the way, or `[paths]` changed while waiting for the lock |
+
+After migration the old `hardware` and `render` commands no longer find the per-machine
+`<name>.json` files; they switch to schema 2 in the work packages that rewrite them.
+
+### Catalog rules
+
+The catalog `modelroom/catalog.toml` is maintained in this repository and shipped with the
+package: per family the publisher account, its base models, which of them are the publisher's
+current models (`latest = true`, a positive statement about that one model), successor links, the Ollama name, and
+for every model row the page that proves it (`source`, a `https://huggingface.co/` page). A
+missing statement is never evidence: a model with neither `latest` nor `successor` has age
+`unknown`. Every `latest = true` carries its own evidence as two fields: `latest_source`, an
+https page with a host, of the publisher, that names the model as current (on the Hub -- host
+`huggingface.co`, `www.huggingface.co` or `hf.co` in any case and with any port -- only the
+publisher's own page `https://huggingface.co/<publisher>` or one of its collections
+`https://huggingface.co/collections/<publisher>/...`, query and fragment ignored; a model's own
+page is no evidence), and
+`latest_checked`, the date the maintainer confirmed it. Both are set exactly when `latest` is
+true. `latest` is never derived from a number, a line or a family: a newer version number in
+the same line does not make an older model `legacy`, only an explicit `successor` does. `Catalog.age_of(hf_repo)` returns `latest`, `legacy` with its successor, or
+`unknown`. A model with a successor is never `latest`; successors stay under the family's
+publisher and never form a cycle, within a family or across families; family names and
+`hf_repo` are unique across the catalog.
+`load_catalog` raises `SchemaVersionError` for an unsupported version and `CatalogError` for a
+file that does not read or validate.
+
+### CatalogModel
+
+```json
+{
+  "hf_repo": "acme/Nova-7B",
+  "latest": false,
+  "latest_source": null,
+  "latest_checked": null,
+  "successor": "acme/Nova-7B-2512",
+  "ollama_base": "nova",
+  "ollama_tag": "7b",
+  "source": "https://huggingface.co/acme/Nova-7B-2512"
+}
+```
+
+### CatalogFamily
+
+```json
+{
+  "name": "nova",
+  "publisher": "acme",
+  "models": [
+    {
+      "hf_repo": "acme/Nova-7B",
+      "latest": false,
+      "latest_source": null,
+      "latest_checked": null,
+      "successor": "acme/Nova-7B-2512",
+      "ollama_base": "nova",
+      "ollama_tag": "7b",
+      "source": "https://huggingface.co/acme/Nova-7B-2512"
+    },
+    {
+      "hf_repo": "acme/Nova-7B-2512",
+      "latest": true,
+      "latest_source": "https://huggingface.co/collections/acme/nova-2512-0123abcd",
+      "latest_checked": "2026-09-23",
+      "successor": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "source": "https://huggingface.co/acme/Nova-7B-2512"
+    }
+  ]
+}
+```
+
+### Catalog
+
+```json
+{
+  "schema_version": 1,
+  "families": [
+    {
+      "name": "nova",
+      "publisher": "acme",
+      "models": [
+        {
+          "hf_repo": "acme/Nova-7B",
+          "latest": false,
+          "latest_source": null,
+          "latest_checked": null,
+          "successor": "acme/Nova-7B-2512",
+          "ollama_base": "nova",
+          "ollama_tag": "7b",
+          "source": "https://huggingface.co/acme/Nova-7B-2512"
+        },
+        {
+          "hf_repo": "acme/Nova-7B-2512",
+          "latest": true,
+          "latest_source": "https://huggingface.co/collections/acme/nova-2512-0123abcd",
+          "latest_checked": "2026-09-23",
+          "successor": null,
+          "ollama_base": null,
+          "ollama_tag": null,
+          "source": "https://huggingface.co/acme/Nova-7B-2512"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Relation check
+
+`check_relation(tags, card_data, hf_repo)` decides whether a Hugging Face repo declares itself a
+quantization of exactly the configured base model. It reads the repo's `tags`
+(`base_model:<repo>`, `base_model:<relation>:<repo>`) and `cardData` (`base_model`,
+`base_model_relation`), in this order:
+
+1. `metadata_conflict`: a field has a shape the Hub does not publish (`tags` that is not a list,
+   `cardData` that is not an object, a tag that is not a string, `base_model` that is not a string or a list of strings, a relation that is not a
+   string), tags and card name different bases, a relation tag names a repo that is not a
+   declared base, or tags and card state different relations;
+2. `base_model_tag`: the declared bases are not exactly `{hf_repo}`;
+3. `relation_unknown`: no relation declared, or one this check does not know;
+4. `derivative`: `finetune`, `adapter` or `merge`;
+5. `quantized`: the only pass.
+
+A pass allows at most `metadata_ok` together with the other provenance rules; only a human
+`Approval` makes a package `approved`. Search and fetch use the same function.
+
+### Fit with profile v2
+
+`compute_fit_v2(profile, package, base_model, scenario, machine_config)` is fit contract v1's
+formula and classes, unchanged, behind a gate: `fit_block_reason(profile)` first (GPU state,
+unknown RAM, a llmfit deviation), then `scenario.requests == 1` (more requests are the reverse
+calculation), then the v1 package rules. VRAM is `0` unless `gpu_state` is `measured`; the RAM
+pool is `ram_physical_gib` (a limit is a note, never an input). The context is
+`scenario.context_requested` for every package, never the package's own `default_context`, so
+`context_assumed` is `false`. `base_model` (its architecture) and `machine_config` (its
+reserves) are inputs because the formula needs them.
+
+### Ranking rule
+
+`rank_packages(entries, measurements, scenario)` orders one device's packages, best first, as a
+total order that does not depend on input order:
+
+1. fit class: `perfect`, `good`, `marginal`;
+2. measured group: group 0 has a counting measurement, group 1 has none;
+3. measured speed `tps_mean`, faster first (group 0 only);
+4. quantization, in `QUANT_ORDER`;
+5. larger weights first;
+6. package identity.
+
+Fit comes before speed: a package that fits comfortably ranks above a faster one that fits
+only barely. A measurement counts (`group_zero_measurement`) when it is protocol `v1`, `valid`,
+comparable, for the same `context_requested` as the ranking and for exactly this package
+content (manifest digest, or repo, revision and a weight file's digest); the newest one wins.
+`unknown` fits are set aside as not covered, with their reason; `too_tight` fits are listed
+apart and never ranked; a computed fit for another context than the ranking's is a caller
+error. `Ranking.top` is the first 10. The rule states facts in order; it recommends nothing.
+
+### SearchHit
+
+One Hugging Face repository from the search, as the selection list shows it. Every field but
+`repo` may be unknown (`None`, or the literal `unknown`). `publisher_status` is `publisher`,
+`listed packager`, `other` or `unknown`. A hit is `resolved` only when exactly one publisher base
+model is proven (relation `quantized`, publisher per catalog), so a resolved hit has
+`base_model` equal to `[resolved_base_model]` and `base_model_relation` `quantized`; an
+unresolved hit carries its
+`unresolved_reason` (a relation status or `publisher_unknown`) and gets neither a fit nor an
+Ollama name. `successor` is set exactly when `age` is `legacy`. `repo_created_at` is shown as
+"repo created", never as the model's release date.
+
+```json
+{
+  "repo": "packager/Nova-7B-GGUF",
+  "publisher_status": "listed packager",
+  "base_model": [
+    "acme/Nova-7B"
+  ],
+  "base_model_relation": "quantized",
+  "resolved": true,
+  "unresolved_reason": null,
+  "resolved_base_model": "acme/Nova-7B",
+  "repo_created_at": "2026-03-02T10:00:00Z",
+  "parameters_b": 7.6,
+  "license": "apache-2.0",
+  "age": "legacy",
+  "successor": "acme/Nova-7B-2512",
+  "ollama": "nova:7b"
+}
+```
+
+### Requirement
+
+What one package needs for a scenario, `computed`, never measured: the reverse calculation.
+`kv_gib_total` is `kv_gib_per_request x scenario.requests`; `need_gib` is fit v1's formula with
+that total (`weights_gib x 1.10 + kv_gib_total + 0.50`); `perfect_reachable` is `false` in `cpu`
+mode, where fit v1 caps at `good`. It carries no speed statement. `package_identity` is the
+package identity triple.
+
+```json
+{
+  "origin": "computed",
+  "package_identity": [
+    "huggingface",
+    "packager/Nova-7B-GGUF",
+    "Nova-7B-Q4_K_M.gguf"
+  ],
+  "scenario": {
+    "context_requested": 8192,
+    "context_origin": "default",
+    "kv_type": "f16",
+    "kv_type_assumed": true,
+    "requests": 4
+  },
+  "mode": "gpu",
+  "weights_gib": 4.5,
+  "kv_gib_per_request": 1.0,
+  "kv_gib_total": 4.0,
+  "reserve_gib": 1.0,
+  "need_gib": 9.45,
+  "perfect_reachable": true
+}
+```
+
+### Note
+
+One plain-language note next to a package, a machine, a measurement or a ranking, built only
+from facts: `facts` names the fields it was derived from, `origin` is their provenance, `text`
+is at most 240 characters.
+
+```json
+{
+  "code": "cpu_caps_at_good",
+  "subject": "package",
+  "origin": "computed",
+  "text": "Runs in system memory only, so the best possible rating on this machine is 'good'.",
+  "facts": [
+    "fit.mode",
+    "fit.fit_class"
+  ]
+}
+```
+
+### Shared request budget
+
+`run_fetch(..., budget=...)` takes either a request count or a `RequestBudget` object. A
+`BudgetedTransport` built on the same `RequestBudget` books against the same count, so a caller
+that has already spent requests (the search, the resolution) passes what is left into the
+fetch; `FetchResult.request_used` and `request_budget` report that shared budget's totals. `BudgetExhaustedError`
+and the area outcome `budget exhausted` are unchanged.

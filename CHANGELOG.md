@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- Schema 2 contracts for the guided mode (CONTRACTS.md, "Schema 2: profiles, measurements,
+  guided mode"): hardware profile v2 keyed by a random `profile_id` with a source for every
+  memory value, a GPU state and an llmfit cross-check; scenario, measurement records as their
+  own files and measurement protocol v1 (`protocol_v1.toml`); export object; pointer file and
+  profile takeover rule; relation check; shipped catalog (`catalog.toml`); fit on profile v2;
+  ranking rule; search hit, requirement and note shapes.
+- `modelroom migrate --config <file>`: moves schema-1 hardware profiles and configuration to
+  schema 2 under the lock, keeps `*.v1.bak` backups, and says `nothing to do` on a second run.
+- `run_fetch` accepts a `RequestBudget` shared with the caller's own requests.
+
+### Changed
+
+- Configuration schema 2: `repos`, `[machines.<name>].profile`, `[defaults]`, `[updates]`,
+  `[guided]`; `families` may be empty. Schema 1 still reads; the shipped example is schema 2.
+
 ## [0.1.0] - 2026-09-23
 
 First release.

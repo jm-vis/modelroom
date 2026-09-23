@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from modelroom.binding import GuidedPointer
+from modelroom.catalog import Catalog, CatalogFamily, CatalogModel
 from modelroom.examples import EXAMPLES
+from modelroom.guided_contracts import Note, Requirement, SearchHit
+from modelroom.measurements import ExportObject, LoadState, MeasurementRecord, PackageRef, RunCounters, Scenario
+from modelroom.profile import CrossCheck, HardwareProfile, LlmfitCrosscheck
 from modelroom.contracts import (
     HARDWARE_SCHEMA_RANGE,
     HARDWARE_SCHEMA_VERSION,
@@ -54,6 +59,23 @@ MODEL_CLASSES = {
     "HardwareSnapshot": HardwareSnapshot,
     "Fit": Fit,
     "Rating": Rating,
+    # Schema 2 and the guided mode (AP9-K); each lives in its own module, same rules.
+    "CrossCheck": CrossCheck,
+    "LlmfitCrosscheck": LlmfitCrosscheck,
+    "HardwareProfile": HardwareProfile,
+    "Scenario": Scenario,
+    "PackageRef": PackageRef,
+    "RunCounters": RunCounters,
+    "LoadState": LoadState,
+    "MeasurementRecord": MeasurementRecord,
+    "ExportObject": ExportObject,
+    "GuidedPointer": GuidedPointer,
+    "CatalogModel": CatalogModel,
+    "CatalogFamily": CatalogFamily,
+    "Catalog": Catalog,
+    "SearchHit": SearchHit,
+    "Requirement": Requirement,
+    "Note": Note,
 }
 
 _NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)

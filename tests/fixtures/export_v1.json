@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "profile": {
+    "schema_version": 2,
+    "profile_id": "3f9a0c21d4e6b870",
+    "display_name": "workstation",
+    "os_fingerprint": "9d2f4b6a8c0e1357",
+    "os_fingerprint_source": "windows_machineguid",
+    "origin": "measured",
+    "recorded_at": "2026-09-23T08:00:00Z",
+    "ram_physical_gib": 31.7,
+    "ram_physical_source": "os",
+    "ram_limit_gib": null,
+    "ram_limit_scope": "none",
+    "vram_gib": 8.0,
+    "vram_source": "nvidia-smi",
+    "gpu_state": "measured",
+    "gpu_name": "Nova GPU",
+    "llmfit_crosscheck": {
+      "ram_physical": {
+        "status": "confirmed",
+        "own_gib": 31.7,
+        "llmfit_gib": 31.9
+      },
+      "vram": {
+        "status": "confirmed",
+        "own_gib": 8.0,
+        "llmfit_gib": 8.0
+      }
+    },
+    "llmfit_version": "1.1.16"
+  },
+  "measurements": [
+    {
+      "schema_version": 2,
+      "measurement_id": "20260923T083000Z-5c1e9a07",
+      "profile_id": "3f9a0c21d4e6b870",
+      "protocol": "v1",
+      "measured_at": "2026-09-23T08:30:00Z",
+      "package": {
+        "content_source": "ollama",
+        "ollama_manifest_digest": "sha256:abababababababababababababababababababababababababababababababab",
+        "hf_repo": null,
+        "hf_revision": null,
+        "hf_file_digest": null
+      },
+      "ollama_name": "nova:7b",
+      "daemon_version": "0.12.3",
+      "scenario": {
+        "context_requested": 8192,
+        "context_origin": "default",
+        "kv_type": "f16",
+        "kv_type_assumed": true,
+        "requests": 1
+      },
+      "runs": [
+        {
+          "done_reason": "length",
+          "eval_count": 128,
+          "eval_duration": 2560000000,
+          "prompt_eval_count": 42,
+          "prompt_eval_duration": 90000000,
+          "load_duration": 12000000
+        },
+        {
+          "done_reason": "length",
+          "eval_count": 128,
+          "eval_duration": 2500000000,
+          "prompt_eval_count": 42,
+          "prompt_eval_duration": 90000000,
+          "load_duration": 12000000
+        },
+        {
+          "done_reason": "length",
+          "eval_count": 128,
+          "eval_duration": 2560000000,
+          "prompt_eval_count": 42,
+          "prompt_eval_duration": 90000000,
+          "load_duration": 12000000
+        }
+      ],
+      "tps_mean": 50.4,
+      "tps_min": 50.0,
+      "tps_max": 51.2,
+      "validity": "valid",
+      "validity_reason": null,
+      "comparable": true,
+      "comparable_reason": null,
+      "load_state": {
+        "gpu_utilization_percent": 3.0,
+        "cpu_load": 0.4
+      }
+    },
+    {
+      "schema_version": 2,
+      "measurement_id": "20260922T202000Z-4da3b585",
+      "profile_id": "3f9a0c21d4e6b870",
+      "protocol": "none",
+      "measured_at": "2026-09-22T20:20:00Z",
+      "package": {
+        "content_source": "ollama",
+        "ollama_manifest_digest": "sha256:abababababababababababababababababababababababababababababababab",
+        "hf_repo": null,
+        "hf_revision": null,
+        "hf_file_digest": null
+      },
+      "ollama_name": null,
+      "daemon_version": "ollama 0.12.3",
+      "scenario": {
+        "context_requested": 4096,
+        "context_origin": "legacy",
+        "kv_type": "f16",
+        "kv_type_assumed": true,
+        "requests": 1
+      },
+      "runs": [],
+      "tps_mean": 42.5,
+      "tps_min": 40.0,
+      "tps_max": 45.0,
+      "validity": "unchecked",
+      "validity_reason": "measured before protocol v1 (migrated from a schema-1 profile)",
+      "comparable": false,
+      "comparable_reason": "measured before protocol v1 (migrated from a schema-1 profile)",
+      "load_state": null
+    }
+  ]
+}
