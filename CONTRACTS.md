@@ -2116,6 +2116,102 @@ profiles, the profiles are migrated and `[machines.<name>].profile` is left to t
 After migration the old `hardware` and `render` commands no longer find the per-machine
 `<name>.json` files; they switch to schema 2 in the work packages that rewrite them.
 
+### Export and import
+
+`modelroom export-profile --config <file> [--profile <profile_id>] --out <file>` writes one
+`ExportObject` (above): a profile and every measurement of that profile, read from the results
+folder the configuration file sits in (the results folder *is* the configuration's own folder).
+Without `--profile` the exported profile is this machine's binding for that folder (the pointer
+file, "Profile binding" above); `--profile` names any profile in the folder and wins over the
+binding, so a profile can also be handed on from a shared folder by a machine that has no
+binding of its own. The file is written with `atomic_write_json`, so a reader never sees half of
+it. No lock is taken: the export writes nothing inside the state folder, and a measurement file
+is published whole and never changed afterwards, so the only effect of a concurrent write is
+that a measurement published during the export may not be in it. An unreadable measurement file
+is reported and left out; it does not stop the export. `--profile` has to be a `profile_id` (16
+lowercase hex characters), and `--out` must be none of the files this package writes itself:
+nothing inside `paths.state` (the same rule `PathsConfig` holds for `paths.markdown`), not the
+configuration file, not the pointer file -- otherwise an export object would replace a profile,
+the snapshot, the lock file, the configuration or the binding, outside the lock.
+
+`modelroom import-profile <file> --config <file>` reads such a file into another results folder,
+under `modelroom.lock`. The whole run is planned under the lock and only then written, so the
+plan *is* the freshness check -- every writer of a profile, a measurement or the configuration
+holds the same lock. A conflict anywhere in the plan leaves the run without a single write. The
+configuration is read once before the lock (a missing, invalid or schema-1 file is refused
+without even creating a lock file) and once under it; the second read is the one the plan uses,
+because another import may have added its own `[machines.<name>]` entry in between. If `[paths]`
+changed meanwhile, the run stops with exit `1` and asks to be repeated.
+
+The profile is keyed by `profile_id`:
+
+| Case | Decision |
+|---|---|
+| no profile of that id in the folder | written (`new`) |
+| the imported `recorded_at` is younger | written (`updated`) |
+| both `recorded_at` are equal | nothing, however the content differs (`unchanged`) |
+| the stored `recorded_at` is younger | the stored profile stays (`kept`) |
+| a file of that name that does not read as that profile, or one that is still schema 1 | conflict, exit `1`, nothing written |
+| a file where a folder of the write path belongs (`hardware`, or the profile's measurement folder) | conflict, exit `1`, nothing written |
+
+The measurements are keyed by `measurement_id` and decided independently of the profile
+(`plan_measurement_import`, "Measurement files and import rule" above):
+
+| Case | Decision |
+|---|---|
+| unknown id | written (`new`) |
+| known id, same content | nothing (`unchanged`) |
+| known id, other content | conflict, exit `1`, nothing written |
+| a file of that id that does not read as a measurement | conflict, exit `1`, nothing written |
+
+Two machines are never merged and never renamed:
+
+- the same `os_fingerprint` under another `profile_id` is a note -- `same hardware id (cloned
+  image?)` -- and both are kept;
+- the same `display_name` under another `profile_id` is a note as well; both are kept, and a
+  name that more than one profile carries is shown with the short id (the first 8 hex of the
+  `profile_id`).
+
+The imported machine gets a `[machines.<name>]` entry: `<name>` is its `display_name`
+normalized (everything outside `a-z0-9` becomes a single `-`, the ends are trimmed), made
+unique with the short id and, as a last resort, with the whole `profile_id`; the reserves come
+from `[defaults]`, `writer` is `false` and `profile` is the imported `profile_id`. A machine
+that already carries this `profile` keeps its entry, and the file is not rewritten at all; a
+machine whose profile is in the folder but in no `[machines.<name>]` entry gets one even when the
+profile itself is not written (`kept`, `unchanged`), so an imported machine never stays
+unconfigured. The
+rewrite goes through `toml_writer.dump_toml` and is validated exactly as `load_config` would
+before anything is written, so a configuration that would not load is never written; it keeps
+every value of the file it replaces, but not its comments. Therefore the file as the user wrote
+it is kept once, next to it, as `<config>.bak`: written immediately before the first rewrite, and
+only when no backup is there yet -- an existing `.bak` holds an older state and is never
+overwritten. Either way the report names the backup path, and a run that rewrites nothing writes
+no backup.
+
+An import never changes the local binding -- it does not even read the pointer file. Broken
+files in the target folder (a profile that does not read or validate, one of an unsupported
+`schema_version`, a schema-1 profile, an unreadable measurement file) are listed in the report
+and left alone; they never stop the import of another profile. The report carries one line per
+profile and per measurement, and a run that changed nothing ends with `nothing to do`.
+
+| Exit | `export-profile` | `import-profile` |
+|---|---|---|
+| `0` | written | written, or nothing to do |
+| `1` | -- | another process holds the lock, or a stored file contradicts the import |
+| `2` | the configuration is missing or invalid, `--profile` is not a `profile_id`, `--out` is one of the files the package writes itself or cannot be written, no profile is bound and none was named, the named profile is not in the folder, or it is still schema 1 | the configuration is missing, invalid, still schema 1, or holds a value the TOML writer cannot write back (`inf`), or a file could not be written (the message names it; every file already written is complete, and repeating the run finishes the import) |
+| `3` | a stored profile, or the pointer file, does not read | the export file does not read, or its `schema_version` is outside the accepted range (`EXPORT_SCHEMA_RANGE`: schema 1 today) |
+
+```console
+$ modelroom export-profile --config /srv/models/modelroom.toml --out /srv/exchange/workstation.json
+exported workstation (3f9a0c21d4e6b870) with 2 measurement(s) to /srv/exchange/workstation.json
+
+$ modelroom import-profile /srv/exchange/workstation.json --config /srv/laptop/modelroom.toml
+profile workstation: new
+measurement 20260922T202000Z-4da3b585: new
+measurement 20260923T083000Z-5c1e9a07: new
+note: machine "workstation" added with the reserves from [defaults] and writer = false
+```
+
 ### Catalog rules
 
 The catalog `modelroom/catalog.toml` is maintained in this repository and shipped with the

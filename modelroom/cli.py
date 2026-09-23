@@ -29,10 +29,18 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from .binding import PointerFileError, default_pointer_path
 from .config import ConfigError, Configuration, load_config
 from .contracts import HARDWARE_SCHEMA_VERSION, HardwareSnapshot, SchemaVersionError, Snapshot
 from .fetch import run_fetch
 from .http import Transport, UrllibTransport
+from .importer import (
+    ImportConflictError,
+    PrerequisiteError,
+    StoredFileError,
+    export_profile,
+    import_profile,
+)
 from .llmfit import (
     LlmfitError,
     Runner,
@@ -121,6 +129,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
 
+    export_parser = subparsers.add_parser(
+        "export-profile", help="Write one machine's hardware profile and its measurements to a file."
+    )
+    export_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
+    export_parser.add_argument("--profile", help="The profile_id to export (default: this machine's own profile)")
+    export_parser.add_argument("--out", required=True, type=Path, help="The file to write")
+
+    import_parser = subparsers.add_parser(
+        "import-profile", help="Read a hardware profile and its measurements from such a file."
+    )
+    import_parser.add_argument("file", type=Path, help="The export file to read")
+    import_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
+
     return parser
 
 
@@ -129,6 +150,7 @@ def main(
     transport: Transport | None = None,
     runner: Runner | None = None,
     now: datetime | None = None,
+    pointer_path: Path | None = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -140,6 +162,10 @@ def main(
         return _cmd_render(args, now)
     if args.command == "migrate":
         return _cmd_migrate(args, now)
+    if args.command == "export-profile":
+        return _cmd_export_profile(args, pointer_path)
+    if args.command == "import-profile":
+        return _cmd_import_profile(args, now)
     parser.error(f"unknown command: {args.command}")
     return 2  # pragma: no cover - argparse.error already exits
 
@@ -418,6 +444,56 @@ def _cmd_migrate(args: argparse.Namespace, now: datetime | None) -> int:
     except LockHeldError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    for line in lines:
+        print(line)
+    return 0
+
+
+def _cmd_export_profile(args: argparse.Namespace, pointer_path: Path | None) -> int:
+    """`export-profile`: exit 0 written, 2 the configuration, `--out` or the chosen profile is
+    not usable (no binding, no such profile, still schema 1, the file cannot be written), 3 a
+    stored file does not read."""
+    try:
+        lines = export_profile(args.config, args.out, args.profile, pointer_path or default_pointer_path())
+    except (SchemaVersionError, StoredFileError, PointerFileError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    except (ConfigError, PrerequisiteError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except OSError as exc:
+        # An --out that is a folder, a read-only target, a full disk: a user-actionable failure,
+        # never a traceback. `atomic_write_json` leaves no temporary file behind either way.
+        print(f"{args.out}: cannot write the export file: {exc}", file=sys.stderr)
+        return 2
+    for line in lines:
+        print(line)
+    return 0
+
+
+def _cmd_import_profile(args: argparse.Namespace, now: datetime | None) -> int:
+    """`import-profile`: exit 0 written or nothing to do, 1 the lock is held or a stored file
+    contradicts the import, 2 the configuration is missing/invalid or still schema 1, 3 the
+    export file does not read or its schema is not supported -- 1, 2 and 3 write nothing."""
+    started_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
+    try:
+        lines = import_profile(args.config, args.file, started_at)
+    except (SchemaVersionError, StoredFileError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    except (ConfigError, PrerequisiteError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except (LockHeldError, ImportConflictError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # A state folder that is a file, a read-only folder, a full disk. Every file the run had
+        # already written is complete and valid (each write is atomic), and repeating the run
+        # after the cause is fixed finishes the import -- so this says what failed, not that
+        # nothing was written.
+        print(f"{args.config}: the import could not finish: {exc}", file=sys.stderr)
+        return 2
     for line in lines:
         print(line)
     return 0

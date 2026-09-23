@@ -15,6 +15,14 @@ All notable changes to this project are documented in this file. The format foll
   ranking rule; search hit, requirement and note shapes.
 - `modelroom migrate --config <file>`: moves schema-1 hardware profiles and configuration to
   schema 2 under the lock, keeps `*.v1.bak` backups, and says `nothing to do` on a second run.
+- `modelroom export-profile --config <file> [--profile <id>] --out <file>` and `modelroom
+  import-profile <file> --config <file>`: hand one machine's hardware profile and its
+  measurements to another results folder (CONTRACTS.md, "Export and import"). The import runs
+  under the lock, never overwrites a younger profile, takes measurements by `measurement_id`
+  (idempotent / conflict / new), adds a `[machines.<name>]` entry with the reserves from
+  `[defaults]` and `writer = false` (keeping the configuration as the user wrote it once as
+  `<config>.bak`), lists broken files instead of loading them, and never changes this machine's
+  own binding.
 - `run_fetch` accepts a `RequestBudget` shared with the caller's own requests.
 - Language standard (`AGENTS.md`, "Language standard"): US English and one word per idea, with
   `tests/test_language_standard.py` as the guard over every module under `modelroom/` and the
