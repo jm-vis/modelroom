@@ -472,3 +472,18 @@ All notable changes to this project are documented in this file. The format foll
     section. Reworded to say explicitly what the code (`cli.py::fetch_with_config`/`_run_locked`)
     already did: written at the end of every run that got past the lock and the stale-run check;
     not written when the lock is held or a newer run is detected. No code change.
+- Fix-round 7, three remaining findings against `db1c729` (Codex round 8, verified one by one):
+  - **R8-1** `hf.py::_files_from_tree` now accepts exactly the two `type` values the tree endpoint
+    sends, `"file"` and `"directory"`; any other value is a shape error that ends the area
+    `incomplete` -- probe: `[{"type": "garbage"}]` still returned `[]` after R7-9, so a tree of
+    unknown types was the same genuinely-empty, complete area that deactivates every old package.
+  - **R8-2** `tests/test_http.py` gained an autouse fixture that removes every `*_proxy`
+    environment variable (any spelling) before each test -- `urllib` reads them
+    case-insensitively and on Unix a lowercase `http_proxy`/`no_proxy` wins over the uppercase
+    value a test sets, so a machine with a proxy configured would have routed the loopback tests
+    through it or made the proxy tests pass for the wrong reason. Each proxy test sets exactly the
+    variables it needs on the clean slate. Test-only.
+  - **R8-3** The two HF repo-name collision tests in `tests/test_config.py` copied the first base
+    model's `ollama_base`/`ollama_tag` onto the second, so the R7-7 Ollama collision validator
+    would have raised the expected `ValidationError` even with the HF check broken; the copy now
+    carries no Ollama mapping and the tests match the HF message (`packager repo`). Test-only.

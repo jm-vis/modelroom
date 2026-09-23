@@ -847,6 +847,47 @@ def test_fetch_hf_area_tree_entry_with_no_type_field_ends_area_incomplete():
     assert outcome.packages == []
 
 
+# --- R8-1 (fix-round 7): an entry that *names* a type the registry never sends ("garbage") is
+# as much a shape error as a missing one -- it was still silently skipped as "not a file", so a
+# tree of nothing but unknown types looked like a genuinely-empty, complete area (the same
+# deactivation hazard). Only "file" and "directory" are known; a directory is skipped.
+
+
+def test_files_from_tree_rejects_an_entry_with_an_unknown_type():
+    with pytest.raises(ValueError, match="type"):
+        _files_from_tree([{"type": "garbage", "path": "x.gguf", "size": 10}])
+
+
+def test_files_from_tree_skips_a_directory_entry():
+    assert _files_from_tree([{"type": "directory", "path": "sub"}]) == []
+
+
+def test_fetch_hf_area_tree_entry_with_an_unknown_type_ends_area_incomplete():
+    sha = "8" * 40
+    transport = build_transport(
+        {
+            ("GET", "https://huggingface.co/api/models/synthetic/Odd-Type-GGUF"): Response(
+                status=200,
+                headers={},
+                body=b'{"sha": "' + sha.encode() + b'", "tags": ["base_model:synthetic/Odd-Type"]}',
+            ),
+            (
+                "GET",
+                f"https://huggingface.co/api/models/synthetic/Odd-Type-GGUF/tree/{sha}?recursive=true",
+            ): Response(status=200, headers={}, body=b'[{"type": "garbage", "path": "x.gguf", "size": 10}]'),
+        }
+    )
+    base_model = _qwen35_9b(
+        hf_repo="synthetic/Odd-Type", repo_aliases=["Odd-Type-GGUF"], ollama_base=None, ollama_tag=None
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="synthetic", run_at=RUN_AT)
+
+    assert outcome.status == "incomplete"
+    assert "type" in outcome.error
+    assert outcome.packages == []
+
+
 def test_fetch_hf_area_file_entry_with_an_empty_path_ends_area_incomplete():
     sha = "6" * 40
     transport = build_transport(

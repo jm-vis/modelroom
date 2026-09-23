@@ -309,8 +309,12 @@ def test_configuration_rejects_a_repo_alias_shared_by_two_base_models():
     second_family["base_models"][0]["hf_repo"] = "acme/Other-7B"
     # same repo_aliases entry as the first base model's -- both hf_repo values differ (so the
     # existing hf_repo-uniqueness check does not fire), but the *packager repo name* collides.
+    # R8-3 (fix-round 7): no Ollama mapping on the copy, so the R7-7 Ollama collision validator
+    # cannot be the one raising; the match pins the HF collision message.
+    second_family["base_models"][0]["ollama_base"] = None
+    second_family["base_models"][0]["ollama_tag"] = None
     payload["families"].append(second_family)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="packager repo"):
         Configuration.model_validate(payload)
 
 
@@ -322,8 +326,10 @@ def test_configuration_rejects_a_default_gguf_name_colliding_with_another_base_m
     # this base model's *default* candidate name ("Nova-7B-Instruct-GGUF") collides with the
     # first base model's explicit repo_aliases entry.
     second_family["base_models"][0]["repo_aliases"] = []
+    second_family["base_models"][0]["ollama_base"] = None  # R8-3: see the test above
+    second_family["base_models"][0]["ollama_tag"] = None
     payload["families"].append(second_family)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="packager repo"):
         Configuration.model_validate(payload)
 
 

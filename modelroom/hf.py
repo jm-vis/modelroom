@@ -62,6 +62,8 @@ _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 # instead of fetching forever. The hop that would exceed the cap is never made, the same
 # convention `http.py::MAX_REDIRECTS` uses for a redirect chain.
 _MAX_TREE_PAGES = 20
+# R8-1: the only `type` values the tree endpoint sends; anything else is a shape error.
+_TREE_ENTRY_TYPES: frozenset[str] = frozenset({"file", "directory"})
 
 
 @dataclass(frozen=True)
@@ -334,15 +336,21 @@ def _files_from_tree(entries: list[dict]) -> list[PackageFile]:
     `_files_from_tree([{}])` returned `[]`, the same "genuinely empty, complete area" hazard F7
     closed for a bad `path`. `type` must now be a non-empty string before it is even compared to
     `"file"`; only an entry that genuinely *names* a non-file type (a real directory) is skipped.
+
+    R8-1 (fix-round 7): "names a type" was still too loose -- `{"type": "garbage"}` also fell
+    through the `!= "file"` skip, so a tree of unknown types was the same empty, complete area.
+    The registry sends exactly `"file"` and `"directory"`; anything else is a shape error.
     """
     files: list[PackageFile] = []
     for entry in entries:
         if not isinstance(entry, dict):
             raise ValueError(f"tree entry is not an object: {entry!r}")
         entry_type = entry.get("type")
-        if not isinstance(entry_type, str) or not entry_type:
-            raise ValueError(f"tree entry 'type' is missing, empty or not a string: {entry_type!r}")
-        if entry_type != "file":
+        if entry_type not in _TREE_ENTRY_TYPES:
+            raise ValueError(
+                f"tree entry 'type' is not one of {sorted(_TREE_ENTRY_TYPES)}: {entry_type!r}"
+            )
+        if entry_type == "directory":
             continue
         name = entry.get("path")
         if not isinstance(name, str) or not name:

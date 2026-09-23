@@ -15,6 +15,7 @@ allow-list refusal of a redirect target outside it.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import urllib.parse
 from contextlib import contextmanager
@@ -37,6 +38,24 @@ from modelroom.http import (
     _check_allowed,
 )
 from modelroom.ollama_local import DEFAULT_BASE_URL
+
+
+@pytest.fixture(autouse=True)
+def _no_proxy_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R8-2 (fix-round 7): every test in this module starts without a proxy environment.
+
+    `urllib.request.getproxies_environment` reads every `*_proxy` variable case-insensitively, and
+    on Unix a lowercase `http_proxy`/`no_proxy` wins over the uppercase spelling a test sets --
+    so a developer machine or CI runner with a proxy configured would route the loopback tests
+    through a foreign proxy, or make the proxy tests below pass or fail for the wrong reason.
+    Each proxy test sets exactly the variables it needs on top of this clean slate. (On Windows,
+    with no environment proxies at all, urllib falls back to the registry proxy settings; those
+    are outside this fixture's reach and are the operator's `NO_PROXY` concern, see CONTRACTS.md
+    "Transport security and proxying".)
+    """
+    for name in list(os.environ):
+        if name.lower().endswith("_proxy"):
+            monkeypatch.delenv(name, raising=False)
 
 
 class _RedirectHandler(BaseHTTPRequestHandler):

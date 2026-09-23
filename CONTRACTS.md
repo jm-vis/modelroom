@@ -949,8 +949,9 @@ An area ends `incomplete` only for a genuine failure: any HTTP status other than
 (Hugging Face model-info additionally treats `401`/`404` as "not found", see below, not a
 failure), a network error, a body that fails to parse, a response missing a field the fetcher
 needs (Hugging Face: `sha`; Ollama: zero tags parsed from the tags page), a tree entry or
-manifest layer in a shape the registry never actually sends -- not a dict, `path`/`mediaType`/
-`digest` not a string, or a weight (`weights`/`weights_shard`, or an Ollama `.image.model`/
+manifest layer in a shape the registry never actually sends -- not a dict, a tree entry whose
+`type` is anything but `"file"` or `"directory"` (missing, empty, or an unknown value; R7-9/R8-1),
+`path`/`mediaType`/`digest` missing or not a string, or a weight (`weights`/`weights_shard`, or an Ollama `.image.model`/
 `.image.tensor` layer) with no non-negative integer `size` (fix-round 1, F3/F4: package
 assembly for a candidate runs inside the same error handling as its tree/manifest fetch, so a
 shape problem in one candidate ends only this area, never the whole run; a non-weight file
