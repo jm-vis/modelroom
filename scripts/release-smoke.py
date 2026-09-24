@@ -6,12 +6,13 @@ Steps, each reported with its exit code and output: build the wheel; create a fr
 the system temp directory (outside any git repository) and `pip install` the wheel there (not
 editable, not from the tree; pip fetches `pydantic` from the package index); write a customer
 configuration derived from `modelroom.example.toml` (one machine `kunde`, reserves 0, no rating
-source); `modelroom hardware`, which must write exactly one schema-2 profile; place the
-schema-1 profile the renderer still reads, built from the recorded fixtures; place a snapshot
+source); `modelroom hardware`, which must write exactly one schema-2 profile; name that profile
+in `[machines.<name>].profile`, the one write the guided mode would do; place a snapshot
 built from the recorded fixtures in `tests/`
 (no live data); `modelroom fetch` with the network blocked through an unreachable proxy (the
-contract honours `HTTPS_PROXY`), which must end every area incomplete with exit 1, keep the
-packages and leave the lock free; `modelroom render`; delete the temp directory.
+contract honors `HTTPS_PROXY`), which must end every area incomplete with exit 1, keep the
+packages and leave the lock free; `modelroom render`, which must write the Markdown view and
+the JSON view next to it from the measured profile; delete the temp directory.
 
 The report goes to stdout. Exit code: 0 every step as expected, 1 a step did not behave as
 expected, 2 the environment could not be set up (build, venv or install failed).
@@ -110,25 +111,39 @@ def markdown_table(text: str, heading: str) -> list[dict[str, str]]:
     return [dict(zip(header, row)) for row in rows]
 
 
-def render_problems(text: str, machine: str, installed: int | None) -> list[str]:
-    """What a customer's document must show: no stars, a fit column, the profile's own inventory.
+def render_problems(text: str, machine: str) -> list[str]:
+    """What a customer's document must show: the ranking header, the machine's own schema-2
+    profile, at least one package row, and no stars without a rating source.
 
-    `installed` is the number of models the machine's hardware profile recorded, `None` when the
-    profile recorded the inventory as unavailable.
+    Schema 2 has no installed-model inventory in the profile any more (the load test reads the
+    daemon itself), so the check is the ranking, not an installed count.
     """
+    lines = text.splitlines()
     problems = []
-    packages = markdown_table(text, "Packages")
-    column = f"fit (computed, v1): {machine}"
-    if not packages:
-        problems.append("Packages table is empty")
-    if any(row.get("Stars") != "–" for row in packages):
+    for expected in (f"## Ranking: {machine}", "Ranking rule: ", "Scenario: context "):
+        if not any(line.startswith(expected) for line in lines):
+            problems.append(f"the document has no line starting with {expected!r}")
+    rows = markdown_table(text, f"Ranking: {machine}") + markdown_table(text, f"Not covered: {machine}")
+    if not rows:
+        problems.append(f"neither the ranking nor the not-covered block of {machine} has a package row")
+    if any(row.get("Stars") != "–" for row in rows):
         problems.append("a Stars cell is not '–' although no rating source is configured")
-    if any(not row.get(column) for row in packages):
-        problems.append(f"column '{column}' missing or empty")
-    machines = {row.get("Machine"): row for row in markdown_table(text, "Machines")}
-    cell = machines.get(machine, {}).get("Installed", "")
-    if (cell != str(installed)) if installed is not None else not re.fullmatch(r"unknown \(.+\)", cell):
-        problems.append(f"Machines table: Installed for {machine} is {cell!r}, profile says {installed}")
+    state = {row.get("Machine"): row for row in markdown_table(text, "Machines")}.get(machine, {}).get("GPU state")
+    if state != "measured":
+        problems.append(f"Machines table: GPU state for {machine} is {state!r}, expected 'measured'")
+    return problems
+
+
+def json_problems(payload: dict, text: str, machine: str) -> list[str]:
+    """The JSON view and the Markdown one come from one document, so they cannot disagree."""
+    problems = []
+    if payload.get("schema_version") != 1:
+        problems.append(f"JSON view schema_version is {payload.get('schema_version')!r}, expected 1")
+    if [block.get("machine") for block in payload.get("machines", [])] != [machine]:
+        problems.append(f"JSON view machines are {[b.get('machine') for b in payload.get('machines', [])]}")
+    rule = payload.get("ranking_rule", "")
+    if not rule or rule not in text:
+        problems.append("the ranking rule of the JSON view is not the one the Markdown view prints")
     return problems
 
 
@@ -272,54 +287,39 @@ def step_hardware(python: Path, config: Path) -> Step:
                 f"{tail(output)}\nschema-2 profiles written: {[path.name for path in written]}")
 
 
-def step_place_v1_profile(config: Path) -> Step:
-    """Place the schema-1 profile `render` still reads, built from this repository's fixtures.
+def bind_profile_in_config(text: str, machine: str, profile_id: str) -> str:
+    """The configuration with `[machines.<machine>].profile` set, as a guided run writes it.
 
-    `hardware` writes schema 2; the renderer switches to it in its own work package and until
-    then reads `<machine>.json`. Built from the recorded `llmfit system --json` and
-    `/api/tags` fixtures, never from live data -- so the render step below keeps checking the
-    renderer, not the measurement.
+    `modelroom hardware` writes the profile and binds it in the user's own pointer file; the
+    entry in the configuration is written by the guided mode after it measured this machine
+    (CONTRACTS.md, "Guided mode"). The smoke test runs the three commands on their own, so it
+    does that one write itself -- otherwise `render` would rightly report this machine as
+    having no profile.
     """
-    profile = v1_profile_from_fixtures(MACHINE)
-    path = config.parent / "state" / "hardware" / f"{MACHINE}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(profile, indent=2), encoding="utf-8", newline="\n")
-    return Step("place schema-1 profile for render", 0, 0,
-                f"{len(profile['installed'])} installed models, vram {profile['vram_gib']} GiB")
+    lines = text.splitlines()
+    header = f"[machines.{machine}]"
+    if header not in lines:
+        raise ValueError(f"the configuration has no {header} table")
+    index = lines.index(header)
+    return "\n".join([*lines[: index + 1], f'profile = "{profile_id}"', *lines[index + 1 :]])
 
 
-def v1_profile_from_fixtures(machine: str) -> dict:
-    """A valid schema-1 `HardwareSnapshot` dict for `machine`, from the recorded fixtures."""
-    sys.path.insert(0, str(REPO / "tests"))
-    from modelroom.contracts import load_hardware_snapshot
-
-    fixtures = REPO / "tests" / "fixtures"
-    system = json.loads((fixtures / "llmfit_system_laptop.json").read_text(encoding="utf-8"))["system"]
-    tags = json.loads((fixtures / "ollama_tags_local.json").read_text(encoding="utf-8"))["models"]
-    data = {
-        "schema_version": 1,
-        "machine": machine,
-        "measured_at": FIXTURE_RUN_AT.isoformat(),
-        "llmfit_version": "0.0.0",
-        "vram_gib": system["gpu_vram_gb"],
-        "ram_gib": system["total_ram_gb"],
-        "free_ram_gib_at_measurement": system["available_ram_gb"],
-        "gpu_name": system["gpu_name"],
-        "backend": system["backend"],
-        "unified_memory": system["unified_memory"],
-        "installed": [
-            {
-                "name": entry["name"],
-                "digest": f"sha256:{entry['digest']}",
-                "size_bytes": entry.get("size", 0),
-                "observed_at": FIXTURE_RUN_AT.isoformat(),
-            }
-            for entry in tags
-        ],
-        "installed_unavailable_reason": None,
-        "measurements": [],
-    }
-    return load_hardware_snapshot(data).model_dump(mode="json")
+def step_bind_profile(config: Path) -> Step:
+    """Name the profile `modelroom hardware` just wrote in `[machines.<machine>].profile`."""
+    written = sorted((config.parent / "state" / "hardware").glob("*.json"))
+    profiles = [json.loads(path.read_text(encoding="utf-8")) for path in written]
+    schema_two = [profile for profile in profiles if profile.get("schema_version") == 2]
+    if len(schema_two) != 1:
+        return Step("bind the profile in the configuration", None, 1,
+                    f"expected exactly one schema-2 profile, found {len(schema_two)}")
+    profile = schema_two[0]
+    config.write_text(
+        bind_profile_in_config(config.read_text(encoding="utf-8"), MACHINE, profile["profile_id"]),
+        encoding="utf-8",
+        newline="\n",
+    )
+    return Step("bind the profile in the configuration", 0, 0,
+                f"{MACHINE}.profile = {profile['profile_id']}, gpu_state {profile['gpu_state']}")
 
 
 def step_place_snapshot(config: Path) -> Step:
@@ -353,25 +353,28 @@ def step_fetch_offline(python: Path, config: Path) -> Step:
                 "\n".join(problems + [summary, f"first area error: {first_error}", tail(output, 6)]))
 
 
-def profile_installed(config: Path) -> int | None:
-    profile = json.loads((config.parent / "state" / "hardware" / f"{MACHINE}.json").read_text(encoding="utf-8"))
-    return None if profile["installed"] is None else len(profile["installed"])
-
-
 def step_render(python: Path, config: Path) -> Step:
+    """`modelroom render`: the ranking of the profile this machine just measured, in both views."""
     code, output = modelroom(python, "render", "--config", str(config))
     document = config.parent / "docs" / "models.md"
+    json_view = document.with_suffix(".json")
     problems = [] if code == 0 else [f"expected exit 0, got {code}"]
-    detail = []
-    if document.is_file():
-        text = document.read_text(encoding="utf-8")
-        installed = profile_installed(config)
-        problems += render_problems(text, MACHINE, installed)
-        detail = [f"{row.get('Packager')}: stars {row.get('Stars')}, {row.get(f'fit (computed, v1): {MACHINE}')}"
-                  for row in markdown_table(text, "Packages")]
-        detail.append(f"installed ({MACHINE}) rendered from the profile's {installed} observed models")
+    detail: list[str] = []
+    if not document.is_file():
+        problems.append("no Markdown document written")
+    elif not json_view.is_file():
+        problems.append("no JSON view written next to it")
     else:
-        problems.append("no document written")
+        text = document.read_text(encoding="utf-8")
+        problems += render_problems(text, MACHINE)
+        problems += json_problems(json.loads(json_view.read_text(encoding="utf-8")), text, MACHINE)
+        ranked = markdown_table(text, f"Ranking: {MACHINE}")
+        not_covered = markdown_table(text, f"Not covered: {MACHINE}")
+        detail = [f"#{row.get('#')} {row.get('Packager')} {row.get('Quant')}: {row.get('Fit (computed)')}"
+                  for row in ranked]
+        detail += [f"not covered: {row.get('Packager')} {row.get('Quant')}: {row.get('Reason')}"
+                   for row in not_covered]
+        detail.append(f"{len(ranked)} ranked, {len(not_covered)} not covered, JSON view {json_view.name}")
     return Step("modelroom render", code, 1 if problems else 0, "\n".join(problems + detail + [tail(output, 3)]))
 
 
@@ -395,7 +398,7 @@ def run_steps(work: Path) -> list[Step]:
     except (SetupError, OSError, KeyError, ValueError, TypeError) as exc:
         return steps + [Step("setup", None, 2, f"{type(exc).__name__}: {exc}")]
     steps.append(guarded("modelroom hardware", lambda: step_hardware(python, config)))
-    steps.append(guarded("place schema-1 profile for render", lambda: step_place_v1_profile(config)))
+    steps.append(guarded("bind the profile in the configuration", lambda: step_bind_profile(config)))
     steps.append(guarded("place fixture snapshot", lambda: step_place_snapshot(config)))
     steps.append(guarded("modelroom fetch, network blocked", lambda: step_fetch_offline(python, config)))
     steps.append(guarded("modelroom render", lambda: step_render(python, config)))

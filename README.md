@@ -19,8 +19,8 @@ on the machine you want to size, and keep the files wherever you keep your notes
 
 ## Status
 
-Alpha, version 0.1.0, the first release (see `CHANGELOG.md`). The three commands `fetch`, `hardware` and `render` work end to end; the data
-shapes are versioned contracts (see `CONTRACTS.md`). Expect changes to the rendered layout and to the fit rules before a stable
+Alpha, version 0.1.0, the first release (see `CHANGELOG.md`). The guided mode and the six
+subcommands work end to end; the data shapes are versioned contracts (see `CONTRACTS.md`). Expect changes to the rendered layout and to the fit rules before a stable
 release. `CHANGELOG.md` lists what has landed.
 
 ## Requirements
@@ -49,7 +49,22 @@ below with `modelroom` in place of `uv run --frozen modelroom`.
 
 ## Quick start
 
-From a clone of this repository, after `uv sync --frozen`:
+Type the command and answer the questions:
+
+```bash
+modelroom
+```
+
+It asks where the results should live, measures this machine, searches Hugging Face for a
+model name, takes your selection and the context, and prints the ranking per machine while
+writing it to `docs/models.md` and `docs/models.json`. The next run is the same command: it
+remembers the folder. Without an interactive terminal it prints the help and stops;
+`modelroom --answers <file>` takes the answers from a TOML file instead (for a self-test or
+CI), and `modelroom --config <file>` works on that configuration rather than the remembered
+folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
+
+The six subcommands never ask anything, and they are what the guided mode calls. From a
+clone of this repository, after `uv sync --frozen`:
 
 ```bash
 cp modelroom.example.toml modelroom.toml
@@ -70,13 +85,17 @@ cat docs/models.md
    CPU machine, `--new-identity` measures a clone as a machine of its own.
 3. `fetch` queries the registries and writes the snapshot `state/modelroom.json`. The named
    machine has to be marked `writer = true`.
-4. `render` reads the snapshot and every machine's hardware profile and writes the Markdown
-   table to `paths.markdown` (`docs/models.md` in the example). It takes no `--machine`.
+4. `render` reads the snapshot and every machine's hardware profile and writes two views: the
+   Markdown one to `paths.markdown` (`docs/models.md` in the example) and the JSON one next
+   to it under the same stem. It takes no `--machine`. A machine is ranked from the profile
+   its `[machines.<name>].profile` names -- the guided mode writes that entry after it has
+   measured the machine.
 5. Read the table. Only active, complete packages with `metadata_ok` or `approved`
-   provenance are shown. For each base model and packager, every machine picks the largest
-   quantization that fits it `good` or better (else the smallest package it could judge).
-   The table shows one row per picked package and one `fit (computed, v1): <machine>`
-   column per configured machine.
+   provenance are shown, and every one of them is ranked per machine: best fit first, a
+   measured package ahead of an unmeasured one of the same fit class, with the rule and the
+   scenario printed in the header. Packages fit v1 cannot judge stand under "not covered"
+   with the reason, ones that do not fit under "too tight". Every computed number says
+   `(computed)`, the measured speed says `(measured)`.
 
 `--config` is required by every command; there is no default path.
 
@@ -88,6 +107,7 @@ Under `paths.state`:
 |---|---|---|
 | `modelroom.json` | `fetch` | snapshot, versioned contract |
 | `hardware/<profile_id>.json` | `hardware`, on that machine | hardware profile, versioned contract |
+| `measurements/<profile_id>/<id>.json` | the load test | speed measurement, versioned contract |
 | `modelroom.lock` | `fetch`, `render` | runtime only, not a contract |
 | `run-status.json` | `fetch` | runtime only, not a contract |
 
@@ -130,7 +150,12 @@ labeled "fit (computed, v1)" in the output for that reason.
 | `0` | success: every fetch area complete; `hardware` measured and wrote the profile (also when `llmfit` was not there to cross-check it); `render` wrote the document (also when its rating source failed) |
 | `1` | at least one fetch area incomplete (complete areas are still written); or another process holds the lock; or this `fetch` is not newer than the stored snapshot; or `render` has no snapshot; or the existing document was rendered from a newer snapshot; or `hardware` wrote the profile but could not record the binding in the pointer file. Every case but the first and the last leaves the snapshot, hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated |
 | `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); `hardware`'s bound profile belongs to another machine (run it with `--new-identity`); or a tool a command requires is missing, older than the minimum, fails, or returns invalid output |
-| `3` | an unsupported `schema_version` in the configuration, the snapshot, a hardware profile or the pointer file; or one of them is not valid JSON or does not match its model |
+| `3` | an unsupported `schema_version` in the configuration, the snapshot, a hardware profile, the answer file or the pointer file; or one of them is not valid JSON or does not match its model |
+| `130` | the guided mode was stopped with Ctrl-C; nothing is left half written |
+
+The guided mode ends with `1` when it wrote its document but a step did not finish -- a
+measurement that failed, a `fetch` that did not complete, an import that did not go through.
+Those lines are printed as they happen; the run goes on with the machines that are there.
 
 Source: `CONTRACTS.md`, "Exit codes", and `AGENTS.md`.
 

@@ -1,32 +1,42 @@
-"""`render`: a pure reader of the snapshot and every configured machine's hardware profile.
+"""`render`: one document object per run, then three writers that only format it.
 
-`build_document(config, snapshot, hardware_by_machine, rendered_at, rating_source=None) -> str`
-is the whole module's public surface besides `RatingSource`/`RatingUnavailableError` and the
-header-line helpers -- no I/O anywhere here, exactly like `modelroom/fit.py::compute_fit`.
-`modelroom/cli.py::render_with_config` is the orchestration layer (the lock, the schema-version
-gates, reading the snapshot and hardware files, the atomic write); this module only turns
-already-loaded data into Markdown. See CONTRACTS.md, "Render (AP5)", for every rule below.
+`build_render_document(...) -> document.RenderDocument` is the pure builder: it takes an
+already-loaded `Configuration`, `Snapshot`, one `MachineProfile` per configured machine, that
+profile's measurement records, the ranking `Scenario` and `rendered_at`, computes every fit
+(`fit.compute_fit_v2`) and every ranking (`ranking.rank_packages`), and returns the one object
+the three writers read: `document_markdown`, `document_json`, `document_terminal`. No I/O
+anywhere in this module -- `modelroom/cli.py::render_with_config` owns the lock, the
+schema-version gates, reading the files and the atomic writes.
+
+`machine_profile` is the other pure decision here: which profile a `[machines.<name>]` entry is
+rendered from, given the profile files found in the results folder. See CONTRACTS.md,
+"Render (schema 2)".
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from .config import Configuration
-from .contracts import (
-    Area,
-    BaseModelSpec,
-    HardwareSnapshot,
-    Measurement,
-    Package,
-    Rating,
-    Snapshot,
+from .config import Configuration, MachineConfig
+from .contracts import BaseModelSpec, Fit, Package, Rating, Snapshot
+from .document import (
+    DOCUMENT_SCHEMA_VERSION,
+    MachineRanking,
+    MachineStatus,
+    RankedEntry,
+    RenderDocument,
+    SetAsideEntry,
 )
-from .fit import GIB, compute_fit
-from .quantization import QUANT_ORDER, package_identity_key, sort_key
+from .fit import GIB, compute_fit_v2
+from .guided_contracts import Note
+from .importer import ProfileScan
+from .measurements import MeasurementRecord, Scenario
+from .profile import CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
+from .quantization import package_identity_key
+from .ranking import RANKING_RULE, Ranking, SetAside, rank_packages
 
 RatingSource = Callable[[str], Rating | None]
 
@@ -34,7 +44,11 @@ _HEADER_RE = re.compile(
     r"^<!-- modelroom render: snapshot_run_at=(?P<snapshot_run_at>\S+) rendered_at=(?P<rendered_at>\S+) -->$"
 )
 _ELIGIBLE_PROVENANCE = ("metadata_ok", "approved")
-_QUALIFYING_FIT_CLASSES = ("good", "perfect")
+_WEIGHT_ROLES = ("weights", "weights_shard")
+_UNKNOWN = "unknown"
+_NOTE_LIMIT = 240
+
+NO_PROFILE_REASON = "no hardware profile yet; measure this machine with `modelroom hardware`"
 
 
 class RatingUnavailableError(Exception):
@@ -50,7 +64,7 @@ class HeaderInfo:
 
 
 def format_header_line(snapshot_run_at: datetime, rendered_at: datetime) -> str:
-    """The fixed header comment `build_document` always writes as the document's first line."""
+    """The fixed header comment `document_markdown` always writes as the document's first line."""
     return f"<!-- modelroom render: snapshot_run_at={snapshot_run_at.isoformat()} rendered_at={rendered_at.isoformat()} -->"
 
 
@@ -62,10 +76,10 @@ def parse_header_line(text: str) -> HeaderInfo | None:
     """The header line's two timestamps, or `None` when `text` has no such first line.
 
     `None` covers an empty file, one whose first line does not match the fixed format (e.g. a
-    document from before `render` wrote this header), and -- fix-round 5, F4 -- one whose
-    `snapshot_run_at`/`rendered_at` parses but is not an aware UTC datetime (`format_header_line`
-    never writes anything else, same rule as `contracts.check_aware_utc`; a hand-edited or
-    otherwise corrupted header with a naive timestamp would otherwise make
+    document from before `render` wrote this header), and one whose `snapshot_run_at`/
+    `rendered_at` parses but is not an aware UTC datetime (`format_header_line` never writes
+    anything else, same rule as `contracts.check_aware_utc`; a hand-edited or otherwise
+    corrupted header with a naive timestamp would otherwise make
     `cli.py::_refusal_against_existing_document`'s comparison against the new, always-aware
     snapshot's `run_at` raise `TypeError` instead of just refusing to compare). Either way, the
     caller (`cli.py`) treats it as nothing to compare against, never a reason to fail.
@@ -84,11 +98,106 @@ def parse_header_line(text: str) -> HeaderInfo | None:
     return HeaderInfo(snapshot_run_at=snapshot_run_at, rendered_at=rendered_at)
 
 
-# --- eligibility and grouping ----------------------------------------------------------------
+# --- which profile one machine is rendered from -----------------------------------------------
 
 
-def _eligible_packages(packages: list[Package]) -> list[Package]:
-    return [p for p in packages if p.provenance in _ELIGIBLE_PROVENANCE and p.complete and p.active]
+@dataclass(frozen=True)
+class MachineProfile:
+    """What the results folder holds for one `[machines.<name>]`, as `machine_profile` decided.
+
+    `ranked` carries the schema-2 profile the fit computes with; `legacy` and `no_profile`
+    carry no profile at all and say why in `reason`. `label` is what the document shows: the
+    profile's `display_name`, the schema-1 file's name, or the machine name.
+    """
+
+    status: MachineStatus
+    label: str
+    profile: HardwareProfile | None
+    reason: str | None
+
+
+def _legacy_fit_reason() -> str:
+    """The reason the fit rule gives for *any* schema-1 profile -- it is always the same one.
+
+    `fit_block_reason` decides it from `gpu_state`, and `profile.normalize_profile_v1` gives
+    every schema-1 profile without unified memory the state `legacy_unknown`, so the text does
+    not depend on the file. Taken from the rule itself rather than copied, so the two can never
+    drift apart (`tests/test_render.py` checks it against a really normalized profile). The
+    probe below is never written anywhere and never leaves this function.
+    """
+    absent = CrossCheck(status="absent")
+    probe = HardwareProfile(
+        schema_version=2,
+        profile_id="0" * 16,
+        display_name="legacy",
+        os_fingerprint="none",
+        os_fingerprint_source="legacy",
+        origin="measured",
+        recorded_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ram_physical_gib=1.0,
+        ram_physical_source="llmfit",
+        ram_limit_gib=None,
+        ram_limit_scope="none",
+        vram_gib=0.0,
+        vram_source="llmfit",
+        gpu_state="legacy_unknown",
+        gpu_name=None,
+        llmfit_crosscheck=LlmfitCrosscheck(ram_physical=absent, vram=absent),
+        llmfit_version=None,
+    )
+    reason = fit_block_reason(probe)
+    assert reason is not None  # `legacy_unknown` is never a state the fit computes for
+    return reason
+
+
+LEGACY_FIT_REASON = _legacy_fit_reason()
+
+
+def machine_profile(machine: str, machine_config: MachineConfig, scan: ProfileScan) -> MachineProfile:
+    """Which profile `[machines.<machine>]` is rendered from, given the folder's profile files.
+
+    `[machines.<name>].profile` names the schema-2 file; when it is set and readable, that is
+    the profile. A machine without `profile` may still have a schema-1 file `<name>.json` from
+    before `modelroom migrate` -- it is shown as `legacy` with the fit rule's own reason and
+    nothing is persisted. Everything else is `no_profile` with the reason named.
+    """
+    wanted = machine_config.profile
+    if wanted is not None:
+        found = scan.profiles.get(wanted)
+        if found is not None:
+            return MachineProfile("ranked", found.display_name, found, None)
+        return MachineProfile("no_profile", machine, None, _missing_profile_reason(wanted, scan))
+    legacy = next((path for path in scan.legacy if path.stem == machine), None)
+    if legacy is not None:
+        return MachineProfile("legacy", legacy.name, None, LEGACY_FIT_REASON)
+    return MachineProfile("no_profile", machine, None, NO_PROFILE_REASON)
+
+
+def _missing_profile_reason(profile_id: str, scan: ProfileScan) -> str:
+    """Why the configured `profile` is not the profile this machine is rendered from."""
+    broken = next((reason for path, reason in scan.unreadable if path.stem == profile_id), None)
+    if broken is not None:
+        return f"the configured profile {profile_id} does not read: {broken}"
+    if any(path.stem == profile_id for path in scan.legacy):
+        return f"the configured profile {profile_id} is still a schema-1 file; {LEGACY_FIT_REASON}"
+    return f"the configured profile {profile_id} is not in this results folder"
+
+
+# --- eligibility and package facts -------------------------------------------------------------
+
+
+def _eligible_packages(snapshot: Snapshot) -> list[Package]:
+    """Every package a fit may be computed for: shown provenance, complete and active.
+
+    The base model is not checked here: `Snapshot` itself refuses a package whose
+    `base_model_hf_repo` is not among its `base_models`, so every package that reaches this
+    point has an architecture the fit can read.
+    """
+    return [
+        package
+        for package in snapshot.packages
+        if package.provenance in _ELIGIBLE_PROVENANCE and package.complete and package.active
+    ]
 
 
 def _packager_name(package: Package) -> str:
@@ -97,420 +206,241 @@ def _packager_name(package: Package) -> str:
     return (package.repo or "").split("/", 1)[0]
 
 
-def _groups_for_base_model(repo: str, packages: list[Package]) -> list[tuple[str, str, list[Package]]]:
-    by_packager: dict[str, list[Package]] = {}
-    for package in packages:
-        by_packager.setdefault(_packager_name(package), []).append(package)
-    ordered_packagers = sorted(by_packager, key=lambda name: (name == "ollama", name))
-    return [(repo, packager, by_packager[packager]) for packager in ordered_packagers]
+def _weights_gib(package: Package) -> float:
+    return sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
 
 
-def _ordered_groups(config: Configuration, eligible: list[Package]) -> list[tuple[str, str, list[Package]]]:
-    """Groups (base model x packager) in config order, packagers alphabetical with ollama last."""
-    by_repo: dict[str, list[Package]] = {}
-    for package in eligible:
-        by_repo.setdefault(package.base_model_hf_repo, []).append(package)
-
-    groups: list[tuple[str, str, list[Package]]] = []
-    for family in config.families:
-        for base_model_config in family.base_models:
-            repo = base_model_config.hf_repo
-            groups.extend(_groups_for_base_model(repo, by_repo.get(repo, [])))
-    return groups
-
-
-def _unique_repos_with_rows(groups: list[tuple[str, str, list[Package]]]) -> list[str]:
-    seen: list[str] = []
-    for repo, _packager, packages in groups:
-        if packages and repo not in seen:
-            seen.append(repo)
-    return seen
+def _package_line(package: Package, note: Note) -> dict:
+    """The fields `RankedEntry` and `SetAsideEntry` share, all of them about the package."""
+    return {
+        "package_identity": package_identity_key(package),
+        "base_model_hf_repo": package.base_model_hf_repo,
+        "packager": _packager_name(package),
+        "quantization": package.quantization or _UNKNOWN,
+        "format": package.format,
+        "weights_gib": _weights_gib(package),
+        "package_context": package.default_context,
+        "provenance": package.provenance,
+        "note": note,
+    }
 
 
-# --- selection rule ------------------------------------------------------------------------
+# --- the plain-language note, built from named facts only ---------------------------------------
 
 
-def _quant_index(package: Package) -> int:
-    """Same convention as `quantization.sort_key`: unknown quantization sorts as if largest."""
-    return QUANT_ORDER.index(package.quantization) if package.quantization in QUANT_ORDER else len(QUANT_ORDER)
+def _clip(text: str) -> str:
+    return text if len(text) <= _NOTE_LIMIT else text[: _NOTE_LIMIT - 1].rstrip() + "…"
 
 
-def _select_for_machine(packages: list[Package], base_model: BaseModelSpec, hardware, machine_config) -> Package | None:
-    """The picked package for one machine, largest good-or-better quant, else the smallest
-    *judged* package -- or `None` when this machine has nothing to recommend at all.
-
-    F5 (fix-round 5): a machine with no hardware profile, or one where fit v1 cannot judge a
-    single package of the group (`fit_class == "unknown"` for every one -- typically the whole
-    architecture is not covered by v1, e.g. the real Qwen3.5 case measured 2026-09-22), makes no
-    pick, rather than falling back to an arbitrary "smallest" package fit v1 never actually
-    scored (the old behavior: a useless recommendation such as `UD-IQ2_XXS` for an architecture
-    fit v1 cannot judge at all). The "else the smallest" fallback still applies once at least one
-    package *was* judged (a real class, not "unknown") but none reached good/perfect -- scoped to
-    the judged packages only, never back to an unknown one that only looks smallest by quant
-    label.
-    """
-    if hardware is None:
-        return None
-
-    fits_by_key = {package_identity_key(p): compute_fit(p, base_model, hardware, machine_config) for p in packages}
-    judged = [p for p in packages if fits_by_key[package_identity_key(p)].fit_class != "unknown"]
-    if not judged:
-        return None
-
-    qualifying = [p for p in judged if fits_by_key[package_identity_key(p)].fit_class in _QUALIFYING_FIT_CLASSES]
-    if not qualifying:
-        return min(judged, key=sort_key)
-
-    max_index = max(_quant_index(p) for p in qualifying)
-    candidates = [p for p in qualifying if _quant_index(p) == max_index]
-    return min(candidates, key=sort_key)
+def _measured_note(measurement: MeasurementRecord) -> Note:
+    return Note(
+        code="measured_here",
+        subject="package",
+        origin="measured",
+        text=_clip(
+            f"Measured on this machine: {measurement.tps_mean:.1f} tokens per second at a "
+            f"context of {measurement.scenario.context_requested}."
+        ),
+        facts=["measurement.tps_mean", "measurement.scenario.context_requested"],
+    )
 
 
-def _select_group_packages(
-    packages: list[Package], base_model: BaseModelSpec, config: Configuration, hardware_by_machine: dict
-) -> list[Package]:
-    """Every distinct package picked by at least one machine -- never one a machine had nothing
-    to recommend for (F5: `_select_for_machine` returning `None` contributes nothing here).
-    """
-    picked_by_key: dict[tuple, Package] = {}
-    for machine_name, machine_config in config.machines.items():
-        hardware = hardware_by_machine.get(machine_name)
-        picked = _select_for_machine(packages, base_model, hardware, machine_config)
-        if picked is not None:
-            picked_by_key[package_identity_key(picked)] = picked
-    return list(picked_by_key.values())
+_MODE_NOTES = {
+    "gpu": (
+        "fits_in_graphics_memory",
+        "Fits into graphics memory: it needs about {need:.1f} GiB of the {pool:.1f} GiB left "
+        "after the reserve.",
+        ["fit.mode", "fit.need_gib", "fit.pool_gib"],
+    ),
+    "cpu_gpu": (
+        "shared_between_memories",
+        "Too large for graphics memory alone, so it runs in system memory with the graphics "
+        "card helping; the best rating it can reach here is 'good'.",
+        ["fit.mode", "fit.fit_class"],
+    ),
+    "cpu": (
+        "cpu_caps_at_good",
+        "Runs in system memory only, so the best possible rating on this machine is 'good'.",
+        ["fit.mode", "fit.fit_class"],
+    ),
+}
 
 
-def _no_recommendation_reason(packages: list[Package], base_model: BaseModelSpec, hardware, machine_config) -> str:
-    """F5: the reason text for a machine that made no pick -- `compute_fit`'s own reason (every
-    package shares it when the cause is architecture-level, the common case) computed against a
-    deterministic representative package (`sort_key`'s smallest) when it is package-level
-    instead, or the literal `"no profile"` when this machine has no hardware profile at all.
-    """
-    if hardware is None:
-        return "no profile"
-    representative = min(packages, key=sort_key)
-    return compute_fit(representative, base_model, hardware, machine_config).reason or "unknown"
+def _computed_note(fit: Fit) -> Note:
+    code, template, facts = _MODE_NOTES[str(fit.mode)]
+    return Note(
+        code=code,
+        subject="package",
+        origin="computed",
+        text=_clip(template.format(need=fit.need_gib, pool=fit.pool_gib)),
+        facts=facts,
+    )
 
 
-@dataclass(frozen=True)
-class PackageRow:
-    base_model_hf_repo: str
-    packager: str
-    package: Package | None
-    base_model: BaseModelSpec
-    variants: int
-    # F5: set only on a "no recommendation" row (`package is None`) -- maps each configured
-    # machine name to the reason text its fit cell shows (`"no recommendation: <reason>"`).
-    no_recommendation: dict[str, str] | None = None
+def _set_aside_note(set_aside: SetAside, covered: bool) -> Note:
+    if not covered:
+        return Note(
+            code="not_covered",
+            subject="package",
+            origin="computed",
+            text=_clip(f"Fit contract v1 cannot judge this package here: {set_aside.reason}."),
+            facts=["fit.fit_class", "fit.reason"],
+        )
+    # Not "more than the machine has": fit v1 already calls a package `too_tight` above 98 % of
+    # the pool, so the need can be below the pool and the note must not claim an overrun
+    # (probe: need 7.125 GiB against a pool of 7.2 GiB is `too_tight`).
+    fit = set_aside.fit
+    return Note(
+        code="too_tight",
+        subject="package",
+        origin="computed",
+        text=_clip(
+            f"Fit contract v1 does not count this as a fit: it needs about {fit.need_gib:.1f} GiB "
+            f"of the {fit.pool_gib:.1f} GiB left after the reserve."
+        ),
+        facts=["fit.need_gib", "fit.pool_gib"],
+    )
 
 
-def _build_rows(
-    groups: list[tuple[str, str, list[Package]]],
+# --- building the document ----------------------------------------------------------------------
+
+
+def _ranked_entries(ranking: Ranking) -> list[RankedEntry]:
+    entries = []
+    for ranked in ranking.top:
+        note = _measured_note(ranked.measurement) if ranked.measurement is not None else _computed_note(ranked.fit)
+        entries.append(
+            RankedEntry(
+                rank=ranked.rank,
+                fit=ranked.fit,
+                measurement_group=ranked.measurement_group,
+                measurement_id=ranked.measurement.measurement_id if ranked.measurement is not None else None,
+                speed_tps=ranked.measurement.tps_mean if ranked.measurement is not None else None,
+                **_package_line(ranked.package, note),
+            )
+        )
+    return entries
+
+
+def _set_aside_entries(items: list[SetAside], covered: bool) -> list[SetAsideEntry]:
+    return [
+        SetAsideEntry(fit=item.fit, reason=item.reason, **_package_line(item.package, _set_aside_note(item, covered)))
+        for item in items
+    ]
+
+
+def _machine_block(
+    machine: str,
+    machine_config: MachineConfig,
+    found: MachineProfile,
+    packages: list[Package],
     base_model_by_repo: dict[str, BaseModelSpec],
-    config: Configuration,
-    hardware_by_machine: dict,
-) -> list[PackageRow]:
-    rows: list[PackageRow] = []
-    for repo, packager, packages in groups:
-        if not packages:
-            continue
-        base_model = base_model_by_repo[repo]
-        selected = _select_group_packages(packages, base_model, config, hardware_by_machine)
-        # F5: every configured machine made no pick for this group (config.machines is never
-        # empty here -- an empty one would make `selected` trivially empty for an unrelated
-        # reason, and must fall through to the ordinary, zero-row path unchanged).
-        if not selected and config.machines:
-            no_recommendation = {
-                name: _no_recommendation_reason(packages, base_model, hardware_by_machine.get(name), machine_config)
-                for name, machine_config in config.machines.items()
-            }
-            rows.append(PackageRow(repo, packager, None, base_model, len(packages), no_recommendation))
-            continue
-        variants = len(packages) - len(selected)
-        for package in sorted(selected, key=sort_key):
-            rows.append(PackageRow(repo, packager, package, base_model, variants))
-    return rows
+    measurements: list[MeasurementRecord],
+    scenario: Scenario,
+) -> MachineRanking:
+    """One machine's block: its three lists, or its reason when no fit can be computed at all."""
+    reserves = {
+        "reserve_ram_gib": machine_config.reserve_ram_gib,
+        "reserve_vram_gib": machine_config.reserve_vram_gib,
+    }
+    if found.profile is None:
+        return MachineRanking(
+            machine=machine, status=found.status, label=found.label, reason=found.reason, **reserves
+        )
+    entries = [
+        (package, compute_fit_v2(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config))
+        for package in packages
+    ]
+    ranking = rank_packages(entries, measurements, scenario)
+    return MachineRanking(
+        machine=machine,
+        status="ranked",
+        label=found.label,
+        profile=found.profile,
+        ranked=_ranked_entries(ranking),
+        ranked_total=len(ranking.ranked),
+        not_covered=_set_aside_entries(ranking.not_covered, covered=False),
+        too_tight=_set_aside_entries(ranking.too_tight, covered=True),
+        **reserves,
+    )
 
 
-# --- ratings ---------------------------------------------------------------------------------
+def _repos_with_rows(blocks: list[MachineRanking]) -> list[str]:
+    """Every base model that has at least one row anywhere, in the order the rows name it."""
+    seen: list[str] = []
+    for block in blocks:
+        for entry in [*block.ranked, *block.not_covered, *block.too_tight]:
+            if entry.base_model_hf_repo not in seen:
+                seen.append(entry.base_model_hf_repo)
+    return seen
 
 
 def _collect_ratings(
     rating_source: RatingSource | None, base_model_repos: list[str]
-) -> tuple[dict[str, Rating | None], str | None]:
-    """Call `rating_source` once per base model; the first exception's message, if any."""
+) -> tuple[dict[str, Rating], str | None]:
+    """Call `rating_source` once per base model; the first exception's message ends the column."""
     if rating_source is None:
         return {}, None
-
-    ratings: dict[str, Rating | None] = {}
-    error_message: str | None = None
+    ratings: dict[str, Rating] = {}
     for repo in base_model_repos:
         try:
-            ratings[repo] = rating_source(repo)
+            answer = rating_source(repo)
         except Exception as exc:  # noqa: BLE001 -- every exception is treated the same (brief)
-            if error_message is None:
-                error_message = str(exc)
-            ratings[repo] = None
-    return ratings, error_message
+            return {}, str(exc)
+        if answer is not None:
+            ratings[repo] = answer
+    return ratings, None
 
 
-def _format_stars(stars: float) -> str:
-    full_stars, half = divmod(round(stars * 2), 2)
-    return "★" * full_stars + ("½" if half else "")
-
-
-def _stars_cell(rating: Rating | None, rating_failed: bool) -> str:
-    if rating_failed or rating is None:
-        return "–"
-    return _format_stars(rating.stars)
-
-
-# --- fit / installed / speed cells ------------------------------------------------------------
-
-
-def _fit_cell(package: Package, base_model: BaseModelSpec, machine_config, hardware) -> str:
-    if hardware is None:
-        return "no profile"
-    fit = compute_fit(package, base_model, hardware, machine_config)
-    if fit.fit_class == "unknown":
-        return f"unknown: {_cell(fit.reason)}" if fit.reason else "unknown"
-    return f"{fit.fit_class} ({fit.mode}, need {fit.need_gib:.1f} / pool {fit.pool_gib:.1f} GiB)"
-
-
-def _installed_cell(package: Package, hardware: HardwareSnapshot | None) -> str:
-    if package.source == "huggingface":
-        return "–"
-    if hardware is None or hardware.installed is None:
-        return "unknown"
-    matched = any(model.digest == package.manifest_digest for model in hardware.installed)
-    return "yes" if matched else "no"
-
-
-def _measurement_matches_package(measurement: Measurement, package: Package) -> bool:
-    if measurement.content_source == "ollama":
-        return package.source == "ollama" and measurement.ollama_manifest_digest == package.manifest_digest
-    if package.source != "huggingface":
-        return False
-    if measurement.hf_repo != package.repo or measurement.hf_revision != package.revision:
-        return False
-    weight_digests = {f.digest for f in package.files if f.role in ("weights", "weights_shard") and f.digest}
-    return measurement.hf_file_digest in weight_digests
-
-
-def _speed_cell(package: Package, machine_names: list[str], hardware_by_machine: dict) -> str:
-    for machine_name in machine_names:
-        hardware = hardware_by_machine.get(machine_name)
-        if hardware is None:
-            continue
-        for measurement in hardware.measurements:
-            if measurement.profile_measured_at != hardware.measured_at:
-                continue
-            if _measurement_matches_package(measurement, package):
-                return f"{measurement.tps_mean:.1f} tps @{measurement.context} ({machine_name})"
-    return "–"
-
-
-def _weights_gib(package: Package) -> float:
-    return sum(f.size_bytes for f in package.files if f.role in ("weights", "weights_shard")) / GIB
-
-
-def _context_cell(package: Package) -> str:
-    if package.default_context:
-        return str(package.default_context)
-    return "8192 (assumed)"
-
-
-# --- rendering: summary, areas, machines, packages ---------------------------------------------
-
-
-def _summary_lines(snapshot: Snapshot, rendered_at: datetime, rating_failed: bool, rating_error: str | None) -> list[str]:
-    lines = [
-        "# Model packages",
-        "",
-        f"Snapshot run at: {snapshot.run_at.isoformat()}",
-        f"Rendered at: {rendered_at.isoformat()}",
-        f"Base models / packages: {len(snapshot.base_models)} / {len(snapshot.packages)}",
-    ]
-    if rating_failed:
-        lines.append(f"Market rating unavailable: {_cell(rating_error)}")
-    return lines
-
-
-def _cell(value: str) -> str:
-    """Sanitize one Markdown table cell's external text (R7-11, fix-round 6).
-
-    Applied to every cell that can carry text this package does not itself control the shape of
-    -- an area's error message, a base model or packager repo name, a quantization/format label,
-    hardware-reported `gpu_name`/`backend`/`installed_unavailable_reason`, a fit or
-    no-recommendation reason, a `RatingSource`'s error message. Escapes `|` (a literal pipe would
-    otherwise read as a new column boundary) and collapses any `\\r\\n`/`\\n`/`\\r` to a single
-    space (a raw newline would otherwise split one logical row across multiple physical lines).
-    Probe: an `Area.error` of `"boom | extra\\nsecond line"` produced 4 physical lines and an
-    extra column in the areas table instead of the one row it should have been.
-    """
-    normalized = value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ")
-    return normalized.replace("|", "\\|").strip()
-
-
-def _render_areas_table(areas: list[Area]) -> str:
-    header = "| Source | Base model | Packager | Status | Last success | Error |\n|---|---|---|---|---|---|"
-    lines = [header]
-    for area in areas:
-        last_success = area.last_success.isoformat() if area.last_success else "–"
-        packager = _cell(area.packager) if area.packager else "–"
-        error = _cell(area.error) if area.error else ""
-        lines.append(
-            f"| {area.source} | {_cell(area.base_model_hf_repo)} | {packager} | {area.status} | "
-            f"{last_success} | {error} |"
-        )
-    return "\n".join(lines)
-
-
-def _installed_summary(hardware: HardwareSnapshot) -> str:
-    if hardware.installed is not None:
-        return str(len(hardware.installed))
-    return f"unknown ({_cell(hardware.installed_unavailable_reason)})"
-
-
-def _machine_row(name: str, machine_config, hardware: HardwareSnapshot | None, rendered_at: datetime) -> str:
-    reserve_vram = f"{machine_config.reserve_vram_gib:.2f}"
-    reserve_ram = f"{machine_config.reserve_ram_gib:.2f}"
-    if hardware is None:
-        no_profile = "no hardware profile yet"
-        return (
-            f"| {name} | {no_profile} | {no_profile} | {reserve_vram} | {reserve_ram} | {no_profile} | "
-            f"{no_profile} | {no_profile} | {no_profile} |"
-        )
-    backend = _cell(hardware.backend) if hardware.backend else "–"
-    gpu_name = _cell(hardware.gpu_name) if hardware.gpu_name else "–"
-    backend_gpu = f"{backend} / {gpu_name}"
-    age_days = (rendered_at - hardware.measured_at).days
-    return (
-        f"| {name} | {hardware.vram_gib:.2f} | {hardware.ram_gib:.2f} | {reserve_vram} | {reserve_ram} | "
-        f"{backend_gpu} | {hardware.measured_at.isoformat()} | {age_days} | {_installed_summary(hardware)} |"
-    )
-
-
-def _render_machines_table(config: Configuration, hardware_by_machine: dict, rendered_at: datetime) -> str:
-    header = (
-        "| Machine | VRAM GiB | RAM GiB | Reserve VRAM GiB | Reserve RAM GiB | Backend / GPU | "
-        "Profile measured at | Profile age (days) | Installed |\n"
-        "|---|---|---|---|---|---|---|---|---|"
-    )
-    lines = [header]
-    for name, machine_config in config.machines.items():
-        lines.append(_machine_row(name, machine_config, hardware_by_machine.get(name), rendered_at))
-    return "\n".join(lines)
-
-
-def _packages_table_header(machine_names: list[str]) -> str:
-    columns = ["Base model", "Stars", "Packager", "Quant", "Format", "Size GiB", "Context"]
-    columns += [f"fit (computed, v1): {name}" for name in machine_names]
-    columns += ["Installed", "Speed", "Provenance", "Observed", "Variants"]
-    return "| " + " | ".join(columns) + " |\n|" + "---|" * len(columns)
-
-
-def _no_recommendation_row_line(
-    row: PackageRow, ratings: dict, rating_failed: bool, machine_names: list[str]
-) -> str:
-    """F5: every package cell "–" except the fit cells (`"no recommendation: <reason>"`) and
-    Variants (`"<N> variants, none judged"`) -- there is no picked `Package` to read the other
-    cells from.
-    """
-    assert row.no_recommendation is not None  # only ever built alongside a no-recommendation row
-    cells = [
-        _cell(row.base_model_hf_repo),
-        _stars_cell(ratings.get(row.base_model_hf_repo), rating_failed),
-        _cell(row.packager),
-        "–",  # Quant
-        "–",  # Format
-        "–",  # Size GiB
-        "–",  # Context
-    ]
-    cells += [f"no recommendation: {_cell(row.no_recommendation[name])}" for name in machine_names]
-    cells.append("–")  # Installed
-    cells.append("–")  # Speed
-    cells.append("–")  # Provenance
-    cells.append("–")  # Observed
-    cells.append(f"{row.variants} variants, none judged")
-    return "| " + " | ".join(cells) + " |"
-
-
-def _package_row_line(
-    row: PackageRow, config: Configuration, hardware_by_machine: dict, ratings: dict, rating_failed: bool, machine_names: list[str]
-) -> str:
-    if row.package is None:
-        return _no_recommendation_row_line(row, ratings, rating_failed, machine_names)
-    package = row.package
-    cells = [
-        _cell(package.base_model_hf_repo),
-        _stars_cell(ratings.get(row.base_model_hf_repo), rating_failed),
-        _cell(row.packager),
-        _cell(package.quantization) if package.quantization else "–",
-        _cell(package.format),
-        f"{_weights_gib(package):.2f}",
-        _context_cell(package),
-    ]
-    cells += [
-        _fit_cell(package, row.base_model, config.machines[name], hardware_by_machine.get(name)) for name in machine_names
-    ]
-    installed = "; ".join(f"{name}: {_installed_cell(package, hardware_by_machine.get(name))}" for name in machine_names)
-    cells.append(installed)
-    cells.append(_speed_cell(package, machine_names, hardware_by_machine))
-    cells.append(package.provenance)
-    cells.append(package.observed_at.date().isoformat())
-    cells.append(f"+{row.variants} more" if row.variants else "–")
-    return "| " + " | ".join(cells) + " |"
-
-
-def _render_packages_table(rows: list[PackageRow], config: Configuration, hardware_by_machine: dict, ratings: dict, rating_failed: bool) -> str:
-    machine_names = list(config.machines)
-    lines = [_packages_table_header(machine_names)]
-    for row in rows:
-        lines.append(_package_row_line(row, config, hardware_by_machine, ratings, rating_failed, machine_names))
-    return "\n".join(lines)
-
-
-# --- entry point -------------------------------------------------------------------------------
-
-
-def build_document(
+def build_render_document(
     config: Configuration,
     snapshot: Snapshot,
-    hardware_by_machine: dict[str, HardwareSnapshot | None],
+    profiles: dict[str, MachineProfile],
+    measurements: dict[str, list[MeasurementRecord]],
+    scenario: Scenario,
     rendered_at: datetime,
     rating_source: RatingSource | None = None,
-) -> str:
-    """Render `snapshot` and every machine's hardware profile into the Markdown package view.
+) -> RenderDocument:
+    """The one object a render produces; pure, no I/O and no clock read.
 
-    Pure: no I/O, no clock read (`rendered_at` is passed in). `hardware_by_machine` maps every
-    `config.machines` key to its `HardwareSnapshot` or `None` (no profile measured yet). See
-    CONTRACTS.md, "Render (AP5)", for the header format, eligibility, selection and cell rules.
+    `profiles` maps every `config.machines` key to the `MachineProfile` the results folder
+    holds for it (`machine_profile`); `measurements` maps a `profile_id` to that profile's
+    measurement records. Every fit is computed against `scenario`, one context for the whole
+    document (CONTRACTS.md, "Render (schema 2)").
     """
     base_model_by_repo = {bm.hf_repo: bm for bm in snapshot.base_models}
-    eligible = _eligible_packages(snapshot.packages)
-    groups = _ordered_groups(config, eligible)
-    ratings, rating_error = _collect_ratings(rating_source, _unique_repos_with_rows(groups))
-    rating_failed = rating_error is not None
-    rows = _build_rows(groups, base_model_by_repo, config, hardware_by_machine)
-
-    sections = [
-        format_header_line(snapshot.run_at, rendered_at),
-        "",
-        *_summary_lines(snapshot, rendered_at, rating_failed, rating_error),
-        "",
-        "## Areas",
-        "",
-        _render_areas_table(snapshot.areas),
-        "",
-        "## Machines",
-        "",
-        _render_machines_table(config, hardware_by_machine, rendered_at),
-        "",
-        "## Packages",
-        "",
-        _render_packages_table(rows, config, hardware_by_machine, ratings, rating_failed),
-        "",
+    packages = _eligible_packages(snapshot)
+    blocks = [
+        _machine_block(
+            machine,
+            machine_config,
+            profiles[machine],
+            packages,
+            base_model_by_repo,
+            measurements.get(getattr(profiles[machine].profile, "profile_id", ""), []),
+            scenario,
+        )
+        for machine, machine_config in config.machines.items()
     ]
-    return "\n".join(sections)
+    ratings, rating_error = _collect_ratings(rating_source, _repos_with_rows(blocks))
+    return RenderDocument(
+        schema_version=DOCUMENT_SCHEMA_VERSION,
+        snapshot_run_at=snapshot.run_at,
+        rendered_at=rendered_at,
+        base_model_count=len(snapshot.base_models),
+        package_count=len(snapshot.packages),
+        scenario=scenario,
+        ranking_rule=RANKING_RULE,
+        rating_unavailable=rating_error,
+        ratings=ratings,
+        areas=snapshot.areas,
+        machines=blocks,
+    )
+
+
+# --- writer: JSON --------------------------------------------------------------------------------
+
+
+def document_json(document: RenderDocument) -> dict:
+    """The document as the JSON file next to the Markdown one: the object itself, nothing added."""
+    return document.model_dump(mode="json")

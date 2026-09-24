@@ -75,6 +75,85 @@ _MEASUREMENT_RECORD = {
     "comparable_reason": None,
     "load_state": {"gpu_utilization_percent": 3.0, "cpu_load": 0.4},
 }
+_RANKED_FIT = {
+    "fit_class": "good",
+    "mode": "gpu",
+    "need_gib": 7.125,
+    "weights_gib": 5.0,
+    "kv_gib": 1.125,
+    "pool_gib": 10.94,
+    "reserve_gib": 1.0,
+    "context": 8192,
+    # Schema 2 always computes with the ranking's own context, so nothing is ever assumed here.
+    "context_assumed": False,
+    "reason": None,
+}
+_NOT_COVERED_FIT = {
+    "fit_class": "unknown",
+    "mode": None,
+    "need_gib": 0.0,
+    "weights_gib": 0.0,
+    "kv_gib": 0.0,
+    "pool_gib": 0.0,
+    "reserve_gib": 0.0,
+    "context": 0,
+    "context_assumed": False,
+    "reason": "architecture not covered by v1",
+}
+_RANKED_ENTRY = {
+    "package_identity": ["huggingface", "packager/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf"],
+    "base_model_hf_repo": "acme/Nova-7B",
+    "packager": "packager",
+    "quantization": "Q4_K_M",
+    "format": "gguf",
+    "weights_gib": 5.0,
+    "package_context": None,
+    "provenance": "metadata_ok",
+    "note": {
+        "code": "measured_here",
+        "subject": "package",
+        "origin": "measured",
+        "text": "Measured on this machine: 50.4 tokens per second at a context of 8192.",
+        "facts": ["measurement.tps_mean", "measurement.scenario.context_requested"],
+    },
+    "rank": 1,
+    "fit": dict(_RANKED_FIT),
+    "measurement_group": 0,
+    "measurement_id": "20260923T083000Z-5c1e9a07",
+    "speed_tps": 50.4,
+}
+_SET_ASIDE_ENTRY = {
+    "package_identity": ["huggingface", "packager/Nova-9B-GGUF", "Nova-9B-Q4_K_M.gguf"],
+    "base_model_hf_repo": "acme/Nova-9B",
+    "packager": "packager",
+    "quantization": "Q4_K_M",
+    "format": "gguf",
+    "weights_gib": 6.4,
+    "package_context": 4096,
+    "provenance": "metadata_ok",
+    "note": {
+        "code": "not_covered",
+        "subject": "package",
+        "origin": "computed",
+        "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+        "facts": ["fit.fit_class", "fit.reason"],
+    },
+    "fit": dict(_NOT_COVERED_FIT),
+    "reason": "architecture not covered by v1",
+}
+_MACHINE_RANKING = {
+    "machine": "workstation",
+    "status": "ranked",
+    "label": "workstation",
+    "profile": deepcopy(_HARDWARE_PROFILE),
+    "reserve_ram_gib": 8.0,
+    "reserve_vram_gib": 1.0,
+    "reason": None,
+    "ranked": [deepcopy(_RANKED_ENTRY)],
+    "ranked_total": 1,
+    "not_covered": [deepcopy(_SET_ASIDE_ENTRY)],
+    "too_tight": [],
+}
 _CATALOG_MODEL = {
     "hf_repo": "acme/Nova-7B",
     "latest": False,
@@ -394,5 +473,34 @@ EXAMPLES: dict[str, dict] = {
         "origin": "computed",
         "text": "Runs in system memory only, so the best possible rating on this machine is 'good'.",
         "facts": ["fit.mode", "fit.fit_class"],
+    },
+    "RankedEntry": deepcopy(_RANKED_ENTRY),
+    "SetAsideEntry": deepcopy(_SET_ASIDE_ENTRY),
+    "MachineRanking": deepcopy(_MACHINE_RANKING),
+    "RenderDocument": {
+        "schema_version": 1,
+        "snapshot_run_at": "2026-09-22T09:00:00Z",
+        "rendered_at": "2026-09-23T09:00:00Z",
+        "base_model_count": 2,
+        "package_count": 2,
+        "scenario": dict(_SCENARIO),
+        "ranking_rule": (
+            "fit class (perfect, good, marginal), then measured group (valid comparable "
+            "measurement first), then measured speed (faster first), then quantization, then "
+            "larger weights, then package identity"
+        ),
+        "rating_unavailable": None,
+        "ratings": {"acme/Nova-7B": {"stars": 3.5, "source": "market index"}},
+        "areas": [
+            {
+                "source": "huggingface",
+                "base_model_hf_repo": "acme/Nova-7B",
+                "packager": "packager",
+                "status": "complete",
+                "last_success": "2026-09-22T09:00:00Z",
+                "error": None,
+            }
+        ],
+        "machines": [deepcopy(_MACHINE_RANKING)],
     },
 }

@@ -1486,6 +1486,14 @@ measurement was taken. This check belongs to the renderer (a later work package)
 
 ## Render (AP5)
 
+> **Superseded in part by "Render (schema 2)" below (AP9-C).** What still holds, unchanged: the
+> rating source, the lock and the ordering, the header line and the newer-document refusal, and
+> the eligibility rule. What no longer holds: the selection rule (one variant per packager), the
+> no-recommendation row, the Installed and Speed cells, the Machines table's columns and the
+> reading of schema-1 hardware profiles as a fit input -- the render computes a full ranking per
+> machine from a schema-2 profile instead. This section is kept because the parts above are
+> written out here and nowhere else.
+
 `modelroom render --config <toml>` (`cli.render_with_config(config, rating=None, now=None)` is
 the programmatic entry point, same pattern as `fetch_with_config`/`hardware_with_config`) is a
 **pure reader** of the current snapshot and every configured machine's hardware profile. It
@@ -2728,3 +2736,609 @@ never evidence:
 publisher model it resolved to; an unresolved hit is always `unknown`. `decide_age` is called
 once per distinct resolved base model in a search, not once per hit. `repo_created_at` is
 labeled "repo created" and is never read as a release date or as an age.
+
+## Render (schema 2)
+
+`modelroom render --config <toml>` (`cli.render_with_config(config, rating=None, now=None,
+scenario=None, echo=None)` is the programmatic entry point) builds **one**
+`document.RenderDocument` and hands it to three writers in `modelroom/render.py`:
+`document_markdown`, `document_json` and `document_terminal`. Nothing is computed twice, so no
+output can state a number another one does not -- a value that is not in the document is in no
+view either. This section replaces the selection rule of "Render (AP5)" above; that section
+stays for the header line, the newer-document refusal and the lock, which are unchanged.
+
+**What it reads.** The snapshot, and for every `[machines.<name>]` the schema-2 hardware profile
+its `profile` names (`<state>/hardware/<profile_id>.json`) plus that profile's measurement files
+(`read_measurements`). The old per-machine `<name>.json` is no longer read as a fit input.
+
+**Which profile a machine is rendered from** (`render.machine_profile`, pure, given
+`importer.scan_profiles` of the hardware folder):
+
+| Case | `status` | What is shown |
+|---|---|---|
+| `profile` names a readable schema-2 file | `ranked` | the ranking, computed from that profile |
+| no `profile`, but a schema-1 file `<name>.json` is there | `legacy` | the file name and the fit rule's own reason (`fit_block_reason` for `gpu_state: legacy_unknown`); nothing is written or migrated |
+| no `profile` and no such file | `no_profile` | `render.NO_PROFILE_REASON` |
+| `profile` names a file that is missing, does not read, or is still schema 1 | `no_profile` | the reason, naming the `profile_id` |
+
+A machine that is not `ranked` carries no entries at all -- there is no fit to show -- and its
+readings are deliberately not printed either: a schema-1 file's numbers came from llmfit under
+the old schema and say nothing about what schema 2 measures. One unreadable profile file is a
+`note:` line on stdout and never keeps another machine's ranking out of the document; only the
+snapshot's own `schema_version` still ends the run with exit `3`.
+
+**Eligibility** is unchanged: `provenance in ("metadata_ok", "approved")`, `complete`, `active`.
+There is no grouping and no selection any more -- **every** eligible package is ranked, and
+`_select_for_machine` (one variant per packager) and the reading of measurements embedded in a
+schema-1 profile (`_speed_cell`) are gone.
+
+**The scenario** is one context for the whole document: `scenario.context_requested` for every
+package, never a package's own `default_context` (that is shown in its own column, `unknown` when
+the package declares none). `modelroom render` always uses `measurements.default_scenario()`
+(8192, origin `default`); the guided mode passes the context the user chose. The scenario and
+`ranking.RANKING_RULE` are printed in every view.
+
+**The ranking** per machine is `ranking.rank_packages` ("Ranking rule" above): `ranked` holds the
+first `ranking.TOP_LIMIT` entries and `ranked_total` says how many there were, `not_covered`
+holds the `unknown` fits with their reason, `too_tight` the ones that do not fit. A measurement
+counts only in measured group 0, and only then are `measurement_id` and `speed_tps` set.
+
+**Provenance per value.** Every computed number carries `(computed)` in its column name
+(`Weights GiB`, `Fit`, `Need GiB`, `Pool GiB`), the measured one carries `(measured)`
+(`Speed tok/s`), and a profile's own readings carry their source in the Machines table
+(`Origin`, `RAM source`, `VRAM source`). Nothing computed is ever labeled as a measurement.
+
+**One note per package**, built from named facts only (`Note`, "Note" above): a measured entry
+gets `measured_here` with `origin: measured`; an entry without a measurement gets the note for
+its fit mode (`fits_in_graphics_memory`, `shared_between_memories`, `cpu_caps_at_good`); a
+set-aside package gets `not_covered` or `too_tight`. `facts` names the fields the text was
+derived from, so a reader can check it.
+
+**The two files.** The Markdown view goes to `config.paths.markdown` (same fixed header line,
+same newer-document refusal, same lock as "Render (AP5)"), the JSON view next to it under the
+same stem and the suffix `.json` -- `models.md` and `models.json`. The JSON view is written
+first, because the Markdown header is what a later run compares against and must only claim a
+render that produced both files. A `paths.markdown` that is itself a `.json` file is exit `2`.
+**Each file is replaced atomically; the two together are not** -- no file system this package
+targets replaces two files as one. Between the two writes a reader can see the new JSON view next
+to the old Markdown one; a failure in between is exit `1` with a message that names which of the
+two is already new, and the next render replaces both. A consumer that needs the pair consistent
+compares the Markdown header's **`rendered_at`** with the JSON view's `rendered_at`: those two are
+equal only when both files come from the same render. `snapshot_run_at` is not enough -- the same
+snapshot can be rendered twice with different contexts, and then both files agree on
+`snapshot_run_at` while their scenario and every fit differ. `echo`, when a caller passes it (the guided mode passes `print`),
+receives the terminal view; `modelroom render` passes nothing and stays silent on success.
+
+**Sections of the Markdown view**, in this order: the header line, the summary block (title,
+snapshot run time, rendered time, base model and package counts, `Scenario:`, `Ranking rule:`,
+and `Market rating unavailable: <message>` when the rating source failed), `## Areas`,
+`## Machines`, and then per machine `## Ranking: <machine>`, `## Not covered: <machine>` and
+`## Too tight: <machine>` -- the last two only when they have rows. Every machine section is a
+`##` heading, so a reader can cut the document at headings.
+
+**The terminal view** shows fewer columns than the Markdown table (a terminal is narrow):
+rank, packager, quantization, weights, fit and measured speed, then one line per note and one
+line per set-aside package. Every value comes from the same document.
+
+**Exit codes**: `0` rendered (also when the rating source failed, and also when a profile file
+was skipped), `1` the lock is held, there is no snapshot, the existing document was rendered
+from a newer snapshot, or a view could not be written, `2` the configuration is missing or
+invalid or `paths.markdown` is a `.json` file, `3` the snapshot's `schema_version` is
+unsupported or it does not read.
+
+### RankedEntry
+
+One row of one machine's ranking. `package_identity` is the package identity triple;
+`quantization` is `unknown` when the package declares none, `package_context` is `null` then.
+`measurement_group` 0 carries `measurement_id` and `speed_tps`, group 1 carries neither. The
+`fit` is always `perfect`, `good` or `marginal` -- the other two classes are set aside.
+
+```json
+{
+  "package_identity": [
+    "huggingface",
+    "packager/Nova-7B-GGUF",
+    "Nova-7B-Q4_K_M.gguf"
+  ],
+  "base_model_hf_repo": "acme/Nova-7B",
+  "packager": "packager",
+  "quantization": "Q4_K_M",
+  "format": "gguf",
+  "weights_gib": 5.0,
+  "package_context": null,
+  "provenance": "metadata_ok",
+  "note": {
+    "code": "measured_here",
+    "subject": "package",
+    "origin": "measured",
+    "text": "Measured on this machine: 50.4 tokens per second at a context of 8192.",
+    "facts": [
+      "measurement.tps_mean",
+      "measurement.scenario.context_requested"
+    ]
+  },
+  "rank": 1,
+  "fit": {
+    "fit_class": "good",
+    "mode": "gpu",
+    "need_gib": 7.125,
+    "weights_gib": 5.0,
+    "kv_gib": 1.125,
+    "pool_gib": 10.94,
+    "reserve_gib": 1.0,
+    "context": 8192,
+    "context_assumed": false,
+    "reason": null
+  },
+  "measurement_group": 0,
+  "measurement_id": "20260923T083000Z-5c1e9a07",
+  "speed_tps": 50.4
+}
+```
+
+### SetAsideEntry
+
+One package outside the ranking: an `unknown` fit (not covered) or a `too_tight` one. Same
+package fields as `RankedEntry`, plus the `reason` shown next to it.
+
+```json
+{
+  "package_identity": [
+    "huggingface",
+    "packager/Nova-9B-GGUF",
+    "Nova-9B-Q4_K_M.gguf"
+  ],
+  "base_model_hf_repo": "acme/Nova-9B",
+  "packager": "packager",
+  "quantization": "Q4_K_M",
+  "format": "gguf",
+  "weights_gib": 6.4,
+  "package_context": 4096,
+  "provenance": "metadata_ok",
+  "note": {
+    "code": "not_covered",
+    "subject": "package",
+    "origin": "computed",
+    "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+    "facts": [
+      "fit.fit_class",
+      "fit.reason"
+    ]
+  },
+  "fit": {
+    "fit_class": "unknown",
+    "mode": null,
+    "need_gib": 0.0,
+    "weights_gib": 0.0,
+    "kv_gib": 0.0,
+    "pool_gib": 0.0,
+    "reserve_gib": 0.0,
+    "context": 0,
+    "context_assumed": false,
+    "reason": "architecture not covered by v1"
+  },
+  "reason": "architecture not covered by v1"
+}
+```
+
+### MachineRanking
+
+One machine's block. `label` is the profile's `display_name`, the schema-1 file's name or the
+machine name, depending on `status`; `ranked_total` is how many packages the rule ranked in all.
+
+```json
+{
+  "machine": "workstation",
+  "status": "ranked",
+  "label": "workstation",
+  "profile": {
+    "schema_version": 2,
+    "profile_id": "3f9a0c21d4e6b870",
+    "display_name": "workstation",
+    "os_fingerprint": "9d2f4b6a8c0e1357",
+    "os_fingerprint_source": "windows_machineguid",
+    "origin": "measured",
+    "recorded_at": "2026-09-23T08:00:00Z",
+    "ram_physical_gib": 31.7,
+    "ram_physical_source": "os",
+    "ram_limit_gib": null,
+    "ram_limit_scope": "none",
+    "vram_gib": 8.0,
+    "vram_source": "nvidia-smi",
+    "gpu_state": "measured",
+    "gpu_name": "Nova GPU",
+    "llmfit_crosscheck": {
+      "ram_physical": {
+        "status": "confirmed",
+        "own_gib": 31.7,
+        "llmfit_gib": 31.9
+      },
+      "vram": {
+        "status": "confirmed",
+        "own_gib": 8.0,
+        "llmfit_gib": 8.0
+      }
+    },
+    "llmfit_version": "1.1.16"
+  },
+  "reserve_ram_gib": 8.0,
+  "reserve_vram_gib": 1.0,
+  "reason": null,
+  "ranked": [
+    {
+      "package_identity": [
+        "huggingface",
+        "packager/Nova-7B-GGUF",
+        "Nova-7B-Q4_K_M.gguf"
+      ],
+      "base_model_hf_repo": "acme/Nova-7B",
+      "packager": "packager",
+      "quantization": "Q4_K_M",
+      "format": "gguf",
+      "weights_gib": 5.0,
+      "package_context": null,
+      "provenance": "metadata_ok",
+      "note": {
+        "code": "measured_here",
+        "subject": "package",
+        "origin": "measured",
+        "text": "Measured on this machine: 50.4 tokens per second at a context of 8192.",
+        "facts": [
+          "measurement.tps_mean",
+          "measurement.scenario.context_requested"
+        ]
+      },
+      "rank": 1,
+      "fit": {
+        "fit_class": "good",
+        "mode": "gpu",
+        "need_gib": 7.125,
+        "weights_gib": 5.0,
+        "kv_gib": 1.125,
+        "pool_gib": 10.94,
+        "reserve_gib": 1.0,
+        "context": 8192,
+        "context_assumed": false,
+        "reason": null
+      },
+      "measurement_group": 0,
+      "measurement_id": "20260923T083000Z-5c1e9a07",
+      "speed_tps": 50.4
+    }
+  ],
+  "ranked_total": 1,
+  "not_covered": [
+    {
+      "package_identity": [
+        "huggingface",
+        "packager/Nova-9B-GGUF",
+        "Nova-9B-Q4_K_M.gguf"
+      ],
+      "base_model_hf_repo": "acme/Nova-9B",
+      "packager": "packager",
+      "quantization": "Q4_K_M",
+      "format": "gguf",
+      "weights_gib": 6.4,
+      "package_context": 4096,
+      "provenance": "metadata_ok",
+      "note": {
+        "code": "not_covered",
+        "subject": "package",
+        "origin": "computed",
+        "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+        "facts": [
+          "fit.fit_class",
+          "fit.reason"
+        ]
+      },
+      "fit": {
+        "fit_class": "unknown",
+        "mode": null,
+        "need_gib": 0.0,
+        "weights_gib": 0.0,
+        "kv_gib": 0.0,
+        "pool_gib": 0.0,
+        "reserve_gib": 0.0,
+        "context": 0,
+        "context_assumed": false,
+        "reason": "architecture not covered by v1"
+      },
+      "reason": "architecture not covered by v1"
+    }
+  ],
+  "too_tight": []
+}
+```
+
+### RenderDocument
+
+Everything one render says. `ratings` holds the rating of every base model the `RatingSource`
+answered for; a base model that is not a key has no rating. A failed rating source sets
+`rating_unavailable` to its message and leaves `ratings` empty, and the run still ends `0`.
+
+```json
+{
+  "schema_version": 1,
+  "snapshot_run_at": "2026-09-22T09:00:00Z",
+  "rendered_at": "2026-09-23T09:00:00Z",
+  "base_model_count": 2,
+  "package_count": 2,
+  "scenario": {
+    "context_requested": 8192,
+    "context_origin": "default",
+    "kv_type": "f16",
+    "kv_type_assumed": true,
+    "requests": 1
+  },
+  "ranking_rule": "fit class (perfect, good, marginal), then measured group (valid comparable measurement first), then measured speed (faster first), then quantization, then larger weights, then package identity",
+  "rating_unavailable": null,
+  "ratings": {
+    "acme/Nova-7B": {
+      "stars": 3.5,
+      "source": "market index"
+    }
+  },
+  "areas": [
+    {
+      "source": "huggingface",
+      "base_model_hf_repo": "acme/Nova-7B",
+      "packager": "packager",
+      "status": "complete",
+      "last_success": "2026-09-22T09:00:00Z",
+      "error": null
+    }
+  ],
+  "machines": [
+    {
+      "machine": "workstation",
+      "status": "ranked",
+      "label": "workstation",
+      "profile": {
+        "schema_version": 2,
+        "profile_id": "3f9a0c21d4e6b870",
+        "display_name": "workstation",
+        "os_fingerprint": "9d2f4b6a8c0e1357",
+        "os_fingerprint_source": "windows_machineguid",
+        "origin": "measured",
+        "recorded_at": "2026-09-23T08:00:00Z",
+        "ram_physical_gib": 31.7,
+        "ram_physical_source": "os",
+        "ram_limit_gib": null,
+        "ram_limit_scope": "none",
+        "vram_gib": 8.0,
+        "vram_source": "nvidia-smi",
+        "gpu_state": "measured",
+        "gpu_name": "Nova GPU",
+        "llmfit_crosscheck": {
+          "ram_physical": {
+            "status": "confirmed",
+            "own_gib": 31.7,
+            "llmfit_gib": 31.9
+          },
+          "vram": {
+            "status": "confirmed",
+            "own_gib": 8.0,
+            "llmfit_gib": 8.0
+          }
+        },
+        "llmfit_version": "1.1.16"
+      },
+      "reserve_ram_gib": 8.0,
+      "reserve_vram_gib": 1.0,
+      "reason": null,
+      "ranked": [
+        {
+          "package_identity": [
+            "huggingface",
+            "packager/Nova-7B-GGUF",
+            "Nova-7B-Q4_K_M.gguf"
+          ],
+          "base_model_hf_repo": "acme/Nova-7B",
+          "packager": "packager",
+          "quantization": "Q4_K_M",
+          "format": "gguf",
+          "weights_gib": 5.0,
+          "package_context": null,
+          "provenance": "metadata_ok",
+          "note": {
+            "code": "measured_here",
+            "subject": "package",
+            "origin": "measured",
+            "text": "Measured on this machine: 50.4 tokens per second at a context of 8192.",
+            "facts": [
+              "measurement.tps_mean",
+              "measurement.scenario.context_requested"
+            ]
+          },
+          "rank": 1,
+          "fit": {
+            "fit_class": "good",
+            "mode": "gpu",
+            "need_gib": 7.125,
+            "weights_gib": 5.0,
+            "kv_gib": 1.125,
+            "pool_gib": 10.94,
+            "reserve_gib": 1.0,
+            "context": 8192,
+            "context_assumed": false,
+            "reason": null
+          },
+          "measurement_group": 0,
+          "measurement_id": "20260923T083000Z-5c1e9a07",
+          "speed_tps": 50.4
+        }
+      ],
+      "ranked_total": 1,
+      "not_covered": [
+        {
+          "package_identity": [
+            "huggingface",
+            "packager/Nova-9B-GGUF",
+            "Nova-9B-Q4_K_M.gguf"
+          ],
+          "base_model_hf_repo": "acme/Nova-9B",
+          "packager": "packager",
+          "quantization": "Q4_K_M",
+          "format": "gguf",
+          "weights_gib": 6.4,
+          "package_context": 4096,
+          "provenance": "metadata_ok",
+          "note": {
+            "code": "not_covered",
+            "subject": "package",
+            "origin": "computed",
+            "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+            "facts": [
+              "fit.fit_class",
+              "fit.reason"
+            ]
+          },
+          "fit": {
+            "fit_class": "unknown",
+            "mode": null,
+            "need_gib": 0.0,
+            "weights_gib": 0.0,
+            "kv_gib": 0.0,
+            "pool_gib": 0.0,
+            "reserve_gib": 0.0,
+            "context": 0,
+            "context_assumed": false,
+            "reason": "architecture not covered by v1"
+          },
+          "reason": "architecture not covered by v1"
+        }
+      ],
+      "too_tight": []
+    }
+  ]
+}
+```
+
+## Guided mode
+
+`modelroom` with **no subcommand** is the guided mode (`modelroom/guided.py`): a configuration
+generator over the three commands. It asks, writes `modelroom.toml`, and then calls exactly the
+functions `hardware`, `fetch` and `render` call -- there is no second way of computing anything.
+`hardware`, `fetch`, `render`, `migrate`, `export-profile` and `import-profile` never ask a
+question.
+
+**The terminal rule.** Without an interactive terminal on both ends (`dialog.is_interactive`)
+the guided mode prints the help to stderr and exits `2` -- it never falls back to a default
+answer. The one exception is `modelroom --answers <file>`: then the answers come from that file
+and everything else is unchanged, the same steps in the same order with the same output.
+`--answers` together with a subcommand is exit `2`.
+
+**Ending the dialog.** Ctrl-C is exit `130`, an end of input exit `2`. Neither leaves a
+half-written file: every write is atomic (`atomic_write_json`/`atomic_write_text`), every write
+of the configuration, a profile, a measurement or the snapshot happens under `modelroom.lock`,
+and no write is started in the middle of a question.
+
+**Which folder.** `--config <path>` wins over the pointer file's `current`. A `--config` that
+names no file, and a remembered folder that no longer holds a `modelroom.toml`, are said out
+loud and the folder question is asked again -- neither is silently replaced by a new folder.
+
+**The steps and their questions.** Every question has a key, which is also its key in the
+answer file:
+
+| # | Key | Question | Answer |
+|---|---|---|---|
+| 0 | `results` | Where should results live? | `here` or `path` |
+| 0 | `results_path` | Path to the results folder | text (only after `path`) |
+| 0 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
+| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import` |
+| 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
+| 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`) |
+| 2 | `search` | What are you looking for? | text |
+| 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
+| 2 | `select` | Which of these models should the result cover? | a list of repository ids |
+| 2 | `context` | How much context should the ranking assume? | a whole number, default 8192 |
+
+**Every write reads the file again first.** The dialog takes as long as the user takes, so the
+configuration is read again immediately before it is changed and written -- an entry another
+process added in between (an `import-profile` on a shared folder) is otherwise thrown away by the
+copy this run loaded at the start. The remaining window is the one `write_configuration` has
+anyway, between its own read-back check and the lock.
+
+**Profiles the folder already holds get a machine entry.** The render computes one ranking per
+configured machine, so a profile that no `[machines.<name>]` names would be left out of the
+result. Whenever the guided mode has a configuration in hand, every profile in the folder without
+an entry gets one, by the same rule `import-profile` uses (name from the `display_name`, reserves
+from `[defaults]`, `writer = false`).
+
+**Step 0, the results folder.** A new `modelroom.toml` is written with `schema_version = 2`,
+families empty, `packagers` empty (the search writes every resolved repository as an
+owner-bound `repos` target, so a speculative `<packager>/<name>-GGUF` probe under five accounts
+per base model would only spend the shared request budget), this device as `[machines.<host>]`
+with `writer = true`, `paths.state = <folder>/state`, `paths.markdown = <folder>/docs/models.md`
+and `[guided].results = <folder>`. The folder is remembered in the pointer file. A
+`modelroom.toml` of schema 1 in the folder is migrated first (`modelroom migrate`, under the
+lock, backup kept, idempotent), before anything is written. A folder that already holds results
+but no `modelroom.toml` is a question, never an assumption.
+
+**Step 1, the machines.** The list is built from every profile file in the results folder
+(`scan_profiles`), grouped by hardware class (GPU, VRAM, RAM) with the count and the names,
+alphabetical. The group is a matter of operation only -- the ranking is computed per device.
+Those entries are shown and cannot be picked: they are already part of the result. So are the
+schema-1 files (`run modelroom migrate`), the files that do not read (with their reason), and
+`enter a machine by hand` (`stage 2`). The two entries that can be picked are `this machine
+(measure now)` and `import a profile file`.
+
+`this machine (measure now)` makes sure `[machines.<host>]` exists and is a writer -- this
+machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the
+results folder as the binding key. The takeover rule decides which profile is written
+(`resolve_profile_target`, "Profile binding"); its `ask_clone` case is the `clone` question, and
+the local fingerprint for it is read on its own (`measure.read_os_identity`), so the question
+comes before the measurement. `a clone` measures as a new identity; `the same machine` measures
+nothing in this run and says what to do (put the profile file back, or import it). After a
+measurement the guided mode writes `[machines.<name>].profile` -- the one configuration write
+`hardware` leaves to it. `import a profile file` runs `import-profile`, which never changes the
+binding; a file that does not import is reported and the run goes on.
+
+**Step 2, search, choice and context.** `run_search` with the run's shared request budget
+(`DEFAULT_GUIDED_BUDGET`, 60, shared with the fetch), then the summary line
+(`SearchOutcome.summary_line`), one line per unresolved hit with its reason, and the selection
+list of the resolved hits with seven facts each: repository, owner class, `repo created`, size,
+license, `latest`/`legacy`/`unknown` and the Ollama name or `none known`. With `filter_owners`
+on, a hit whose owner class is `other` is shown but cannot be picked. The chosen hits go through
+`apply_hits` into the configuration, which is written with `write_configuration`. A hit whose
+base model the shipped catalog has no family for gets the family name `search.family_name_for`
+derives from the repository name; the guided mode does not ask for one. The `context` answer is
+the one context of the whole ranking (`Scenario`, origin `default` at 8192, `entered`
+otherwise); anything that is not a whole number above zero ends the run with exit `2`.
+
+**Steps 3 to 5.** `fetch_with_config` with the same budget object (nothing configured yet means
+nothing to fetch, said out loud), then the load test's place -- work package E; the step prints
+`load test: not part of stage C` -- and then `render_with_config` with the chosen scenario, which
+writes both views and prints the terminal one.
+
+**The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
+question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question
+with no answer ends the run with exit `2` and names the question; an answer that is not one of
+the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
+exit `3`.
+
+```toml
+# modelroom guided answers
+schema_version = 1
+results = "here"
+machines = ["this-machine"]
+search = "qwen"
+filter_owners = true
+select = ["unsloth/Qwen3.5-9B-GGUF"]
+context = "8192"
+```
+
+**A step that did not do what it was asked does not end the run.** A measurement that failed, a
+`fetch` that did not complete, an import that did not go through, a `the same machine` answer with
+no profile to measure into: each is said out loud and the run goes on with what is there -- one
+machine's trouble must not cost the ranking of the others. **The exit code still says so:** a run
+that wrote its document but had such a step ends with `1`, not `0`, and prints how many steps did
+not finish. Only a run in which every step did what it was asked ends with `0`.
+
+**Exit codes**: `0` a document was written and every step finished, `1` another process holds the
+lock, there was nothing to render, or a step did not finish, `2` no terminal and no `--answers`,
+an end of input, a missing or unusable answer, or a step that cannot go on at all (the message
+says which), `3` a stored file's `schema_version` is unsupported or a stored file does not read,
+`130` Ctrl-C. A failure of a stored file keeps the exit code the command that owns it would give:
+the guided mode does not flatten `SchemaVersionError`, `MigrationError`, `PointerFileError` or a
+held lock into its own `2`.

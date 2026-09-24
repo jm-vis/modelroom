@@ -21,6 +21,11 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.11,<3",
+    # The guided mode's terminal dialog (selection lists with check marks), MIT, on
+    # prompt_toolkit (BSD). Imported only by `modelroom/dialog.py`; the three automation
+    # commands and every pure module run without it. Gate for the pin: AGENTS.md,
+    # "Terminal dialog library".
+    "questionary>=2.1,<3",
 ]
 
 [project.scripts]

@@ -79,6 +79,21 @@ class GuidedPointer(BaseModel):
             }
         )
 
+    def with_current(self, results_dir: Path) -> "GuidedPointer":
+        """A copy whose `current` is `results_dir`; the bindings stay as they are.
+
+        The guided mode remembers the folder it wrote a configuration in before anything has
+        been measured there, so the next run finds it without asking again; the binding follows
+        only when a measurement really produced a profile (`with_binding`).
+        """
+        return GuidedPointer.model_validate(
+            {
+                "schema_version": POINTER_SCHEMA_VERSION,
+                "current": str(results_dir),
+                "bindings": dict(self.bindings),
+            }
+        )
+
 
 def read_pointer(path: Path) -> GuidedPointer:
     """The pointer file at `path`; an empty pointer when it does not exist yet.

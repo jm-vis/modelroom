@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from modelroom.binding import GuidedPointer
 from modelroom.catalog import Catalog, CatalogFamily, CatalogModel
+from modelroom.document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from modelroom.examples import EXAMPLES
 from modelroom.guided_contracts import Note, Requirement, SearchHit
 from modelroom.measurements import ExportObject, LoadState, MeasurementRecord, PackageRef, RunCounters, Scenario
@@ -77,6 +78,12 @@ MODEL_CLASSES = {
     "SearchHit": SearchHit,
     "Requirement": Requirement,
     "Note": Note,
+    # The render document (AP9-C): one object per render, three writers (CONTRACTS.md,
+    # "Render (schema 2)").
+    "RankedEntry": RankedEntry,
+    "SetAsideEntry": SetAsideEntry,
+    "MachineRanking": MachineRanking,
+    "RenderDocument": RenderDocument,
 }
 
 _NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)

@@ -7,6 +7,23 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- `modelroom` with no subcommand is the guided mode (CONTRACTS.md, "Guided mode"): it asks where
+  results should live, migrates and writes `modelroom.toml` with this device as the writer,
+  measures this machine or imports a profile, searches Hugging Face, takes the selection and the
+  context, fetches and renders -- calling exactly the functions the three commands call, with no
+  second way of computing anything. Without an interactive terminal it prints the help and exits
+  `2`; `modelroom --answers <file>` takes the dialog's answers from TOML instead (for a self-test
+  or CI), Ctrl-C is exit `130` and an end of input exit `2`, neither leaving a half-written file.
+- The terminal dialog is `questionary` (MIT) on `prompt_toolkit` (BSD), imported by
+  `modelroom/dialog.py` and nowhere else, pinned after a gate in PowerShell 5.1 under both the
+  Windows console host and Windows Terminal (AGENTS.md, "Terminal dialog library").
+- `render` writes a JSON view next to the Markdown one, under the same stem: both come from one
+  `document.RenderDocument`, so no output can state a number another one does not. The document
+  is a contract of its own (`RankedEntry`, `SetAsideEntry`, `MachineRanking`, `RenderDocument`).
+- `scripts/selftest.py`: the acceptance run of the guided mode, one step per criterion of the
+  plan, twice through `--answers` against the pinned search answer, with the real measurement of
+  this machine and the live search as a smoke that decides nothing. It moves its home folder into
+  a temporary tree and refuses to start if the pointer file would land anywhere else.
 - Schema 2 contracts for the guided mode (CONTRACTS.md, "Schema 2: profiles, measurements,
   guided mode"): hardware profile v2 keyed by a random `profile_id` with a source for every
   memory value, a GPU state and an llmfit cross-check; scenario, measurement records as their
@@ -52,6 +69,38 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- `render` reads schema 2 and ranks: per `[machines.<name>]` it takes the profile that
+  `profile` names, computes `compute_fit_v2` for **every** eligible package against one context
+  for the whole document (`Scenario`, 8192 unless the guided mode passes another), and shows the
+  full ranking per machine (top ten, with the total), a `not covered` block and a `too tight`
+  block, each with its reason and one plain-language note per package built from named facts.
+  The selection rule (one variant per packager), the no-recommendation row, the Installed column
+  and the Speed column that read measurements embedded in a schema-1 profile are gone; speeds now
+  come from the measurement files of that profile. A machine whose profile is a schema-1 file is
+  shown as `legacy` with the fit rule's own reason and nothing is persisted; a hardware file that
+  does not read is a `note:` line instead of ending the whole render with exit `3`.
+- `fetch_with_config` takes the request budget the caller already spent on, so the guided run's
+  search and its fetch share one budget.
+- `scripts/release-smoke.py` no longer places a schema-1 profile for the renderer: it names the
+  profile `modelroom hardware` just measured in `[machines.<name>].profile`, the one write the
+  guided mode does, and then checks the ranking header, the not-covered block and that the JSON
+  view agrees with the Markdown one.
+- `render` reads schema 2 and ranks: per `[machines.<name>]` it takes the profile that
+  `profile` names, computes `compute_fit_v2` for **every** eligible package against one context
+  for the whole document (`Scenario`, 8192 unless the guided mode passes another), and shows the
+  full ranking per machine (top ten, with the total), a `not covered` block and a `too tight`
+  block, each with its reason and one plain-language note per package built from named facts.
+  The selection rule (one variant per packager), the no-recommendation row, the Installed column
+  and the Speed column that read measurements embedded in a schema-1 profile are gone; speeds now
+  come from the measurement files of that profile. A machine whose profile is a schema-1 file is
+  shown as `legacy` with the fit rule's own reason and nothing is persisted; a hardware file that
+  does not read is a `note:` line instead of ending the whole render with exit `3`.
+- `fetch_with_config` takes the request budget the caller already spent on, so the guided run's
+  search and its fetch share one budget.
+- `scripts/release-smoke.py` no longer places a schema-1 profile for the renderer: it names the
+  profile `modelroom hardware` just measured in `[machines.<name>].profile`, the one write the
+  guided mode does, and then checks the ranking header, the not-covered block and that the JSON
+  view agrees with the Markdown one.
 - `modelroom hardware` writes a schema-2 profile `<state>/hardware/<profile_id>.json` from its
   own measurement and binds this machine in the pointer file; `--machine` is now optional and
   `--cpu-only`/`--new-identity` are new. `llmfit` is a cross-check of the physical RAM and the

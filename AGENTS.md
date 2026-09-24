@@ -8,15 +8,46 @@ ever appear) import this one and stay thin; the truth lives here.
 `modelroom` finds the local packages (GGUF and tensor builds) that exist for an allow-list of
 model families on Hugging Face and in the Ollama registry, and computes whether each package
 fits a measured machine. It is a command-line tool and a small library, published under MIT.
-Status: alpha, first release 0.1.0; `fetch`, `hardware` and `render` work end to end, the data shapes
-are versioned contracts (`CONTRACTS.md`), layout and fit rules may still change.
+Status: alpha, first release 0.1.0; the data shapes are versioned contracts (`CONTRACTS.md`),
+layout and fit rules may still change.
+
+The commands:
+
+| Command | What it does |
+|---|---|
+| `modelroom` | the guided mode: asks, writes `modelroom.toml`, then runs the three commands below (`CONTRACTS.md`, "Guided mode") |
+| `modelroom --answers <file>` | the same run with the dialog's answers from a TOML file, for a self-test or CI |
+| `modelroom --config <file>` | the guided mode on that configuration, rather than the folder it last used |
+| `modelroom hardware --config <file> [--machine <name>] [--cpu-only] [--new-identity]` | measure this machine and write its schema-2 profile |
+| `modelroom fetch --config <file> --machine <name>` | fetch package metadata for every configured base model |
+| `modelroom render --config <file>` | write the ranking per machine: Markdown, and the JSON view next to it |
+| `modelroom migrate --config <file>` | move schema-1 profiles and configuration to schema 2 |
+| `modelroom export-profile --config <file> [--profile <id>] --out <file>` | write one machine's profile and measurements to a file |
+| `modelroom import-profile <file> --config <file>` | read such a file into this results folder |
+
+Only the guided mode ever asks a question; every subcommand runs without a terminal.
 
 ## Stack and language choice
 
 Python (3.11 or newer), because the catalog logic and Pydantic contracts it integrates with are
-Python and the run has to be platform neutral. Dependencies are kept to the standard library
-plus `pydantic`; `llmfit` is an external tool called as a subprocess, never vendored. Everything
-in this repository is English; the next section says which English, and which words.
+Python and the run has to be platform neutral. Dependencies are kept to the standard library,
+`pydantic` and `questionary`; `llmfit` is an external tool called as a subprocess, never
+vendored. Everything in this repository is English; the next section says which English, and
+which words.
+
+### Terminal dialog library
+
+The guided mode's selection lists with check marks are `questionary` (MIT) on `prompt_toolkit`
+(BSD), imported by `modelroom/dialog.py` and by nothing else -- every other module and all six
+subcommands run without it. No dialog layer is written by hand.
+
+The pin follows a gate, never convenience: the candidate has to render and read real keys in
+every terminal a user of this package may sit at. Measured 2026-09-24 with `questionary` 2.1.1
+on `prompt_toolkit` 3.0.53, PowerShell 5.1, key events written into the console input buffer
+(`WriteConsoleInputW` on `CONIN$`, the same buffer a keyboard fills) and read back through
+prompt_toolkit's own Win32 input: Windows console host (`conhost`) **pass**, Windows Terminal
+**pass**. A Linux SSH session with a PTY is not part of that measurement and is open. Without a
+passed gate there is no pin.
 
 Package manager is `uv`. `uv.lock` is committed and is the truth for dependency versions;
 install with `uv sync --frozen`. To raise a dependency: `uv lock --upgrade-package <name>`,
@@ -72,8 +103,10 @@ exception list carries a reason per entry and has to shrink, never grow quietly.
   could not bind this machine to it), `2` the configuration is missing or
   invalid, the named machine is not a writer (`fetch`) or not configured at all (`hardware`),
   `hardware`'s bound profile belongs to another machine, or an external tool a command requires
-  is missing or too old, `3` an input file has an unsupported schema version. Details:
-  `CONTRACTS.md`.
+  is missing or too old, `3` an input file has an unsupported schema version. The guided mode
+  adds two of its own: `2` as well when there is no terminal and no `--answers`, when the input
+  ends, or when an answer is missing or unusable, and `130` when the user presses Ctrl-C.
+  Details: `CONTRACTS.md`.
 
 ## Hard boundaries
 

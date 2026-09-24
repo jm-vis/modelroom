@@ -18,6 +18,8 @@ if sys.platform == "win32":
 else:
     import fcntl
 
+from pydantic import ValidationError
+
 from .config import Configuration
 from .contracts import (
     Area,
@@ -279,6 +281,40 @@ def load_existing_snapshot(config: Configuration) -> Snapshot | None:
     if not isinstance(data, dict):
         raise StateFileShapeError(f"{path}: expected a JSON object at the root, got {type(data).__name__}")
     return load_snapshot(data)
+
+
+class UnreadableStateFileError(Exception):
+    """A stored snapshot is not valid JSON, or does not match its model (P2-3).
+
+    `load_existing_snapshot` lets `json.JSONDecodeError`, pydantic `ValidationError`,
+    `StateFileShapeError` and `UnicodeDecodeError` propagate unchanged (only
+    `SchemaVersionError` is its own); `read_snapshot` below catches those four and raises this
+    instead, naming the file, so every load site maps it to exit `3` exactly like
+    `SchemaVersionError` -- a corrupt or wrong-shape file must never crash a command with an
+    uncaught exception (probe: a naive `Snapshot.run_at`, before P2-3's contract fix, validated
+    fine and then blew up `check_run_is_newer` with an uncaught `TypeError`; a truncated file or
+    one missing required fields did the same via `JSONDecodeError`/`ValidationError`; R7-3: a
+    JSON root of `[]`/`null`/a bare string did the same via an uncaught `AttributeError` inside
+    `contracts.load_snapshot`, and a file that is not valid UTF-8 via `UnicodeDecodeError`).
+    """
+
+
+def read_snapshot(config: Configuration) -> Snapshot | None:
+    """`load_existing_snapshot`, wrapping a corrupt or wrong-shape file with its path (P2-3).
+
+    The one snapshot reader every command uses (`fetch` in `modelroom/cli.py`, `render` in
+    `modelroom/render_cmd.py`), so a broken file reads the same way and names the same path
+    wherever it is met.
+    """
+    try:
+        return load_existing_snapshot(config)
+    except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError, OSError) as exc:
+        # `OSError` as well (found by the second-model review of AP9-C, and true of this reader
+        # since AP3): `load_existing_snapshot` checks `Path.exists()` and then reads, so a folder
+        # named `modelroom.json`, a file without read permission or a race between the two raised
+        # an `IsADirectoryError`/`PermissionError`/`FileNotFoundError` straight out of `fetch` and
+        # `render` -- a traceback where the contract promises a message and exit `3`.
+        raise UnreadableStateFileError(f"{config.paths.snapshot_file}: cannot read snapshot: {exc}") from exc
 
 
 def write_snapshot(config: Configuration, data: dict) -> Snapshot:

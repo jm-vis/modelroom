@@ -1,14 +1,15 @@
-"""Tests for modelroom.render: the pure Markdown document builder for `modelroom render`.
+"""Tests for modelroom.render: the schema-2 render document and its three writers.
 
-Every fixture here is built in memory (no I/O), the same convention as `tests/test_fit.py` --
-`build_document` takes a `Configuration`, a `Snapshot`, a `{machine: HardwareSnapshot | None}`
-mapping and `rendered_at`, and returns Markdown text. See CONTRACTS.md, "Render (AP5)", for the
-header format, eligibility, selection and cell rules this file checks against.
+Every fixture here is built in memory (no I/O), the same convention as `tests/test_fit.py`:
+`build_render_document` takes a `Configuration`, a `Snapshot`, one `MachineProfile` per
+configured machine, that profile's measurement records, a `Scenario` and `rendered_at`, and
+returns the one `RenderDocument` all three writers read. See CONTRACTS.md, "Render (schema 2)".
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timezone
 
 import pytest
 
@@ -18,24 +19,33 @@ from modelroom.contracts import (
     Area,
     BaseModelSpec,
     HardwareSnapshot,
-    InstalledModel,
-    Measurement,
     Package,
     PackageFile,
     Rating,
     Snapshot,
 )
+from modelroom.document import RenderDocument
+from modelroom.importer import ProfileScan
+from modelroom.measurements import MeasurementRecord, PackageRef, RunCounters, Scenario, default_scenario
+from modelroom.profile import CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason, normalize_profile_v1
+from modelroom.ranking import RANKING_RULE, TOP_LIMIT
 from modelroom.render import (
+    LEGACY_FIT_REASON,
+    NO_PROFILE_REASON,
+    MachineProfile,
     RatingUnavailableError,
-    _cell,
-    build_document,
+    build_render_document,
+    document_json,
     format_header_line,
+    machine_profile,
     parse_header_line,
 )
+from modelroom.views import _cell, document_markdown, document_terminal
 
 NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
 RENDERED_AT = datetime(2026, 9, 22, 10, 0, 0, tzinfo=timezone.utc)
 GIB = 1024**3
+PROFILE_ID = "3f9a0c21d4e6b870"
 
 
 # --- fixtures shared by every test in this module -------------------------------------------
@@ -107,74 +117,105 @@ def _hf_package(
     )
 
 
-def _ollama_package(
-    *,
-    weights_bytes: int = 5 * GIB,
-    quantization: str = "Q4_K_M",
-    tag: str = "8b-q4_K_M",
-    manifest_digest: str = "sha256:" + "b" * 64,
-    active: bool = True,
-) -> Package:
-    files = [PackageFile(name=f"nova:{tag}", role="weights", size_bytes=weights_bytes, digest=None)]
-    return Package(
-        source="ollama",
-        ollama_name=f"nova:{tag}",
-        manifest_digest=manifest_digest,
-        base_model_hf_repo="acme/Nova-8B",
-        format="gguf",
-        files=files,
-        complete=True,
-        quantization=quantization,
-        default_context=None,
-        provenance="metadata_ok",
-        unresolved_reason=None,
-        approval=None,
-        observed_at=NOW,
-        last_seen=NOW,
-        active=active,
+def _profile(*, vram_gib: float = 11.94, ram_gib: float = 127.46, profile_id: str = PROFILE_ID) -> HardwareProfile:
+    absent = CrossCheck(status="absent")
+    return HardwareProfile(
+        schema_version=2,
+        profile_id=profile_id,
+        display_name="workstation",
+        os_fingerprint="9d2f4b6a8c0e1357",
+        os_fingerprint_source="windows_machineguid",
+        origin="measured",
+        recorded_at=NOW,
+        ram_physical_gib=ram_gib,
+        ram_physical_source="os",
+        ram_limit_gib=None,
+        ram_limit_scope="none",
+        vram_gib=vram_gib,
+        vram_source="nvidia-smi" if vram_gib else "none",
+        gpu_state="measured" if vram_gib else "none",
+        gpu_name="Nova GPU" if vram_gib else None,
+        llmfit_crosscheck=LlmfitCrosscheck(ram_physical=absent, vram=absent),
+        llmfit_version=None,
     )
 
 
-def _hardware(
-    *,
-    vram_gib: float = 11.94,
-    ram_gib: float = 127.46,
-    measured_at: datetime = NOW,
-    installed: list[InstalledModel] | None = None,
-    installed_unavailable_reason: str | None = "not queried in this test",
-    measurements: list[Measurement] | None = None,
-) -> HardwareSnapshot:
+def _legacy_snapshot() -> HardwareSnapshot:
     return HardwareSnapshot(
         schema_version=1,
         machine="workstation",
-        measured_at=measured_at,
+        measured_at=NOW,
         llmfit_version="1.1.16",
-        vram_gib=vram_gib,
-        ram_gib=ram_gib,
+        vram_gib=11.94,
+        ram_gib=127.46,
         free_ram_gib_at_measurement=None,
-        gpu_name="Nova GPU" if vram_gib else None,
-        backend="CUDA" if vram_gib else None,
+        gpu_name="Nova GPU",
+        backend="CUDA",
         unified_memory=False,
-        installed=installed,
-        installed_unavailable_reason=None if installed is not None else installed_unavailable_reason,
-        measurements=measurements or [],
+        installed=None,
+        installed_unavailable_reason="not queried in this test",
+        measurements=[],
     )
 
 
-def _config(machines: dict[str, MachineConfig] | None = None) -> Configuration:
+def _measurement(package: Package, *, tps: float = 50.0, context: int = 8192, token: str = "4da3b585"):
+    eval_duration = round(128 / tps * 1e9)
+    run = RunCounters(
+        done_reason="length",
+        eval_count=128,
+        eval_duration=eval_duration,
+        prompt_eval_count=42,
+        prompt_eval_duration=90000000,
+        load_duration=12000000,
+    )
+    measured_at = datetime(2026, 9, 22, 20, 20, 0, tzinfo=timezone.utc)
+    digest = next(f.digest for f in package.files if f.digest)
+    return MeasurementRecord(
+        schema_version=2,
+        measurement_id=f"{measured_at.strftime('%Y%m%dT%H%M%SZ')}-{token}",
+        profile_id=PROFILE_ID,
+        protocol="v1",
+        measured_at=measured_at,
+        package=PackageRef(
+            content_source="huggingface",
+            hf_repo=package.repo,
+            hf_revision=package.revision,
+            hf_file_digest=digest,
+        ),
+        scenario=Scenario(
+            context_requested=context,
+            context_origin="default" if context == 8192 else "entered",
+            kv_type="f16",
+            kv_type_assumed=True,
+            requests=1,
+        ),
+        runs=[run, run, run],
+        tps_mean=run.tokens_per_second(),
+        tps_min=run.tokens_per_second(),
+        tps_max=run.tokens_per_second(),
+        validity="valid",
+        validity_reason=None,
+        comparable=True,
+        comparable_reason=None,
+    )
+
+
+def _config(machines: dict[str, MachineConfig | dict] | None = None) -> Configuration:
     return Configuration.from_dict(
         {
-            "schema_version": 1,
-            "families": [
-                {
-                    "name": "nova",
-                    "base_models": [{"hf_repo": "acme/Nova-8B"}],
-                }
-            ],
+            "schema_version": 2,
+            "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-8B"}]}],
             "packagers": ["packager"],
             "publishers": ["acme"],
             "machines": machines
-            or {"workstation": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": True}},
+            or {
+                "workstation": {
+                    "reserve_ram_gib": 16.0,
+                    "reserve_vram_gib": 1.0,
+                    "writer": True,
+                    "profile": PROFILE_ID,
+                }
+            },
             "paths": {"state": "//models/state", "markdown": "//models/models.md"},
         }
     )
@@ -194,16 +235,36 @@ def _snapshot(packages: list[Package], *, base_models: list[BaseModelSpec] | Non
                 error=None,
             )
         ],
-        base_models=base_models or [_base_model()],
+        base_models=[_base_model()] if base_models is None else base_models,
         packages=packages,
     )
 
 
-def _render(packages, *, machines=None, hardware_by_machine=None, rating_source=None) -> str:
+def _ready(profile: HardwareProfile | None = None) -> MachineProfile:
+    found = profile or _profile()
+    return MachineProfile(status="ranked", label=found.display_name, profile=found, reason=None)
+
+
+def _document(
+    packages,
+    *,
+    machines=None,
+    profiles=None,
+    measurements=None,
+    scenario: Scenario | None = None,
+    rating_source=None,
+    base_models=None,
+) -> RenderDocument:
     config = _config(machines)
-    snapshot = _snapshot(packages)
-    hardware_by_machine = hardware_by_machine if hardware_by_machine is not None else {"workstation": _hardware()}
-    return build_document(config, snapshot, hardware_by_machine, RENDERED_AT, rating_source)
+    return build_render_document(
+        config,
+        _snapshot(packages, base_models=base_models),
+        profiles if profiles is not None else {"workstation": _ready()},
+        measurements or {},
+        scenario or default_scenario(),
+        RENDERED_AT,
+        rating_source,
+    )
 
 
 # --- header line: format/parse round-trip ---------------------------------------------------
@@ -211,9 +272,9 @@ def _render(packages, *, machines=None, hardware_by_machine=None, rating_source=
 
 def test_header_line_round_trips():
     line = format_header_line(NOW, RENDERED_AT)
-    parsed = parse_header_line(line + "\n# Model packages\n")
-    assert parsed.snapshot_run_at == NOW
-    assert parsed.rendered_at == RENDERED_AT
+    header = parse_header_line(line + "\n\n# Model packages\n")
+    assert header is not None
+    assert (header.snapshot_run_at, header.rendered_at) == (NOW, RENDERED_AT)
 
 
 def test_parse_header_line_returns_none_for_a_file_without_the_header():
@@ -224,350 +285,278 @@ def test_parse_header_line_returns_none_for_an_empty_file():
     assert parse_header_line("") is None
 
 
-# --- F4 (fix-round 5, own finding at the AP5 acceptance): a naive header timestamp is None --
-#
-# `datetime.fromisoformat` happily parses a timestamp with no UTC offset; before this fix
-# `parse_header_line` returned a `HeaderInfo` carrying naive datetimes, and
-# `cli.py::_refusal_against_existing_document`'s `header.snapshot_run_at <= new_snapshot_run_at`
-# then raised `TypeError: can't compare offset-naive and offset-aware datetimes` (the new
-# snapshot's `run_at` is always aware since P2-3). CONTRACTS.md, "Header and the newer-document
-# refusal", documents a header with a naive timestamp as `None`, same as no header at all.
-
-
-def test_parse_header_line_returns_none_for_a_naive_snapshot_run_at():
-    line = "<!-- modelroom render: snapshot_run_at=2026-09-22T09:00:00 rendered_at=2026-09-22T10:00:00+00:00 -->"
-    assert parse_header_line(line + "\n") is None
-
-
-def test_parse_header_line_returns_none_for_a_naive_rendered_at():
-    line = "<!-- modelroom render: snapshot_run_at=2026-09-22T09:00:00+00:00 rendered_at=2026-09-22T10:00:00 -->"
-    assert parse_header_line(line + "\n") is None
+def test_parse_header_line_returns_none_for_a_naive_timestamp():
+    naive = "<!-- modelroom render: snapshot_run_at=2026-09-22T09:00:00 rendered_at=2026-09-22T10:00:00+00:00 -->"
+    assert parse_header_line(naive) is None
 
 
 def test_parse_header_line_returns_none_for_a_non_utc_offset():
-    """Same rule as `contracts.check_aware_utc`: aware but not UTC is still rejected."""
-    line = "<!-- modelroom render: snapshot_run_at=2026-09-22T11:00:00+02:00 rendered_at=2026-09-22T10:00:00+00:00 -->"
-    assert parse_header_line(line + "\n") is None
+    shifted = (
+        "<!-- modelroom render: snapshot_run_at=2026-09-22T09:00:00+02:00 "
+        "rendered_at=2026-09-22T10:00:00+00:00 -->"
+    )
+    assert parse_header_line(shifted) is None
 
 
-def test_build_document_starts_with_the_header_line():
-    document = _render([_hf_package()])
-    assert document.startswith(format_header_line(NOW, RENDERED_AT))
+def test_markdown_starts_with_the_header_line():
+    text = document_markdown(_document([_hf_package()]))
+    assert text.splitlines()[0] == format_header_line(NOW, RENDERED_AT)
 
 
-# --- eligibility: unresolved / incomplete / inactive are excluded ---------------------------
+# --- eligibility ----------------------------------------------------------------------------
+
+
+def _ranked_identities(document: RenderDocument) -> list[tuple]:
+    return [tuple(entry.package_identity) for entry in document.machines[0].ranked]
 
 
 def test_unresolved_package_is_excluded():
-    document = _render([_hf_package(provenance="unresolved")])
-    assert "Q4_K_M" not in document
+    assert _ranked_identities(_document([_hf_package(provenance="unresolved")])) == []
 
 
 def test_incomplete_package_is_excluded():
-    document = _render([_hf_package(complete=False)])
-    packages_table = document.split("## Packages")[1]
-    assert "acme/Nova-8B" not in packages_table
+    assert _ranked_identities(_document([_hf_package(complete=False)])) == []
 
 
 def test_inactive_package_is_excluded():
-    document = _render([_hf_package(active=False)])
-    assert "Q4_K_M" not in document
+    assert _ranked_identities(_document([_hf_package(active=False)])) == []
 
 
 def test_approved_provenance_is_eligible():
-    from modelroom.contracts import Approval
-
-    revision = "a" * 40
-    approval = Approval(date="2026-09-01", content=revision, by="acme-team")
-    package = _hf_package(provenance="approved", revision=revision, approval=approval)
-    document = _render([package])
-    assert "Q4_K_M" in document
-    assert "approved" in document
-
-
-# --- selection rule ---------------------------------------------------------------------------
-
-
-# A hardware/machine pair where Q3_K_S=perfect, Q4_K_M/Q5_K_M=good, Q8_0=too_tight (worked by
-# hand: need_gib = weights_gib*1.10 + 1.125 (kv, L=36/KVH=8/D=128 @ context 8192) + 0.50).
-_SELECTION_MACHINES = {"workstation": MachineConfig(reserve_ram_gib=8.0, reserve_vram_gib=1.0, writer=True)}
-
-
-def _selection_hardware() -> HardwareSnapshot:
-    return _hardware(vram_gib=11.94, ram_gib=16.0)
-
-
-def test_selection_picks_the_largest_good_or_better_quant():
-    small = _hf_package(quantization="Q3_K_S", weights_bytes=int(3.5 * GIB), repo="packager/Nova-8B-GGUF-small")
-    large_good = _hf_package(quantization="Q5_K_M", weights_bytes=int(6.0 * GIB), repo="packager/Nova-8B-GGUF-good")
-    too_big = _hf_package(quantization="Q8_0", weights_bytes=int(20.0 * GIB), repo="packager/Nova-8B-GGUF-huge")
-    document = _render(
-        [small, large_good, too_big],
-        machines=_SELECTION_MACHINES,
-        hardware_by_machine={"workstation": _selection_hardware()},
+    approved = _hf_package(
+        provenance="approved",
+        approval={"date": "2026-09-01", "content": "a" * 40, "by": "acme-ai-team"},
     )
-
-    assert "Q5_K_M" in document
-    assert "Q3_K_S" not in document
-    assert "Q8_0" not in document
+    assert len(_ranked_identities(_document([approved]))) == 1
 
 
-def test_selection_falls_back_to_the_smallest_when_none_qualify():
-    small = _hf_package(quantization="Q3_K_S", weights_bytes=int(3.5 * GIB), repo="packager/Nova-8B-GGUF-small")
-    huge = _hf_package(quantization="Q8_0", weights_bytes=int(50.0 * GIB), repo="packager/Nova-8B-GGUF-huge")
-    document = _render(
-        [small, huge],
-        machines={"workstation": MachineConfig(reserve_ram_gib=3.0, reserve_vram_gib=0.0, writer=True)},
-        hardware_by_machine={"workstation": _hardware(vram_gib=0.0, ram_gib=7.56)},
-    )
-
-    assert "Q3_K_S" in document
-    assert "too_tight" in document
-    assert "Q8_0" not in document
+# --- the ranking ------------------------------------------------------------------------------
 
 
-def test_selection_differs_per_machine_yields_two_rows():
-    small = _hf_package(quantization="Q3_K_S", weights_bytes=int(3.5 * GIB), repo="packager/Nova-8B-GGUF-small")
-    large_good = _hf_package(quantization="Q5_K_M", weights_bytes=int(6.0 * GIB), repo="packager/Nova-8B-GGUF-good")
-    machines = {
-        "workstation": MachineConfig(reserve_ram_gib=16.0, reserve_vram_gib=1.0, writer=True),
-        "tiny-server": MachineConfig(reserve_ram_gib=3.0, reserve_vram_gib=0.0, writer=False),
-    }
-    hardware_by_machine = {
-        "workstation": _hardware(vram_gib=11.94, ram_gib=127.46),
-        "tiny-server": _hardware(vram_gib=0.0, ram_gib=7.56),
-    }
-    document = _render([small, large_good], machines=machines, hardware_by_machine=hardware_by_machine)
-
-    assert "Q5_K_M" in document
-    assert "Q3_K_S" in document
+def test_every_eligible_package_is_ranked_not_just_one_per_packager():
+    packages = [
+        _hf_package(quantization="Q4_K_M", weights_bytes=5 * GIB),
+        _hf_package(quantization="Q8_0", weights_bytes=8 * GIB),
+        _hf_package(quantization="Q2_K", weights_bytes=3 * GIB),
+    ]
+    block = _document(packages).machines[0]
+    assert [entry.rank for entry in block.ranked] == [1, 2, 3]
+    assert {entry.quantization for entry in block.ranked} == {"Q4_K_M", "Q8_0", "Q2_K"}
 
 
-def test_variants_count_excludes_packages_not_shown_as_a_row():
-    small = _hf_package(quantization="Q3_K_S", weights_bytes=int(3.5 * GIB), repo="packager/Nova-8B-GGUF-small")
-    mid = _hf_package(quantization="Q4_K_M", weights_bytes=int(5.0 * GIB), repo="packager/Nova-8B-GGUF-mid")
-    large_good = _hf_package(quantization="Q5_K_M", weights_bytes=int(6.0 * GIB), repo="packager/Nova-8B-GGUF-good")
-    # All three qualify (perfect/good/good) on this hardware -> exactly one row (Q5_K_M, the
-    # largest qualifying quant), the other two eligible packages become "+2 more".
-    document = _render(
-        [small, mid, large_good],
-        machines=_SELECTION_MACHINES,
-        hardware_by_machine={"workstation": _selection_hardware()},
-    )
-
-    assert "+2 more" in document
+def test_fit_class_beats_measured_speed():
+    fits_gpu = _hf_package(quantization="Q4_K_M", weights_bytes=5 * GIB, file_digest="sha256:" + "c" * 64)
+    needs_ram = _hf_package(quantization="Q8_0", weights_bytes=90 * GIB, file_digest="sha256:" + "d" * 64)
+    measurements = {PROFILE_ID: [_measurement(needs_ram, tps=200.0)]}
+    block = _document([fits_gpu, needs_ram], measurements=measurements).machines[0]
+    assert block.ranked[0].quantization == "Q4_K_M"
+    assert block.ranked[0].measurement_group == 1
+    assert block.ranked[1].measurement_group == 0
+    assert block.ranked[1].speed_tps == pytest.approx(200.0)
 
 
-# --- F5 (fix-round 5): a group fit v1 cannot judge at all makes no pick, never a useless one --
-#
-# Before F5, `_select_for_machine` fell back to "the smallest package" whenever nothing
-# qualified as good/perfect -- including when fit v1 could not judge *any* package of the group
-# (`fit_class == "unknown"` for every one, e.g. a whole architecture fit v1 does not cover, the
-# real Qwen3.5 case measured 2026-09-22: every package came back unknown, and the old fallback
-# still picked an arbitrary smallest quant such as `UD-IQ2_XXS` with `+21 more`, a recommendation
-# with no basis at all). The new rule: a machine with no judged package (all unknown, or no
-# hardware profile) makes no pick; if no machine picks anything for the group, it renders one
-# row with every package cell "–" except the fit cells ("no recommendation: <reason>") and
-# Variants ("<N> variants, none judged"). The "else the smallest" fallback still applies, but
-# only across the *judged* packages, when at least one is judged and none reach good/perfect.
+def test_a_measurement_of_another_context_does_not_count():
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    measurements = {PROFILE_ID: [_measurement(package, context=4096)]}
+    block = _document([package], measurements=measurements).machines[0]
+    assert block.ranked[0].measurement_group == 1
+    assert block.ranked[0].speed_tps is None
 
 
-def test_group_entirely_unknown_renders_one_no_recommendation_row():
-    small = _hf_package(quantization="Q3_K_S", weights_bytes=int(3.5 * GIB), repo="packager/Nova-8B-GGUF-small")
-    mid = _hf_package(quantization="Q4_K_M", weights_bytes=int(5.0 * GIB), repo="packager/Nova-8B-GGUF-mid")
-    large = _hf_package(quantization="Q5_K_M", weights_bytes=int(6.0 * GIB), repo="packager/Nova-8B-GGUF-good")
-    base_model = _base_model(architecture=_architecture(kind="unknown"))
-    # `_render`'s helper always attaches the default dense_classic `_base_model()` -- build
-    # directly so the group's base model is the unknown-architecture one instead.
-    config = _config(_SELECTION_MACHINES)
-    snapshot = _snapshot([small, mid, large], base_models=[base_model])
-    document = build_document(config, snapshot, {"workstation": _selection_hardware()}, RENDERED_AT)
-
-    assert "no recommendation: architecture not covered by v1" in document
-    assert "3 variants, none judged" in document
-    assert "Q3_K_S" not in document
-    assert "Q4_K_M" not in document
-    assert "Q5_K_M" not in document
+def test_measured_entry_carries_a_measured_note():
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    measurements = {PROFILE_ID: [_measurement(package, tps=50.0)]}
+    note = _document([package], measurements=measurements).machines[0].ranked[0].note
+    assert note.origin == "measured"
+    assert "50.0" in note.text
+    assert note.facts == ["measurement.tps_mean", "measurement.scenario.context_requested"]
 
 
-def test_group_with_one_judged_bad_package_among_unknowns_picks_the_judged_one():
-    unknown_a = _hf_package(
-        quantization="Q3_K_S", weights_bytes=0, repo="packager/Nova-8B-GGUF-unknown-a"
-    )  # a weight file with no size -> unknown, regardless of its (smallest) quant label
-    unknown_b = _hf_package(
-        quantization="Q4_K_M", weights_bytes=0, repo="packager/Nova-8B-GGUF-unknown-b"
-    )
-    judged_bad = _hf_package(
-        quantization="Q8_0", weights_bytes=int(50.0 * GIB), repo="packager/Nova-8B-GGUF-huge"
-    )  # judged (too_tight) on the tiny hardware below -- the only package fit v1 could judge
-    document = _render(
-        [unknown_a, unknown_b, judged_bad],
-        machines={"workstation": MachineConfig(reserve_ram_gib=3.0, reserve_vram_gib=0.0, writer=True)},
-        hardware_by_machine={"workstation": _hardware(vram_gib=0.0, ram_gib=7.56)},
-    )
-
-    assert "Q8_0" in document
-    assert "too_tight" in document
-    assert "no recommendation" not in document
-    assert "+2 more" in document
+def test_an_architecture_fit_v1_cannot_judge_lands_in_not_covered():
+    document = _document([_hf_package()], base_models=[_base_model(architecture=_architecture(kind="unknown"))])
+    block = document.machines[0]
+    assert block.ranked == []
+    assert [entry.reason for entry in block.not_covered] == ["architecture not covered by v1"]
+    assert block.not_covered[0].note.code == "not_covered"
 
 
-# --- fit cell: unknown never prints the zeroed numbers --------------------------------------
+def test_a_package_that_does_not_fit_lands_in_too_tight_and_never_in_the_ranking():
+    huge = _hf_package(weights_bytes=400 * GIB)
+    block = _document([huge]).machines[0]
+    assert block.ranked == []
+    assert len(block.too_tight) == 1
+    assert block.too_tight[0].note.code == "too_tight"
 
 
-def test_fit_cell_for_unknown_architecture_never_prints_numbers():
-    """F5 (fix-round 5): every package in the group is unknown here (architecture-level, so it
-    applies to every package regardless of its own properties) -- the group makes no pick at
-    all and renders the "no recommendation" row (see the F5 section below), never a fit cell
-    quoting the zeroed placeholder numbers `compute_fit` returns for the unknown case.
+def test_the_too_tight_note_claims_no_overrun_that_did_not_happen():
+    """Fit v1 sets `too_tight` above 98 % of the pool, so the need can be below the pool.
+
+    Found by the second-model review: the note used to say "more than the machine offers after
+    the reserve", which is false for every package between 98 % and 100 % of the pool.
     """
-    package = _hf_package()
-    base_model = _base_model(architecture=_architecture(kind="unknown"))
-    config = _config()
-    snapshot = _snapshot([package], base_models=[base_model])
-    document = build_document(config, snapshot, {"workstation": _hardware()}, RENDERED_AT)
+    tight = _hf_package(weights_bytes=int(98.8 * GIB))
+    entry = _document([tight]).machines[0].too_tight[0]
 
-    assert "no recommendation: architecture not covered by v1" in document
-    assert "need 0.0" not in document
-    assert "pool 0.0" not in document
-
-
-def test_fit_cell_no_profile_when_machine_has_no_hardware():
-    document = _render([_hf_package()], hardware_by_machine={"workstation": None})
-    assert "no profile" in document
+    assert entry.fit.fit_class == "too_tight"
+    assert entry.fit.need_gib < entry.fit.pool_gib
+    assert "more than" not in entry.note.text
+    assert f"{entry.fit.need_gib:.1f}" in entry.note.text
+    assert f"{entry.fit.pool_gib:.1f}" in entry.note.text
 
 
-# --- installed cell ----------------------------------------------------------------------------
+def test_the_ranking_is_capped_at_ten_and_reports_the_total():
+    packages = [
+        _hf_package(quantization=quant, weights_bytes=(3 + index) * GIB, repo=f"packager/Nova-8B-{index}-GGUF")
+        for index, quant in enumerate(
+            ["Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0"]
+        )
+    ]
+    block = _document(packages).machines[0]
+    assert len(block.ranked) == TOP_LIMIT
+    assert block.ranked_total == len(packages)
 
 
-def test_installed_cell_yes_when_digest_matches():
-    digest = "sha256:" + "c" * 64
-    package = _ollama_package(manifest_digest=digest)
-    installed = [InstalledModel(name="nova:8b-q4_K_M", digest=digest, size_bytes=5 * GIB, observed_at=NOW)]
-    document = _render([package], hardware_by_machine={"workstation": _hardware(installed=installed)})
-    assert "workstation: yes" in document
+def test_the_context_comes_from_the_scenario_not_from_the_package():
+    package = _hf_package(default_context=4096)
+    block = _document([package]).machines[0]
+    assert block.ranked[0].fit.context == 8192
+    assert block.ranked[0].fit.context_assumed is False
+    assert block.ranked[0].package_context == 4096
 
 
-def test_installed_cell_no_when_digest_does_not_match():
-    package = _ollama_package(manifest_digest="sha256:" + "c" * 64)
-    installed = [InstalledModel(name="nova:other", digest="sha256:" + "d" * 64, size_bytes=5 * GIB, observed_at=NOW)]
-    document = _render([package], hardware_by_machine={"workstation": _hardware(installed=installed)})
-    assert "workstation: no" in document
+# --- which profile a machine is rendered from -------------------------------------------------
 
 
-def test_installed_cell_unknown_when_installed_is_none():
-    package = _ollama_package()
-    document = _render([package], hardware_by_machine={"workstation": _hardware(installed=None)})
-    assert "workstation: unknown" in document
+def test_machine_profile_reads_the_configured_schema_two_profile():
+    profile = _profile()
+    scan = ProfileScan(profiles={PROFILE_ID: profile})
+    found = machine_profile("workstation", _config().machines["workstation"], scan)
+    assert found == MachineProfile(status="ranked", label="workstation", profile=profile, reason=None)
 
 
-def test_installed_cell_dash_for_a_huggingface_package():
-    package = _hf_package()
-    document = _render([package])
-    assert "workstation: –" in document
+def test_machine_profile_without_a_configured_profile_is_no_profile():
+    machines = {"workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True}}
+    found = machine_profile("workstation", _config(machines).machines["workstation"], ProfileScan())
+    assert (found.status, found.profile, found.reason) == ("no_profile", None, NO_PROFILE_REASON)
 
 
-# --- speed cell ---------------------------------------------------------------------------------
+def test_machine_profile_finds_a_schema_one_file_under_the_machine_name(tmp_path):
+    machines = {"workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True}}
+    scan = ProfileScan(legacy=[tmp_path / "workstation.json"])
+    found = machine_profile("workstation", _config(machines).machines["workstation"], scan)
+    assert found.status == "legacy"
+    assert found.label == "workstation.json"
+    assert found.reason == LEGACY_FIT_REASON
 
 
-def test_speed_cell_shown_for_a_matching_current_measurement():
-    digest = "sha256:" + "c" * 64
-    package = _ollama_package(manifest_digest=digest)
-    measurement = Measurement(
-        content_source="ollama",
-        ollama_manifest_digest=digest,
-        hf_repo=None,
-        hf_revision=None,
-        hf_file_digest=None,
-        context=8192,
-        runtime="ollama 0.12.3",
-        profile_measured_at=NOW,
-        measured_at=NOW,
-        tps_mean=42.5,
-        tps_range=(40.0, 45.0),
-    )
-    document = _render([package], hardware_by_machine={"workstation": _hardware(measurements=[measurement])})
-    assert "42.5 tps @8192 (workstation)" in document
+def test_the_legacy_reason_is_the_fit_rule_s_own_reason():
+    normalized = normalize_profile_v1(_legacy_snapshot(), PROFILE_ID)
+    assert LEGACY_FIT_REASON == fit_block_reason(normalized)
 
 
-def test_speed_cell_dash_for_a_stale_measurement():
-    digest = "sha256:" + "c" * 64
-    package = _ollama_package(manifest_digest=digest)
-    stale_measurement = Measurement(
-        content_source="ollama",
-        ollama_manifest_digest=digest,
-        hf_repo=None,
-        hf_revision=None,
-        hf_file_digest=None,
-        context=8192,
-        runtime="ollama 0.12.3",
-        profile_measured_at=NOW - timedelta(days=1),  # profile has since changed
-        measured_at=NOW,
-        tps_mean=42.5,
-        tps_range=(40.0, 45.0),
-    )
-    document = _render([package], hardware_by_machine={"workstation": _hardware(measurements=[stale_measurement])})
-    assert "42.5 tps" not in document
+def test_machine_profile_reports_a_configured_profile_that_is_not_in_the_folder():
+    found = machine_profile("workstation", _config().machines["workstation"], ProfileScan())
+    assert found.status == "no_profile"
+    assert PROFILE_ID in found.reason
 
 
-def test_speed_cell_dash_when_no_measurement_matches():
-    package = _ollama_package()
-    document = _render([package])
-    row = next(line for line in document.splitlines() if line.startswith("| acme/Nova-8B"))
-    cells = [cell.strip() for cell in row.strip("|").split("|")]
-    speed_cell_index = 9  # base model, stars, packager, quant, format, size, context, fit, installed, speed
-    assert cells[speed_cell_index] == "–"
+def test_machine_profile_reports_an_unreadable_profile_file(tmp_path):
+    scan = ProfileScan(unreadable=[(tmp_path / f"{PROFILE_ID}.json", "not valid JSON")])
+    found = machine_profile("workstation", _config().machines["workstation"], scan)
+    assert found.status == "no_profile"
+    assert "not valid JSON" in found.reason
 
 
-# --- stars / rating ------------------------------------------------------------------------------
+def test_a_machine_without_a_profile_shows_its_reason_and_no_entries():
+    profiles = {"workstation": MachineProfile("no_profile", "workstation", None, NO_PROFILE_REASON)}
+    block = _document([_hf_package()], profiles=profiles).machines[0]
+    assert (block.status, block.ranked, block.not_covered, block.too_tight) == ("no_profile", [], [], [])
+    assert block.reason == NO_PROFILE_REASON
 
 
-def test_stars_cell_renders_half_stars():
-    document = _render([_hf_package()], rating_source=lambda repo: Rating(stars=3.5, source="market index"))
-    assert "★★★½" in document
+def test_a_legacy_machine_is_shown_as_legacy_with_the_fit_reason():
+    profiles = {"workstation": MachineProfile("legacy", "workstation.json", None, LEGACY_FIT_REASON)}
+    block = _document([_hf_package()], profiles=profiles).machines[0]
+    assert block.status == "legacy"
+    assert block.reason == LEGACY_FIT_REASON
+    assert document_markdown(_document([_hf_package()], profiles=profiles)).count("legacy") >= 1
 
 
-def test_stars_cell_dash_when_source_returns_none():
-    document = _render([_hf_package()], rating_source=lambda repo: None)
-    assert "Market rating unavailable" not in document
+# --- stars / rating ---------------------------------------------------------------------------
 
 
-def test_stars_cell_dash_and_no_note_when_no_source_given():
-    document = _render([_hf_package()], rating_source=None)
-    assert "Market rating unavailable" not in document
+def test_stars_are_collected_once_per_base_model():
+    asked: list[str] = []
+
+    def source(repo: str) -> Rating:
+        asked.append(repo)
+        return Rating(stars=3.5, source="market index")
+
+    document = _document([_hf_package(), _hf_package(quantization="Q8_0")], rating_source=source)
+    assert asked == ["acme/Nova-8B"]
+    assert document.ratings["acme/Nova-8B"].stars == 3.5
+    assert "★★★½" in document_markdown(document)
 
 
-def test_rating_source_raising_unavailable_error_adds_a_note_and_still_renders():
-    def _failing(repo: str):
-        raise RatingUnavailableError("market index is down")
+def test_a_rating_source_that_fails_leaves_a_note_and_no_ratings():
+    def source(repo: str) -> Rating:
+        raise RatingUnavailableError("index unreachable")
 
-    document = _render([_hf_package()], rating_source=_failing)
-    assert "Market rating unavailable: market index is down" in document
-    assert "Q4_K_M" in document
+    document = _document([_hf_package()], rating_source=source)
+    assert document.rating_unavailable == "index unreachable"
+    assert document.ratings == {}
+    assert "Market rating unavailable: index unreachable" in document_markdown(document)
 
 
-def test_rating_source_raising_any_exception_is_treated_the_same():
-    def _failing(repo: str):
+def test_any_exception_from_the_rating_source_is_treated_the_same():
+    def source(repo: str) -> Rating:
         raise RuntimeError("boom")
 
-    document = _render([_hf_package()], rating_source=_failing)
-    assert "Market rating unavailable: boom" in document
+    assert _document([_hf_package()], rating_source=source).rating_unavailable == "boom"
 
 
-# --- machines without a profile ----------------------------------------------------------------
+def test_no_rating_source_means_no_stars_and_no_note():
+    document = _document([_hf_package()])
+    assert (document.ratings, document.rating_unavailable) == ({}, None)
+    assert "Market rating unavailable" not in document_markdown(document)
 
 
-def test_machine_without_a_profile_renders_no_hardware_profile_yet():
-    document = _render([_hf_package()], hardware_by_machine={"workstation": None})
-    assert "no hardware profile yet" in document
-    assert "no profile" in document  # the package row's fit cell
+# --- the three writers agree ------------------------------------------------------------------
 
 
-# --- R7-11 (fix-round 6): unescaped cell content breaks the Markdown tables -----------------
-#
-# Probe: an `Area.error` of `"boom | extra\nsecond line"` produced 4 physical lines and an extra
-# column in the areas table instead of the one row it should have been -- a literal `|` reads as
-# a new column boundary, a raw newline splits one logical row across multiple physical lines.
+def test_json_is_the_document_itself():
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    document = _document([package], measurements={PROFILE_ID: [_measurement(package)]})
+    payload = document_json(document)
+    assert RenderDocument.model_validate(payload) == document
+
+
+def test_markdown_and_json_show_the_same_speed_and_fit():
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    document = _document([package], measurements={PROFILE_ID: [_measurement(package, tps=50.0)]})
+    entry = document.machines[0].ranked[0]
+    row = next(line for line in document_markdown(document).splitlines() if line.startswith("| 1 |"))
+    assert f"{entry.speed_tps:.1f}" in row
+    assert entry.fit.fit_class in row
+    assert f"{entry.fit.need_gib:.2f}" in row
+
+
+def test_every_writer_names_the_rule_and_the_scenario():
+    document = _document([_hf_package()])
+    for text in (document_markdown(document), document_terminal(document)):
+        assert RANKING_RULE in text
+        assert "context 8192" in text
+        assert "f16" in text
+
+
+def test_the_terminal_view_lists_the_ranking_and_the_blocks():
+    huge = _hf_package(weights_bytes=400 * GIB, repo="packager/Nova-8B-XL-GGUF")
+    text = document_terminal(_document([_hf_package(), huge]))
+    assert "Ranking: workstation" in text
+    assert "too tight" in text.lower()
+
+
+# --- Markdown cell escaping (R7-11) -------------------------------------------------------------
 
 
 def test_cell_escapes_pipes_and_collapses_newlines():
@@ -578,69 +567,19 @@ def test_cell_collapses_crlf_and_lone_cr():
     assert _cell("a\r\nb\rc") == "a b c"
 
 
-def test_render_areas_table_escapes_the_probe_case():
-    config = _config()
-    snapshot = Snapshot(
-        schema_version=1,
-        run_at=NOW,
-        areas=[
-            Area(
-                source="huggingface",
-                base_model_hf_repo="acme/Nova-8B",
-                packager="packager",
-                status="incomplete",
-                last_success=None,
-                error="boom | extra\nsecond line",
-            )
-        ],
-        base_models=[_base_model()],
-        packages=[],
+def test_an_area_error_with_a_pipe_stays_one_row():
+    snapshot = _snapshot([_hf_package()])
+    broken = snapshot.model_copy(
+        update={
+            "areas": [
+                snapshot.areas[0].model_copy(update={"status": "incomplete", "error": "boom | extra\nsecond line"})
+            ]
+        }
     )
-
-    document = build_document(config, snapshot, {"workstation": _hardware()}, RENDERED_AT)
-
-    areas_section = document.split("## Areas")[1].split("## Machines")[0].strip()
-    lines = areas_section.splitlines()
-    assert len(lines) == 3  # header, separator, exactly one data row -- never split into two
-    data_row = lines[2]
-    # 6 columns -> 7 pipe delimiters, plus the one escaped `\|` literal from the error text
-    # (kept, but no longer read as a column boundary) -- never an extra *column*.
-    assert data_row.count("|") == 8
-    assert data_row.count(" | ") == 5  # exactly 5 real column boundaries for 6 columns
-    assert "boom \\| extra second line" in data_row
-
-
-def test_render_machines_table_escapes_a_pipe_in_gpu_name():
-    hardware = HardwareSnapshot(
-        schema_version=1,
-        machine="workstation",
-        measured_at=NOW,
-        llmfit_version="1.1.16",
-        vram_gib=11.94,
-        ram_gib=127.46,
-        free_ram_gib_at_measurement=None,
-        gpu_name="Nova | Ultra GPU",
-        backend="CUDA",
-        unified_memory=False,
-        installed=None,
-        installed_unavailable_reason="not queried in this test",
-        measurements=[],
+    document = build_render_document(
+        _config(), broken, {"workstation": _ready()}, {}, default_scenario(), RENDERED_AT, None
     )
-    document = _render([_hf_package()], hardware_by_machine={"workstation": hardware})
-
-    machines_section = document.split("## Machines")[1].split("## Packages")[0].strip()
-    lines = machines_section.splitlines()
-    assert len(lines) == 3  # header, separator, exactly one machine row
-    data_row = lines[2]
-    # 9 columns -> 10 pipe delimiters, plus the one escaped `\|` literal from the gpu name.
-    assert data_row.count("|") == 11
-    assert data_row.count(" | ") == 8  # exactly 8 real column boundaries for 9 columns
-    assert "CUDA / Nova \\| Ultra GPU" in data_row
-
-
-def test_cell_helper_backs_the_fit_reason_cell_against_a_newline():
-    """`fit.py::compute_fit` only ever sets a fixed, safe `reason` string today -- this proves the
-    shared `_cell` helper `_fit_cell` relies on actually collapses a newline, the property that
-    matters if a future fit reason (or any other caller) ever carried one.
-    """
-    assert _cell("architecture not covered\nby v1") == "architecture not covered by v1"
+    text = document_markdown(document)
+    area_rows = [line for line in text.splitlines() if line.startswith("| huggingface |")]
+    assert len(area_rows) == 1
+    assert len(re.findall(r"(?<!\\)\|", area_rows[0])) == 7

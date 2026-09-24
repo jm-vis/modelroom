@@ -20,9 +20,18 @@ from modelroom.cli import fetch_with_config, main, render_with_config
 from modelroom.config import Configuration
 from modelroom.contracts import load_snapshot
 from modelroom.http import Response
+from modelroom.importer import scan_profiles
+from modelroom.measurements import MeasurementRecord, PackageRef, RunCounters, Scenario
+from modelroom.render_cmd import _machine_profiles, _measurements_of
 from modelroom.render import RatingUnavailableError
 
-from fixture_support import build_transport, qwen35_example_config_dict, qwen35_transport_mapping
+from fixture_support import (
+    build_transport,
+    place_v2_profile,
+    qwen35_example_config_dict,
+    qwen35_transport_mapping,
+    with_profile,
+)
 
 RUN1 = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
 RUN2 = datetime(2026, 9, 22, 10, 0, 0, tzinfo=timezone.utc)
@@ -360,7 +369,13 @@ def test_render_snapshot_with_unsupported_schema_version_is_exit_3(tmp_path: Pat
     assert not (tmp_path / "models.md").exists()
 
 
-def test_render_hardware_with_unsupported_schema_version_is_exit_3(tmp_path: Path):
+def test_render_hardware_with_unsupported_schema_version_is_a_note_not_a_failure(tmp_path: Path, capsys):
+    """Schema 2: one unreadable profile file no longer keeps every machine out of the document.
+
+    `scan_profiles` lists a file that does not read, does not validate or carries an unsupported
+    `schema_version`; the machine is shown with that reason and the render still writes both
+    views. Only the snapshot's own `schema_version` still ends the run with exit 3.
+    """
     config_path = _write_config(tmp_path)
     assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
     hardware_dir = tmp_path / "state" / "hardware"
@@ -369,8 +384,9 @@ def test_render_hardware_with_unsupported_schema_version_is_exit_3(tmp_path: Pat
 
     code = main(["render", "--config", str(config_path)], now=RUN2)
 
-    assert code == 3
-    assert not (tmp_path / "models.md").exists()
+    assert code == 0
+    assert "skipped workstation.json" in capsys.readouterr().out
+    assert "no_profile" in (tmp_path / "models.md").read_text(encoding="utf-8")
 
 
 # --- P2-3 (fix-round 5): a corrupt or wrong-shape snapshot/hardware file is exit 3 ----------
@@ -419,23 +435,8 @@ def test_render_snapshot_with_malformed_shape_is_exit_3(tmp_path: Path, capsys, 
     assert str(snapshot_path) in capsys.readouterr().err
 
 
-def test_render_hardware_with_truncated_json_is_exit_3_and_names_the_file(tmp_path: Path, capsys):
-    config_path = _write_config(tmp_path)
-    assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
-    hardware_dir = tmp_path / "state" / "hardware"
-    hardware_dir.mkdir(parents=True)
-    hardware_path = hardware_dir / "workstation.json"
-    hardware_path.write_text('{"schema_version": 1, "machine": ', encoding="utf-8")  # truncated
-
-    code = main(["render", "--config", str(config_path)], now=RUN2)
-
-    assert code == 3
-    assert not (tmp_path / "models.md").exists()
-    assert str(hardware_path) in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("payload", _MALFORMED_STATE_PAYLOADS)
-def test_render_hardware_with_malformed_shape_is_exit_3(tmp_path: Path, capsys, payload: bytes):
+@pytest.mark.parametrize("payload", [b'{"schema_version": 1, "machine": ', *_MALFORMED_STATE_PAYLOADS])
+def test_render_names_every_hardware_file_that_does_not_read(tmp_path: Path, capsys, payload: bytes):
     config_path = _write_config(tmp_path)
     assert main(["fetch", "--config", str(config_path), "--machine", "workstation"], transport=_transport(), now=RUN1) == 0
     hardware_dir = tmp_path / "state" / "hardware"
@@ -445,9 +446,8 @@ def test_render_hardware_with_malformed_shape_is_exit_3(tmp_path: Path, capsys, 
 
     code = main(["render", "--config", str(config_path)], now=RUN2)
 
-    assert code == 3
-    assert not (tmp_path / "models.md").exists()
-    assert str(hardware_path) in capsys.readouterr().err
+    assert code == 0
+    assert f"skipped {hardware_path.name}" in capsys.readouterr().out
 
 
 def test_render_end_to_end_exit_0_writes_a_markdown_document(tmp_path: Path):
@@ -568,6 +568,10 @@ def test_render_with_config_rating_source_failure_is_exit_0_with_a_note(tmp_path
     data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
     config = Configuration.from_dict(data)
     assert fetch_with_config(config, "workstation", transport=_transport(), now=RUN1) == 0
+    # The Stars column only exists where rows exist, so this machine needs a profile the fit
+    # computes for -- without one the rating source is never asked at all.
+    profile = place_v2_profile(config.paths.hardware_dir)
+    config = with_profile(config, "workstation", profile.profile_id)
 
     def _failing(repo: str):
         raise RatingUnavailableError("market index unreachable")
@@ -589,6 +593,189 @@ def test_render_with_config_no_source_given_has_no_rating_note(tmp_path: Path):
     assert code == 0
     text = (tmp_path / "models.md").read_text(encoding="utf-8")
     assert "Market rating unavailable" not in text
+
+
+# --- render on schema 2: the ranking, the JSON view next to the Markdown one -----------------
+
+
+def _rendered(tmp_path: Path, *, machines: dict | None = None, **render_kwargs):
+    """Fetch from the fixtures, then render; returns `(code, config)`."""
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    if machines is not None:
+        data["machines"] = machines
+    config = Configuration.from_dict(data)
+    writer = next(name for name, machine in config.machines.items() if machine.writer)
+    assert fetch_with_config(config, writer, transport=_transport(), now=RUN1) == 0
+    return config
+
+
+def test_render_ranks_the_packages_of_a_schema_two_profile(tmp_path: Path):
+    config = _rendered(tmp_path)
+    profile = place_v2_profile(config.paths.hardware_dir)
+    config = with_profile(config, "workstation", profile.profile_id)
+
+    assert render_with_config(config, now=RUN2) == 0
+
+    text = (tmp_path / "models.md").read_text(encoding="utf-8")
+    assert "## Ranking: workstation" in text
+    assert "Scenario: context 8192 (default), KV cache f16 (assumed), 1 request" in text
+    assert "Ranking rule: fit class (perfect, good, marginal)" in text
+
+
+def test_render_writes_the_json_view_next_to_the_markdown_one(tmp_path: Path):
+    config = _rendered(tmp_path)
+    profile = place_v2_profile(config.paths.hardware_dir)
+    config = with_profile(config, "workstation", profile.profile_id)
+
+    assert render_with_config(config, now=RUN2) == 0
+
+    payload = json.loads((tmp_path / "models.json").read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert datetime.fromisoformat(payload["rendered_at"]) == RUN2
+    assert [block["machine"] for block in payload["machines"]] == ["workstation"]
+    assert payload["ranking_rule"] in (tmp_path / "models.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("command", ["render", "fetch"])
+def test_a_snapshot_path_that_is_a_folder_is_exit_3_not_a_traceback(tmp_path: Path, capsys, command: str):
+    """`load_existing_snapshot` checks `exists()` and then reads: a folder raised `OSError`.
+
+    Found by the second-model review of AP9-C and true of this reader since AP3; the contract
+    promises a message and exit `3` for every stored file that does not read.
+    """
+    config_path = _write_config(tmp_path)
+    (tmp_path / "state" / "modelroom.json").mkdir(parents=True)
+    argv = [command, "--config", str(config_path)]
+    if command == "fetch":
+        argv += ["--machine", "workstation"]
+
+    code = main(argv, transport=_transport(), now=RUN1)
+
+    assert code == 3
+    assert "cannot read snapshot" in capsys.readouterr().err
+
+
+def test_render_refuses_a_markdown_path_that_is_itself_a_json_file(tmp_path: Path, capsys):
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.json"))
+    config = Configuration.from_dict(data)
+
+    assert render_with_config(config, now=RUN2) == 2
+    assert "must not be a .json file" in capsys.readouterr().err
+
+
+def test_render_shows_a_schema_one_profile_as_legacy_and_persists_nothing(tmp_path: Path):
+    config = _rendered(tmp_path)
+    legacy_path = config.paths.hardware_dir / "workstation.json"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(json.dumps(_v1_profile("workstation")), encoding="utf-8")
+    before = legacy_path.read_bytes()
+
+    assert render_with_config(config, now=RUN2) == 0
+
+    text = (tmp_path / "models.md").read_text(encoding="utf-8")
+    assert "workstation.json -- legacy" in text
+    assert "measure again" in text
+    assert legacy_path.read_bytes() == before
+    assert sorted(path.name for path in config.paths.hardware_dir.glob("*.json")) == ["workstation.json"]
+
+
+def test_render_reads_the_measurement_files_of_the_profile(tmp_path: Path):
+    """The speed comes from `<state>/measurements/<profile_id>/`, never from the profile file.
+
+    Asserted on what the reader returns, not on the rendered document: the fixture snapshot is
+    Qwen3.5, which fit v1 does not cover, so an empty ranking would also hold if the file had
+    never been read (found by the second-model review).
+    """
+    config = _rendered(tmp_path)
+    profile = place_v2_profile(config.paths.hardware_dir)
+    config = with_profile(config, "workstation", profile.profile_id)
+    ollama = next(p for p in load_snapshot(json.loads(config.paths.snapshot_file.read_text(encoding="utf-8"))).packages
+                  if p.source == "ollama")
+    record = _ollama_measurement(profile.profile_id, ollama.manifest_digest)
+    (config.paths.state / "measurements" / profile.profile_id).mkdir(parents=True)
+    (config.paths.state / "measurements" / profile.profile_id / f"{record.measurement_id}.json").write_text(
+        json.dumps(record.model_dump(mode="json")), encoding="utf-8"
+    )
+
+    profiles = _machine_profiles(config, scan_profiles(config.paths.hardware_dir))
+    records, notes = _measurements_of(config, profiles)
+
+    assert notes == []
+    assert [entry.measurement_id for entry in records[profile.profile_id]] == [record.measurement_id]
+    assert records[profile.profile_id][0].tps_mean == pytest.approx(50.0)
+    assert render_with_config(config, now=RUN2) == 0
+
+
+def test_render_names_a_measurement_file_that_does_not_read(tmp_path: Path, capsys):
+    config = _rendered(tmp_path)
+    profile = place_v2_profile(config.paths.hardware_dir)
+    config = with_profile(config, "workstation", profile.profile_id)
+    folder = config.paths.state / "measurements" / profile.profile_id
+    folder.mkdir(parents=True)
+    (folder / "20260922T202000Z-4da3b585.json").write_text("{", encoding="utf-8")
+
+    assert render_with_config(config, now=RUN2) == 0
+    assert "skipped measurement 20260922T202000Z-4da3b585.json" in capsys.readouterr().out
+
+
+def _ollama_measurement(profile_id: str, manifest_digest: str) -> MeasurementRecord:
+    run = RunCounters(
+        done_reason="length",
+        eval_count=128,
+        eval_duration=2_560_000_000,
+        prompt_eval_count=42,
+        prompt_eval_duration=90_000_000,
+        load_duration=12_000_000,
+    )
+    measured_at = datetime(2026, 9, 22, 20, 20, 0, tzinfo=timezone.utc)
+    return MeasurementRecord(
+        schema_version=2,
+        measurement_id=f"{measured_at.strftime('%Y%m%dT%H%M%SZ')}-4da3b585",
+        profile_id=profile_id,
+        protocol="v1",
+        measured_at=measured_at,
+        package=PackageRef(content_source="ollama", ollama_manifest_digest=manifest_digest),
+        scenario=Scenario(
+            context_requested=8192, context_origin="default", kv_type="f16", kv_type_assumed=True, requests=1
+        ),
+        runs=[run, run, run],
+        tps_mean=run.tokens_per_second(),
+        tps_min=run.tokens_per_second(),
+        tps_max=run.tokens_per_second(),
+        validity="valid",
+        validity_reason=None,
+        comparable=True,
+        comparable_reason=None,
+    )
+
+
+def test_render_echoes_the_terminal_view_when_a_caller_asks_for_it(tmp_path: Path):
+    config = _rendered(tmp_path)
+    profile = place_v2_profile(config.paths.hardware_dir)
+    config = with_profile(config, "workstation", profile.profile_id)
+    lines: list[str] = []
+
+    assert render_with_config(config, now=RUN2, echo=lines.append) == 0
+
+    assert "Ranking: workstation" in "\n".join(lines)
+
+
+def _v1_profile(machine: str) -> dict:
+    return {
+        "schema_version": 1,
+        "machine": machine,
+        "measured_at": RUN1.isoformat(),
+        "llmfit_version": "1.1.16",
+        "vram_gib": 11.94,
+        "ram_gib": 127.46,
+        "free_ram_gib_at_measurement": None,
+        "gpu_name": "Nova GPU",
+        "backend": "CUDA",
+        "unified_memory": False,
+        "installed": None,
+        "installed_unavailable_reason": "not queried in this test",
+        "measurements": [],
+    }
 
 
 def test_render_with_config_defaults_to_the_real_clock(tmp_path: Path):

@@ -1,6 +1,7 @@
-"""The `modelroom` command line: `fetch`, `hardware` and `render` today, `check` later.
+"""The `modelroom` command line: the guided mode, `fetch`, `hardware`, `render` and the rest.
 
-`main(argv)` is the real entry point (`[project.scripts]` in `pyproject.toml`); it takes
+`modelroom` with no subcommand is the guided mode (`modelroom/guided.py`); the subcommands never
+ask a question. `main(argv)` is the real entry point (`[project.scripts]` in `pyproject.toml`); it takes
 optional `transport`/`probes`/`pointer_path`/`now` keyword arguments purely for dependency
 injection in tests -- the real CLI never passes them, so it always uses `UrllibTransport()`,
 the real `Probes()` (this machine), the user's own pointer file and the real clock. Exit codes
@@ -27,9 +28,11 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from pydantic import ValidationError
 
+from .answers import AnswerFileError, read_answers
 from .binding import (
     KnownProfile,
     PointerFileError,
@@ -39,9 +42,19 @@ from .binding import (
     write_pointer,
 )
 from .config import ConfigError, Configuration, load_config
-from .contracts import HardwareSnapshot, SchemaVersionError, Snapshot
+from .contracts import HardwareSnapshot, SchemaVersionError
+from .dialog import (
+    AnswerInvalidError,
+    AnswerMissingError,
+    Asker,
+    Canceled,
+    FileAsker,
+    TerminalAsker,
+    is_interactive,
+)
 from .fetch import run_fetch
-from .http import Transport, UrllibTransport
+from .guided import GuidedError, run_guided
+from .http import DEFAULT_REQUEST_BUDGET, RequestBudget, Transport, UrllibTransport
 from .importer import (
     ImportConflictError,
     PrerequisiteError,
@@ -53,18 +66,16 @@ from .llmfit import LlmfitReference, read_llmfit_reference
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware
 from .migrate import MigrationError, migrate
 from .profile import HardwareProfile, fit_block_reason, os_fingerprint, read_profile_document
-from .render import RatingSource, build_document, parse_header_line
+from .render_cmd import render_with_config
 from .state import (
     LockHeldError,
     StaleRunError,
     StateFileShapeError,
+    UnreadableStateFileError,
     acquire_lock,
     atomic_write_json,
-    atomic_write_text,
     check_run_is_newer,
-    hardware_snapshot_path,
-    load_existing_hardware_snapshot,
-    load_existing_snapshot,
+    read_snapshot,
     release_lock,
     write_run_status,
     write_snapshot,
@@ -74,43 +85,21 @@ from .state import (
 _FRESH_ID_ATTEMPTS = 8
 
 
-class _UnreadableStateFileError(Exception):
-    """A stored snapshot/hardware file is not valid JSON, or does not match its model (P2-3).
-
-    `state.load_existing_snapshot`/`load_existing_hardware_snapshot` let `json.JSONDecodeError`,
-    pydantic `ValidationError`, `state.StateFileShapeError` and `UnicodeDecodeError` propagate
-    unchanged (only `SchemaVersionError` is their own); `_read_snapshot`/`_read_hardware_snapshot`
-    below catch those four and re-raise this instead, naming the file, so every load site in
-    `cli.py` maps it to exit `3` exactly like `SchemaVersionError` -- a corrupt or wrong-shape
-    file must never crash `main()` with an uncaught exception (probe: a naive `Snapshot.run_at`,
-    before P2-3's contract fix, validated fine and then blew up `state.check_run_is_newer` with
-    an uncaught `TypeError` instead; a truncated file or one missing required fields did the same
-    via `JSONDecodeError`/`ValidationError`; R7-3/fix-round 6: a JSON root of `[]`/`null`/a bare
-    string did the same via an uncaught `AttributeError` inside `contracts.load_snapshot`, and a
-    file that is not valid UTF-8 at all via an uncaught `UnicodeDecodeError`).
-    """
-
-
-def _read_snapshot(config: Configuration) -> Snapshot | None:
-    """`load_existing_snapshot`, wrapping a corrupt/wrong-shape file with its path (P2-3)."""
-    try:
-        return load_existing_snapshot(config)
-    except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError) as exc:
-        raise _UnreadableStateFileError(f"{config.paths.snapshot_file}: cannot read snapshot: {exc}") from exc
-
-
-def _read_hardware_snapshot(config: Configuration, machine: str) -> HardwareSnapshot | None:
-    """`load_existing_hardware_snapshot`, wrapping a corrupt/wrong-shape file with its path (P2-3)."""
-    try:
-        return load_existing_hardware_snapshot(config, machine)
-    except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError) as exc:
-        path = hardware_snapshot_path(config, machine)
-        raise _UnreadableStateFileError(f"{path}: cannot read hardware profile: {exc}") from exc
-
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="modelroom")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        prog="modelroom",
+        description=(
+            "Without a subcommand: the guided mode, which asks, writes modelroom.toml and runs "
+            "hardware, fetch and render. The subcommands never ask a question."
+        ),
+    )
+    parser.add_argument(
+        "--config", type=Path, help="Path to modelroom.toml (guided mode: wins over the remembered folder)"
+    )
+    parser.add_argument(
+        "--answers", type=Path, help="Guided mode: take the dialog's answers from this TOML file instead of asking"
+    )
+    subparsers = parser.add_subparsers(dest="command")
 
     fetch_parser = subparsers.add_parser(
         "fetch", help="Fetch package metadata for every configured base model from this machine."
@@ -162,9 +151,17 @@ def main(
     now: datetime | None = None,
     probes: Probes | None = None,
     pointer_path: Path | None = None,
+    asker: Asker | None = None,
+    here: Path | None = None,
+    out: Callable[[str], None] | None = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command is None:
+        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out)
+    if args.answers is not None:
+        print(f"--answers belongs to the guided mode; {args.command} never asks a question", file=sys.stderr)
+        return 2
     if args.command == "fetch":
         return _cmd_fetch(args, transport, now)
     if args.command == "hardware":
@@ -181,6 +178,70 @@ def main(
     return 2  # pragma: no cover - argparse.error already exits
 
 
+def _cmd_guided(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    transport: Transport | None,
+    probes: Probes | None,
+    pointer_path: Path | None,
+    now: datetime | None,
+    asker: Asker | None,
+    here: Path | None,
+    out: Callable[[str], None] | None,
+) -> int:
+    """`modelroom` with no subcommand: the guided mode (`modelroom/guided.py`).
+
+    Exit codes: `0` a document was written, `1` another process holds the lock or a step reported
+    it, `2` without a terminal and without `--answers` (the help goes to stderr), at an end of
+    input, at a missing or unusable answer, or when a step cannot go on, `3` a stored file's
+    `schema_version` is unsupported or it does not read, `130` at Ctrl-C. Every failure of a
+    stored file keeps the exit code that command would give it on its own -- the guided mode does
+    not flatten them into one. Ctrl-C and an end of input leave no half-written file: every write
+    of this mode is atomic and happens after the last question of its step.
+    """
+    try:
+        chosen = asker if asker is not None else _asker_for(args, parser)
+        if chosen is None:
+            return 2
+        return run_guided(
+            chosen,
+            here=here if here is not None else Path.cwd(),
+            config_arg=args.config,
+            pointer_path=pointer_path,
+            transport=transport,
+            probes=probes,
+            now=now,
+            out=out if out is not None else print,
+        )
+    except KeyboardInterrupt:
+        print("stopped at your request; nothing was left half written", file=sys.stderr)
+        return 130
+    except (Canceled, AnswerMissingError, AnswerInvalidError, AnswerFileError, GuidedError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except LockHeldError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except (SchemaVersionError, MigrationError, PointerFileError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+
+
+def _asker_for(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Asker | None:
+    """The asker this run uses, or `None` when there is no way to ask (help on stderr, exit 2)."""
+    if args.answers is not None:
+        return FileAsker(read_answers(args.answers))
+    if is_interactive():
+        return TerminalAsker()
+    parser.print_help(sys.stderr)
+    print(
+        "\nmodelroom without a subcommand needs an interactive terminal, or "
+        "`modelroom --answers <file>` with the dialog's answers.",
+        file=sys.stderr,
+    )
+    return None
+
+
 def _cmd_fetch(args: argparse.Namespace, transport: Transport | None, now: datetime | None) -> int:
     try:
         config = load_config(args.config)
@@ -195,7 +256,11 @@ def _cmd_fetch(args: argparse.Namespace, transport: Transport | None, now: datet
 
 
 def fetch_with_config(
-    config: Configuration, machine: str, transport: Transport | None = None, now: datetime | None = None
+    config: Configuration,
+    machine: str,
+    transport: Transport | None = None,
+    now: datetime | None = None,
+    budget: int | RequestBudget = DEFAULT_REQUEST_BUDGET,
 ) -> int:
     """Run `fetch` against an already-loaded `Configuration` -- the programmatic entry point.
 
@@ -224,8 +289,8 @@ def fetch_with_config(
     # snapshot is read again inside the lock (`_run_locked`), since it may change between the
     # two reads.
     try:
-        _read_snapshot(config)
-    except (SchemaVersionError, _UnreadableStateFileError) as exc:
+        read_snapshot(config)
+    except (SchemaVersionError, UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -236,15 +301,15 @@ def fetch_with_config(
         return 1
 
     try:
-        return _run_locked(config, active_transport, run_at)
+        return _run_locked(config, active_transport, run_at, budget)
     finally:
         release_lock(handle)
 
 
-def _run_locked(config, transport: Transport, run_at: datetime) -> int:
+def _run_locked(config, transport: Transport, run_at: datetime, budget: int | RequestBudget) -> int:
     try:
-        old_snapshot = _read_snapshot(config)
-    except (SchemaVersionError, _UnreadableStateFileError) as exc:
+        old_snapshot = read_snapshot(config)
+    except (SchemaVersionError, UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -254,7 +319,7 @@ def _run_locked(config, transport: Transport, run_at: datetime) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    result = run_fetch(config, transport, run_at, old_snapshot)
+    result = run_fetch(config, transport, run_at, old_snapshot, budget)
     write_snapshot(config, result.snapshot.model_dump(mode="json"))
     write_run_status(config, result.snapshot, result.request_used, result.request_budget)
 
@@ -355,7 +420,7 @@ def _hardware_locked(
     """
     try:
         profiles = _existing_profiles(config)
-    except (SchemaVersionError, _UnreadableStateFileError) as exc:
+    except (SchemaVersionError, UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -481,7 +546,7 @@ def _read_profile_file(path: Path) -> HardwareSnapshot | HardwareProfile:
     except SchemaVersionError as exc:
         raise SchemaVersionError(f"{path}: {exc}") from exc
     except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError, ValueError, OSError) as exc:
-        raise _UnreadableStateFileError(f"{path}: cannot read hardware profile: {exc}") from exc
+        raise UnreadableStateFileError(f"{path}: cannot read hardware profile: {exc}") from exc
 
 
 def _taken_profile_ids(config: Configuration, profiles: dict[str, HardwareProfile]) -> set[str]:
@@ -538,77 +603,6 @@ def _cmd_render(args: argparse.Namespace, now: datetime | None) -> int:
         return 2
 
     return render_with_config(config, now=now)
-
-
-def render_with_config(
-    config: Configuration, rating: RatingSource | None = None, now: datetime | None = None
-) -> int:
-    """Run `render` against an already-loaded `Configuration` -- see `fetch_with_config`.
-
-    A pure reader: acquires the same lock `fetch` uses (`modelroom/state.py::acquire_lock`),
-    reads the snapshot and every configured machine's hardware profile, and writes exactly one
-    Markdown file (`config.paths.markdown`) via `modelroom.render.build_document`. `rating` is a
-    `RatingSource` for the Package table's Stars column; `None` (the CLI's own default -- there
-    is no `--rating` flag) renders every Stars cell as `–` with no failure note.
-    """
-    rendered_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
-
-    # Same ordering as fetch_with_config (F13): the schema-version gate on the existing
-    # snapshot runs before the lock is taken -- an unsupported version exits 3 with nothing
-    # written, not even a lock file.
-    try:
-        pre_read_snapshot = _read_snapshot(config)
-    except (SchemaVersionError, _UnreadableStateFileError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
-
-    # R7-12 (fix-round 6): "nothing to render" is decided from this same pre-read, still before
-    # the lock -- `acquire_lock` creates the state directory and the lock file as a side effect
-    # of opening it (`Path.mkdir` + `os.open(..., O_CREAT)`), so a render that has nothing to do
-    # must never call it at all. `_render_locked` re-reads the snapshot itself once the lock is
-    # held (a concurrent `fetch` could have written one, or changed it, between this read and
-    # that one), so this is a short-circuit on the common case, never a replacement for that
-    # re-read.
-    if pre_read_snapshot is None:
-        print("nothing to render, run fetch first", file=sys.stderr)
-        return 1
-
-    try:
-        handle = acquire_lock(config.paths.lock_file, "render", rendered_at)
-    except LockHeldError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    try:
-        return _render_locked(config, rendered_at, rating)
-    finally:
-        release_lock(handle)
-
-
-def _render_locked(config: Configuration, rendered_at: datetime, rating: RatingSource | None) -> int:
-    try:
-        snapshot = _read_snapshot(config)
-    except (SchemaVersionError, _UnreadableStateFileError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
-    if snapshot is None:
-        print("nothing to render, run fetch first", file=sys.stderr)
-        return 1
-
-    try:
-        hardware_by_machine = _load_hardware_profiles(config)
-    except (SchemaVersionError, _UnreadableStateFileError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
-
-    refusal = _refusal_against_existing_document(config.paths.markdown, snapshot.run_at)
-    if refusal is not None:
-        print(refusal, file=sys.stderr)
-        return 1
-
-    document = build_document(config, snapshot, hardware_by_machine, rendered_at, rating)
-    atomic_write_text(config.paths.markdown, document)
-    return 0
 
 
 def _cmd_migrate(args: argparse.Namespace, now: datetime | None) -> int:
@@ -679,35 +673,6 @@ def _cmd_import_profile(args: argparse.Namespace, now: datetime | None) -> int:
     for line in lines:
         print(line)
     return 0
-
-
-def _load_hardware_profiles(config: Configuration) -> dict[str, HardwareSnapshot | None]:
-    return {name: _read_hardware_snapshot(config, name) for name in config.machines}
-
-
-def _refusal_against_existing_document(markdown_path: Path, new_snapshot_run_at: datetime) -> str | None:
-    """`None` when `render` may write `markdown_path`, else the message to print and exit 1 with.
-
-    A missing file, one whose first line is not the fixed header, one whose header timestamps
-    are not aware UTC (`parse_header_line` returns `None` for all three), or one that is not
-    valid UTF-8 at all (fix-round 5, F4: `read_text` would otherwise raise `UnicodeDecodeError`
-    straight out of `render` for a corrupted/foreign-encoding existing file) is never a reason to
-    refuse -- only a header whose own `snapshot_run_at` is strictly newer than the snapshot about
-    to be rendered blocks the write.
-    """
-    if not markdown_path.exists():
-        return None
-    try:
-        existing_text = markdown_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return None
-    header = parse_header_line(existing_text)
-    if header is None or header.snapshot_run_at <= new_snapshot_run_at:
-        return None
-    return (
-        f"{markdown_path}: already rendered from a newer snapshot "
-        f"({header.snapshot_run_at.isoformat()} > {new_snapshot_run_at.isoformat()}); nothing written"
-    )
 
 
 if __name__ == "__main__":

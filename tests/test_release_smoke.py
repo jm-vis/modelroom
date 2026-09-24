@@ -12,11 +12,15 @@ from pathlib import Path
 
 import pytest
 
-from fixture_support import build_transport, qwen35_example_config_dict, qwen35_transport_mapping
+from fixture_support import (
+    build_transport,
+    place_v2_profile,
+    qwen35_example_config_dict,
+    qwen35_transport_mapping,
+)
+from fixture_support import with_profile as with_profile_id
 from modelroom.cli import fetch_with_config, render_with_config
 from modelroom.config import Configuration, load_config
-from modelroom.contracts import load_hardware_snapshot
-from modelroom.examples import EXAMPLES
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "release-smoke.py"
@@ -58,65 +62,66 @@ def test_a_temp_directory_that_cannot_be_made_is_a_reported_setup_error(monkeypa
     assert capsys.readouterr().out.splitlines()[-1] == "RELEASE-SMOKE: FAIL"
 
 
-def machines_document(cell: str) -> str:
-    return ("## Packages\n\n| Packager | Stars | fit (computed, v1): kunde |\n|---|---|---|\n| x | – | good |\n\n"
-            f"## Machines\n\n| Machine | Installed |\n|---|---|\n| kunde | {cell} |\n")
-
-
-def test_an_unknown_inventory_must_be_rendered_exactly_as_unknown_with_a_reason():
-    assert rs.render_problems(machines_document("unknown (llmfit not found)"), "kunde", None) == []
-    assert rs.render_problems(machines_document("unknownBROKEN"), "kunde", None)
-    assert rs.render_problems(machines_document("unknown ()"), "kunde", None)
-
-
-def rendered(tmp_path: Path, with_profile: bool) -> str:
+def rendered(tmp_path: Path, with_profile: bool) -> tuple[str, dict]:
+    """A real render of the fixture snapshot; returns the Markdown text and the JSON view."""
     config = Configuration.from_dict(qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md")))
     run_at = datetime(2026, 9, 22, 9, tzinfo=timezone.utc)
     assert fetch_with_config(config, "workstation", build_transport(qwen35_transport_mapping()), run_at) == 0
     if with_profile:
-        profile = dict(EXAMPLES["HardwareSnapshot"], machine="workstation")
-        (tmp_path / "state" / "hardware").mkdir()
-        (tmp_path / "state" / "hardware" / "workstation.json").write_text(json.dumps(profile), encoding="utf-8")
+        profile = place_v2_profile(config.paths.hardware_dir)
+        config = with_profile_id(config, "workstation", profile.profile_id)
     assert render_with_config(config) == 0
-    return (tmp_path / "models.md").read_text(encoding="utf-8")
+    return (
+        (tmp_path / "models.md").read_text(encoding="utf-8"),
+        json.loads((tmp_path / "models.json").read_text(encoding="utf-8")),
+    )
 
 
-def test_markdown_table_reads_the_rendered_package_table(tmp_path):
-    rows = rs.markdown_table(rendered(tmp_path, with_profile=True), "Packages")
-    assert len(rows) == 2
+def test_markdown_table_reads_the_rendered_not_covered_block(tmp_path):
+    """Qwen3.5 is `not covered` by fit v1, so the fixture snapshot fills exactly that block."""
+    text, _payload = rendered(tmp_path, with_profile=True)
+    rows = rs.markdown_table(text, "Not covered: workstation")
     assert {row["Packager"] for row in rows} == {"unsloth", "ollama"}
     assert all(row["Stars"] == "–" for row in rows)
-    assert all(row["fit (computed, v1): workstation"].startswith("no recommendation:") for row in rows)
-
-
-def test_the_placed_schema_1_profile_validates_and_carries_the_fixture_inventory():
-    """The step that keeps `render` testable until the renderer reads schema 2: the profile it
-    places has to be a valid schema-1 `HardwareSnapshot` with the fixtures' own numbers."""
-    profile = rs.v1_profile_from_fixtures("kunde")
-
-    assert load_hardware_snapshot(profile).machine == "kunde"
-    assert profile["vram_gib"] == 11.94 and profile["ram_gib"] == 127.46
-    assert len(profile["installed"]) == 3
-    assert all(entry["digest"].startswith("sha256:") for entry in profile["installed"])
+    assert all(row["Reason"] == "architecture not covered by v1" for row in rows)
+    assert rs.markdown_table(text, "Ranking: workstation") == []
 
 
 def test_render_checks_pass_on_a_document_with_a_profile(tmp_path):
-    assert rs.render_problems(rendered(tmp_path, with_profile=True), "workstation", 1) == []
-
-
-def test_render_checks_compare_installed_with_the_profile(tmp_path):
-    problems = rs.render_problems(rendered(tmp_path, with_profile=True), "workstation", 2)
-    assert any("Installed" in problem for problem in problems)
+    text, payload = rendered(tmp_path, with_profile=True)
+    assert rs.render_problems(text, "workstation") == []
+    assert rs.json_problems(payload, text, "workstation") == []
 
 
 def test_render_checks_name_a_machine_without_a_profile(tmp_path):
-    problems = rs.render_problems(rendered(tmp_path, with_profile=False), "workstation", None)
-    assert any("Installed" in problem for problem in problems)
+    text, _payload = rendered(tmp_path, with_profile=False)
+    problems = rs.render_problems(text, "workstation")
+    assert any("GPU state" in problem for problem in problems)
 
 
-def test_render_checks_name_a_missing_fit_column(tmp_path):
-    problems = rs.render_problems(rendered(tmp_path, with_profile=True), "kunde", 1)
-    assert any("fit (computed, v1): kunde" in problem for problem in problems)
+def test_render_checks_name_a_machine_that_is_not_in_the_document(tmp_path):
+    text, _payload = rendered(tmp_path, with_profile=True)
+    problems = rs.render_problems(text, "kunde")
+    assert any("## Ranking: kunde" in problem for problem in problems)
+
+
+def test_json_checks_name_a_view_that_disagrees_with_the_markdown_one(tmp_path):
+    text, payload = rendered(tmp_path, with_profile=True)
+    assert rs.json_problems({**payload, "ranking_rule": "something else"}, text, "workstation")
+    assert rs.json_problems({**payload, "schema_version": 2}, text, "workstation")
+    assert rs.json_problems({**payload, "machines": []}, text, "workstation")
+
+
+def test_binding_the_profile_writes_it_into_the_machine_table():
+    text = rs.customer_config(EXAMPLE, {"Qwen/Qwen3.5-9B"})
+    bound = rs.bind_profile_in_config(text, "kunde", "3f9a0c21d4e6b870")
+    assert 'profile = "3f9a0c21d4e6b870"' in bound
+    assert tomllib.loads(bound)["machines"]["kunde"]["profile"] == "3f9a0c21d4e6b870"
+
+
+def test_binding_a_machine_the_configuration_does_not_have_is_a_value_error():
+    with pytest.raises(ValueError, match="machines.other"):
+        rs.bind_profile_in_config(rs.customer_config(EXAMPLE, {"Qwen/Qwen3.5-9B"}), "other", "3f9a0c21d4e6b870")
 
 
 def test_markdown_table_keeps_an_escaped_pipe_inside_its_cell():
