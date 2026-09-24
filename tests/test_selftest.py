@@ -175,25 +175,38 @@ GOOD_DOCUMENT = "\n".join(
         "## Ranking: workstation",
     ]
 )
-NOT_COVERED = [{"base_model_hf_repo": st.QWEN_BASE, "reason": "architecture not covered by v1"}]
+def _block(**changes) -> dict:
+    """A machine block in which Qwen3.5 is ranked from the size of its packages."""
+    entry = {"base_model_hf_repo": st.QWEN_BASE, "fit": {"basis": "size"}, "reason": None}
+    data = {"ranked": [entry], "too_tight": [], "not_covered": []}
+    data.update(changes)
+    return data
 
 
 def test_criterion_four_passes_on_a_ranking_with_its_header():
-    assert st.ranking_problems(GOOD_DOCUMENT, "workstation", NOT_COVERED) == []
+    assert st.ranking_problems(GOOD_DOCUMENT, "workstation", _block()) == []
 
 
 def test_criterion_four_names_a_missing_header_line():
     without_rule = GOOD_DOCUMENT.replace("Ranking rule: ", "Rule: ")
-    assert any("Ranking rule" in problem for problem in st.ranking_problems(without_rule, "workstation", NOT_COVERED))
+    assert any("Ranking rule" in problem for problem in st.ranking_problems(without_rule, "workstation", _block()))
 
 
-def test_criterion_four_names_an_empty_not_covered_block():
-    assert any("empty" in problem for problem in st.ranking_problems(GOOD_DOCUMENT, "workstation", []))
+def test_criterion_four_names_a_machine_that_judged_no_package_of_the_model():
+    empty = _block(ranked=[])
+    assert any("no package" in problem for problem in st.ranking_problems(GOOD_DOCUMENT, "workstation", empty))
 
 
-def test_criterion_four_names_another_reason_than_the_fit_rules_own():
-    other = [{"base_model_hf_repo": st.QWEN_BASE, "reason": "no profile"}]
-    assert any("not the fit rule" in problem for problem in st.ranking_problems(GOOD_DOCUMENT, "workstation", other))
+def test_criterion_four_names_a_package_judged_on_another_basis():
+    architecture = _block(ranked=[{"base_model_hf_repo": st.QWEN_BASE, "fit": {"basis": "architecture"}}])
+    problems = st.ranking_problems(GOOD_DOCUMENT, "workstation", architecture)
+    assert any("another basis" in problem for problem in problems)
+
+
+def test_criterion_four_names_packages_still_set_aside_as_not_covered():
+    stale = _block(not_covered=[{"base_model_hf_repo": st.QWEN_BASE, "reason": "architecture not covered by v1"}])
+    problems = st.ranking_problems(GOOD_DOCUMENT, "workstation", stale)
+    assert any("still set aside" in problem for problem in problems)
 
 
 # --- criterion 5 -------------------------------------------------------------------------------------
@@ -365,12 +378,37 @@ GOOD_DIALOG = [
     "Step 3 of 5  Context",
     "checking workstation   one graphics card, 12 GB, 128 GB memory",
     "Step 4 of 5  Measurement",
-    "Step 5 of 5  Results\n  not covered: 7 packages -- architecture not covered by v1 (a Q4, b Q4, c Q4 and 4 more)",
+    "Step 5 of 5  Results\n #   Model                    Package                  Fit                 Speed"
+    "         Memory\n not covered: 7 packages -- a weight file has no size (a Q4, b Q4, c Q4 and 4 more)",
+]
+GOOD_MODELS = [
+    "Qwen3.5-9B                    good          9B       Qwen, unsloth               13.6M    qwen3.5:9b",
+    "DeepSeek-R1-0528-Qwen3-8B     good          8B       unsloth                     68k      none known",
 ]
 
 
 def test_criterion_seven_passes_on_a_run_that_reads_as_a_guided_dialog():
-    assert st.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE) == []
+    assert st.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE, GOOD_MODELS) == []
+
+
+def test_criterion_seven_names_a_model_list_that_is_empty():
+    assert any("no model" in problem for problem in st.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE, []))
+
+
+def test_criterion_seven_names_a_model_line_that_is_too_wide():
+    wide = [GOOD_MODELS[0] + " " * 20]
+
+    assert any("characters wide" in problem for problem in st.model_list_problems(wide))
+
+
+def test_criterion_seven_names_a_model_line_without_a_fit():
+    assert any("carries no fit" in problem for problem in st.model_list_problems(["Qwen3.5-9B    9B"]))
+
+
+def test_criterion_seven_names_a_result_table_without_the_model_column():
+    without = [line for line in GOOD_DIALOG if "Package" not in line]
+
+    assert any("table head" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE, GOOD_MODELS))
 
 
 def test_criterion_seven_names_a_missing_start_screen():
@@ -394,9 +432,12 @@ def test_criterion_seven_names_a_scale_without_its_last_column():
 def test_criterion_seven_names_a_result_view_that_lists_every_package_again():
     one_per_package = [
         line for line in GOOD_DIALOG if "not covered" not in line
-    ] + ["Step 5 of 5  Results\n  not covered: a Q4 -- architecture not covered by v1"]
+    ] + [
+        "Step 5 of 5  Results\n #   Model                    Package                  Fit                 Speed"
+        "         Memory\n not covered: a Q4 -- a weight file has no size"
+    ]
 
-    problems = st.guided_mode_problems(one_per_package, GOOD_SCALE)
+    problems = st.guided_mode_problems(one_per_package, GOOD_SCALE, GOOD_MODELS)
 
     assert any("not grouped by reason" in problem for problem in problems)
 

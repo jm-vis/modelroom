@@ -30,6 +30,7 @@ from modelroom.intro import (
     print_intro,
     source_url,
     step_head,
+    style_rules,
     use_color,
 )
 
@@ -240,6 +241,54 @@ def test_the_start_screen_promises_nothing_it_does_not_keep():
     printed = _text(_intro(), _stream("utf-8"))
 
     assert "before you say yes" not in printed
+
+
+# --- the pictogram: shading without color, three colors with it -------------------------------------
+
+
+def test_with_color_every_cell_of_the_mark_is_a_full_block():
+    """Windows Terminal draws the shading glyphs as a coarse dot raster (measured 2026-09-24)."""
+    lines = intro_lines(_intro(), _stream("utf-8"), colored=True)
+
+    drawn = "".join(text for line in lines[:3] for _class, text in line)
+    assert UNICODE_GLYPHS.muted not in drawn
+    assert UNICODE_GLYPHS.empty not in drawn
+    assert drawn.count(UNICODE_GLYPHS.full) == 12
+
+
+def test_the_three_cell_colors_are_white_and_two_blues():
+    classes = {name: style for name, style in style_rules()}
+
+    assert classes["mark"].startswith("fg:#ffffff")
+    assert classes["mark-muted"] == "fg:#8cacc9"
+    assert classes["mark-empty"] == "fg:#3c5470"
+
+
+def test_with_color_the_three_cell_kinds_keep_their_own_class():
+    lines = intro_lines(_intro(), _stream("utf-8"), colored=True)
+
+    pictogram = lines[0][: lines[0].index(("", "   "))]
+    assert [name for name, _text in pictogram if name] == [
+        "class:mark",
+        "class:mark",
+        "class:mark-muted",
+        "class:mark",
+    ]
+
+
+def test_without_color_the_shading_glyphs_stay_as_they_are():
+    printed = _text(_intro(), _stream("utf-8"))
+
+    assert UNICODE_GLYPHS.muted in printed
+    assert UNICODE_GLYPHS.empty in printed
+
+
+def test_a_console_without_the_block_glyphs_keeps_its_ascii_mark_in_color():
+    lines = intro_lines(_intro(), _stream("cp1252"), colored=True)
+
+    drawn = "".join(text for line in lines[:3] for _class, text in line)
+    assert ASCII_GLYPHS.full in drawn
+    assert drawn.count(ASCII_GLYPHS.full) == 12
 
 
 # --- the step heads --------------------------------------------------------------------------------

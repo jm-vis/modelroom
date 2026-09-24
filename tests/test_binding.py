@@ -133,6 +133,41 @@ def test_a_missing_fingerprint_on_either_side_never_disagrees(stored, local):
     assert target.action == "adopt_config"
 
 
+def test_the_same_machine_measures_again_under_a_binding_that_is_missing():
+    """The way out of the clone question (decided 2026-09-24): the old id keeps its measurement."""
+    target = resolve_profile_target(BOUND, None, {}, HERE, FRESH, same_machine=True)
+
+    assert (target.action, target.profile_id) == ("rewrite", BOUND)
+    assert "missing" in target.reason and "same id" in target.reason
+
+
+def test_the_same_machine_measures_again_under_a_profile_of_another_fingerprint():
+    target = resolve_profile_target(None, CONFIGURED, _profiles(configured=ELSEWHERE), HERE, FRESH, same_machine=True)
+
+    assert (target.action, target.profile_id) == ("rewrite", CONFIGURED)
+    assert "os_fingerprint" in target.reason and "same machine" in target.reason
+
+
+@pytest.mark.parametrize(
+    "home_binding, config_profile, profiles, expected",
+    [
+        (BOUND, CONFIGURED, {"bound": HERE}, ("bound", BOUND)),
+        (None, CONFIGURED, {"configured": HERE}, ("adopt_config", CONFIGURED)),
+        (None, None, {}, ("new", FRESH)),
+    ],
+)
+def test_same_machine_changes_nothing_where_the_rule_does_not_ask(home_binding, config_profile, profiles, expected):
+    known = _profiles(**{key: value for key, value in profiles.items()})
+    target = resolve_profile_target(home_binding, config_profile, known, HERE, FRESH, same_machine=True)
+
+    assert (target.action, target.profile_id) == expected
+
+
+def test_both_switches_at_once_are_a_value_error():
+    with pytest.raises(ValueError):
+        resolve_profile_target(BOUND, None, {}, HERE, FRESH, new_identity=True, same_machine=True)
+
+
 def test_the_fresh_id_must_be_new():
     with pytest.raises(ValueError):
         resolve_profile_target(None, None, _profiles(bound=HERE), HERE, BOUND)

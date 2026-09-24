@@ -77,14 +77,14 @@ def rendered(tmp_path: Path, with_profile: bool) -> tuple[str, dict]:
     )
 
 
-def test_markdown_table_reads_the_rendered_not_covered_block(tmp_path):
-    """Qwen3.5 is `not covered` by fit v1, so the fixture snapshot fills exactly that block."""
+def test_markdown_table_reads_the_rendered_ranking(tmp_path):
+    """Qwen3.5 is a hybrid architecture, so every package of it is judged from its size."""
     text, _payload = rendered(tmp_path, with_profile=True)
-    rows = rs.markdown_table(text, "Not covered: workstation")
-    assert {row["Packager"] for row in rows} == {"unsloth", "ollama"}
+    rows = rs.markdown_table(text, "Ranking: workstation")
+    assert {row["Packager"] for row in rows} == {"unsloth"}  # the first ten of them
     assert all(row["Stars"] == "–" for row in rows)
-    assert all(row["Reason"] == "architecture not covered by v1" for row in rows)
-    assert rs.markdown_table(text, "Ranking: workstation") == []
+    assert all(row["Fit (computed)"].startswith(("good", "marginal")) for row in rows)
+    assert rs.markdown_table(text, "Not covered: workstation") == []
 
 
 def test_render_checks_pass_on_a_document_with_a_profile(tmp_path):

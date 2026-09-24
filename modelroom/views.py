@@ -12,6 +12,7 @@ from datetime import datetime
 
 from .contracts import Area, Fit, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
+from .guided_context import LEVELS
 from .intro import STEP_COUNT, glyphs, step_head
 from .measurements import Scenario
 from .render import format_header_line
@@ -266,14 +267,22 @@ def document_markdown(document: RenderDocument) -> str:
 
 # --- writer: terminal ----------------------------------------------------------------------------
 
+# The result table as the mockup of 2026-09-24 draws it: what a reader recognizes a package by
+# (its model and its packager) before what a fit is made of. 99 characters wide plus the one space
+# every line of this view is indented by, so it fits a 100-column window without wrapping.
+# `Fit` is 20 and not 18: `marginal (from size)` is 20 characters and was cut to
+# `marginal (from siz` (second-model round, 2026-09-24). The two came off `Package`, whose cell
+# says so with `…` instead of ending mid-word.
 _TERMINAL_COLUMNS = (
     ("#", 3),
-    ("packager", 20),
-    ("quant", 12),
-    ("GiB", 8),
-    ("fit (computed)", 20),
-    ("tok/s (measured)", 16),
+    ("Model", 24),
+    ("Package", 22),
+    ("Fit", 20),
+    ("Speed", 12),
+    ("Memory", 8),
 )
+_INDENT = " "
+_FROM_SIZE = " (from size)"
 # How many of the packages behind one reason are named before the rest is a number.
 _NAMED_PER_REASON = 3
 
@@ -305,35 +314,74 @@ def _set_aside_lines(heading: str, entries: list[SetAsideEntry]) -> list[str]:
         rest = len(names) - _NAMED_PER_REASON
         listed = f"{shown} and {rest} more" if rest > 0 else shown
         count = f"{len(names)} package" + ("" if len(names) == 1 else "s")
-        lines.append(f"  {heading}: {count} -- {reason} ({listed})")
+        lines.append(f"{_INDENT}{heading}: {count} -- {reason} ({listed})")
     return lines
 
 
+def context_short(context: int) -> str:
+    """A context as the scale of the dialog names it: `L 32k`, or the number for a custom one."""
+    level = next((level for level in LEVELS if level.tokens == context), None)
+    return f"{level.name} {level.shown_tokens}" if level is not None else f"{context} tokens"
+
+
+def scenario_short(scenario: Scenario) -> str:
+    """The scenario in one short line, for a terminal: `context L 32k · 1 request · KV cache f16`."""
+    assumed = " (assumed)" if scenario.kv_type_assumed else ""
+    requests = "request" if scenario.requests == 1 else "requests"
+    dot = glyphs().dot
+    return (
+        f"context {context_short(scenario.context_requested)} {dot} "
+        f"{scenario.requests} {requests} {dot} KV cache {scenario.kv_type}{assumed}"
+    )
+
+
+def _model_name(entry: RankedEntry) -> str:
+    """What a reader calls the model: the name of its base model, without the account in front."""
+    return entry.base_model_hf_repo.partition("/")[2] or entry.base_model_hf_repo
+
+
+def _package_cell(entry: RankedEntry) -> str:
+    """`packager · quant`, cut to its column with `…` rather than ending mid-word."""
+    width = dict(_TERMINAL_COLUMNS)["Package"]
+    text = f"{entry.packager} {glyphs().dot} {entry.quantization}"
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _terminal_fit(fit: Fit) -> str:
+    """The fit in the terminal table: the class, and on the size basis that it is from the size."""
+    return f"{fit.fit_class}{_FROM_SIZE if fit.basis == 'size' else ''}"
+
+
+def _terminal_speed(entry: RankedEntry) -> str:
+    return _UNKNOWN if entry.speed_tps is None else f"{entry.speed_tps:.1f} tok/s"
+
+
 def _terminal_ranking(block: MachineRanking) -> list[str]:
-    lines = [f"Ranking: {block.machine} ({block.label}, {block.status})"]
+    head = f"Ranking: {block.machine} ({block.label})"
+    lines = [head if block.status == "ranked" else f"Ranking: {block.machine} ({block.label}, {block.status})"]
     if block.reason is not None:
-        lines.append(f"  {block.reason}")
+        lines.append(f"{_INDENT}{block.reason}")
     if not block.ranked:
-        lines.append("  no package of the configured base models is ranked here")
+        lines.append(f"{_INDENT}no package of the configured base models is ranked here")
     else:
-        lines.append("  " + _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))
-        lines.append("  " + _terminal_rule())
+        lines.append(_INDENT + _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))
+        lines.append(_INDENT + _terminal_rule())
         for entry in block.ranked:
             lines.append(
-                "  "
+                _INDENT
                 + _terminal_row(
                     [
                         str(entry.rank),
-                        entry.packager,
-                        entry.quantization,
-                        f"{entry.weights_gib:.2f}",
-                        _fit_text(entry.fit),
-                        _UNKNOWN if entry.speed_tps is None else f"{entry.speed_tps:.1f}",
+                        _model_name(entry),
+                        _package_cell(entry),
+                        _terminal_fit(entry.fit),
+                        _terminal_speed(entry),
+                        f"{entry.fit.need_gib:.1f} GB",
                     ]
                 )
             )
-        lines.append(f"  showing {len(block.ranked)} of {block.ranked_total} ranked packages")
-        lines += [f"  #{entry.rank} {entry.note.text}" for entry in block.ranked]
+        lines.append(f"{_INDENT}showing {len(block.ranked)} of {block.ranked_total} ranked packages")
+        lines += [f"{_INDENT}#{entry.rank} {entry.note.text}" for entry in block.ranked]
     lines += _set_aside_lines("not covered", block.not_covered)
     lines += _set_aside_lines("too tight", block.too_tight)
     return lines
@@ -343,17 +391,14 @@ def document_terminal(document: RenderDocument) -> str:
     """A compact terminal view of the same document: the ranking, the notes and both blocks.
 
     It shows fewer columns than the Markdown table on purpose (a terminal is narrow), never
-    other numbers: every value here is read from `document`, like the other two writers. It is
-    step 5 of the guided mode, which is the only caller that asks for it, so it carries that
-    step's head; `modelroom render` writes the two files and stays silent.
+    other numbers: every value here is read from `document`, like the other two writers. Since
+    2026-09-24 it reads as the mockup does -- the model and the package by name, the fit, the
+    speed and the memory -- and the snapshot time and the ranking rule stay in the Markdown file
+    a reader can take their time over. It is step 5 of the guided mode, which is the only caller
+    that asks for it, so it carries that step's head; `modelroom render` writes the two files and
+    stays silent.
     """
-    lines = [
-        step_head(RESULTS_STEP),
-        "",
-        f"Snapshot run at: {document.snapshot_run_at.isoformat()}",
-        f"Scenario: {scenario_line(document.scenario)}",
-        f"Ranking rule: {document.ranking_rule}",
-    ]
+    lines = [step_head(RESULTS_STEP), "", scenario_short(document.scenario)]
     if document.rating_unavailable is not None:
         lines.append(f"Market rating unavailable: {document.rating_unavailable}")
     for block in document.machines:
@@ -361,4 +406,4 @@ def document_terminal(document: RenderDocument) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["document_markdown", "document_terminal", "scenario_line"]
+__all__ = ["context_short", "document_markdown", "document_terminal", "scenario_line", "scenario_short"]

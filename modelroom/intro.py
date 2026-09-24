@@ -38,7 +38,10 @@ from .profile import HardwareProfile
 # gray for a side note. They are foreground colors only -- the background belongs to the terminal.
 WHITE = "#ffffff"
 MUTED = "#8cacc9"
-MUTED_DARK = "#5a7c99"
+# The darker tone of the same family, for the empty cells of the mark. In color every cell is a
+# full block and the tone alone tells them apart (decided 2026-09-24): Windows Terminal draws the
+# shading glyphs as a coarse dot raster, which the mark is not.
+MUTED_DARK = "#3c5470"
 GREEN = "#3fa58e"
 AMBER = "#d97706"
 CYAN = "#0891b2"
@@ -166,8 +169,12 @@ def done_line(number: int, summary: str, stream=None) -> str:
     return f"{glyphs(stream).check} {STEP_NAMES[number - 1].ljust(_LABEL_WIDTH + 3)} {summary}"
 
 
-def intro_lines(intro: Intro, stream=None) -> list[list[tuple[str, str]]]:
-    """The start screen as lines of `(class name, text)` fragments -- one list per line."""
+def intro_lines(intro: Intro, stream=None, colored: bool = False) -> list[list[tuple[str, str]]]:
+    """The start screen as lines of `(class name, text)` fragments -- one list per line.
+
+    `colored` says which mark is drawn: in color every cell is a full block and its own color
+    tells it apart, without color the three shading glyphs do (`_pictogram_row`).
+    """
     marks = glyphs(stream)
     version = f"modelroom {intro.version}"
     right = [
@@ -175,7 +182,9 @@ def intro_lines(intro: Intro, stream=None) -> list[list[tuple[str, str]]]:
         [("class:tagline", TAGLINE)],
         [("class:note", version if intro.source is None else f"{version} {marks.dot} {intro.source}")],
     ]
-    lines = [[*_pictogram_row(row, marks), ("", "   ")] + fragments for row, fragments in zip(PICTOGRAM, right)]
+    lines = [
+        [*_pictogram_row(row, marks, colored), ("", "   ")] + fragments for row, fragments in zip(PICTOGRAM, right)
+    ]
     lines.append([])
     lines += [_fact_line(fact) for fact in intro.facts]
     lines.append([])
@@ -190,12 +199,14 @@ def print_intro(intro: Intro, out: Callable[[str], None], stream=None, colored: 
     `False`, because a run that answers from a file is read from a log, not from a screen, and its
     output has to be the same wherever it runs. `None` asks the stream (`use_color`).
     """
-    lines = intro_lines(intro, stream)
     if colored is None:
         colored = use_color(stream)
+    lines = intro_lines(intro, stream, colored=colored)
     if colored and _print_in_color(lines):
         return
-    for line in lines:
+    # The library could not drive this console after all, so the mark is printed without color --
+    # and then it is the shading glyphs again, not twelve blocks of one tone.
+    for line in intro_lines(intro, stream) if colored else lines:
         out(" " + "".join(text for _class, text in line) if line else "")
 
 
@@ -222,8 +233,18 @@ def _print_in_color(lines: list[list[tuple[str, str]]]) -> bool:
     return True
 
 
-def _pictogram_row(row: Sequence[str], marks: Glyphs) -> list[tuple[str, str]]:
-    cells = {"f": ("class:mark", marks.full), "m": ("class:mark-muted", marks.muted), "x": ("class:mark-empty", marks.empty)}
+def _pictogram_row(row: Sequence[str], marks: Glyphs, colored: bool = False) -> list[tuple[str, str]]:
+    """One row of the mark: three shading glyphs without color, twelve full blocks with it.
+
+    `▓▓` and `░░` are drawn as a coarse dot raster by the console this package is used at most
+    (measured 2026-09-24, Windows Terminal), which the mark of a brand is not. Where there is
+    color, the block is the same for every cell and the color is what tells the three apart; where
+    there is none, the glyph has to, exactly as before.
+    """
+    if colored:
+        cells = {key: (f"class:mark{suffix}", marks.full) for key, suffix in (("f", ""), ("m", "-muted"), ("x", "-empty"))}
+    else:
+        cells = {"f": ("class:mark", marks.full), "m": ("class:mark-muted", marks.muted), "x": ("class:mark-empty", marks.empty)}
     fragments: list[tuple[str, str]] = []
     for index, cell in enumerate(row):
         if index:

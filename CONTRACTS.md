@@ -87,7 +87,7 @@ it is the tag part of `ollama_name` after the colon.
 |---|---|
 | `0` | success: every fetch area is `complete` (`render`: the document was written, even when its rating source failed) |
 | `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first leaves the snapshot, the hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated, because the lock is taken before the staleness checks (`cli.py`) |
-| `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration (`fetch`) or not configured at all (`hardware`); `hardware`'s bound profile belongs to another machine (see "Hardware measurement"); or an external tool a command *requires* is missing or below the minimum version -- since the measurement work package `hardware` no longer requires `llmfit`, which is a cross-check there |
+| `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration (`fetch`) or not configured at all (`hardware`); `hardware`'s bound profile belongs to another machine (see "Hardware measurement") and neither `--same-machine` nor `--new-identity` says which it is; `hardware --same-machine` and `hardware --new-identity` were passed together; or an external tool a command *requires* is missing or below the minimum version -- since the measurement work package `hardware` no longer requires `llmfit`, which is a cross-check there |
 | `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version`, is not valid JSON, or does not match its model (fix-round 5, P2-3: `cli.py`'s own `_read_snapshot`/`_read_hardware_snapshot` catch `json.JSONDecodeError`/pydantic `ValidationError` at every load site and name the file in the message, the same exit code as an unsupported `schema_version`) |
 
 ## Models
@@ -565,13 +565,14 @@ renderer must use.
 |---|---|---|---|
 | `fit_class` | `"perfect" \| "good" \| "marginal" \| "too_tight" \| "unknown"` | -- | the fit verdict |
 | `mode` | `"gpu" \| "cpu_gpu" \| "cpu" \| None` | `None` only when `fit_class == "unknown"` | where the package would run |
-| `need_gib` | `float` | `>= 0` | estimated memory needed |
+| `need_gib` | `float` | `>= 0` | the memory needed, computed |
 | `weights_gib` | `float` | `>= 0` | the package's weight files, summed |
-| `kv_gib` | `float` | `>= 0` | estimated KV-cache size at `context` |
+| `kv_gib` | `float` | `>= 0` | the KV-cache size at `context`, computed |
 | `pool_gib` | `float` | -- | the memory pool judged against (can be negative if reserves exceed capacity) |
 | `reserve_gib` | `float` | `>= 0` | the reserve actually applied (VRAM or RAM, matching `mode`) |
 | `context` | `int` | `>= 0` | the context length used for `kv_gib` |
 | `context_assumed` | `bool` | -- | `true` when `context` is the 8192 fallback, not the package's own `default_context` |
+| `basis` | `"architecture" \| "size"` | default `"architecture"` | what the KV cache was computed from: the base model's architecture, or the size alone ("Fit from size") |
 | `reason` | `str \| None` | non-`None` typically iff `fit_class == "unknown"` | why the fit could not be computed, when it could not |
 
 ```json
@@ -585,6 +586,7 @@ renderer must use.
   "reserve_gib": 1.0,
   "context": 8192,
   "context_assumed": true,
+  "basis": "architecture",
   "reason": null
 }
 ```
@@ -1440,13 +1442,15 @@ summary line to stdout: the machine name, `vram_gib`/`ram_gib`, and either `inst
 `modelroom/fit.py::compute_fit(package, base_model, hardware, machine_config) -> Fit` is a
 pure function (no I/O) computing whether one `Package` fits one machine, given its
 `HardwareSnapshot` and the `MachineConfig` naming its reserved headroom. **A renderer must
-always label this result "fit (computed, v1)", never "runs"** -- it is an estimate from a
+always label this result "fit (computed, v1)", never "runs"** -- it is computed from a
 memory-sizing formula, not a measurement of the package actually loading and generating
 tokens (that is what `Measurement`/`bench`, a later work package, are for).
 
-**Coverage.** Only `base_model.architecture.kind == "dense_classic"` is judged; anything else
-(including a hybrid or MoE architecture resolved to `"unknown"`, e.g. `Qwen/Qwen3.5-9B`) comes
-back `fit_class="unknown"`, `reason="architecture not covered by v1"`. Only a `complete`
+**Coverage.** Only `base_model.architecture.kind == "dense_classic"` is judged by this formula;
+anything else (including a hybrid or MoE architecture resolved to `"unknown"`, e.g.
+`Qwen/Qwen3.5-9B`) comes back `fit_class="unknown"`,
+`reason="architecture not covered by v1"` from `compute_fit`, and is computed from its size by
+`compute_fit_v2` instead ("Fit from size (basis `size`)" below, decided 2026-09-24). Only a `complete`
 `format == "gguf"` package is judged; an incomplete package or a non-GGUF (`tensor`) package
 also comes back `"unknown"` with a reason. A `Fit` for an unknown case carries zeroed
 numeric fields (`need_gib`, `weights_gib`, `kv_gib`, `pool_gib`, `reserve_gib` all `0.0`,
@@ -1497,6 +1501,58 @@ package (~5.6 GiB, `L=42, KVH=8, D=128`) has `need_gib = 7.9725` GiB: `good` on 
 as if it were current for that profile, since the hardware may have changed since that
 measurement was taken. This check belongs to the renderer (a later work package), not to
 `compute_fit` or to the `Measurement`/`HardwareSnapshot` models themselves.
+
+### Fit from size (basis `size`)
+
+Decided 2026-09-24, after a hand test in which 25 of 26 packages stood under "architecture not
+covered by v1" and one package was ranked: an architecture nobody can read is a reason to compute
+more coarsely, not a reason to say nothing. A `Fit` says which of the two it is in `basis`, and
+the provenance of both stays `computed` -- the word for a number this package worked out rather
+than measured. `size` is never shown as a measurement and never as a promise.
+
+**Two entry points**, both in `modelroom/fit.py`, both fit v1's formula and classes with one term
+replaced:
+
+- `fit_from_size(package, vram_gib, ram_gib, machine_config, context)` -- after the fetch:
+  `weights_gib` is the package's own weight files as always, and
+  `kv_gib = context x KV_PER_TOKEN_SIZE_BASIS / 1024**3` with `KV_PER_TOKEN_SIZE_BASIS = 147_456`
+  bytes (`2 x 36 layers x 8 KV heads x 128 wide x 2 bytes`, the numbers of a dense 9B model at
+  16-bit precision). `compute_fit_v2` calls it for every package whose architecture is not
+  `dense_classic`.
+- `fit_from_parameters(parameters_b, vram_gib, ram_gib, machine_config, context)` -- before the
+  fetch, for the selection list of the guided mode's step 2:
+  `weights_gib = parameters_b x 1e9 x BYTES_PER_PARAMETER_Q4 / 1024**3` with
+  `BYTES_PER_PARAMETER_Q4 = 0.6`, the size of a `Q4_K_M` build (about 4.85 bits per weight plus
+  the tables). Measured against two real packages of the fixtures: 5,680,522,464 bytes for
+  9,653,104,368 parameters (0.588) and 5,027,785,216 bytes for 8,190,735,360 parameters (0.614).
+
+`need_gib`, the pool, the mode and the thresholds are fit v1's, unchanged. **The class is capped
+at `good`**: `perfect` stays reserved for a package whose architecture was read.
+
+**The KV constant is one fixed assumption, not a bound in either direction** (corrected in the
+second-model round of 2026-09-24, which measured the case). A hybrid or mixture architecture keeps
+fewer layers of full attention and needs less than it; a dense model with more layers needs more.
+Measured on the 5.29 GiB `Q4_K_M` package of the fixtures at 131072 tokens: 24.32 GiB on this
+basis, against 22.32 GiB for 32 layers, 27.32 for 42 and 30.32 for 48. At 8192 tokens the same
+comparison is 7.44 against 7.32 / 7.63 / 7.82 GiB. So a package this basis calls `marginal` can be
+`too_tight` in truth, and one it calls `too_tight` can fit: the cap at `good` limits the claim, it
+does not make the number exact. Every view therefore says `from size` next to the class, and an
+exact computation for these architectures is a work package of its own.
+
+**What stays `unknown`**, size or no size, because there is nothing to compute with: a package
+that is not a complete `gguf` build, a weight file with no size, the GPU states the schema-2 gate
+refuses, a llmfit deviation, and more than one request. For the list of step 2 there are two more
+of its own: `machine not measured` and `parameter count unknown`.
+
+**Where the basis is visible.** In the JSON view as `fit.basis`, in the terminal table as
+` (from size)` behind the class, and in the note of the row -- the note of a ranked package keeps
+the sentence of its memory pool in front (`Fits into graphics memory: …`, `Too large for graphics
+memory alone, …`; without it a row in system memory read as the equal of one in graphics memory,
+acceptance of 2026-09-24) and ends with `From the size of the package, not its architecture.`,
+with `fit.basis` added to its facts; a `too_tight` one ends with the same sentence. A row whose
+speed was measured carries the measurement's note instead, so in
+the Markdown view the basis of such a row is in the JSON view only; the Markdown table's own `Fit
+(computed)` cell is unchanged.
 
 ## Render (AP5)
 
@@ -2227,19 +2283,33 @@ results folder the guided mode used last, `bindings` maps each results folder to
 `PointerFileError`, an unsupported version `SchemaVersionError`.
 
 `resolve_profile_target(home_binding, config_profile, profiles, local_fingerprint,
-fresh_profile_id, new_identity=False)` is the takeover rule, without I/O:
+fresh_profile_id, new_identity=False, same_machine=False)` is the takeover rule, without I/O:
 
-1. `new_identity` (a later `hardware --new-identity`, or "a clone" in the guided mode): `new`.
+1. `new_identity` (`hardware --new-identity`, or "a clone" in the guided mode): `new`.
 2. The home binding for this results folder: `bound`.
 3. Else the selected configuration machine's `profile`: `adopt_config` (it becomes the binding).
 4. Else: `new` (a new profile, bound and written to the configuration).
 
 A bound or configured profile that is missing from the results folder, or whose
 `os_fingerprint` differs from this machine's, is `ask_clone`: the guided mode asks "same machine
-or a clone?", automation stops and names `--new-identity`. A fingerprint `none` on either side
-never differs (a migrated profile, or a machine whose identifier is unreadable). In this work
-package the rule is a function with the parameter `new_identity`; the `hardware --new-identity`
-flag is wired by the work package that rewrites `hardware`.
+or a clone?", automation stops and names `--same-machine` and `--new-identity`. A fingerprint
+`none` on either side never differs (a migrated profile, or a machine whose identifier is
+unreadable).
+
+**`same_machine` is the way out of that question** (`hardware --same-machine`, or "the same
+machine" in the guided mode; decided 2026-09-24, after a hand test in which the honest answer
+"the same machine" left the machine unmeasured and every step after it empty). Where the rule
+would ask, it answers `rewrite` with the **id the binding already names** and the reason it was
+reached (`... is missing in the results folder; measured again under the same id`, or `... has
+another os_fingerprint; measured again under the same id, the answer was that it is the same
+machine`). `hardware` then writes the profile under that `profile_id` -- `display_name` the
+existing profile's, else this machine's host name -- binds it (the binding does not change, it
+is the same id) and the guided mode writes `[machines.<name>].profile` as it does after `new`.
+The measurements under `measurements/<profile_id>/` stay what they are: a measurement belongs to
+an id, and whether it still counts for a ranking is decided, as ever, by the comparison of
+protocol and scenario. Where the rule does not ask, `same_machine` changes nothing. The two
+switches are two answers to one question: together they are exit `2` with a sentence naming
+both, and `resolve_profile_target` raises `ValueError` for them.
 
 ### GuidedPointer
 
@@ -2520,7 +2590,10 @@ A pass allows at most `metadata_ok` together with the other provenance rules; on
 `compute_fit_v2(profile, package, base_model, scenario, machine_config)` is fit contract v1's
 formula and classes, unchanged, behind a gate: `fit_block_reason(profile)` first (GPU state,
 unknown RAM, a llmfit deviation), then `scenario.requests == 1` (more requests are the reverse
-calculation), then the v1 package rules. VRAM is `0` unless `gpu_state` is `measured`; the RAM
+calculation), then the package rules (a complete `gguf` build, every weight file with a size).
+An architecture the formula cannot read is the one case that is **not** `unknown` here: the
+package is computed from its size instead, `basis: "size"` ("Fit from size" above, decided
+2026-09-24). VRAM is `0` unless `gpu_state` is `measured`; the RAM
 pool is `ram_physical_gib` (a limit is a note, never an input). The context is
 `scenario.context_requested` for every package, never the package's own `default_context`, so
 `context_assumed` is `false`. `base_model` (its architecture) and `machine_config` (its
@@ -2545,6 +2618,11 @@ content (manifest digest, or repo, revision and a weight file's digest); the new
 `unknown` fits are set aside as not covered, with their reason; `too_tight` fits are listed
 apart and never ranked; a computed fit for another context than the ranking's is a caller
 error. `Ranking.top` is the first 10. The rule states facts in order; it recommends nothing.
+
+The rule reads the fit class and not its `basis`, so inside one class a package judged from its
+architecture and one judged from its size stand mixed. That is deliberate: the class is the
+statement, the basis is how it was reached, and a reader sees the basis in the row itself
+("Fit from size").
 
 ### SearchHit
 
@@ -2578,6 +2656,65 @@ many people take, **never a rank** -- the ranking rule alone orders the result.
   "age": "legacy",
   "successor": "acme/Nova-7B-2512",
   "ollama": "nova:7b"
+}
+```
+
+### ModelChoice
+
+One line of the selection list of step 2: one resolved base model, with every repository of the
+search that packages it (`modelroom/guided_models.py`, decided 2026-09-24). `repos` are those
+repositories as the search answered them, in the order its groups were asked, so the two the
+fetch works through can be picked from it; `packagers` are their accounts in the same order, for
+the column that shows them. `downloads` is the sum over the repositories that state one (`None`
+when none does), `parameters_b` what a repository states, else what the name says, else `None`,
+and `fit` is the fit from that size ("Fit from size"), or `unknown` with `machine not measured`
+or `parameter count unknown`. `name` and `publisher` are the two halves of `base_model`.
+
+```json
+{
+  "base_model": "acme/Nova-7B",
+  "name": "Nova-7B",
+  "publisher": "acme",
+  "repos": [
+    {
+      "repo": "packager/Nova-7B-GGUF",
+      "publisher_status": "listed packager",
+      "base_model": [
+        "acme/Nova-7B"
+      ],
+      "base_model_relation": "quantized",
+      "resolved": true,
+      "unresolved_reason": null,
+      "resolved_base_model": "acme/Nova-7B",
+      "repo_created_at": "2026-03-02T10:00:00Z",
+      "downloads": 68445,
+      "parameters_b": 7.6,
+      "license": "apache-2.0",
+      "age": "legacy",
+      "successor": "acme/Nova-7B-2512",
+      "ollama": "nova:7b"
+    }
+  ],
+  "packagers": [
+    "packager"
+  ],
+  "downloads": 68445,
+  "ollama": "nova:7b",
+  "age": "legacy",
+  "parameters_b": 7.6,
+  "fit": {
+    "fit_class": "good",
+    "mode": "gpu",
+    "need_gib": 6.3,
+    "weights_gib": 4.25,
+    "kv_gib": 1.125,
+    "pool_gib": 10.94,
+    "reserve_gib": 1.0,
+    "context": 8192,
+    "context_assumed": false,
+    "basis": "size",
+    "reason": null
+  }
 }
 ```
 
@@ -2914,9 +3051,18 @@ and `Market rating unavailable: <message>` when the rating source failed), `## A
 
 **The terminal view** is what step 5 of the guided mode shows, and it carries that step's head
 (`Step 5 of 5  Results`); `modelroom render` writes the two files and stays silent unless a caller
-asks for it. It shows fewer columns than the Markdown table (a terminal is narrow): rank,
-packager, quantization, weights, fit and measured speed, with a rule under the column names, then
-one line per note. `not covered` and `too tight` are then **grouped by reason**, one line each with
+asks for it. It shows fewer columns than the Markdown table (a terminal is narrow) and, since
+2026-09-24, the ones a reader recognizes a package by: `#` (3), `Model` (24, the base model's name
+without its account), `Package` (22, `packager · quant`, cut with `…` where it does not fit),
+`Fit` (20, the class, and on the size basis ` (from size)` behind it -- 20 because
+`marginal (from size)` is 20 characters long), `Speed` (12, `41.1 tok/s` or `unknown`) and
+`Memory` (8, `need_gib` as `GB` with one decimal). With the one space every line is indented by,
+that is 100 characters. Under the head stands a rule, then the rows, then one line per note. The snapshot time
+and the ranking rule are **not** in this view -- they are in the Markdown file, which is where a
+reader has room for them -- and the scenario is one short line under the step head: `context L 32k
+· 1 request · KV cache f16 (assumed)`. A machine that is `ranked` is named without its status
+(`Ranking: workstation (workstation)`), any other machine with it.
+`not covered` and `too tight` are then **grouped by reason**, one line each with
 the number of packages behind it and up to three of their names (`not covered: 12 packages --
 architecture not covered by v1 (a Q4_K_M, b Q4_K_M, c Q4_K_M and 9 more)`) -- 41 lines that all
 said the same thing pushed the ranking off the screen in the hand test of 2026-09-24. Every value
@@ -2971,6 +3117,7 @@ One row of one machine's ranking. `package_identity` is the package identity tri
     "reserve_gib": 1.0,
     "context": 8192,
     "context_assumed": false,
+    "basis": "architecture",
     "reason": null
   },
   "measurement_group": 0,
@@ -3002,7 +3149,7 @@ package fields as `RankedEntry`, plus the `reason` shown next to it.
     "code": "not_covered",
     "subject": "package",
     "origin": "computed",
-    "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+    "text": "Fit contract v1 cannot judge this package here: a weight file has no size.",
     "facts": [
       "fit.fit_class",
       "fit.reason"
@@ -3018,9 +3165,10 @@ package fields as `RankedEntry`, plus the `reason` shown next to it.
     "reserve_gib": 0.0,
     "context": 0,
     "context_assumed": false,
-    "reason": "architecture not covered by v1"
+    "basis": "architecture",
+    "reason": "a weight file has no size"
   },
-  "reason": "architecture not covered by v1"
+  "reason": "a weight file has no size"
 }
 ```
 
@@ -3102,6 +3250,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
         "reserve_gib": 1.0,
         "context": 8192,
         "context_assumed": false,
+        "basis": "architecture",
         "reason": null
       },
       "measurement_group": 0,
@@ -3128,7 +3277,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
         "code": "not_covered",
         "subject": "package",
         "origin": "computed",
-        "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+        "text": "Fit contract v1 cannot judge this package here: a weight file has no size.",
         "facts": [
           "fit.fit_class",
           "fit.reason"
@@ -3144,9 +3293,10 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
         "reserve_gib": 0.0,
         "context": 0,
         "context_assumed": false,
-        "reason": "architecture not covered by v1"
+        "basis": "architecture",
+        "reason": "a weight file has no size"
       },
-      "reason": "architecture not covered by v1"
+      "reason": "a weight file has no size"
     }
   ],
   "too_tight": []
@@ -3264,6 +3414,7 @@ answered for; a base model that is not a key has no rating. A failed rating sour
             "reserve_gib": 1.0,
             "context": 8192,
             "context_assumed": false,
+            "basis": "architecture",
             "reason": null
           },
           "measurement_group": 0,
@@ -3290,7 +3441,7 @@ answered for; a base model that is not a key has no rating. A failed rating sour
             "code": "not_covered",
             "subject": "package",
             "origin": "computed",
-            "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+            "text": "Fit contract v1 cannot judge this package here: a weight file has no size.",
             "facts": [
               "fit.fit_class",
               "fit.reason"
@@ -3306,9 +3457,10 @@ answered for; a base model that is not a key has no rating. A failed rating sour
             "reserve_gib": 0.0,
             "context": 0,
             "context_assumed": false,
-            "reason": "architecture not covered by v1"
+            "basis": "architecture",
+            "reason": "a weight file has no size"
           },
-          "reason": "architecture not covered by v1"
+          "reason": "a weight file has no size"
         }
       ],
       "too_tight": []
@@ -3529,10 +3681,10 @@ matter, so the move is invisible to it.
 | 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
 | 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import` |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
-| 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`) |
+| 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`; both measure -- `same` under the bound profile id, `clone` under a new one) |
 | 2 | `search` | What are you looking for? | text |
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
-| 2 | `select` | Which of these models should the result cover? | a list of repository ids |
+| 2 | `select` | Which of these models should the result cover? | a list of base model ids (`Qwen/Qwen3.5-9B`); an answer file may name repository ids instead, as before |
 | 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
 | 4 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **the one optional answer** -- an answer file that does not mention it does not measure |
 | 4 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
@@ -3581,8 +3733,11 @@ machine is the one that fetches -- and then measures through `cli.hardware_with_
 results folder as the binding key. The takeover rule decides which profile is written
 (`resolve_profile_target`, "Profile binding"); its `ask_clone` case is the `clone` question, and
 the local fingerprint for it is read on its own (`measure.read_os_identity`), so the question
-comes before the measurement. `a clone` measures as a new identity; `the same machine` measures
-nothing in this run and says what to do (put the profile file back, or import it). After a
+comes before the measurement. **Both answers measure** (decided 2026-09-24): `a clone` measures
+as a new identity, `the same machine` measures again under the profile id this folder already
+binds this machine to (`--same-machine`, "Profile binding"). A folder someone emptied is a folder
+to measure into; the run that answered "the same machine" and then stood in front of an empty
+step 3, an empty step 4 and "nothing to render" was the hand test this rule comes from. After a
 measurement the guided mode writes `[machines.<name>].profile` -- the one configuration write
 `hardware` leaves to it. `import a profile file` runs `import-profile`, which never changes the
 binding; a file that does not import is reported and the run goes on.
@@ -3592,18 +3747,68 @@ binding; a file that does not import is reported and the run goes on.
 filter is a question about the **request**, not only about the list: with it on, only the accounts
 are asked; switching it off adds the two open lists on top of the account groups (see "Search over
 the Hugging Face API"). Then one line per group (`SearchOutcome.group_lines`), then the summary line
-(`SearchOutcome.summary_line`), then the selection list of **every** hit with eight facts each:
-repository, owner class, `repo created`, size, license, `latest`/`legacy`/`unknown`, `downloads`
-(`12.0M`, `68k`, `3551`, `unknown`; an indication, not a rank) and the Ollama
-name or `none known`. A hit that cannot be picked is shown grayed out with its reason in plain
-words, and under the list stands one line per reason with the number of repositories behind it
-(`3 repositories cannot be picked: the repository does not say it packages a base model`) -- never
-one line per repository, which said the same five things 28 times in the hand test of 2026-09-24.
-The reasons are `guided.UNRESOLVED_REASONS` (one sentence per `SearchHit.unresolved_reason`) and,
-with `filter_owners` on, `not a publisher or a listed packager` for an owner class of `other`. When
+(`SearchOutcome.summary_line`), and then **the list of models** (`modelroom/guided_models.py`,
+decided 2026-09-24, in place of the list of repositories: 120 lines of over 200 characters, size
+and age `unknown` throughout and 40 grayed-out rows whose appended reason broke the columns --
+"I cannot tell what to pick, or what I am risking" was the hand test's verdict).
+
+**One line per model** (`ModelChoice`), and only the ones that can be picked. Six columns, at most
+100 characters: the model's name (the part after the `/`, 26), the fit in a word (14: `good`,
+`marginal`, `too tight`, `unknown` -- and `good (RAM)` or `marginal (RAM)` where the graphics
+memory is too small and the fit is against system memory: fit v1 caps that pool at `good`, and
+live on 2026-09-24 a 122B model stood as `good` above a 9B `marginal` that fits the graphics card,
+with nothing to tell the two apart), its size (7: `9B`, `0.6B`, `2.4T`, `unknown`), the packager
+accounts that have it (22, `unsloth, bartowski +2` beyond three), the downloads of all of them
+together (7; an indication, not a rank) and the Ollama name or `none known` (the rest of the
+line, 14). **Every cell is cut to its column** with `…`: `dialog.columns` pads and never cuts, and
+a name, an account and a download count all come from a registry -- `deepseek-r1:8b` made a line
+of 104 characters before that (second-model round, 2026-09-24), and `1000000B` one of 101. The
+order is the memory pool (a fit in graphics memory before one in system memory, whatever its
+class), then the fit class, then the downloads, then the name, with `too tight` and `unknown`
+last (decided 2026-09-24). Above the list stands one line with the two counts
+(`2 models can be picked; 1 repository cannot:`) and under it the reasons as before, one line per
+reason with the number of repositories behind it (`3 repositories cannot be picked: the repository
+does not say it packages a base model`; `guided_models.UNRESOLVED_REASONS`, and with
+`filter_owners` on `not a publisher or a listed packager` for an owner class of `other`) -- the
+repositories themselves are no longer lines of the list. Then, where a fit was computed at all,
+the context it was computed for (`fit at 8k context, computed from the size of the model`), and
+the instruction line: `Space marks a model, Enter confirms; nothing marked keeps the folder as it
+is. Fit is from the size of the model, the exact fit comes after the fetch; (RAM) means the
+graphics memory is too small for it.` -- with `Fit is unknown until this machine is measured.` in
+place of the second sentence when this folder holds no measured machine.
+
+**The fit of the list** is `fit.fit_from_parameters` ("Fit from size", basis `size`) against the
+profile this folder binds this machine to and the reserves of its `[machines.<name>]` -- the same
+machine the size scale of step 3 counts against (`guided_context.machine_checked`). Its context is
+`[guided].context` when the folder kept one, else 8192: step 3 is where the context is asked, and
+a fit stands on a number, not on the level a question starts at. The parameter count is what a
+repository states (`SearchHit.parameters_b`), else what the model's name says
+(`guided_models.parameters_from_name`: every `<number>B`/`<number>T` that does not stand behind a
+letter, the largest of them, `2.4T` as 2400 and shown as `2.4T` again -- so `Qwen3.5-35B-A3B-MTP` is 35, `Nova-A17B` and
+`Qwen-Image-2.1` are nothing), else nothing, and then the fit is `unknown` with `parameter count
+unknown` rather than a guess. `machine not measured` is the other such reason.
+
+**A chosen model becomes two repositories**: the publisher's own, when the search resolved one,
+and the first listed packager's in the order of the positive list. Of an account's builds the
+plain `<name>-GGUF` repository is the one, where the account has it, else the account's first in
+the order of the search (`unsloth` answered `-MTP-GGUF`, `-GGUF` and `-UD-GGUF` for one model,
+newest first; decided 2026-09-24). A model that only accounts of
+neither list hold is fetched from the one with the most downloads -- otherwise picking it would
+add nothing at all. Two, because every repository costs the fetch about ten requests of the shared
+budget (measured: two repositories spend 20 of 150) and the ranking shows the packages of both;
+choosing the packager per model is stage 2.
+
+`select` takes base model ids, and an answer file may name repository ids as it always could --
+such a value picks exactly that repository and not the pair, so the answer files written before
+this list run unchanged. A value that is **both** a base model of this search and a repository of
+it is read as the **base model**: that is what the list offers, so that is what a person can have
+marked, and nothing forbids the collision (a repository may package one model and be the base
+model of another). A value that is neither ends the run with the answer file's own message
+(`not a list out of ...`). When
 nothing can be picked the list is shown all the same, `Enter` goes on, and the run says `no
 repository of a publisher or a listed packager was resolved; nothing added`. The chosen hits go
-through `apply_hits` into the configuration, which is written with `write_configuration`. A hit
+through the unchanged `apply_hits` into the configuration, which is written with
+`write_configuration`. A hit
 whose base model the shipped catalog has no family for gets the family name
 `search.family_name_for` derives from the repository name; the guided mode does not ask for one.
 Then `fetch_with_config` runs with the same budget object (nothing configured yet means nothing to

@@ -372,11 +372,36 @@ def test_measured_entry_carries_a_measured_note():
     assert note.facts == ["measurement.tps_mean", "measurement.scenario.context_requested"]
 
 
-def test_an_architecture_fit_v1_cannot_judge_lands_in_not_covered():
+def test_an_architecture_fit_v1_cannot_judge_is_ranked_from_the_size():
+    """Not set aside any more (decided 2026-09-24): the size of the package answers instead."""
     document = _document([_hf_package()], base_models=[_base_model(architecture=_architecture(kind="unknown"))])
     block = document.machines[0]
+    assert block.not_covered == []
+    assert [entry.fit.basis for entry in block.ranked] == ["size"]
+    # The pool's own sentence stays in front (acceptance of 2026-09-24: a row in system memory read
+    # as the equal of one in graphics memory without it), the basis is the sentence after it.
+    assert block.ranked[0].note.text.startswith("Fits into graphics memory:")
+    assert block.ranked[0].note.text.endswith("From the size of the package, not its architecture.")
+    assert block.ranked[0].note.facts == ["fit.mode", "fit.need_gib", "fit.pool_gib", "fit.basis"]
+
+
+def test_a_package_set_aside_on_the_size_basis_names_that_basis_in_its_note():
+    """The Markdown reader sees the basis of a `too_tight` row in its note (second-model round)."""
+    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+    huge = _hf_package(weights_bytes=400 * GIB)
+
+    entry = _document([huge], base_models=unknown).machines[0].too_tight[0]
+
+    assert entry.fit.basis == "size"
+    assert entry.note.text.endswith("From the size of the package, not its architecture.")
+    assert "fit.basis" in entry.note.facts
+
+
+def test_a_weight_file_without_a_size_is_still_not_covered():
+    """The size basis needs a size: a package the fetcher learned none for is no size at all."""
+    block = _document([_hf_package(weights_bytes=0)]).machines[0]
     assert block.ranked == []
-    assert [entry.reason for entry in block.not_covered] == ["architecture not covered by v1"]
+    assert [entry.reason for entry in block.not_covered] == ["a weight file has no size"]
     assert block.not_covered[0].note.code == "not_covered"
 
 
@@ -541,12 +566,82 @@ def test_markdown_and_json_show_the_same_speed_and_fit():
     assert f"{entry.fit.need_gib:.2f}" in row
 
 
-def test_every_writer_names_the_rule_and_the_scenario():
-    document = _document([_hf_package()])
-    for text in (document_markdown(document), document_terminal(document)):
-        assert RANKING_RULE in text
-        assert "context 8192" in text
-        assert "f16" in text
+def test_the_markdown_view_names_the_rule_and_the_scenario():
+    text = document_markdown(_document([_hf_package()]))
+
+    assert RANKING_RULE in text
+    assert "context 8192" in text
+    assert "f16" in text
+
+
+def test_the_terminal_view_says_the_scenario_short_and_leaves_the_rule_to_the_file():
+    """A terminal is narrow: the rule and the snapshot time stay in the Markdown view (2026-09-24)."""
+    large = Scenario(
+        context_requested=32768, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1
+    )
+    text = document_terminal(_document([_hf_package()], scenario=large))
+
+    assert "context L 32k · 1 request · KV cache f16 (assumed)" in text
+    assert RANKING_RULE not in text
+    assert "Snapshot run at" not in text
+
+
+def test_the_terminal_table_reads_as_the_mockup_does():
+    """Model, package, fit, speed and memory in plain words -- the columns of the mockup."""
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    document = _document([package], measurements={PROFILE_ID: [_measurement(package, tps=41.1)]})
+
+    lines = document_terminal(document).splitlines()
+
+    head = next(line for line in lines if "Model" in line and "Package" in line)
+    assert head.split() == ["#", "Model", "Package", "Fit", "Speed", "Memory"]
+    row = lines[lines.index(head) + 2]
+    entry = document.machines[0].ranked[0]
+    assert row.split() == ["1", "Nova-8B", "packager", "·", "Q4_K_M", entry.fit.fit_class, "41.1", "tok/s", f"{entry.fit.need_gib:.1f}", "GB"]
+
+
+def test_a_fit_from_the_size_says_so_in_the_fit_column():
+    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+
+    text = document_terminal(_document([_hf_package()], base_models=unknown))
+
+    assert "good (from size)" in text or "marginal (from size)" in text
+
+
+def test_the_longest_fit_text_is_not_cut_off_in_its_column():
+    """`marginal (from size)` is 20 characters and was cut to `marginal (from siz`."""
+    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+    # 90 GiB of weights: need 100.6 GiB against the system-memory pool of 111.46, ratio 0.90.
+    marginal = _hf_package(weights_bytes=90 * GIB)
+
+    text = document_terminal(_document([marginal], base_models=unknown))
+
+    assert "marginal (from size)" in text
+    assert "from siz " not in text
+
+
+def test_no_line_of_the_terminal_table_is_wider_than_a_hundred_characters():
+    packages = [_hf_package(repo=f"packager-with-a-long-name/Nova-8B-{index}-GGUF") for index in range(3)]
+
+    lines = document_terminal(_document(packages)).splitlines()
+
+    table = lines[: next(index for index, line in enumerate(lines) if line.strip().startswith("showing "))]
+    for line in table:
+        assert len(line) <= 100, line
+
+
+def test_a_machine_that_is_not_ranked_keeps_its_status_next_to_its_name():
+    profiles = {"workstation": MachineProfile(status="no_profile", label="workstation", profile=None, reason="no profile yet")}
+
+    text = document_terminal(_document([_hf_package()], profiles=profiles))
+
+    assert "Ranking: workstation (workstation, no_profile)" in text
+
+
+def test_a_ranked_machine_is_named_without_its_status():
+    text = document_terminal(_document([_hf_package()]))
+
+    assert "Ranking: workstation (workstation)" in text
 
 
 def test_the_terminal_view_lists_the_ranking_and_the_blocks():
@@ -563,22 +658,21 @@ def test_the_terminal_view_carries_the_head_of_the_last_step():
 
 def test_the_terminal_view_groups_what_was_set_aside_by_reason():
     """41 lines that all said `not covered` pushed the ranking off the screen (hand test, 2026-09-24)."""
-    packages = [_hf_package(repo=f"packager/Nova-8B-{index}-GGUF") for index in range(5)]
-    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+    packages = [_hf_package(repo=f"packager/Nova-8B-{index}-GGUF", weights_bytes=0) for index in range(5)]
 
-    text = document_terminal(_document(packages, base_models=unknown))
+    text = document_terminal(_document(packages))
 
     set_aside = [line for line in text.splitlines() if "not covered" in line]
     assert len(set_aside) == 1
-    assert "5 packages -- architecture not covered by v1" in set_aside[0]
+    assert "5 packages -- a weight file has no size" in set_aside[0]
     assert set_aside[0].count("Q4_K_M") == 3
     assert set_aside[0].endswith("and 2 more)")
 
 
 def test_one_package_behind_a_reason_is_named_in_the_singular():
-    text = document_terminal(_document([_hf_package()], base_models=[_base_model(architecture=_architecture(kind="unknown"))]))
+    text = document_terminal(_document([_hf_package(weights_bytes=0)]))
 
-    assert "not covered: 1 package -- architecture not covered by v1 (packager Q4_K_M)" in text
+    assert "not covered: 1 package -- a weight file has no size (packager Q4_K_M)" in text
 
 
 MARKDOWN_FIXTURE = "markdown_view_ap9_c2.md"

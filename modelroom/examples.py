@@ -86,6 +86,7 @@ _RANKED_FIT = {
     "context": 8192,
     # Schema 2 always computes with the ranking's own context, so nothing is ever assumed here.
     "context_assumed": False,
+    "basis": "architecture",
     "reason": None,
 }
 _NOT_COVERED_FIT = {
@@ -98,7 +99,8 @@ _NOT_COVERED_FIT = {
     "reserve_gib": 0.0,
     "context": 0,
     "context_assumed": False,
-    "reason": "architecture not covered by v1",
+    "basis": "architecture",
+    "reason": "a weight file has no size",
 }
 _RANKED_ENTRY = {
     "package_identity": ["huggingface", "packager/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf"],
@@ -135,11 +137,11 @@ _SET_ASIDE_ENTRY = {
         "code": "not_covered",
         "subject": "package",
         "origin": "computed",
-        "text": "Fit contract v1 cannot judge this package here: architecture not covered by v1.",
+        "text": "Fit contract v1 cannot judge this package here: a weight file has no size.",
         "facts": ["fit.fit_class", "fit.reason"],
     },
     "fit": dict(_NOT_COVERED_FIT),
-    "reason": "architecture not covered by v1",
+    "reason": "a weight file has no size",
 }
 _MACHINE_RANKING = {
     "machine": "workstation",
@@ -388,6 +390,7 @@ EXAMPLES: dict[str, dict] = {
         "reserve_gib": 1.0,
         "context": 8192,
         "context_assumed": True,
+        "basis": "architecture",
         "reason": None,
     },
     "Rating": {
@@ -449,6 +452,47 @@ EXAMPLES: dict[str, dict] = {
         "age": "legacy",
         "successor": "acme/Nova-7B-2512",
         "ollama": "nova:7b",
+    },
+    "ModelChoice": {
+        "base_model": "acme/Nova-7B",
+        "name": "Nova-7B",
+        "publisher": "acme",
+        "repos": [
+            {
+                "repo": "packager/Nova-7B-GGUF",
+                "publisher_status": "listed packager",
+                "base_model": ["acme/Nova-7B"],
+                "base_model_relation": "quantized",
+                "resolved": True,
+                "unresolved_reason": None,
+                "resolved_base_model": "acme/Nova-7B",
+                "repo_created_at": "2026-03-02T10:00:00Z",
+                "downloads": 68445,
+                "parameters_b": 7.6,
+                "license": "apache-2.0",
+                "age": "legacy",
+                "successor": "acme/Nova-7B-2512",
+                "ollama": "nova:7b",
+            }
+        ],
+        "packagers": ["packager"],
+        "downloads": 68445,
+        "ollama": "nova:7b",
+        "age": "legacy",
+        "parameters_b": 7.6,
+        "fit": {
+            "fit_class": "good",
+            "mode": "gpu",
+            "need_gib": 6.3,
+            "weights_gib": 4.25,
+            "kv_gib": 1.125,
+            "pool_gib": 10.94,
+            "reserve_gib": 1.0,
+            "context": 8192,
+            "context_assumed": False,
+            "basis": "size",
+            "reason": None,
+        },
     },
     "Requirement": {
         "origin": "computed",

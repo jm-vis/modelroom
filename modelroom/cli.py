@@ -119,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
     hardware_parser.add_argument(
         "--new-identity", action="store_true", help="Write a new profile for this machine instead of the bound one"
     )
+    hardware_parser.add_argument(
+        "--same-machine",
+        action="store_true",
+        help="Measure again under the bound profile's own id, when that profile is missing or foreign",
+    )
 
     render_parser = subparsers.add_parser(
         "render", help="Render the current snapshot and every machine's hardware profile to Markdown."
@@ -353,6 +358,7 @@ def _cmd_hardware(
         pointer_path,
         cpu_only=args.cpu_only,
         new_identity=args.new_identity,
+        same_machine=args.same_machine,
         results_dir=args.config.resolve().parent,
     )
 
@@ -366,6 +372,11 @@ def hardware_with_config(
     cpu_only: bool = False,
     new_identity: bool = False,
     results_dir: Path | None = None,
+    # Behind `results_dir` and by keyword only, so that no caller of the eight positional
+    # arguments this function had before hands its folder in as a "yes" to overwriting a profile
+    # (second-model round, 2026-09-24).
+    *,
+    same_machine: bool = False,
 ) -> int:
     """Run `hardware` against an already-loaded `Configuration` -- the programmatic entry point.
 
@@ -376,7 +387,18 @@ def hardware_with_config(
     takeover rule may adopt. The measurement itself runs before the lock -- it reads the machine,
     not the state -- and the lock covers reading the existing profiles, writing the new one and
     binding it.
+
+    `new_identity` and `same_machine` are the two answers to the takeover rule's own question and
+    are mutually exclusive: refused here with exit `2`, before anything is measured or written.
     """
+    if new_identity and same_machine:
+        print(
+            "--new-identity and --same-machine are two answers to one question: "
+            "--new-identity measures this machine as a new one, --same-machine measures it again "
+            "under the profile id this results folder already binds it to. Pass one of them",
+            file=sys.stderr,
+        )
+        return 2
     if machine is not None and machine not in config.machines:
         names = sorted(config.machines)
         print(
@@ -402,7 +424,7 @@ def hardware_with_config(
     try:
         return _hardware_locked(
             config, machine, active, measured, reference, recorded_at, pointer_file, new_identity,
-            _binding_key(config, results_dir),
+            _binding_key(config, results_dir), same_machine,
         )
     finally:
         release_lock(handle)
@@ -418,6 +440,7 @@ def _hardware_locked(
     pointer_file: Path,
     new_identity: bool,
     binding_key: Path,
+    same_machine: bool = False,
 ) -> int:
     """Pick this machine's profile, write it and bind it -- everything the lock has to cover.
 
@@ -447,11 +470,13 @@ def _hardware_locked(
         os_fingerprint(raw_id) if raw_id else "none",
         fresh_profile_id,
         new_identity,
+        same_machine,
     )
     if target.action == "ask_clone":
         print(
-            f"{target.reason} ({target.profile_id}); this is either the same machine under a new "
-            "profile or a clone -- run `modelroom hardware --new-identity` to measure it as its own machine",
+            f"{target.reason} ({target.profile_id}); this is either the same machine or a clone -- "
+            "run `modelroom hardware --same-machine` to measure it again under that same profile id, "
+            "or `modelroom hardware --new-identity` to measure it as its own machine",
             file=sys.stderr,
         )
         return 2

@@ -289,6 +289,94 @@ def test_new_identity_writes_a_second_profile_and_rebinds_this_machine(tmp_path:
     assert read_pointer(pointer_path).binding_for(config.paths.state) == ID_TWO
 
 
+def test_same_machine_writes_the_bound_profile_again_and_keeps_the_binding(tmp_path: Path):
+    """The way out of the clone question (decided 2026-09-24): measured again under the same id."""
+    config = _config(tmp_path)
+    pointer_path = tmp_path / "home" / "guided.json"
+    write_pointer(pointer_path, GuidedPointer(schema_version=1).with_binding(config.paths.state, ID_TWO))
+
+    assert _run(config, tmp_path, pointer_path=pointer_path, same_machine=True) == 0
+
+    assert [path.name for path in _profiles(config)] == [f"{ID_TWO}.json"]
+    assert _written(config).display_name == "workstation"
+    assert read_pointer(pointer_path).binding_for(config.paths.state) == ID_TWO
+
+
+def test_same_machine_keeps_the_display_name_of_a_profile_of_another_fingerprint(tmp_path: Path):
+    config = _config(tmp_path)
+    pointer_path = tmp_path / "home" / "guided.json"
+    _place_profile(config, ID_TWO, fingerprint="abcdefabcdefabcd", display_name="the-same-box")
+    write_pointer(pointer_path, GuidedPointer(schema_version=1).with_binding(config.paths.state, ID_TWO))
+
+    assert _run(config, tmp_path, pointer_path=pointer_path, same_machine=True) == 0
+
+    profile = _written(config)
+    assert (profile.profile_id, profile.display_name) == (ID_TWO, "the-same-box")
+    assert profile.os_fingerprint == LAPTOP_FINGERPRINT
+
+
+def test_the_positional_arguments_of_the_older_signature_still_mean_what_they_did(tmp_path: Path):
+    """`same_machine` stands behind `results_dir` and takes a keyword only (second-model round).
+
+    A caller of the eight positional arguments this function had before must not hand its results
+    folder in as a "yes" to measuring over a profile of another machine.
+    """
+    config = _config(tmp_path)
+    results = tmp_path / "results"
+    results.mkdir()
+
+    code = hardware_with_config(
+        config, "workstation", _probes(), RUN1, tmp_path / "home" / "guided.json", False, False, results
+    )
+
+    assert code == 0
+    assert read_pointer(tmp_path / "home" / "guided.json").binding_for(results) == ID_ONE
+    with pytest.raises(TypeError):
+        hardware_with_config(
+            config, "workstation", _probes(), RUN1, tmp_path / "home" / "guided.json", False, False, results, True
+        )
+
+
+def test_same_machine_and_new_identity_together_are_exit_2_with_a_sentence(tmp_path: Path, capsys):
+    config = _config(tmp_path)
+
+    assert _run(config, tmp_path, new_identity=True, same_machine=True) == 2
+
+    message = capsys.readouterr().err
+    assert "--new-identity" in message and "--same-machine" in message
+    assert _profiles(config) == []
+
+
+def test_the_command_line_passes_same_machine_through(tmp_path: Path):
+    config_path = _write_config_file(tmp_path)
+    pointer_path = tmp_path / "home" / "guided.json"
+    write_pointer(pointer_path, GuidedPointer(schema_version=1).with_binding(tmp_path.resolve(), ID_TWO))
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--same-machine"],
+        probes=_probes(),
+        now=RUN1,
+        pointer_path=pointer_path,
+    )
+
+    assert code == 0
+    assert (tmp_path / "state" / "hardware" / f"{ID_TWO}.json").is_file()
+
+
+def test_the_command_line_refuses_both_switches_at_once(tmp_path: Path, capsys):
+    config_path = _write_config_file(tmp_path)
+
+    code = main(
+        ["hardware", "--config", str(config_path), "--same-machine", "--new-identity"],
+        probes=_probes(),
+        now=RUN1,
+        pointer_path=tmp_path / "home" / "guided.json",
+    )
+
+    assert code == 2
+    assert "--same-machine" in capsys.readouterr().err
+
+
 def test_a_bound_profile_that_is_gone_stops_the_run_and_names_new_identity(tmp_path: Path, capsys):
     config = _config(tmp_path)
     pointer_path = tmp_path / "home" / "guided.json"

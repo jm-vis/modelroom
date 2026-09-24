@@ -22,12 +22,11 @@ import pytest
 from modelroom.binding import GuidedPointer, read_pointer, write_pointer
 from modelroom.cli import main
 from modelroom.config import load_config
-from modelroom.dialog import AnswerMissingError, Canceled, FileAsker
+from modelroom.dialog import AnswerMissingError, Canceled, Choice, FileAsker
 from modelroom.examples import EXAMPLES
-from modelroom.guided import GuidedError, _hit_choices, _hit_label, run_guided
+from modelroom.guided import GuidedError, run_guided
 from modelroom.guided_loadtest import NO_CANDIDATE_LINE
 from modelroom.intro import STEP_NAMES
-from modelroom.guided_contracts import SearchHit
 from modelroom.profile import HardwareProfile
 from modelroom.state import acquire_lock, atomic_write_json, release_lock
 
@@ -52,6 +51,20 @@ QWEN_GGUF = "Qwen/Qwen3.5-9B-GGUF"
 # The one repository in the pinned search answer whose base model fit v1 can judge, and whose
 # `Q4_K_M` package is the one the load test fixtures show as installed.
 DEEPSEEK = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
+DEEPSEEK_BASE = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+
+
+class _WatchingAsker(FileAsker):
+    """A `FileAsker` that keeps the choices every list was built with, for the list's own shape."""
+
+    def __init__(self, answers: dict, lines: list[str]) -> None:
+        super().__init__(answers)
+        self.choices: dict[str, list[Choice]] = {}
+        self._lines = lines
+
+    def checkbox(self, key: str, question: str, choices) -> list[str]:
+        self.choices[key] = list(choices)
+        return super().checkbox(key, question, choices)
 
 FULL_ANSWERS = {
     "results": "here",
@@ -498,18 +511,40 @@ def test_a_clone_answer_writes_a_second_profile(tmp_path: Path):
     assert not any("nothing measured" in line for line in lines)
 
 
-def test_the_same_machine_answer_measures_nothing_and_says_what_to_do(tmp_path: Path):
+def test_the_same_machine_answer_measures_again_under_the_bound_id(tmp_path: Path):
+    """The way out of the clone question, decided 2026-09-24: the run measures, it does not stop.
+
+    The results folder was emptied and the pointer file was not -- the case a hand test ran into
+    on 2026-09-24, where "the same machine" left the machine unmeasured and every step after it
+    empty.
+    """
+    assert _run(tmp_path)[0] == 0
+    bound = read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path))
+    _profiles(tmp_path)[0].unlink()
+
+    answers = {key: value for key, value in FULL_ANSWERS.items() if key != "results"} | {"clone": "same"}
+    code, lines = _run(tmp_path, answers, now=RUN2)
+
+    assert code == 0
+    assert [path.stem for path in _profiles(tmp_path)] == [bound]
+    assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) == bound
+    assert not any("nothing measured" in line for line in lines)
+    assert not any("did not finish" in line for line in lines)
+
+
+def test_the_same_machine_answer_leads_to_a_ranking_of_this_machine(tmp_path: Path):
+    """The whole point of the way out: the steps after it have a measured machine to work with."""
     assert _run(tmp_path)[0] == 0
     _profiles(tmp_path)[0].unlink()
 
     answers = {key: value for key, value in FULL_ANSWERS.items() if key != "results"} | {"clone": "same"}
     code, lines = _run(tmp_path, answers, now=RUN2)
 
-    # Exit 1, not 0: the document is written, but a step did not do what it was asked.
-    assert code == 1
-    assert _profiles(tmp_path) == []
-    assert any("nothing measured for this machine" in line for line in lines)
-    assert any("1 step(s) did not finish" in line for line in lines)
+    assert code == 0
+    assert any("packages fit" in line for line in lines)  # step 3 has a machine to count against
+    assert "Ranking: " in "\n".join(lines)  # step 5 has a ranking
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert payload["machines"][0]["status"] == "ranked"
 
 
 def test_an_import_adds_the_machine_and_never_changes_the_binding(tmp_path: Path):
@@ -802,52 +837,50 @@ def test_the_chosen_repositories_reach_the_configuration(tmp_path: Path):
     assert config.publishers == ["Qwen"]
 
 
-def _hit(repo: str, publisher_status: str, **overrides) -> SearchHit:
-    return SearchHit(
-        repo=repo,
-        publisher_status=publisher_status,
-        base_model=["Qwen/Qwen3.5-9B"],
-        base_model_relation="quantized",
-        resolved=True,
-        resolved_base_model="Qwen/Qwen3.5-9B",
-        **overrides,
+def test_the_list_shows_one_line_per_model_with_its_fit_and_its_packagers(tmp_path: Path):
+    """The list a person picks from, printed by the run itself (decided 2026-09-24)."""
+    lines: list[str] = []
+    asker = _WatchingAsker(FULL_ANSWERS, lines)
+    code = run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
     )
 
-
-def test_the_owner_filter_grays_out_every_other_account():
-    """No resolved hit of the pinned answer is `other`, so the rule itself is checked here."""
-    hits = [_hit(UNSLOTH, "listed packager"), _hit("community-user/Qwen3.5-9B-GGUF", "other")]
-
-    on = {choice.value: choice.disabled for choice in _hit_choices(hits, True)}
-    off = {choice.value: choice.disabled for choice in _hit_choices(hits, False)}
-
-    assert on["community-user/Qwen3.5-9B-GGUF"] == "not a publisher or a listed packager"
-    assert on[UNSLOTH] is None
-    assert set(off.values()) == {None}
-
-
-def test_every_selectable_hit_shows_the_eight_facts():
-    label = _hit_label(_hit(UNSLOTH, "listed packager", downloads=12_031_627))
-
-    assert label.startswith(UNSLOTH)
-    assert "listed packager" in label
-    assert "repo created unknown" in label
-    assert "unknown" in label  # size and license, both absent from this hit
-    assert "12.0M" in label
-    assert "ollama: none known" in label
+    assert code == 0
+    listed = asker.choices["select"]
+    # Two models, then the repositories an answer file of the older shape may name instead.
+    assert [choice.value for choice in listed[:2]] == ["Qwen/Qwen3.5-9B", DEEPSEEK_BASE]
+    assert [choice.value for choice in listed[2:]] == [QWEN_GGUF, UNSLOTH, DEEPSEEK]
+    assert all(choice.disabled is None for choice in listed)
+    assert listed[0].label.startswith("Qwen3.5-9B")
+    assert "good" in listed[0].label
+    assert "Qwen, unsloth" in listed[0].label
+    assert all(len(choice.label) <= 100 for choice in listed[:2])
 
 
-def test_the_downloads_column_stands_behind_the_age():
-    """Decided 2026-09-24: the eighth fact, an indication of what many people take, not a rank."""
-    label = _hit_label(_hit(UNSLOTH, "listed packager", age="latest", downloads=68_445))
+def test_the_count_line_and_the_hint_line_stand_around_the_list(tmp_path: Path):
+    _code, lines = _run(tmp_path)
 
-    assert label.index("latest") < label.index("68k") < label.index("ollama:")
+    assert any(line.startswith("2 models can be picked; 1 repository cannot:") for line in lines)
+    assert any(line.startswith("fit at 8k context") for line in lines)
+    assert any(line.startswith("Space marks a model") for line in lines)
 
 
-def test_a_hit_without_a_download_count_shows_unknown_in_that_column():
-    label = _hit_label(_hit(UNSLOTH, "listed packager", age="latest"))
+def test_a_model_is_fetched_from_the_publisher_and_from_one_listed_packager(tmp_path: Path):
+    """Two repositories per model, because every one costs the fetch about ten requests."""
+    answers = {**FULL_ANSWERS, "select": ["Qwen/Qwen3.5-9B"]}
 
-    assert label[label.index("latest") :].startswith("latest    unknown")
+    code, _lines = _run(tmp_path, answers)
+
+    assert code == 0
+    base_model = load_config(_config_file(tmp_path)).families[0].base_models[0]
+    assert sorted(base_model.repos) == sorted([QWEN_GGUF, UNSLOTH])
 
 
 def test_choosing_nothing_leaves_the_configuration_as_it_is(tmp_path: Path):
@@ -871,7 +904,9 @@ def test_an_entered_context_reaches_the_document(tmp_path: Path):
         "kv_type_assumed": True,
         "requests": 1,
     }
-    assert any("context 4096 (entered)" in line for line in lines)
+    # The terminal view says the scenario short, the two files carry it in full.
+    printed = "\n".join(lines)
+    assert "context XS 4k" in printed and "1 request" in printed and "KV cache f16 (assumed)" in printed
 
 
 def test_the_chosen_context_is_kept_in_the_configuration(tmp_path: Path):
@@ -1029,8 +1064,11 @@ def test_the_run_ends_with_both_views_and_a_word_on_the_load_test(tmp_path: Path
     assert any(line.startswith("no load test: ") for line in lines)
     assert (_results(tmp_path) / "docs" / "models.md").is_file()
     assert (_results(tmp_path) / "docs" / "models.json").is_file()
-    assert any("Ranking rule: fit class" in line for line in lines)
-    assert any("Ranking: workstation" in line for line in lines)
+    printed = "\n".join(lines)
+    # The rule and the snapshot time are in the Markdown file; the screen shows the table.
+    assert "Ranking rule: fit class" in (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+    assert "Ranking: workstation" in printed
+    assert "Model" in printed and "Package" in printed
 
 
 def _ranked_deepseek(tmp_path: Path) -> dict:
@@ -1130,8 +1168,11 @@ def test_a_daemon_that_goes_away_after_the_yes_is_a_step_that_did_not_finish(tmp
 
 def test_a_digest_that_changes_mid_run_is_stored_as_not_comparable_and_ranks_in_group_one(tmp_path: Path):
     observations = [ps_answer(), ps_answer(), ps_answer(digest="d" * 64), ps_answer()]
+    # This one model only: a measurement that does not count ranks behind every package that
+    # does, and the ranking of the document shows the first ten of them.
+    answers = {**LOAD_TEST_ANSWERS, "select": [DEEPSEEK]}
 
-    code, lines = _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon(observations=observations))
+    code, lines = _run(tmp_path, answers, daemon=loadtest_daemon(observations=observations))
 
     assert code == 0
     record = json.loads(_measurement_files(tmp_path)[0].read_text(encoding="utf-8"))
@@ -1245,15 +1286,16 @@ def test_a_second_run_keeps_the_measurement_and_writes_no_second_file(tmp_path: 
     assert _ranked_deepseek(tmp_path)["measurement_group"] == 0
 
 
-def test_qwen35_is_not_covered_by_fit_v1_and_says_so(tmp_path: Path):
+def test_qwen35_is_judged_from_the_size_of_its_packages(tmp_path: Path):
+    """Its architecture is a hybrid one fit v1 cannot read, so the size answers (2026-09-24)."""
     assert _run(tmp_path)[0] == 0
 
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     block = payload["machines"][0]
     assert block["status"] == "ranked"
-    assert block["ranked"] == []
-    reasons = {entry["reason"] for entry in block["not_covered"]}
-    assert reasons == {"architecture not covered by v1"}
+    assert block["ranked"], "a package of a hybrid architecture is judged from its size now"
+    assert {entry["fit"]["basis"] for entry in block["ranked"]} == {"size"}
+    assert not any(entry["reason"] == "architecture not covered by v1" for entry in block["not_covered"])
 
 
 # --- the entry point: the TTY rule and --answers -------------------------------------------------------

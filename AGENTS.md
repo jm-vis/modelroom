@@ -18,7 +18,7 @@ The commands:
 | `modelroom` | the guided mode: asks, writes `modelroom.toml`, then runs the three commands below, and between the fetch and the render offers the load test of the packages this machine already has (`CONTRACTS.md`, "Guided mode", "Load test (stage 1)") |
 | `modelroom --answers <file>` | the same run with the dialog's answers from a TOML file, for a self-test or CI |
 | `modelroom --config <file>` | the guided mode on that configuration, rather than the folder it last used |
-| `modelroom hardware --config <file> [--machine <name>] [--cpu-only] [--new-identity]` | measure this machine and write its schema-2 profile |
+| `modelroom hardware --config <file> [--machine <name>] [--cpu-only] [--new-identity \| --same-machine]` | measure this machine and write its schema-2 profile; `--new-identity` writes a new one, `--same-machine` writes the bound profile again under its own id (`CONTRACTS.md`, "Profile binding") |
 | `modelroom fetch --config <file> --machine <name>` | fetch package metadata for every configured base model |
 | `modelroom render --config <file>` | write the ranking per machine: Markdown, and the JSON view next to it |
 | `modelroom migrate --config <file>` | move schema-1 profiles and configuration to schema 2 |

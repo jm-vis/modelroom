@@ -138,12 +138,13 @@ class ProfileTarget:
 
     `bound` -- the home binding holds; `adopt_config` -- `[machines.<name>].profile` becomes the
     binding (no new profile); `new` -- a new profile, bound and written to the configuration;
-    `ask_clone` -- the bound or configured profile is missing or its fingerprint differs: the
-    guided mode asks "same machine or a clone?", automation stops and points to
-    `hardware --new-identity`.
+    `rewrite` -- that missing or foreign profile is measured again under its own id, because the
+    answer was "the same machine"; `ask_clone` -- the bound or configured profile is missing or
+    its fingerprint differs: the guided mode asks "same machine or a clone?", automation stops
+    and points to `hardware --same-machine` and `hardware --new-identity`.
     """
 
-    action: Literal["bound", "adopt_config", "new", "ask_clone"]
+    action: Literal["bound", "adopt_config", "new", "rewrite", "ask_clone"]
     profile_id: str
     reason: str
 
@@ -160,6 +161,7 @@ def resolve_profile_target(
     local_fingerprint: str,
     fresh_profile_id: str,
     new_identity: bool = False,
+    same_machine: bool = False,
 ) -> ProfileTarget:
     """Pick the profile "this machine" writes to, in the order of the takeover rule.
 
@@ -169,7 +171,15 @@ def resolve_profile_target(
     A binding or configured profile that is missing from `profiles` (the profile files found in
     the results folder), or whose `os_fingerprint` differs from `local_fingerprint`, is
     `ask_clone`. `local_fingerprint` is `none` when this machine's OS identifier is unreadable.
+
+    `same_machine` (`hardware --same-machine`, or "the same machine" in the guided mode) is the
+    answer to exactly that question: the `ask_clone` case becomes `rewrite`, a measurement under
+    the very id the binding names, so a results folder someone emptied is measured into again
+    (decided 2026-09-24). It changes nothing where the rule does not ask. The two switches are
+    two answers to one question and are never both given.
     """
+    if new_identity and same_machine:
+        raise ValueError("new_identity and same_machine are two answers to one question; pass one of them")
     if not PROFILE_ID_RE.fullmatch(fresh_profile_id) or fresh_profile_id in profiles:
         raise ValueError(f"fresh_profile_id must be a new profile_id: {fresh_profile_id!r}")
     if new_identity:
@@ -182,8 +192,18 @@ def resolve_profile_target(
             continue
         known = profiles.get(candidate)
         if known is None:
-            return ProfileTarget("ask_clone", candidate, f"profile from {source} is missing in the results folder")
+            missing = f"profile from {source} is missing in the results folder"
+            if same_machine:
+                return ProfileTarget("rewrite", candidate, f"{missing}; measured again under the same id")
+            return ProfileTarget("ask_clone", candidate, missing)
         if not _fingerprints_agree(known, local_fingerprint):
-            return ProfileTarget("ask_clone", candidate, f"profile from {source} has another os_fingerprint")
+            differs = f"profile from {source} has another os_fingerprint"
+            if same_machine:
+                return ProfileTarget(
+                    "rewrite",
+                    candidate,
+                    f"{differs}; measured again under the same id, the answer was that it is the same machine",
+                )
+            return ProfileTarget("ask_clone", candidate, differs)
         return ProfileTarget(action, candidate, f"profile from {source}")
     return ProfileTarget("new", fresh_profile_id, "no binding and no configured profile")

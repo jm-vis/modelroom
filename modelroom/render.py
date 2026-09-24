@@ -266,15 +266,20 @@ _MODE_NOTES = {
 }
 
 
+# The one sentence a fit on the size basis adds to its note, whatever the pool: the number comes
+# from the size of the package, not from an architecture this package's base model never made
+# readable (decided 2026-09-24). The pool's own sentence stays in front of it -- in the acceptance
+# of 2026-09-24 a row in system memory read as the equal of one in graphics memory without it.
+_FROM_SIZE_SENTENCE = " From the size of the package, not its architecture."
+
+
 def _computed_note(fit: Fit) -> Note:
     code, template, facts = _MODE_NOTES[str(fit.mode)]
-    return Note(
-        code=code,
-        subject="package",
-        origin="computed",
-        text=_clip(template.format(need=fit.need_gib, pool=fit.pool_gib)),
-        facts=facts,
-    )
+    text = template.format(need=fit.need_gib, pool=fit.pool_gib)
+    if fit.basis == "size":
+        text += _FROM_SIZE_SENTENCE
+        facts = [*facts, "fit.basis"]
+    return Note(code=code, subject="package", origin="computed", text=_clip(text), facts=facts)
 
 
 def _set_aside_note(set_aside: SetAside, covered: bool) -> Note:
@@ -290,15 +295,18 @@ def _set_aside_note(set_aside: SetAside, covered: bool) -> Note:
     # the pool, so the need can be below the pool and the note must not claim an overrun
     # (probe: need 7.125 GiB against a pool of 7.2 GiB is `too_tight`).
     fit = set_aside.fit
+    # A package set aside on the size basis says on what basis: the number that put it there was
+    # computed from its size, not from its architecture (second-model round, 2026-09-24).
+    from_size = _FROM_SIZE_SENTENCE if fit.basis == "size" else ""
     return Note(
         code="too_tight",
         subject="package",
         origin="computed",
         text=_clip(
             f"Fit contract v1 does not count this as a fit: it needs about {fit.need_gib:.1f} GiB "
-            f"of the {fit.pool_gib:.1f} GiB left after the reserve."
+            f"of the {fit.pool_gib:.1f} GiB left after the reserve.{from_size}"
         ),
-        facts=["fit.need_gib", "fit.pool_gib"],
+        facts=["fit.need_gib", "fit.pool_gib"] + (["fit.basis"] if fit.basis == "size" else []),
     )
 
 

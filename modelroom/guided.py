@@ -34,13 +34,22 @@ from .config import (
 )
 from .contracts import SchemaVersionError, validate_machine_name
 from .daemon import Daemon, LocalDaemon
-from .dialog import Asker, Choice, columns, selectable
-from .guided_context import DEFAULT_CONTEXT, LEVELS
+from .dialog import Asker, Choice
+from .guided_context import DEFAULT_CONTEXT
 from .guided_context import QUESTION as CONTEXT_QUESTION
-from .guided_context import context_step, snapshot_packages
-from .guided_contracts import SearchHit
+from .guided_context import context_step, machine_checked, snapshot_packages
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
 from .guided_loadtest import load_test_step
+from .guided_models import (
+    ask_models,
+    chosen_hits,
+    count_line,
+    fit_line,
+    hint_line,
+    list_context,
+    model_choices,
+    unusable_reasons,
+)
 from .http import RequestBudget, Transport, UrllibTransport
 from .importer import (
     ImportConflictError,
@@ -61,14 +70,17 @@ from .search import (
     DEFAULT_PACKAGERS,
     SearchError,
     apply_hits,
-    ollama_label,
     run_search,
     write_configuration,
 )
-from .search_pages import format_downloads
 from .state import LockHeldError
 
 CONFIG_NAME = "modelroom.toml"
+# How this machine is measured, as `_clone_mode` answers it: the takeover rule as it stands, a new
+# profile ("a clone"), or the bound profile written again under its own id ("the same machine").
+MODE_NORMAL = "normal"
+MODE_NEW_IDENTITY = "new_identity"
+MODE_SAME_MACHINE = "same_machine"
 STATE_FOLDER = "state"
 MARKDOWN_PATH = ("docs", "models.md")
 _FRESH_ID_ATTEMPTS = 8
@@ -431,12 +443,14 @@ def _fresh_profile_id(run: GuidedRun, scan: ProfileScan) -> str:
     raise GuidedError(f"no unused profile_id after {_FRESH_ID_ATTEMPTS} attempts; the id source repeats itself")
 
 
-def _new_identity(run: GuidedRun, config: Configuration, name: str, scan: ProfileScan, results_dir: Path) -> bool | None:
-    """Whether the measurement writes a new profile; `None` means: do not measure in this run.
+def _clone_mode(run: GuidedRun, config: Configuration, name: str, scan: ProfileScan, results_dir: Path) -> str:
+    """How this machine is measured: `normal`, `new_identity` or `same_machine`.
 
     The takeover rule decides (`resolve_profile_target`); only its `ask_clone` case is a question
     here. The local fingerprint is read on its own (`read_os_identity`), so the question comes
-    before the measurement rather than after it.
+    before the measurement rather than after it. Since 2026-09-24 both answers measure: "a clone"
+    writes a new profile, "the same machine" writes the bound profile again under its own id. A
+    results folder someone emptied is a folder to measure into, not a dead end.
     """
     identity = read_os_identity(run.probes.platform, run.probes.runner, run.probes.read_text)
     local = os_fingerprint(identity.raw_id) if identity.raw_id else "none"
@@ -450,16 +464,10 @@ def _new_identity(run: GuidedRun, config: Configuration, name: str, scan: Profil
         _fresh_profile_id(run, scan),
     )
     if target.action != "ask_clone":
-        return False
+        return MODE_NORMAL
     question = f"{target.reason} ({target.profile_id}). {QUESTIONS['clone']}"
     answer = run.asker.select("clone", question, [Choice("same", "the same machine"), Choice("clone", "a clone")])
-    if answer == "clone":
-        return True
-    run.failed(
-        f"nothing measured for this machine: {target.reason} ({target.profile_id}). Put that profile file back "
-        "into the results folder or import it, then run again; answering 'a clone' writes a new profile instead"
-    )
-    return None
+    return MODE_NEW_IDENTITY if answer == "clone" else MODE_SAME_MACHINE
 
 
 def _measure_this_machine(
@@ -471,16 +479,15 @@ def _measure_this_machine(
     results_dir = config_file.parent
     name = _machine_key(run.probes.hostname())
     config = _ensure_this_machine(run, config_file, config, name)
-    new_identity = _new_identity(run, config, name, scan, results_dir)
-    if new_identity is None:
-        return config
+    mode = _clone_mode(run, config, name, scan, results_dir)
     code = hardware_with_config(
         config,
         name,
         run.probes,
         run.now,
         run.pointer_path,
-        new_identity=new_identity,
+        new_identity=mode == MODE_NEW_IDENTITY,
+        same_machine=mode == MODE_SAME_MACHINE,
         results_dir=results_dir,
     )
     if code != 0:
@@ -567,74 +574,26 @@ def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> Hard
 
 # --- step 2: search, choose, fetch ---------------------------------------------------------------
 
-# Why a repository cannot be picked, in the words a reader can act on. The technical status stays
-# in the answer file's own error message, which names the value a file would have to answer with.
-UNRESOLVED_REASONS: dict[str, str] = {
-    "derivative": "a fine-tune or a merge, not a quantization of one base model",
-    "relation_unknown": "the repository does not say it packages a base model",
-    "metadata_conflict": "the repository's own data names more than one base model",
-    "base_model_tag": "the repository names no base model of this search",
-    "publisher_unknown": "the base model's owner is not a publisher in this catalog",
-}
-OTHER_OWNER_REASON = "not a publisher or a listed packager"
-# The eighth column is `downloads`, behind the age (decided 2026-09-24): what many people take is
-# an indication a reader asked for, and it is wide enough for `12.0M` and for `unknown`.
-_HIT_WIDTHS = (38, 18, 20, 8, 14, 8, 10)
-
-
-def _hit_label(hit: SearchHit) -> str:
-    """One line of the selection list: the eight facts the plan asks for, `unknown` where absent."""
-    created = hit.repo_created_at.date().isoformat() if hit.repo_created_at is not None else _UNKNOWN
-    size = _UNKNOWN if hit.parameters_b is None else f"{hit.parameters_b:.1f}B"
-    cells = [
-        hit.repo,
-        hit.publisher_status,
-        f"repo created {created}",
-        size,
-        hit.license,
-        hit.age,
-        format_downloads(hit.downloads),
-    ]
-    return columns([cells], _HIT_WIDTHS)[0] + f"   ollama: {ollama_label(hit)}"
-
-
-def _hit_reason(hit: SearchHit, filtered: bool) -> str | None:
-    """Why this repository cannot be picked, in plain words, or `None` when it can be."""
-    if not hit.resolved:
-        return UNRESOLVED_REASONS.get(str(hit.unresolved_reason), str(hit.unresolved_reason))
-    if filtered and hit.publisher_status == "other":
-        return OTHER_OWNER_REASON
-    return None
-
-
-def _hit_choices(hits: list[SearchHit], filtered: bool) -> list[Choice]:
-    """Every hit of the search, the ones that cannot be picked grayed out with their reason."""
-    return [Choice(hit.repo, _hit_label(hit), disabled=_hit_reason(hit, filtered)) for hit in hits]
-
-
-def _grouped_reasons(choices: list[Choice]) -> list[str]:
-    """One line per reason with the number of repositories behind it, instead of one line each."""
-    counted: dict[str, int] = {}
-    for choice in choices:
-        if choice.disabled is not None:
-            counted[choice.disabled] = counted.get(choice.disabled, 0) + 1
-    return [
-        f"{count} repositor{'y' if count == 1 else 'ies'} cannot be picked: {reason}"
-        for reason, count in sorted(counted.items())
-    ]
-
 
 def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
+    """Search, then the list of **models** (`modelroom/guided_models.py`), then the choice.
+
+    One line per model with the fit its size allows, and only the ones that can be picked: a
+    hand test of 2026-09-24 showed 120 repository lines nobody could choose from. The
+    repositories behind a chosen model are `guided_models.chosen_hits`', and they go through the
+    unchanged `apply_hits`.
+    """
     name = run.asker.text("search", QUESTIONS["search"]).strip()
     if not name:
         raise GuidedError("no model name to search for")
     filtered = run.asker.confirm("filter_owners", QUESTIONS["filter_owners"], default=True)
+    listed_packagers = config.packagers or DEFAULT_PACKAGERS
     try:
         outcome = run_search(
             run.transport,
             name,
             catalog=run.catalog,
-            listed_packagers=config.packagers or DEFAULT_PACKAGERS,
+            listed_packagers=listed_packagers,
             budget=run.budget,
             # The owner filter is a question about the request, not only about the list: with it
             # on, only the accounts are asked; switching it off adds the two open lists on top
@@ -646,13 +605,20 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
     for line in outcome.group_lines():
         run.out(line)
     run.out(outcome.summary_line())
-    choices = _hit_choices(outcome.hits, filtered)
-    for line in _grouped_reasons(choices):
+    context = list_context(config.guided.context)
+    checked = machine_checked(run.pointer_path, config, config_file.parent)
+    models = model_choices(outcome.hits, filtered=filtered, checked=checked, context=context)
+    run.out(count_line(models, outcome.hits, filtered))
+    for line in unusable_reasons(outcome.hits, filtered):
         run.out(line)
-    picked = run.asker.checkbox("select", QUESTIONS["select"], choices)
-    chosen = [hit for hit in outcome.hits if hit.repo in picked]
+    fit_at = fit_line(context, checked)
+    if fit_at is not None:
+        run.out(fit_at)
+    run.out(hint_line(checked))
+    picked = ask_models(run.asker, QUESTIONS["select"], models)
+    chosen = chosen_hits(models, picked, listed_packagers)
     if not chosen:
-        if not selectable(choices):
+        if not models:
             run.out("no repository of a publisher or a listed packager was resolved; nothing added")
         else:
             run.out("nothing chosen; the configuration stays as it is")
@@ -696,9 +662,14 @@ def context_default(config: Configuration) -> int:
 
 
 def context_label(context: int) -> str:
-    """How a chosen context is named in a line that looks back at it: `L 32k`, or the number."""
-    level = next((level for level in LEVELS if level.tokens == context), None)
-    return f"{level.name} {level.shown_tokens}" if level is not None else f"{context} tokens"
+    """How a chosen context is named in a line that looks back at it: `L 32k`, or the number.
+
+    One definition for the dialog and for the result view, which says the same thing in its own
+    first line (`views.context_short`).
+    """
+    from .views import context_short  # imported here: the view reads the scale, not the reverse
+
+    return context_short(context)
 
 
 # --- the fetch of step 2, and step 5: the render --------------------------------------------------

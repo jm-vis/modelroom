@@ -163,9 +163,20 @@ def test_every_gpu_state_either_computes_or_is_unknown_with_a_reason_naming_it(s
         assert fit.reason is not None and state in fit.reason
 
 
-def test_the_v1_package_rules_still_apply():
+def test_an_architecture_v1_cannot_read_is_computed_from_the_size_instead():
+    """Since 2026-09-24 such a package is judged from its size, not set aside (tests/test_fit_size.py)."""
     base = BaseModelSpec.model_validate(
         {**EXAMPLES["BaseModelSpec"], "architecture": {"source_repo": "acme/Nova-7B", "source_revision": None, "kind": "unknown"}}
     )
     fit = compute_fit_v2(_profile(), _package(), base, default_scenario(), MACHINE)
-    assert fit.reason == "architecture not covered by v1"
+    assert (fit.basis, fit.reason) == ("size", None)
+    assert fit.fit_class in ("good", "marginal", "too_tight")
+
+
+def test_the_v1_package_rules_still_apply():
+    """A package that is not a complete gguf build is `unknown`, architecture or no architecture."""
+    payload = copy.deepcopy(EXAMPLES["Package"])
+    payload.update({"files": [], "complete": False, "quantization": None})
+    incomplete = Package.model_validate(payload)
+    fit = compute_fit_v2(_profile(), incomplete, _base_model(), default_scenario(), MACHINE)
+    assert fit.reason == "only a complete gguf package is judged by fit contract v1"

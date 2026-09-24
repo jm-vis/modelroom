@@ -717,6 +717,11 @@ class Fit(BaseModel):
     (AP5) calls it fresh against the current snapshot and hardware profile every time it
     renders, and always labels the result "fit (computed, v1)", never "runs" (CONTRACTS.md,
     "Fit contract v1").
+
+    `basis` says what the KV cache was computed from: the base model's own `architecture`, or
+    the `size` of the package alone, for a package whose architecture fit v1 cannot read
+    (decided 2026-09-24). The provenance of both is `computed`; `size` is the coarser of the two
+    and never reaches `perfect` (CONTRACTS.md, "Fit from size (basis `size`)").
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -730,6 +735,7 @@ class Fit(BaseModel):
     reserve_gib: float = Field(ge=0)
     context: int = Field(ge=0)
     context_assumed: bool
+    basis: Literal["architecture", "size"] = "architecture"
     reason: str | None
 
 

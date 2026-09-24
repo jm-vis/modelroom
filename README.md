@@ -113,7 +113,9 @@ cat docs/models.md
    Run it once on every machine you want to size; the machine is remembered in a small pointer
    file in your home folder, so a second run updates the same profile. `--machine <name>` is
    optional and adopts that configuration entry's profile; `--cpu-only` judges the machine as a
-   CPU machine, `--new-identity` measures a clone as a machine of its own.
+   CPU machine, `--new-identity` measures a clone as a machine of its own, and `--same-machine`
+   measures this machine again under the profile id it is already bound to -- the answer for a
+   results folder whose profile file is gone. The two exclude each other.
 3. `fetch` queries the registries and writes the snapshot `state/modelroom.json`. The named
    machine has to be marked `writer = true`.
 4. `render` reads the snapshot and every machine's hardware profile and writes two views: the
@@ -166,10 +168,12 @@ labeled "fit (computed, v1)" in the output for that reason.
 
 ## Limits of fit v1
 
-- Only dense transformer architectures are judged. A hybrid or mixture-of-experts
-  architecture comes back `unknown` with the reason "architecture not covered by v1". When no
-  machine can judge any package of a group, the table shows one row with
-  `no recommendation: <reason>` instead of guessing a package.
+- Only a dense transformer architecture is judged from its own layers and heads. A hybrid or
+  mixture-of-experts architecture is judged **from the size of the package** instead: the same
+  formula with the KV cache taken from a constant, shown as `good (from size)` and never as
+  `perfect`. The KV cache in that formula is one fixed assumption, not a bound: a mixture
+  architecture usually needs less, a dense model with many layers more, so a `good (from size)`
+  is coarser than a `good` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
 - Only complete GGUF packages are judged; other formats are `unknown`.
 - A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
 - Unified memory is not modeled. The profile records llmfit's `unified_memory` flag, but the
@@ -182,7 +186,7 @@ labeled "fit (computed, v1)" in the output for that reason.
 |---|---|
 | `0` | success: every fetch area complete; `hardware` measured and wrote the profile (also when `llmfit` was not there to cross-check it); `render` wrote the document (also when its rating source failed) |
 | `1` | at least one fetch area incomplete (complete areas are still written); or another process holds the lock; or this `fetch` is not newer than the stored snapshot; or `render` has no snapshot; or the existing document was rendered from a newer snapshot; or `hardware` wrote the profile but could not record the binding in the pointer file. Every case but the first and the last leaves the snapshot, hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated |
-| `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); `hardware`'s bound profile belongs to another machine (run it with `--new-identity`); or a tool a command requires is missing, older than the minimum, fails, or returns invalid output |
+| `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); `hardware`'s bound profile is missing or belongs to another machine (run it with `--same-machine` or `--new-identity`, never both); or a tool a command requires is missing, older than the minimum, fails, or returns invalid output |
 | `3` | an unsupported `schema_version` in the configuration, the snapshot, a hardware profile, the answer file or the pointer file; or one of them is not valid JSON or does not match its model |
 | `130` | the guided mode was stopped with Ctrl-C; nothing is left half written |
 

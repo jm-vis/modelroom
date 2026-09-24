@@ -15,6 +15,7 @@ from modelroom.catalog import Catalog, CatalogFamily, CatalogModel
 from modelroom.document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from modelroom.examples import EXAMPLES
 from modelroom.guided_contracts import Note, Requirement, SearchHit
+from modelroom.guided_models import ModelChoice
 from modelroom.measurements import ExportObject, LoadState, MeasurementRecord, PackageRef, RunCounters, Scenario
 from modelroom.profile import CrossCheck, HardwareProfile, LlmfitCrosscheck
 from modelroom.contracts import (
@@ -76,6 +77,7 @@ MODEL_CLASSES = {
     "CatalogFamily": CatalogFamily,
     "Catalog": Catalog,
     "SearchHit": SearchHit,
+    "ModelChoice": ModelChoice,
     "Requirement": Requirement,
     "Note": Note,
     # The render document (AP9-C): one object per render, three writers (CONTRACTS.md,

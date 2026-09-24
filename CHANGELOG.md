@@ -5,7 +5,62 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **`modelroom hardware --same-machine`**, and "the same machine" in the guided mode's clone
+  question, now **measure** (`modelroom/binding.py`, `modelroom/cli.py`, `modelroom/guided.py`;
+  CONTRACTS.md, "Profile binding"). Until now the honest answer to "is this the same machine or a
+  clone?" for a results folder whose profile file is gone was a dead end: the run said "put that
+  profile file back", measured nothing, and every step after it was empty -- no fit in the size
+  scale, no measurement, "nothing to render" at the end. The takeover rule gained the answer
+  `rewrite`: the machine is measured again under the profile id the folder already binds it to,
+  the binding stays that id, and `[machines.<name>].profile` is written as after a new profile.
+  The two switches are two answers to one question: together they are exit `2` with a sentence
+  naming both.
+- **A fit from the size of a package**, for an architecture fit v1 cannot read
+  (`modelroom/fit.py::fit_from_size` and `fit_from_parameters`, `Fit.basis`; CONTRACTS.md, "Fit
+  from size (basis `size`)"). A hybrid or mixture architecture -- Qwen3.5, Qwen3.6, Qwen3.8,
+  DeepSeek-R1 in its Qwen build -- used to leave every one of its packages under "architecture not
+  covered by v1": 25 of 26 packages in a hand test of 2026-09-24, with a single package ranked.
+  Such a package is now computed with the same formula and a KV cache taken from a constant
+  (`KV_PER_TOKEN_SIZE_BASIS`, 147,456 bytes per token: 2 x 36 layers x 8 KV heads x 128 wide x 2
+  bytes), capped at `good`, and every view says `from size` next to the class. That constant is one
+  fixed assumption and no bound in either direction -- measured on a 5.29 GiB `Q4_K_M` package at
+  131072 tokens it computes 24.32 GiB, against 22.32 for a 32-layer model and 27.32 for a 42-layer
+  one -- which is what the cap at `good` and the words `from size` are for.
+  `fit_from_parameters` answers the same question before anything is fetched, from a parameter
+  count and `BYTES_PER_PARAMETER_Q4` (0.6, measured against two real packages of the fixtures).
+
 ### Changed
+
+- **Step 2 of the guided mode offers models, not repositories**
+  (`modelroom/guided_models.py`, new; CONTRACTS.md, "Guided mode", step 2, and "ModelChoice").
+  The list of the hand test of 2026-09-24 had 120 lines of over 200 characters, repository ids,
+  `unknown` in the size and age columns throughout and 40 grayed-out rows whose appended reason
+  broke the columns -- and no statement at all about what a choice would cost. The list now holds
+  one line per resolved base model and only the ones that can be picked: name, the fit its size
+  allows on this machine (`good (RAM)` where the graphics memory is too small for it and the fit
+  is against system memory), the size, the packager accounts that have it, their downloads
+  together and the Ollama name, at most 100 characters -- every cell cut to its column, because
+  `dialog.columns` pads and never cuts and these names come from a registry. A fit in graphics
+  memory stands above one in system memory whatever its class, then the class, then the
+  downloads: live, a 122B model had stood as `good` above a 9B `marginal` that fits the graphics
+  card. Above it stand the two counts and the reasons the
+  other repositories are no model; under it the context the fit was computed for and one line on
+  what marking does. A chosen model is fetched from two repositories -- the publisher's own and
+  the first listed packager's, of an account's builds the plain `<name>-GGUF` one -- because every
+  repository costs the fetch about ten requests of the shared budget. `select` takes base model ids, and an answer file may name repository ids as
+  it always could.
+- **The result view of the terminal reads as the mockup does** (`modelroom/views.py`): `#`,
+  `Model`, `Package` (`packager · quant`, cut with `…`), `Fit` (20 characters, with ` (from size)`
+  where that is the basis), `Speed` and `Memory`, 100 characters wide, with the scenario as one
+  short line under the step head. The snapshot time and the ranking rule are in the Markdown file,
+  which is unchanged.
+- **The mark of the start screen is drawn in one glyph and three colors** (`modelroom/intro.py`).
+  Windows Terminal draws `▓▓` and `░░` as a coarse dot raster; where there is color, every cell is
+  a full block now and its own color tells the three apart. Without color -- no terminal,
+  `NO_COLOR`, `--answers`, or a console that cannot encode the block -- the shading glyphs stay
+  exactly as they were.
 
 - **The search asks one request per account, and the open lists only without the filter**
   (`modelroom/search_pages.py`, new; CONTRACTS.md, "Search over the Hugging Face API"). Until now

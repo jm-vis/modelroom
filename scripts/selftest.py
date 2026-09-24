@@ -174,24 +174,32 @@ def search_problems(lines: list[str]) -> list[str]:
     return problems
 
 
-def ranking_problems(text: str, machine: str, not_covered: list[dict]) -> list[str]:
-    """Criterion 4: the header carries rule and context, and Qwen3.5 stands under not covered.
+def ranking_problems(text: str, machine: str, block: dict) -> list[str]:
+    """Criterion 4: the header carries rule and context, and Qwen3.5 is judged from its size.
 
     `entered` and not `default`: everything the dialog writes is a decision of the user, 8192
     included -- `default` is what the three automation commands assume when nobody chose one
-    (CONTRACTS.md, "Guided mode", step 3).
+    (CONTRACTS.md, "Guided mode", step 3). Qwen3.5 is a hybrid architecture fit v1 cannot read;
+    since 2026-09-24 that is no longer a reason to set its packages aside but to compute them
+    from their size (`basis: "size"`), so this criterion watches exactly that.
     """
     lines = text.splitlines()
     problems = []
     for expected in ("Ranking rule: ", f"Scenario: context {ANSWERED_CONTEXT} (entered)", f"## Ranking: {machine}"):
         if not any(line.startswith(expected) for line in lines):
             problems.append(f"the document has no line starting with {expected!r}")
-    if not not_covered:
-        problems.append("the not-covered block of this machine is empty")
-    if any(entry["base_model_hf_repo"] != QWEN_BASE for entry in not_covered):
-        problems.append(f"the not-covered block names something other than {QWEN_BASE}")
-    if any(entry["reason"] != "architecture not covered by v1" for entry in not_covered):
-        problems.append(f"a not-covered reason is not the fit rule's own: {[e['reason'] for e in not_covered]}")
+    judged = [
+        entry
+        for entry in block["ranked"] + block["too_tight"]
+        if entry["base_model_hf_repo"] == QWEN_BASE
+    ]
+    if not judged:
+        problems.append(f"no package of {QWEN_BASE} was judged on this machine")
+    if any(entry["fit"]["basis"] != "size" for entry in judged):
+        problems.append(f"a package of {QWEN_BASE} was judged on another basis than its size")
+    stale = [entry["reason"] for entry in block["not_covered"] if entry["reason"] == "architecture not covered by v1"]
+    if stale:
+        problems.append(f"{len(stale)} packages are still set aside as not covered by v1")
     return problems
 
 
@@ -279,14 +287,16 @@ def stored_context_problems(
     return problems
 
 
-def guided_mode_problems(lines: list[str], scale: list[str]) -> list[str]:
-    """Criterion 7: the run reads like the guided mode it is -- start screen, steps, scale, groups.
+def guided_mode_problems(lines: list[str], scale: list[str], models: list[str] | None = None) -> list[str]:
+    """Criterion 7: the run reads like the guided mode it is -- start screen, steps, scale, list.
 
-    The four things the hand test of 2026-09-24 did not find: a start screen, a numbered step for
-    every question, a context question that says what still fits, and a result view that says a
-    reason once instead of once per package.
+    The things the hand tests of 2026-09-24 did not find: a start screen, a numbered step for
+    every question, a context question that says what still fits, a selection list of models
+    rather than of repositories, and a result table that names the model.
     """
     problems = []
+    if models is not None:
+        problems += model_list_problems(models)
     if not any("ModelRoom" in line for line in lines[:6]):
         problems.append("the run does not begin with the start screen")
     for label in ("folder", "daemon", "machine"):
@@ -300,11 +310,39 @@ def guided_mode_problems(lines: list[str], scale: list[str]) -> list[str]:
         problems.append("step 3 does not say which machine the scale is about")
     if not all(" packages fit" in label or " packages fits" in label for label in scale):
         problems.append(f"a level of the scale carries no count of what fits: {scale}")
-    grouped = [line for line in "\n".join(lines).splitlines() if "not covered: " in line]
-    if not grouped:
-        problems.append("the result view has no grouped not-covered line")
-    elif not any(" packages -- " in line or " package -- " in line for line in grouped):
-        problems.append(f"the not-covered lines are not grouped by reason: {grouped}")
+    problems += result_table_problems("\n".join(lines).splitlines())
+    return problems
+
+
+def model_list_problems(models: list[str]) -> list[str]:
+    """Criterion 7, the selection list of step 2: one line per model, each with its fit in a word.
+
+    The list of 2026-09-24 had one line per repository, over 200 characters wide, `unknown` where
+    a size belongs and no fit at all; this one has a model per line and says what it would cost
+    (CONTRACTS.md, "Guided mode", step 2).
+    """
+    problems = []
+    if not models:
+        problems.append("the selection list of step 2 holds no model")
+    for label in models:
+        if len(label) > 100:
+            problems.append(f"a line of the model list is {len(label)} characters wide: {label}")
+        if not any(word in label for word in ("good", "marginal", "too tight", "unknown")):
+            problems.append(f"a line of the model list carries no fit: {label}")
+    return problems
+
+
+def result_table_problems(lines: list[str]) -> list[str]:
+    """Criterion 7, the result table: the columns of the mockup, and a reason said once."""
+    problems = []
+    head = next((line for line in lines if "Model" in line and "Package" in line and "Fit" in line), None)
+    if head is None:
+        problems.append("the result view has no table head with Model, Package and Fit")
+    elif head.split() != ["#", "Model", "Package", "Fit", "Speed", "Memory"]:
+        problems.append(f"the columns of the result table are {head.split()}")
+    grouped = [line for line in lines if "not covered: " in line or "too tight: " in line]
+    if grouped and not any(" packages -- " in line or " package -- " in line for line in grouped):
+        problems.append(f"the set-aside lines are not grouped by reason: {grouped}")
     return problems
 
 
@@ -430,11 +468,13 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             or next(line for line in lines if " repositories, " in line),
         ),
         Step(
-            "(4) the ranking carries rule and context, Qwen3.5 is not covered",
-            not ranking_problems(text, machine, block["not_covered"]),
-            "\n".join(ranking_problems(text, machine, block["not_covered"]))
-            or f"{len(block['ranked'])} ranked, {len(block['not_covered'])} not covered "
-            f"({block['not_covered'][0]['reason']})",
+            "(4) the ranking carries rule and context, Qwen3.5 is judged from its size",
+            not ranking_problems(text, machine, block),
+            "\n".join(ranking_problems(text, machine, block))
+            or f"{len(block['ranked'])} ranked, {len(block['too_tight'])} too tight, "
+            f"{len(block['not_covered'])} not covered; "
+            f"{sum(1 for e in block['ranked'] + block['too_tight'] if e['fit']['basis'] == 'size')} "
+            f"rows judged from the size",
         ),
     ]
     return steps, lines
@@ -496,6 +536,36 @@ def _scale_labels(results: Path, pointer: Path) -> list[str]:
     fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts)
     choices = scale_choices(LEVELS, ANSWERED_CONTEXT, fits, context_cap(base_models))
     return [choice.label for choice in choices if choice.value in {level.name for level in LEVELS}]
+
+
+def _model_list_labels(results: Path, pointer: Path, transport) -> list[str]:
+    """The lines of step 2's selection list for this folder, built by the step's own functions.
+
+    An answer file answers the question outright, so the list itself is never printed -- the same
+    reason the scale is rebuilt here. The search runs once more against the very same pinned
+    answers, with a budget of its own so this rebuild cannot spend the run's.
+    """
+    from modelroom.catalog import load_catalog
+    from modelroom.config import load_config
+    from modelroom.guided_context import machine_checked
+    from modelroom.guided_models import list_choices, list_context, model_choices
+    from modelroom.http import RequestBudget
+    from modelroom.search import DEFAULT_GUIDED_BUDGET, DEFAULT_PACKAGERS, run_search
+
+    config = load_config(results / "modelroom.toml")
+    outcome = run_search(
+        transport,
+        SEARCH_NAME,
+        catalog=load_catalog(),
+        listed_packagers=config.packagers or DEFAULT_PACKAGERS,
+        budget=RequestBudget(DEFAULT_GUIDED_BUDGET),
+        open_pages=False,
+    )
+    checked = machine_checked(pointer, config, results)
+    models = model_choices(
+        outcome.hits, filtered=True, checked=checked, context=list_context(config.guided.context)
+    )
+    return [choice.label for choice in list_choices(models)]
 
 
 def _standalone_render(results: Path, config_file: Path, now: datetime) -> tuple[int, str | None]:
@@ -576,19 +646,25 @@ def run_steps(work: Path) -> list[Step]:
     machine = _machine_name((results / "modelroom.toml").read_text(encoding="utf-8"))
     steps.append(_load_test_step(results, machine))
     scale = _scale_labels(results, pointer)
+    models = _model_list_labels(results, pointer, build_transport(guided_transport_mapping()))
     steps += _second_run(
         results, build_transport(guided_transport_mapping()), started + timedelta(minutes=1), machine
     )
-    steps.append(_guided_mode_step(first_lines, scale))
+    steps.append(_guided_mode_step(first_lines, scale, models))
     steps.append(_live_search_smoke())
     return steps
 
 
-def _guided_mode_step(lines: list[str], scale: list[str]) -> Step:
+def _guided_mode_step(lines: list[str], scale: list[str], models: list[str]) -> Step:
     """Criterion 7: the dialog of the first run is the one the guided mode promises."""
-    problems = guided_mode_problems(lines, scale)
-    detail = "\n".join(problems) or "start screen, five step heads, scale: " + " / ".join(scale[:2])
-    return Step("(7) the run reads as a guided dialog: start screen, steps, scale, grouped reasons", not problems, detail)
+    problems = guided_mode_problems(lines, scale, models)
+    detail = "\n".join(problems) or (
+        "start screen, five step heads, scale: "
+        + " / ".join(scale[:2])
+        + f", {len(models)} models in the list: "
+        + " | ".join(label.split("  ")[0] for label in models)
+    )
+    return Step("(7) the run reads as a guided dialog: start screen, steps, scale, model list", not problems, detail)
 
 
 def main() -> int:
