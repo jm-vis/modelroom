@@ -17,6 +17,7 @@ from modelroom.llmfit import (
     check_llmfit_version,
     fetch_llmfit_system,
     hardware_fields_from_llmfit_system,
+    read_llmfit_reference,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -392,3 +393,83 @@ def test_subprocess_runner_decodes_output_as_utf8_with_replace_on_undecodable_by
 
     assert result.returncode == 0
     assert "llmfit 1.1.16" in result.stdout
+
+
+# --- the cross-check reference: llmfit's own readings, never the authority ------------------
+
+
+def _reference_runner(system_stdout: str | None = None, version_stdout: str = "llmfit 1.1.16\n") -> FixtureRunner:
+    if system_stdout is None:
+        system_stdout = (FIXTURES / "llmfit_system_laptop.json").read_text(encoding="utf-8")
+    return FixtureRunner(
+        {
+            ("llmfit", "--version"): _completed(["llmfit", "--version"], stdout=version_stdout),
+            ("llmfit", "system", "--json"): _completed(["llmfit", "system", "--json"], stdout=system_stdout),
+        }
+    )
+
+
+def test_read_llmfit_reference_returns_both_readings_and_the_version():
+    reference = read_llmfit_reference(_reference_runner(), "1.1.16")
+    assert reference.status == "available" and reference.version == "1.1.16"
+    assert reference.ram_gib == 127.46 and reference.vram_gib == 11.94
+    assert reference.reason is None
+
+
+def test_read_llmfit_reference_without_llmfit_is_absent_never_an_exception():
+    def _missing(args: list[str]) -> subprocess.CompletedProcess:
+        raise FileNotFoundError("llmfit not found")
+
+    reference = read_llmfit_reference(_missing, "1.1.16")
+    assert reference.status == "absent" and reference.version is None
+    assert reference.ram_gib is None and reference.vram_gib is None
+    assert "not installed" in reference.reason
+
+
+def test_read_llmfit_reference_with_a_version_below_the_minimum_is_absent():
+    reference = read_llmfit_reference(_version_ok_runner("llmfit 1.0.0\n"), "1.1.16")
+    assert reference.status == "absent" and "1.1.16" in reference.reason
+
+
+def test_read_llmfit_reference_with_a_failing_system_call_is_an_error():
+    runner = FixtureRunner(
+        {
+            ("llmfit", "--version"): _completed(["llmfit", "--version"], stdout="llmfit 1.1.16\n"),
+            ("llmfit", "system", "--json"): _completed(["llmfit", "system", "--json"], returncode=1, stderr="boom"),
+        }
+    )
+    reference = read_llmfit_reference(runner, "1.1.16")
+    assert reference.status == "error" and reference.version == "1.1.16"
+    assert "exit 1" in reference.reason
+
+
+def test_read_llmfit_reference_with_an_unusable_system_block_is_an_error():
+    reference = read_llmfit_reference(_reference_runner(system_stdout='{"system": {"total_ram_gb": null}}'), "1.1.16")
+    assert reference.status == "error" and "total_ram_gb" in reference.reason
+
+
+def test_read_llmfit_reference_with_an_unresponsive_binary_is_an_error():
+    runner = FixtureRunner({("llmfit", "--version"): subprocess.TimeoutExpired(cmd=["llmfit"], timeout=10.0)})
+    reference = read_llmfit_reference(runner, "1.1.16")
+    assert reference.status == "error" and reference.version is None
+
+
+def test_read_llmfit_reference_with_an_over_long_json_integer_is_an_error_not_a_crash():
+    """`json.loads` raises a plain `ValueError`, not a `JSONDecodeError`, for an integer above
+    Python's int/str conversion limit. The cross-check must never raise: it is optional."""
+    huge = '{"system": {"total_ram_gb": ' + "1" * 5000 + "}}"
+    reference = read_llmfit_reference(_reference_runner(system_stdout=huge), "1.1.16")
+    assert reference.status == "error" and reference.ram_gib is None
+
+
+def test_fetch_llmfit_system_turns_an_over_long_json_integer_into_an_llmfit_error():
+    runner = FixtureRunner(
+        {("llmfit", "system", "--json"): _completed(["llmfit"], stdout='{"a": ' + "1" * 5000 + "}")}
+    )
+    with pytest.raises(LlmfitError, match="invalid JSON"):
+        fetch_llmfit_system(runner)
+
+
+def test_read_llmfit_reference_of_a_gpu_less_machine_reports_zero_vram():
+    reference = read_llmfit_reference(_reference_runner(system_stdout='{"system": {"total_ram_gb": 31.2}}'), "1.1.16")
+    assert reference.status == "available" and reference.vram_gib == 0.0

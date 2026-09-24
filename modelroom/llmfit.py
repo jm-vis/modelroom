@@ -16,7 +16,8 @@ import os
 import re
 import subprocess
 import sys
-from typing import Callable, Protocol
+from dataclasses import dataclass
+from typing import Callable, Literal, Protocol
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 # F9b (fix-round 5): `Which = (name) -> absolute path | None`, the same dependency-injection
@@ -78,6 +79,15 @@ class LlmfitError(Exception):
 
     The CLI maps this to exit code 2, the same code AGENTS.md already documents for "a
     required external tool is missing or too old".
+    """
+
+
+class LlmfitUnusableError(LlmfitError):
+    """`llmfit` was never asked: it is not installed, or it is below the minimum version.
+
+    A subclass, so every caller that catches `LlmfitError` still catches this one. It exists
+    for the profile-v2 cross-check, where "we never asked" (`absent`) and "we asked and it
+    failed" (`error`) are two different recorded states (CONTRACTS.md, "CrossCheck").
     """
 
 
@@ -169,7 +179,7 @@ def check_llmfit_version(runner: Runner, min_version: str) -> str:
     try:
         result = runner(["llmfit", "--version"])
     except FileNotFoundError as exc:
-        raise LlmfitError(f"llmfit is not installed (requires >= {min_version}); {INSTALL_HINT}") from exc
+        raise LlmfitUnusableError(f"llmfit is not installed (requires >= {min_version}); {INSTALL_HINT}") from exc
     except (subprocess.TimeoutExpired, OSError) as exc:
         raise LlmfitError(f"llmfit --version did not respond (requires >= {min_version}); {INSTALL_HINT}: {exc}") from exc
 
@@ -184,7 +194,7 @@ def check_llmfit_version(runner: Runner, min_version: str) -> str:
 
     required = _parse_semver(min_version, "min_version")
     if installed < required:
-        raise LlmfitError(f"llmfit {installed_str} is older than the required {min_version}; {INSTALL_HINT}")
+        raise LlmfitUnusableError(f"llmfit {installed_str} is older than the required {min_version}; {INSTALL_HINT}")
     return installed_str
 
 
@@ -203,7 +213,11 @@ def fetch_llmfit_system(runner: Runner) -> dict:
         raise LlmfitError(f"llmfit system --json failed (exit {result.returncode}): {result.stderr.strip()}")
     try:
         data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
+        # `ValueError`, not only `json.JSONDecodeError`: an integer above Python's int/str
+        # conversion limit raises a plain `ValueError` out of `json.loads` (probe: a
+        # `total_ram_gb` of 5000 digits). Uncaught, it escaped `read_llmfit_reference`, whose
+        # whole point is that an optional cross-check can never fail the command.
         raise LlmfitError(f"llmfit system --json returned invalid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise LlmfitError("llmfit system --json returned a non-object JSON value")
@@ -287,3 +301,44 @@ def _optional_bool(value: object, field: str) -> bool:
     if not isinstance(value, bool):
         raise LlmfitError(f"llmfit system --json response field {field!r} is not a boolean: {value!r}")
     return value
+
+
+@dataclass(frozen=True)
+class LlmfitReference:
+    """llmfit's own readings of this machine, for the cross-check -- never the authority.
+
+    `available` carries both readings (`vram_gib` is `0.0` on a machine llmfit reports without
+    a GPU); `absent` means llmfit was never asked (not installed, or below the minimum
+    version); `error` means it was asked and failed. `reason` says which, in the tool's own
+    words, for the note the command prints.
+    """
+
+    status: Literal["available", "absent", "error"]
+    version: str | None
+    ram_gib: float | None
+    vram_gib: float | None
+    reason: str | None
+
+
+def read_llmfit_reference(runner: Runner, min_version: str) -> LlmfitReference:
+    """The cross-check reading of `llmfit`, without ever raising.
+
+    Profile v2 measures the machine itself and asks llmfit only for a second opinion
+    (CONTRACTS.md, "Cross-check with llmfit"), so a missing, too old or failing llmfit is a
+    recorded state, not a failed command -- unlike schema 1, where `llmfit` was the only source
+    and its absence was exit `2`.
+    """
+    try:
+        version = check_llmfit_version(runner, min_version)
+    except LlmfitUnusableError as exc:
+        return LlmfitReference(status="absent", version=None, ram_gib=None, vram_gib=None, reason=str(exc))
+    except LlmfitError as exc:
+        return LlmfitReference(status="error", version=None, ram_gib=None, vram_gib=None, reason=str(exc))
+
+    try:
+        fields = hardware_fields_from_llmfit_system(fetch_llmfit_system(runner))
+    except LlmfitError as exc:
+        return LlmfitReference(status="error", version=version, ram_gib=None, vram_gib=None, reason=str(exc))
+    return LlmfitReference(
+        status="available", version=version, ram_gib=fields["ram_gib"], vram_gib=fields["vram_gib"], reason=None
+    )

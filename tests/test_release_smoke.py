@@ -15,6 +15,7 @@ import pytest
 from fixture_support import build_transport, qwen35_example_config_dict, qwen35_transport_mapping
 from modelroom.cli import fetch_with_config, render_with_config
 from modelroom.config import Configuration, load_config
+from modelroom.contracts import load_hardware_snapshot
 from modelroom.examples import EXAMPLES
 
 REPO = Path(__file__).resolve().parent.parent
@@ -86,6 +87,17 @@ def test_markdown_table_reads_the_rendered_package_table(tmp_path):
     assert {row["Packager"] for row in rows} == {"unsloth", "ollama"}
     assert all(row["Stars"] == "–" for row in rows)
     assert all(row["fit (computed, v1): workstation"].startswith("no recommendation:") for row in rows)
+
+
+def test_the_placed_schema_1_profile_validates_and_carries_the_fixture_inventory():
+    """The step that keeps `render` testable until the renderer reads schema 2: the profile it
+    places has to be a valid schema-1 `HardwareSnapshot` with the fixtures' own numbers."""
+    profile = rs.v1_profile_from_fixtures("kunde")
+
+    assert load_hardware_snapshot(profile).machine == "kunde"
+    assert profile["vram_gib"] == 11.94 and profile["ram_gib"] == 127.46
+    assert len(profile["installed"]) == 3
+    assert all(entry["digest"].startswith("sha256:") for entry in profile["installed"])
 
 
 def test_render_checks_pass_on_a_document_with_a_profile(tmp_path):

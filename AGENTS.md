@@ -65,13 +65,15 @@ exception list carries a reason per entry and has to shrink, never grow quietly.
   rule: the kernel releases a crashed holder's lock, a live holder keeps it regardless of age, and
   the lock file is never renamed or deleted. Three review rounds showed that no file-name
   choreography closes every race; see the "Lock file" section of `CONTRACTS.md`.
-- Exit codes are part of the contract: `0` success (`hardware`: measured and written, even
-  when the local Ollama daemon could not be reached), `1` at least one `fetch` area incomplete
-  (or `fetch` stopped at another process's lock, or this run is not newer than the stored
-  snapshot -- both leave the state directory untouched), `2` the configuration is missing or
+- Exit codes are part of the contract: `0` success (`hardware`: measured and written, even when
+  `llmfit` was not there to cross-check the readings), `1` at least one `fetch` area incomplete
+  (or a command stopped at another process's lock, or this run is not newer than the stored
+  snapshot -- both leave the state directory untouched -- or `hardware` wrote the profile but
+  could not bind this machine to it), `2` the configuration is missing or
   invalid, the named machine is not a writer (`fetch`) or not configured at all (`hardware`),
-  or a required external tool (`llmfit`) is missing or too old, `3` an input file has an
-  unsupported schema version. Details: `CONTRACTS.md`.
+  `hardware`'s bound profile belongs to another machine, or an external tool a command requires
+  is missing or too old, `3` an input file has an unsupported schema version. Details:
+  `CONTRACTS.md`.
 
 ## Hard boundaries
 

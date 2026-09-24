@@ -1,0 +1,3 @@
+00:00.0 Host bridge [0600]: Intel Corporation 440FX - 82441FX PMC [Natoma] [8086:1237] (rev 02)
+00:03.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]
+00:05.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]

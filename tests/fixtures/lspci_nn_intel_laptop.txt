@@ -1,0 +1,3 @@
+00:00.0 Host bridge [0600]: Intel Corporation Device [8086:7d01] (rev 04)
+00:02.0 VGA compatible controller [0300]: Intel Corporation Device [8086:7d51] (rev 08)
+00:14.3 Network controller [0280]: Intel Corporation Device [8086:7e40] (rev 20)

@@ -6,7 +6,9 @@ Steps, each reported with its exit code and output: build the wheel; create a fr
 the system temp directory (outside any git repository) and `pip install` the wheel there (not
 editable, not from the tree; pip fetches `pydantic` from the package index); write a customer
 configuration derived from `modelroom.example.toml` (one machine `kunde`, reserves 0, no rating
-source); `modelroom hardware`; place a snapshot built from the recorded fixtures in `tests/`
+source); `modelroom hardware`, which must write exactly one schema-2 profile; place the
+schema-1 profile the renderer still reads, built from the recorded fixtures; place a snapshot
+built from the recorded fixtures in `tests/`
 (no live data); `modelroom fetch` with the network blocked through an unreachable proxy (the
 contract honours `HTTPS_PROXY`), which must end every area incomplete with exit 1, keep the
 packages and leave the lock free; `modelroom render`; delete the temp directory.
@@ -253,10 +255,71 @@ def modelroom(python: Path, *args: str, env: dict[str, str] | None = None) -> tu
 
 
 def step_hardware(python: Path, config: Path) -> Step:
-    code, output = modelroom(python, "hardware", "--config", str(config), "--machine", MACHINE)
-    profile = config.parent / "state" / "hardware" / f"{MACHINE}.json"
-    ok = code == 0 and profile.is_file()
-    return Step("modelroom hardware", code, 0 if ok else 1, f"{tail(output)}\nprofile written: {profile.is_file()}")
+    """`modelroom hardware` on this machine: exactly one schema-2 profile must be written.
+
+    The file is named after the random `profile_id`, so the check is "one new schema-2 profile
+    in the folder", not a file name (CONTRACTS.md, "Hardware measurement").
+    """
+    # The pointer file lives in the user's home folder, so the run gets a home of its own inside
+    # the temp tree: a smoke test must not leave a binding to a deleted folder in anybody's home.
+    home = str(config.parent)
+    code, output = modelroom(python, "hardware", "--config", str(config), "--machine", MACHINE,
+                             env=clean_env(USERPROFILE=home, HOME=home))
+    written = [path for path in sorted((config.parent / "state" / "hardware").glob("*.json"))
+               if json.loads(path.read_text(encoding="utf-8")).get("schema_version") == 2]
+    ok = code == 0 and len(written) == 1
+    return Step("modelroom hardware", code, 0 if ok else 1,
+                f"{tail(output)}\nschema-2 profiles written: {[path.name for path in written]}")
+
+
+def step_place_v1_profile(config: Path) -> Step:
+    """Place the schema-1 profile `render` still reads, built from this repository's fixtures.
+
+    `hardware` writes schema 2; the renderer switches to it in its own work package and until
+    then reads `<machine>.json`. Built from the recorded `llmfit system --json` and
+    `/api/tags` fixtures, never from live data -- so the render step below keeps checking the
+    renderer, not the measurement.
+    """
+    profile = v1_profile_from_fixtures(MACHINE)
+    path = config.parent / "state" / "hardware" / f"{MACHINE}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(profile, indent=2), encoding="utf-8", newline="\n")
+    return Step("place schema-1 profile for render", 0, 0,
+                f"{len(profile['installed'])} installed models, vram {profile['vram_gib']} GiB")
+
+
+def v1_profile_from_fixtures(machine: str) -> dict:
+    """A valid schema-1 `HardwareSnapshot` dict for `machine`, from the recorded fixtures."""
+    sys.path.insert(0, str(REPO / "tests"))
+    from modelroom.contracts import load_hardware_snapshot
+
+    fixtures = REPO / "tests" / "fixtures"
+    system = json.loads((fixtures / "llmfit_system_laptop.json").read_text(encoding="utf-8"))["system"]
+    tags = json.loads((fixtures / "ollama_tags_local.json").read_text(encoding="utf-8"))["models"]
+    data = {
+        "schema_version": 1,
+        "machine": machine,
+        "measured_at": FIXTURE_RUN_AT.isoformat(),
+        "llmfit_version": "0.0.0",
+        "vram_gib": system["gpu_vram_gb"],
+        "ram_gib": system["total_ram_gb"],
+        "free_ram_gib_at_measurement": system["available_ram_gb"],
+        "gpu_name": system["gpu_name"],
+        "backend": system["backend"],
+        "unified_memory": system["unified_memory"],
+        "installed": [
+            {
+                "name": entry["name"],
+                "digest": f"sha256:{entry['digest']}",
+                "size_bytes": entry.get("size", 0),
+                "observed_at": FIXTURE_RUN_AT.isoformat(),
+            }
+            for entry in tags
+        ],
+        "installed_unavailable_reason": None,
+        "measurements": [],
+    }
+    return load_hardware_snapshot(data).model_dump(mode="json")
 
 
 def step_place_snapshot(config: Path) -> Step:
@@ -332,6 +395,7 @@ def run_steps(work: Path) -> list[Step]:
     except (SetupError, OSError, KeyError, ValueError, TypeError) as exc:
         return steps + [Step("setup", None, 2, f"{type(exc).__name__}: {exc}")]
     steps.append(guarded("modelroom hardware", lambda: step_hardware(python, config)))
+    steps.append(guarded("place schema-1 profile for render", lambda: step_place_v1_profile(config)))
     steps.append(guarded("place fixture snapshot", lambda: step_place_snapshot(config)))
     steps.append(guarded("modelroom fetch, network blocked", lambda: step_fetch_offline(python, config)))
     steps.append(guarded("modelroom render", lambda: step_render(python, config)))

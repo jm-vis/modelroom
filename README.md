@@ -26,11 +26,13 @@ release. `CHANGELOG.md` lists what has landed.
 ## Requirements
 
 - Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
-- `llmfit` 1.1.16 or newer on `PATH`, for `hardware` only. The minimum is set in the
-  configuration (`[llmfit] min_version`).
-- Internet access for `fetch` only. `hardware` also reads a local Ollama daemon at
-  `http://127.0.0.1:11434` when one is running; without it the profile records the installed
-  models as unknown and the command still succeeds.
+- `llmfit` 1.1.16 or newer on `PATH` is optional: `hardware` measures the machine itself and
+  uses `llmfit` only to cross-check the physical RAM and the VRAM. Without it the profile
+  records both checks as `absent` and the command still succeeds. The minimum version is set
+  in the configuration (`[llmfit] min_version`).
+- `nvidia-smi` on `PATH` for a machine with an NVIDIA card; without it the profile records
+  that an adapter is present but unmeasured, and no fit is computed for it.
+- Internet access for `fetch` only.
 
 ## Installation
 
@@ -51,7 +53,7 @@ From a clone of this repository, after `uv sync --frozen`:
 
 ```bash
 cp modelroom.example.toml modelroom.toml
-uv run --frozen modelroom hardware --config modelroom.toml --machine workstation
+uv run --frozen modelroom hardware --config modelroom.toml
 uv run --frozen modelroom fetch --config modelroom.toml --machine workstation
 uv run --frozen modelroom render --config modelroom.toml
 cat docs/models.md
@@ -61,8 +63,11 @@ cat docs/models.md
    two machines (`workstation`, a writer, and `inference-server`) and two paths. Relative
    paths resolve against the configuration file's own directory, never the current working
    directory. Edit the copy for your own models and machines.
-2. `hardware` measures the machine it runs on and writes `state/hardware/<machine>.json`.
-   The machine only has to be configured. Run it once on every machine you want to size.
+2. `hardware` measures the machine it runs on and writes `state/hardware/<profile_id>.json`.
+   Run it once on every machine you want to size; the machine is remembered in a small pointer
+   file in your home folder, so a second run updates the same profile. `--machine <name>` is
+   optional and adopts that configuration entry's profile; `--cpu-only` judges the machine as a
+   CPU machine, `--new-identity` measures a clone as a machine of its own.
 3. `fetch` queries the registries and writes the snapshot `state/modelroom.json`. The named
    machine has to be marked `writer = true`.
 4. `render` reads the snapshot and every machine's hardware profile and writes the Markdown
@@ -82,7 +87,7 @@ Under `paths.state`:
 | File | Written by | Kind |
 |---|---|---|
 | `modelroom.json` | `fetch` | snapshot, versioned contract |
-| `hardware/<machine>.json` | `hardware`, on that machine | hardware profile, versioned contract |
+| `hardware/<profile_id>.json` | `hardware`, on that machine | hardware profile, versioned contract |
 | `modelroom.lock` | `fetch`, `render` | runtime only, not a contract |
 | `run-status.json` | `fetch` | runtime only, not a contract |
 
@@ -122,10 +127,10 @@ labeled "fit (computed, v1)" in the output for that reason.
 
 | Code | Meaning |
 |---|---|
-| `0` | success: every fetch area complete; `hardware` measured and wrote the profile (also when no local Ollama daemon answered); `render` wrote the document (also when its rating source failed) |
-| `1` | at least one fetch area incomplete (complete areas are still written); or another process holds the lock; or this `fetch` is not newer than the stored snapshot; or `render` has no snapshot; or the existing document was rendered from a newer snapshot. Every case but the first leaves the snapshot, hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated |
-| `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); or `llmfit` is missing, older than the minimum, fails, or returns invalid output |
-| `3` | an unsupported `schema_version` in the configuration, the snapshot or a hardware profile; or a snapshot or hardware profile that is not valid JSON or does not match its model |
+| `0` | success: every fetch area complete; `hardware` measured and wrote the profile (also when `llmfit` was not there to cross-check it); `render` wrote the document (also when its rating source failed) |
+| `1` | at least one fetch area incomplete (complete areas are still written); or another process holds the lock; or this `fetch` is not newer than the stored snapshot; or `render` has no snapshot; or the existing document was rendered from a newer snapshot; or `hardware` wrote the profile but could not record the binding in the pointer file. Every case but the first and the last leaves the snapshot, hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated |
+| `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); `hardware`'s bound profile belongs to another machine (run it with `--new-identity`); or a tool a command requires is missing, older than the minimum, fails, or returns invalid output |
+| `3` | an unsupported `schema_version` in the configuration, the snapshot, a hardware profile or the pointer file; or one of them is not valid JSON or does not match its model |
 
 Source: `CONTRACTS.md`, "Exit codes", and `AGENTS.md`.
 

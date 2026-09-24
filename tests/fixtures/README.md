@@ -131,6 +131,34 @@ Both real commands here were run on the same reference laptop, 2026-09-22.
   **bare hex, with no `sha256:` prefix** (measured 2026-09-22) -- `fetch_installed_models`
   normalizes it before building `InstalledModel` (CONTRACTS.md, "Local Ollama inventory").
 
+## Hardware measurement (AP9-A)
+
+Hand-written, synthetic outputs in the exact shape of the real commands; no host names, no
+paths, no serial numbers. Written 2026-09-23. Each is one machine class from the plan.
+
+- `nvidia_smi_one_gpu.csv` -- `nvidia-smi --query-gpu=index,name,memory.total
+  --format=csv,noheader,nounits` on a laptop with one NVIDIA adapter: index `0`, `12282` MiB
+  (11.99 GiB). The adapter name is the one `llmfit_system_laptop.json` also reports, so the two
+  fixtures describe the same machine class.
+- `nvidia_smi_two_gpus.csv` -- the same command on a two-adapter server: `gpu_state`
+  `multi_gpu_not_covered`, no VRAM.
+- `lspci_nn_cpu_server.txt` -- `lspci -nn` on a CPU-only virtual server: the only class-`0300`
+  device is the QEMU/Bochs display adapter `[1234:1111]`, so this is a CPU machine with the note
+  `display adapter only`.
+- `lspci_nn_intel_laptop.txt` -- `lspci -nn` on a laptop with Intel graphics and no
+  `nvidia-smi`: `present_unmeasured` with the CPU hint.
+- `lspci_nn_nvidia_laptop.txt` -- Intel graphics *and* a discrete NVIDIA `[10de:2bb4]` adapter,
+  again without `nvidia-smi`: `present_unmeasured` naming both vendors, and deliberately without
+  the Intel-only hint.
+- `lspci_nn_headless.txt` -- a server with no class-03 device at all: `gpu_state` `none`.
+- `proc_meminfo_linux.txt` -- the first lines of `/proc/meminfo`, `MemTotal` `32612348` kB
+  (31.10 GiB).
+
+The Windows sources have no fixture files: `Win32_VideoController.PNPDeviceID` values, the
+`reg query MachineGuid` output, `sysctl hw.memsize` and `ioreg`'s `IOPlatformUUID` are one line
+each and are written in the tests that use them (`tests/test_measure.py`), with a fictitious
+GUID and UUID.
+
 ## Schema 2 and migration (AP9-K)
 
 All hand-written, fictitious machines and models (`acme/Nova-*`, `packager/*`); no real host

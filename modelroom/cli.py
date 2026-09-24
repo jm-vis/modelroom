@@ -1,17 +1,18 @@
 """The `modelroom` command line: `fetch`, `hardware` and `render` today, `check` later.
 
 `main(argv)` is the real entry point (`[project.scripts]` in `pyproject.toml`); it takes
-optional `transport`/`runner`/`now` keyword arguments purely for dependency injection in tests
--- the real CLI never passes them, so it always uses `UrllibTransport()`, `SubprocessRunner()`
-and the real clock. Exit codes follow AGENTS.md/CONTRACTS.md: `0` success (`fetch`: every area
-complete; `hardware`: the profile was measured and written, whether or not the local Ollama
-daemon could be reached; `render`: the document was written, even when its rating source
-failed), `1` (`fetch`/`render`) at least one `fetch` area incomplete, the lock is held, a
-`fetch` run is not newer than the stored snapshot, `render` has no snapshot to read, or
-`render`'s existing document was rendered from a newer snapshot, `2` the configuration is
-missing/invalid, the named machine is not a writer (`fetch`) or not configured at all
-(`hardware`), or a required external tool (`llmfit`) is missing or too old, `3` a stored file's
-(configuration, snapshot or hardware profile) `schema_version` is unsupported.
+optional `transport`/`probes`/`pointer_path`/`now` keyword arguments purely for dependency
+injection in tests -- the real CLI never passes them, so it always uses `UrllibTransport()`,
+the real `Probes()` (this machine), the user's own pointer file and the real clock. Exit codes
+follow AGENTS.md/CONTRACTS.md: `0` success (`fetch`: every area complete; `hardware`: the
+profile was measured and written, whether or not `llmfit` was there to cross-check it;
+`render`: the document was written, even when its rating source failed), `1` (`fetch`/`render`/
+`hardware`) at least one `fetch` area incomplete, the lock is held, a `fetch` run is not newer
+than the stored snapshot, `render` has no snapshot to read, or `render`'s existing document was
+rendered from a newer snapshot, `2` the configuration is missing/invalid, the named machine is
+not a writer (`fetch`) or not configured at all (`hardware`), or `hardware`'s bound profile
+belongs to another machine (`--new-identity`), `3` a stored file's (configuration, snapshot,
+hardware profile or pointer file) `schema_version` is unsupported or it cannot be read.
 
 `fetch_with_config`/`hardware_with_config`/`render_with_config` are the programmatic entry
 points for a caller that already has a `Configuration` object (e.g. built with
@@ -29,9 +30,16 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from .binding import PointerFileError, default_pointer_path
+from .binding import (
+    KnownProfile,
+    PointerFileError,
+    default_pointer_path,
+    read_pointer,
+    resolve_profile_target,
+    write_pointer,
+)
 from .config import ConfigError, Configuration, load_config
-from .contracts import HARDWARE_SCHEMA_VERSION, HardwareSnapshot, SchemaVersionError, Snapshot
+from .contracts import HardwareSnapshot, SchemaVersionError, Snapshot
 from .fetch import run_fetch
 from .http import Transport, UrllibTransport
 from .importer import (
@@ -41,32 +49,29 @@ from .importer import (
     export_profile,
     import_profile,
 )
-from .llmfit import (
-    LlmfitError,
-    Runner,
-    SubprocessRunner,
-    check_llmfit_version,
-    fetch_llmfit_system,
-    hardware_fields_from_llmfit_system,
-)
+from .llmfit import LlmfitReference, read_llmfit_reference
+from .measure import MeasuredHardware, Probes, build_profile, measure_hardware
 from .migrate import MigrationError, migrate
-from .ollama_local import fetch_installed_models
+from .profile import HardwareProfile, fit_block_reason, os_fingerprint, read_profile_document
 from .render import RatingSource, build_document, parse_header_line
 from .state import (
     LockHeldError,
     StaleRunError,
     StateFileShapeError,
     acquire_lock,
+    atomic_write_json,
     atomic_write_text,
     check_run_is_newer,
     hardware_snapshot_path,
     load_existing_hardware_snapshot,
     load_existing_snapshot,
     release_lock,
-    write_hardware_snapshot,
     write_run_status,
     write_snapshot,
 )
+
+
+_FRESH_ID_ATTEMPTS = 8
 
 
 class _UnreadableStateFileError(Exception):
@@ -113,11 +118,17 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
     fetch_parser.add_argument("--machine", required=True, help="This machine's name in [machines]")
 
-    hardware_parser = subparsers.add_parser(
-        "hardware", help="Measure this machine's hardware and local Ollama inventory."
-    )
+    hardware_parser = subparsers.add_parser("hardware", help="Measure this machine and write its hardware profile.")
     hardware_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
-    hardware_parser.add_argument("--machine", required=True, help="This machine's name in [machines]")
+    hardware_parser.add_argument(
+        "--machine", help="This machine's name in [machines], when it has one (its profile is adopted)"
+    )
+    hardware_parser.add_argument(
+        "--cpu-only", action="store_true", help="Judge this machine as a CPU machine; no GPU source is read"
+    )
+    hardware_parser.add_argument(
+        "--new-identity", action="store_true", help="Write a new profile for this machine instead of the bound one"
+    )
 
     render_parser = subparsers.add_parser(
         "render", help="Render the current snapshot and every machine's hardware profile to Markdown."
@@ -148,8 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(
     argv: list[str] | None = None,
     transport: Transport | None = None,
-    runner: Runner | None = None,
     now: datetime | None = None,
+    probes: Probes | None = None,
     pointer_path: Path | None = None,
 ) -> int:
     parser = build_parser()
@@ -157,7 +168,7 @@ def main(
     if args.command == "fetch":
         return _cmd_fetch(args, transport, now)
     if args.command == "hardware":
-        return _cmd_hardware(args, runner, transport, now)
+        return _cmd_hardware(args, probes, pointer_path, now)
     if args.command == "render":
         return _cmd_render(args, now)
     if args.command == "migrate":
@@ -251,7 +262,7 @@ def _run_locked(config, transport: Transport, run_at: datetime) -> int:
 
 
 def _cmd_hardware(
-    args: argparse.Namespace, runner: Runner | None, transport: Transport | None, now: datetime | None
+    args: argparse.Namespace, probes: Probes | None, pointer_path: Path | None, now: datetime | None
 ) -> int:
     try:
         config = load_config(args.config)
@@ -262,24 +273,39 @@ def _cmd_hardware(
         print(str(exc), file=sys.stderr)
         return 2
 
-    return hardware_with_config(config, args.machine, runner, transport, now)
+    return hardware_with_config(
+        config,
+        args.machine,
+        probes,
+        now,
+        pointer_path,
+        cpu_only=args.cpu_only,
+        new_identity=args.new_identity,
+        results_dir=args.config.resolve().parent,
+    )
 
 
 def hardware_with_config(
     config: Configuration,
-    machine: str,
-    runner: Runner | None = None,
-    transport: Transport | None = None,
+    machine: str | None = None,
+    probes: Probes | None = None,
     now: datetime | None = None,
+    pointer_path: Path | None = None,
+    cpu_only: bool = False,
+    new_identity: bool = False,
+    results_dir: Path | None = None,
 ) -> int:
     """Run `hardware` against an already-loaded `Configuration` -- the programmatic entry point.
 
-    Unlike `fetch_with_config`, `machine` only has to be *configured*, not a writer -- hardware
-    is measured on every machine, and each machine writes only its own
-    `<state>/hardware/<machine>.json` file, so there is no lock to acquire (CONTRACTS.md,
-    "Hardware profile (AP4)").
+    Measures this machine itself (`modelroom/measure.py`), cross-checks the two comparable
+    readings against `llmfit` and writes one schema-2 profile,
+    `<state>/hardware/<profile_id>.json` (CONTRACTS.md, "Hardware measurement"). `machine` is
+    optional: it is only consulted for `[machines.<name>].profile`, the configured profile the
+    takeover rule may adopt. The measurement itself runs before the lock -- it reads the machine,
+    not the state -- and the lock covers reading the existing profiles, writing the new one and
+    binding it.
     """
-    if machine not in config.machines:
+    if machine is not None and machine not in config.machines:
         names = sorted(config.machines)
         print(
             f"{machine!r} is not a configured machine; "
@@ -288,61 +314,217 @@ def hardware_with_config(
         )
         return 2
 
-    measured_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
-    active_runner = runner if runner is not None else SubprocessRunner()
-    active_transport = transport if transport is not None else UrllibTransport()
+    active = probes if probes is not None else Probes()
+    recorded_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
+    pointer_file = pointer_path if pointer_path is not None else default_pointer_path()
+
+    measured = measure_hardware(active.platform, active.runner, active.read_text, active.memory_bytes, cpu_only)
+    reference = read_llmfit_reference(active.runner, config.llmfit.min_version)
 
     try:
-        llmfit_version = check_llmfit_version(active_runner, config.llmfit.min_version)
-        system_data = fetch_llmfit_system(active_runner)
-        fields = hardware_fields_from_llmfit_system(system_data)
-    except LlmfitError as exc:
+        handle = acquire_lock(config.paths.lock_file, "hardware", recorded_at)
+    except LockHeldError as exc:
         print(str(exc), file=sys.stderr)
-        return 2
-
-    installed, unavailable_reason = fetch_installed_models(active_transport, measured_at)
+        return 1
 
     try:
-        existing = _read_hardware_snapshot(config, machine)
+        return _hardware_locked(
+            config, machine, active, measured, reference, recorded_at, pointer_file, new_identity,
+            _binding_key(config, results_dir),
+        )
+    finally:
+        release_lock(handle)
+
+
+def _hardware_locked(
+    config: Configuration,
+    machine: str | None,
+    probes: Probes,
+    measured: MeasuredHardware,
+    reference: LlmfitReference,
+    recorded_at: datetime,
+    pointer_file: Path,
+    new_identity: bool,
+    binding_key: Path,
+) -> int:
+    """Pick this machine's profile, write it and bind it -- everything the lock has to cover.
+
+    The pointer file is read *here*, not before the lock, and as late as the takeover rule
+    allows: two runs that both read "no binding yet" before either wrote one would each create a
+    profile for the same machine, which is exactly what the binding exists to prevent.
+    """
+    try:
+        profiles = _existing_profiles(config)
     except (SchemaVersionError, _UnreadableStateFileError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
-    measurements = existing.measurements if existing is not None else []
 
-    data = {
-        "schema_version": HARDWARE_SCHEMA_VERSION,
-        "machine": machine,
-        "measured_at": measured_at.isoformat(),
-        "llmfit_version": llmfit_version,
-        "vram_gib": fields["vram_gib"],
-        "ram_gib": fields["ram_gib"],
-        "free_ram_gib_at_measurement": fields["free_ram_gib_at_measurement"],
-        "gpu_name": fields["gpu_name"],
-        "backend": fields["backend"],
-        "unified_memory": fields["unified_memory"],
-        "installed": [model.model_dump(mode="json") for model in installed] if installed is not None else None,
-        "installed_unavailable_reason": unavailable_reason,
-        "measurements": [measurement.model_dump(mode="json") for measurement in measurements],
-    }
-    # R7: second line of defense. hardware_fields_from_llmfit_system already validates every
-    # field it produces, but a llmfit output shape neither it nor this function has anticipated
-    # must still exit 2 -- never crash with an uncaught pydantic ValidationError. Validation
-    # happens before any file is touched (write_hardware_snapshot's own convention), so nothing
-    # is written either way.
+    raw_id = measured.identity.raw_id
+    machine_config = config.machines.get(machine) if machine is not None else None
+    known = {key: KnownProfile(key, profile.os_fingerprint) for key, profile in profiles.items()}
+    fresh_profile_id = _fresh_profile_id(probes, _taken_profile_ids(config, profiles))
     try:
-        snapshot = write_hardware_snapshot(config, machine, data)
-    except ValidationError as exc:
-        print(f"llmfit output did not validate as a hardware profile: {exc}", file=sys.stderr)
+        pointer = read_pointer(pointer_file)
+    except (SchemaVersionError, PointerFileError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    target = resolve_profile_target(
+        pointer.binding_for(binding_key),
+        machine_config.profile if machine_config is not None else None,
+        known,
+        os_fingerprint(raw_id) if raw_id else "none",
+        fresh_profile_id,
+        new_identity,
+    )
+    if target.action == "ask_clone":
+        print(
+            f"{target.reason} ({target.profile_id}); this is either the same machine under a new "
+            "profile or a clone -- run `modelroom hardware --new-identity` to measure it as its own machine",
+            file=sys.stderr,
+        )
         return 2
 
-    if snapshot.installed is not None:
-        installed_summary = f"installed: {len(snapshot.installed)}"
-    else:
-        installed_summary = f"installed: unknown ({snapshot.installed_unavailable_reason})"
+    existing = profiles.get(target.profile_id)
+    display_name = existing.display_name if existing is not None else probes.hostname()
+    # Second line of defense, the same convention the llmfit path already follows: every source
+    # guards its own value (a byte count that is not a real positive number never becomes a
+    # reading), but a combination none of them anticipated must still end as an exit code, never
+    # as an uncaught pydantic error. Validation happens before the write, so nothing is written
+    # either way (probe: a naive `now`, which `recorded_at` refuses).
+    try:
+        profile = build_profile(measured, reference, target.profile_id, display_name, recorded_at)
+    except ValidationError as exc:
+        print(f"this measurement did not validate as a hardware profile: {exc}", file=sys.stderr)
+        return 2
+    profile_file = config.paths.hardware_dir / f"{profile.profile_id}.json"
+    try:
+        atomic_write_json(profile_file, profile.model_dump(mode="json"))
+    except OSError as exc:
+        # A state folder that cannot hold the profile -- a regular file where the `hardware`
+        # folder belongs, a full disk, no permission -- is a message and an exit code, never an
+        # `OSError` out of the command. Nothing is written and nothing is bound.
+        print(f"{profile_file}: the profile could not be written ({exc})", file=sys.stderr)
+        return 1
+    bound = _bind_this_machine(pointer_file, binding_key, profile.profile_id)
+    _print_hardware_summary(profile, measured, reference)
+    return 0 if bound else 1
+
+
+def _bind_this_machine(pointer_file: Path, results_dir: Path, profile_id: str) -> bool:
+    """Record this machine's profile in the pointer file; `False` when that could not be done.
+
+    The pointer file is one file per user for *every* results folder, and each folder has its own
+    lock, so this is a merge onto the newest content rather than a write-back of the copy this run
+    read -- a binding another folder's run added meanwhile must not be dropped. The remaining
+    window between this read and this write is not covered by any lock; it is the same trade-off
+    as "atomicity, not durability" for the state files, and the cost of losing it is one extra
+    profile on the next run, never a lost measurement.
+
+    The profile itself is already written when this runs: a pointer file that cannot be read or
+    written (a folder in the way, no permission, a corrupt file) must therefore not throw the
+    measurement away. It is reported instead, and the caller ends with exit `1`.
+    """
+    try:
+        write_pointer(pointer_file, read_pointer(pointer_file).with_binding(results_dir, profile_id))
+        return True
+    except (OSError, ValueError, SchemaVersionError, PointerFileError) as exc:
+        print(
+            f"{pointer_file}: the profile was written, but this machine could not be bound to it "
+            f"({exc}); the next run may write a second profile for this machine",
+            file=sys.stderr,
+        )
+        return False
+
+
+def _binding_key(config: Configuration, results_dir: Path | None) -> Path:
+    """The folder this machine's profile is bound to in the home pointer file.
+
+    The results folder *is* the folder the configuration file sits in -- the same key
+    `export-profile`/`import-profile` and the guided mode use, so one machine never ends up with
+    two profiles in one folder. A configuration handed in as an object without a file (an
+    embedding adapter) has no such folder and binds on the state folder, where the profiles live.
+    """
+    return results_dir if results_dir is not None else config.paths.state
+
+
+def _existing_profiles(config: Configuration) -> dict[str, HardwareProfile]:
+    """Every schema-2 profile in the hardware folder, by `profile_id`.
+
+    A schema-1 file (`<machine>.json`, written before `modelroom migrate` ran) is read, version
+    checked and then skipped: it is not a profile v2, it carries no `profile_id`, and this
+    command neither adopts nor overwrites it.
+    """
+    folder = config.paths.hardware_dir
+    if not folder.is_dir():
+        return {}
+    profiles: dict[str, HardwareProfile] = {}
+    for path in sorted(folder.glob("*.json")):
+        document = _read_profile_file(path)
+        if isinstance(document, HardwareProfile):
+            profiles[document.profile_id] = document
+    return profiles
+
+
+def _read_profile_file(path: Path) -> HardwareSnapshot | HardwareProfile:
+    """One stored profile file, with the file named in every failure (exit `3` at the call site).
+
+    `ValueError` covers more than `json.JSONDecodeError`: a JSON integer above Python's
+    int/str conversion limit raises a plain `ValueError` out of `json.loads` (probe: a
+    `schema_version` of 5000 digits), and pydantic's `ValidationError`, `StateFileShapeError` and
+    `UnicodeDecodeError` are all `ValueError`s as well. They are named anyway, for the reader.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise StateFileShapeError(f"expected a JSON object at the root, got {type(data).__name__}")
+        return read_profile_document(data)
+    except SchemaVersionError as exc:
+        raise SchemaVersionError(f"{path}: {exc}") from exc
+    except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError, ValueError, OSError) as exc:
+        raise _UnreadableStateFileError(f"{path}: cannot read hardware profile: {exc}") from exc
+
+
+def _taken_profile_ids(config: Configuration, profiles: dict[str, HardwareProfile]) -> set[str]:
+    """Every name a new profile must not take: each file name in the folder and each `profile_id`.
+
+    The file names matter on their own, because a schema-1 file (`<machine>.json`) carries no
+    `profile_id` and a machine name may well look like one -- a fresh id landing on it would
+    overwrite a profile this command promises never to touch.
+    """
+    folder = config.paths.hardware_dir
+    stems = {path.stem for path in folder.glob("*.json")} if folder.is_dir() else set()
+    return stems | set(profiles)
+
+
+def _fresh_profile_id(probes: Probes, taken: set[str]) -> str:
+    """A `profile_id` no file in this folder uses yet (16 random hex characters, `Probes`)."""
+    for _ in range(_FRESH_ID_ATTEMPTS):
+        candidate = probes.new_id()
+        if candidate not in taken:
+            return candidate
+    raise ValueError(f"no unused profile_id after {_FRESH_ID_ATTEMPTS} attempts; the id source repeats itself")
+
+
+def _print_hardware_summary(profile: HardwareProfile, measured: MeasuredHardware, reference: LlmfitReference) -> None:
+    """One summary line, then every note the user has to read -- facts only, no advice."""
+    checks = profile.llmfit_crosscheck
     print(
-        f"{machine}: vram {snapshot.vram_gib:.2f} GiB, ram {snapshot.ram_gib:.2f} GiB, {installed_summary}"
+        f"{profile.display_name} ({profile.profile_id}): "
+        f"ram {_gib(profile.ram_physical_gib)} ({profile.ram_physical_source}), "
+        f"vram {_gib(profile.vram_gib)} ({profile.vram_source}), gpu {profile.gpu_state}, "
+        f"llmfit ram {checks.ram_physical.status} / vram {checks.vram.status}"
     )
-    return 0
+    for note in measured.notes:
+        print(f"note: {note}")
+    if reference.reason is not None:
+        print(f"note: the llmfit cross-check is {reference.status}: {reference.reason}")
+    blocked = fit_block_reason(profile)
+    if blocked is not None:
+        print(f"note: no fit is computed for this profile -- {blocked}")
+
+
+def _gib(value: float | None) -> str:
+    return "unknown" if value is None else f"{value:.2f} GiB"
 
 
 def _cmd_render(args: argparse.Namespace, now: datetime | None) -> int:

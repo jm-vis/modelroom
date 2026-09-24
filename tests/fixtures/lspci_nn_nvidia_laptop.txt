@@ -1,0 +1,2 @@
+00:02.0 VGA compatible controller [0300]: Intel Corporation Device [8086:7d51] (rev 08)
+01:00.0 3D controller [0302]: NVIDIA Corporation Device [10de:2bb4] (rev a1)

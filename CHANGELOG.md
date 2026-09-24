@@ -42,8 +42,25 @@ All notable changes to this project are documented in this file. The format foll
   state lock once it reads back unchanged. Search, resolution, successor lookups and the fetch
   share one request budget, `DEFAULT_GUIDED_BUDGET = 60`.
 
+- `modelroom/measure.py`: modelroom measures the machine itself (CONTRACTS.md, "Hardware
+  measurement") -- physical RAM from `GlobalMemoryStatusEx`, `/proc/meminfo` or
+  `sysctl hw.memsize`, VRAM from `nvidia-smi` for one adapter, the graphics adapter from
+  `lspci -nn`/`Win32_VideoController.PNPDeviceID` against a positive list of display-only
+  vendors, a cgroup v2 memory limit as a note, and the OS identifier behind a salted digest.
+  Every source runs through an injected command or file layer with a 10 s timeout and a defined
+  failure, and returns a value with its source or a reason, never an exception.
+
 ### Changed
 
+- `modelroom hardware` writes a schema-2 profile `<state>/hardware/<profile_id>.json` from its
+  own measurement and binds this machine in the pointer file; `--machine` is now optional and
+  `--cpu-only`/`--new-identity` are new. `llmfit` is a cross-check of the physical RAM and the
+  VRAM instead of the source: a missing one is `absent`, a failing one `error`, and neither
+  fails the command (exit `2` for a missing `llmfit` is gone); an entered `--cpu-only` VRAM is
+  not compared at all. The pointer file is read inside the lock and written as a merge onto a
+  fresh read, and a new `profile_id` avoids every file name in the folder, so a schema-1 file is
+  never overwritten. A profile that was written but could not be bound is exit `1`. The schema-1
+  writer stays for `render` and `modelroom migrate` until the renderer switches.
 - Configuration schema 2: `repos`, `[machines.<name>].profile`, `[defaults]`, `[updates]`,
   `[guided]`; `families` may be empty. Schema 1 still reads; the shipped example is schema 2.
 - Prose converted to the language standard in `AGENTS.md`, `README.md`, `CONTRACTS.md` and

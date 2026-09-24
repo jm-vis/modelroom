@@ -87,7 +87,7 @@ it is the tag part of `ollama_name` after the colon.
 |---|---|
 | `0` | success: every fetch area is `complete` (`render`: the document was written, even when its rating source failed) |
 | `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first leaves the snapshot, the hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated, because the lock is taken before the staleness checks (`cli.py`) |
-| `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration; or a required external tool (`llmfit`) is missing or below the minimum version |
+| `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration (`fetch`) or not configured at all (`hardware`); `hardware`'s bound profile belongs to another machine (see "Hardware measurement"); or an external tool a command *requires* is missing or below the minimum version -- since the measurement work package `hardware` no longer requires `llmfit`, which is a cross-check there |
 | `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version`, is not valid JSON, or does not match its model (fix-round 5, P2-3: `cli.py`'s own `_read_snapshot`/`_read_hardware_snapshot` catch `json.JSONDecodeError`/pydantic `ValidationError` at every load site and name the file in the message, the same exit code as an unsupported `schema_version`) |
 
 ## Models
@@ -1348,16 +1348,27 @@ them exactly as documented there and did not need to extend the contract.
 
 ## Hardware profile (AP4)
 
-`modelroom hardware --config <toml> --machine <name>` measures the machine it runs on and
-writes `<state>/hardware/<machine>.json` (`HardwareSnapshot`, models documented above). Unlike
-`fetch`, the named machine only has to be *configured* (present in `Configuration.machines`),
-not a `writer` -- hardware is measured on every machine, including inference-only ones. Exit
-codes reuse the table above unchanged: `2` for an unconfigured machine or a missing/too-old
-`llmfit`, `3` for an existing hardware file with an unsupported `schema_version`, `0`
-otherwise -- including when the local Ollama daemon could not be reached (`installed` is then
-`None` with a reason, never a command failure).
+**Schema 1, read-only since the measurement work package.** This is how `hardware` wrote a
+profile before it measured the machine itself: `<state>/hardware/<machine>.json`
+(`HardwareSnapshot`, models documented above), filled from `llmfit` and the local Ollama
+daemon. `hardware` now writes schema 2 (see "Hardware measurement" below); `write_hardware_snapshot`
+and `load_existing_hardware_snapshot` stay for `render`, which reads these files until the
+renderer switches, and for `modelroom migrate`, which converts them. The exit codes below
+describe that old command; the current ones are in "Hardware measurement".
+
+Unlike `fetch`, the named machine only has to be *configured* (present in
+`Configuration.machines`), not a `writer` -- hardware is measured on every machine, including
+inference-only ones. Exit codes reused the table above unchanged: `2` for an unconfigured
+machine or a missing/too-old `llmfit`, `3` for an existing hardware file with an unsupported
+`schema_version`, `0` otherwise -- including when the local Ollama daemon could not be reached
+(`installed` is then `None` with a reason, never a command failure).
 
 ### Local llmfit binding
+
+`read_llmfit_reference(runner, min_version)` is what the schema-2 measurement uses: it runs the
+two calls below and never raises. A missing or too old `llmfit` (`LlmfitUnusableError` -- it was
+never asked) is `absent`, a call that failed is `error`, and a good run is `available` with
+`ram_gib`/`vram_gib` for the cross-check. The raising functions below stay for schema-1 callers.
 
 `modelroom/llmfit.py` calls `llmfit --version` first (`check_llmfit_version`), comparing it
 against `config.llmfit.min_version` as an integer `(major, minor, patch)` tuple -- a version
@@ -1682,6 +1693,134 @@ llmfit values with source `llmfit`, `gpu_state` is `unified_memory` when the old
 `legacy_unknown` otherwise (a positive VRAM did not prove a single GPU, a zero did not prove
 none), both cross-checks `absent`. The schema-1 `installed` list is not carried over: it is a
 point-in-time observation the next measurement records again.
+
+### Hardware measurement
+
+`modelroom hardware --config <toml> [--machine <name>] [--cpu-only] [--new-identity]` measures
+the machine it runs on and writes one schema-2 profile, `<state>/hardware/<profile_id>.json`
+(`modelroom/measure.py`, `modelroom/cli.py`). modelroom measures the machine itself; `llmfit` is
+a cross-check of two quantities, never the source and never a requirement -- a machine without
+`llmfit` is measured and written all the same. `--machine` is optional and only names the
+configuration entry whose `profile` the takeover rule may adopt. The schema-1 writer
+(`write_hardware_snapshot`, `<machine>.json`) stays readable for `render` until the renderer
+switches; `hardware` no longer writes it, and a schema-1 file in the folder is skipped, never
+adopted and never overwritten. The command reads no Ollama daemon: the installed packages are a
+point-in-time observation the load test records (CONTRACTS.md, "MeasurementRecord"), not part of
+a profile.
+
+**Sources.** Every source is a fixed argument list or a fixed file path, run through the
+injected command layer (`Runner`, 10 s timeout) or file layer -- no user-controlled string ever
+reaches a command line, and `AdapterRAM`/`adapter memory` is never read as VRAM.
+
+| Quantity | Platform | Source | Unit | Stored as |
+|---|---|---|---|---|
+| physical RAM | Windows | `GlobalMemoryStatusEx().ullTotalPhys` (ctypes, `kernel32`) | bytes | `ram_physical_gib`, source `os` |
+| physical RAM | Linux | `/proc/meminfo`, `MemTotal` | kB | `ram_physical_gib`, source `os` |
+| physical RAM | macOS | `sysctl -n hw.memsize` | bytes | `ram_physical_gib`, source `os` (display only: macOS has no fit) |
+| VRAM | Windows, Linux | `nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits` | MiB | `vram_gib`, source `nvidia-smi`, `gpu_name` |
+| display adapters | Linux | `lspci -nn`, PCI class `03xx` | vendor id | `gpu_state` (adapter rule below) |
+| display adapters | Windows | `Win32_VideoController.PNPDeviceID` (`VEN_xxxx`), read with `powershell -NoProfile -NonInteractive -Command` | vendor id | `gpu_state` (adapter rule below) |
+| memory limit | Linux | cgroup v2: `/proc/self/cgroup`, then `memory.max` from this cgroup up to the root; the effective limit is the smallest numeric value | bytes | `ram_limit_gib` + `ram_limit_scope` `cgroup` -- a note, never a fit input |
+| machine identifier | Windows | `reg query HKLM\SOFTWARE\Microsoft\Cryptography /v MachineGuid` | string | `os_fingerprint` (salted digest only) |
+| machine identifier | Linux | `/etc/machine-id` | string | `os_fingerprint` |
+| machine identifier | macOS | `ioreg -rd1 -c IOPlatformExpertDevice`, `IOPlatformUUID` | string | `os_fingerprint` |
+
+**Failure of a source.** Every source has a defined failure: the program is not installed, it
+cannot be run, it does not answer within 10 s, it exits non-zero, or its output cannot be read.
+None of them raises: the reading becomes "no value" with the reason, the profile records the
+source as `unknown`, and the reason is printed as a note. One unreadable source never ends the
+command. A byte count that is not a real positive number (`0` from a call that reported success, a
+negative value, an infinity, or a value that rounds to `0.00` GiB) is such a failure too, because
+the contract's `ram_physical_gib` is `> 0`; so is a number no process can convert (a digit string
+above Python's int/str conversion limit, from `/proc/meminfo`, `nvidia-smi` or `memory.max`); and
+so is a blank machine identifier, because the fingerprint of an empty identifier is refused. The cgroup files are the one exception to the note
+rule above: absent or unreadable means "no limit", not a failure to report -- a machine without
+cgroups is the normal case, and the limit is a hint that never enters the fit anyway.
+
+**`gpu_state`.** `nvidia-smi` decides first; when it is not installed or cannot answer, the
+adapter rule does.
+
+| Observation | `gpu_state` | VRAM |
+|---|---|---|
+| `nvidia-smi` lists exactly one adapter at index 0 with memory above 0 | `measured` | MiB / 1024, source `nvidia-smi` |
+| `nvidia-smi` lists more than one adapter | `multi_gpu_not_covered` | `unknown` |
+| `nvidia-smi` lists one adapter that is not index 0, reports no memory, or output that cannot be read | `present_unmeasured` | `unknown` |
+| no `nvidia-smi`, and no PCI class-03 device at all | `none` | `0`, source `none` |
+| no `nvidia-smi`, and every class-03 device is from the display-only list below | `none` | `0`, source `none`, note `display adapter only` |
+| no `nvidia-smi`, and at least one class-03 device is from any other vendor | `present_unmeasured` | `unknown` |
+| no `nvidia-smi`, and the adapters could not be listed at all | `present_unmeasured` | `unknown` (a GPU cannot be ruled out) |
+| macOS, or any platform that is not Windows or Linux | `unsupported_platform` | `unknown` (no unified-memory statement is invented) |
+| `--cpu-only` on Windows or Linux | `none` | `0`, source `none`, profile `origin` `entered` |
+| `--cpu-only` on any other platform | `unsupported_platform` | `unknown`: the flag speaks about the GPU, not about the platform, and the RAM there is display only |
+
+**The display-only vendor list.** A positive list, so an unknown vendor is never declared
+harmless: QEMU/Bochs `1234`, virtio `1af4`, VMware `15ad`, Red Hat `1b36`, VirtualBox `80ee`,
+Microsoft Hyper-V `1414`, Xen `5853`, Amazon `1d0f`. Every other vendor -- NVIDIA `10de`, AMD
+`1002`, Intel `8086`, or none readable at all -- is `present_unmeasured` with a note naming the
+vendors. When the *only* measurable vendor is Intel, the note adds "Ollama uses the CPU on Intel
+graphics; run `hardware --cpu-only` for the CPU fit"; on a machine that also carries a discrete
+card that advice would be wrong, so it is not given there.
+
+**The cross-check and `--cpu-only`.** An entered `0` VRAM is not a reading, so it is not
+compared with llmfit's: the VRAM check of a `--cpu-only` profile is `absent`, whatever llmfit
+did -- `absent` means "never asked", while `error` would claim the comparison was attempted.
+Comparing them on a machine that does have a card was a `deviation`, and a deviation blocks the
+fit -- exactly the CPU fit `--cpu-only` exists to produce. The physical RAM is still measured
+there, and still cross-checked.
+
+**Notes.** Facts only, printed after the summary line: the reason a reading is unknown, the GPU
+note, the reason the machine identifier could not be read (with its consequence: a clone of this
+machine cannot be told apart), and -- when a cgroup limit is *smaller* than the physical RAM --
+that the fit computes with the physical RAM and can be too optimistic here. The llmfit state and
+the reason the fit is blocked are printed the same way. Two absences are deliberately *not*
+notes: a machine with no cgroup files at all (the normal case outside a container) is simply a
+machine without a limit, and `--cpu-only` reports the skipped GPU and identifier once, in its own
+note, instead of as three failures.
+
+**The profile that is written** is exactly the shape of the `HardwareProfile` example below, and
+a Windows machine with one NVIDIA adapter produces exactly its fields: `origin` `measured`,
+`ram_physical_source` `os`, `vram_source` `nvidia-smi`, `gpu_state` `measured`, both cross-checks
+`confirmed`. The raw machine identifier never reaches the file -- only `os_fingerprint`'s digest.
+`display_name` is this machine's host name for a new profile and is kept as it is when the
+profile already exists (the user may rename it). `--cpu-only` writes an `entered` profile, which
+by contract carries no fingerprint (`os_fingerprint_source` `none`).
+
+**Which profile is written** follows the takeover rule (`resolve_profile_target`, "Profile
+binding"): the home binding, else the configured `[machines.<name>].profile`, else a new
+profile; `--new-identity` always writes a new one. The binding key is the folder the
+configuration file sits in -- the results folder, the same key `export-profile` and
+`import-profile` read the binding under; a configuration handed in as an object without a file
+binds on `paths.state`. A bound or configured profile
+that is missing or carries another `os_fingerprint` stops the run with exit `2` naming
+`--new-identity`; nothing is written. Reading the profiles, reading the pointer file, writing the
+new profile and binding it all happen under `modelroom.lock`; the measurement itself runs before
+the lock (it reads the machine, not the state).
+
+**The pointer file is read late and written as a merge.** The read happens inside the lock and as
+late as the takeover rule allows: two runs that both read "no binding yet" before either wrote one
+would each create a profile for the same machine. And because the pointer file is one file per
+user for *every* results folder while each folder has its own lock, the write is a merge onto the
+newest content, never a write-back of the copy this run read -- a binding another folder's run
+added meanwhile is kept. The window between that read and that write is not covered by any lock:
+the same trade-off as "atomicity, not durability", and its cost is one extra profile on the next
+run, never a lost measurement. A new `profile_id` also avoids every *file name* in the folder, not
+only every `profile_id`: a schema-1 file carries no `profile_id`, and a machine name may look
+exactly like one.
+
+The pointer file is read before the profile is written, so a corrupt or unreadable pointer file
+stops the run at exit `3` with nothing written. The *binding*, however, happens after the profile
+is written, and a pointer file that cannot be written or re-read then (a folder in the way, no
+permission, a file corrupted meanwhile) does not throw the measurement away: the profile stays,
+the message says that the next run may write a second profile, and the run ends `1`. A profile
+that cannot be written at all -- a regular file where the `hardware` folder belongs, a full disk,
+no permission -- is also exit `1`, with nothing written and nothing bound.
+
+| Exit | `hardware` |
+|---|---|
+| `0` | measured, written and bound, with or without `llmfit` |
+| `1` | another process holds the lock (nothing written); the profile could not be written (nothing written); or the profile was written but the binding could not be recorded |
+| `2` | the configuration is missing or invalid, `--machine` names a machine that is not configured, the bound profile belongs to another machine (`--new-identity`), or the measurement did not validate as a profile (nothing written) |
+| `3` | a stored profile or the pointer file has an unsupported `schema_version` or cannot be read |
 
 ### CrossCheck
 
