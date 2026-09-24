@@ -1,14 +1,20 @@
 """Asking one question, two ways: at the terminal, or out of an answer file.
 
-`Asker` is the whole interface the guided mode uses -- four kinds of question, each with the
+`Asker` is the whole interface the guided mode uses -- five kinds of question, each with the
 key it is stored under in an answer file. `TerminalAsker` runs `questionary` (MIT, on
 `prompt_toolkit`, BSD): the only place in this package that imports it, so every other module
 and the three automation commands run without it. `FileAsker` answers from a `dict` read by
 `modelroom/answers.py` and never touches a terminal.
 
+Every question looks the same: one style and one set of glyphs, both from `modelroom/intro.py`,
+a green pointer on the line the keyboard is on, the grayed-out entries with their reason, and
+one instruction line under the list. A yes or no question is a list of `Yes` and `No` as well --
+there is no `(Y/n)` to read anywhere.
+
 Ending the dialog: Ctrl-C raises `KeyboardInterrupt` (the caller ends with exit `130`), an end
-of input raises `Canceled` (exit `2`). Both leave the run without a half-written file, because
-every write the guided mode does is atomic and happens after the last question of its step.
+of input and `Esc` in a list raise `Canceled` (exit `2`). All of them leave the run without a
+half-written file, because every write the guided mode does is atomic and happens after the last
+question of its step.
 """
 
 from __future__ import annotations
@@ -17,6 +23,11 @@ import sys
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
+from .intro import GRAY, GREEN, WHITE, glyphs, style_rules
+
+YES = "yes"
+NO = "no"
+
 
 @dataclass(frozen=True)
 class Choice:
@@ -24,6 +35,8 @@ class Choice:
 
     `disabled` is the grayed-out case -- an entry that is shown for what it says (a machine that
     is already in the results folder, a step that belongs to a later stage) and cannot be picked.
+    `checked` marks an entry of a `checkbox` as already marked, and in a `select` the entry the
+    pointer starts on; at most one entry of a `select` carries it.
     """
 
     value: str
@@ -50,7 +63,7 @@ class AnswerInvalidError(Exception):
 
 
 class Asker(Protocol):
-    """Four kinds of question. `key` is the answer file's key for the same question."""
+    """Five kinds of question. `key` is the answer file's key for the same question."""
 
     def text(self, key: str, question: str, default: str = "") -> str: ...
 
@@ -59,6 +72,21 @@ class Asker(Protocol):
     def checkbox(self, key: str, question: str, choices: Sequence[Choice]) -> list[str]: ...
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool: ...
+
+    def select_or_text(
+        self, key: str, question: str, choices: Sequence[Choice], text_value: str, text_question: str
+    ) -> str: ...
+
+
+def columns(rows: Sequence[Sequence[str]], widths: Sequence[int]) -> list[str]:
+    """The labels of one list, aligned in columns, so a scale, a hit list and a load test read as
+    a table. A cell wider than its column pushes the rest of its own row and is never cut; a
+    column `widths` does not name (the last one, usually) is not padded at all."""
+    lines = []
+    for row in rows:
+        cells = [cell.ljust(width) for cell, width in zip(row, widths)]
+        lines.append("  ".join([*cells, *row[len(widths) :]]).rstrip())
+    return lines
 
 
 def is_interactive() -> bool:
@@ -75,7 +103,7 @@ def selectable(choices: Sequence[Choice]) -> list[str]:
 
 
 class TerminalAsker:
-    """Asks at the terminal through `questionary`.
+    """Asks at the terminal through `questionary`, in the one style of the guided mode.
 
     `input`/`output` are `prompt_toolkit`'s own; the real CLI passes neither and questionary
     uses the console. A test passes a `create_pipe_input()` pipe and a `DummyOutput`, so the
@@ -88,6 +116,9 @@ class TerminalAsker:
             self._streams["input"] = input
         if output is not None:
             self._streams["output"] = output
+        # The glyph set is a question about the console this process writes to, which is
+        # `sys.stdout` -- prompt_toolkit's `Output` is not a text stream and has none of its own.
+        self._glyphs = glyphs()
 
     def _ask(self, question):
         try:
@@ -95,25 +126,104 @@ class TerminalAsker:
         except EOFError as exc:
             raise Canceled("the dialog ended without an answer") from exc
 
+    def _style(self):
+        import questionary
+
+        return questionary.Style(style_rules() + _QUESTION_RULES)
+
+    def _list_question(self, factory, question: str, choices: Sequence[Choice], instruction: str, **extra):
+        """One selection list, with the pointer, the style and the instruction line of this dialog.
+
+        `Esc` is bound after the question is built: `questionary` binds Ctrl-C and Enter and then
+        swallows every other key, and it takes no key bindings of its own. The binding ends the
+        application the way an end of input does, so `Esc` is the documented exit `2` and not a
+        second way out. It is added to lists only -- a text question keeps prompt_toolkit's own
+        Esc, which is the prefix of its editing keys.
+        """
+        import questionary
+
+        built = factory(
+            question,
+            choices=_questionary_choices(choices),
+            pointer=self._glyphs.pointer,
+            instruction=instruction,
+            style=self._style(),
+            **extra,
+            **self._streams,
+        )
+        _bind_escape(built)
+        return self._ask(built)
+
     def text(self, key: str, question: str, default: str = "") -> str:
         import questionary
 
-        return self._ask(questionary.text(question, default=default, **self._streams))
+        return self._ask(questionary.text(question, default=default, style=self._style(), **self._streams))
 
     def select(self, key: str, question: str, choices: Sequence[Choice]) -> str:
         import questionary
 
-        return self._ask(questionary.select(question, choices=_questionary_choices(choices), **self._streams))
+        pointer_at = _pointer_at(choices)
+        return self._list_question(questionary.select, question, choices, self.select_instruction(), default=pointer_at)
 
     def checkbox(self, key: str, question: str, choices: Sequence[Choice]) -> list[str]:
         import questionary
 
-        return self._ask(questionary.checkbox(question, choices=_questionary_choices(choices), **self._streams))
+        return self._list_question(questionary.checkbox, question, choices, self.checkbox_instruction())
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool:
-        import questionary
+        """A yes or no question as a list of two entries, the default one under the pointer."""
+        choices = [Choice(YES, "Yes", checked=default), Choice(NO, "No", checked=not default)]
+        return self.select(key, question, choices) == YES
 
-        return self._ask(questionary.confirm(question, default=default, **self._streams))
+    def select_or_text(
+        self, key: str, question: str, choices: Sequence[Choice], text_value: str, text_question: str
+    ) -> str:
+        """A selection list with one entry that leads to a text question (the scale's own number).
+
+        The text question starts empty on purpose: what this folder kept is already the line
+        the pointer starts on, and a prefilled field would grow into `14096` the moment
+        someone types `4096` in front of it -- prompt_toolkit puts the cursor behind a
+        default value, never over it.
+        """
+        chosen = self.select(key, question, choices)
+        if chosen != text_value:
+            return chosen
+        return self.text(key, text_question)
+
+    def select_instruction(self) -> str:
+        return f"{self._glyphs.move} move   Enter select   Esc leave"
+
+    def checkbox_instruction(self) -> str:
+        return f"{self._glyphs.move} move   Space marks   Enter confirms   Esc leave"
+
+
+# The question's own classes, on top of `intro.style_rules`: questionary names them, this package
+# only says which color each one is. The pointer and the answer are green, the line the keyboard
+# is on is white and bold, a grayed-out entry and the instruction line are gray.
+_QUESTION_RULES = [
+    ("qmark", f"fg:{GREEN} bold"),
+    ("question", "bold"),
+    ("answer", f"fg:{GREEN} bold"),
+    ("pointer", f"fg:{GREEN} bold"),
+    ("highlighted", f"fg:{WHITE} bold"),
+    ("selected", f"fg:{GREEN}"),
+    ("instruction", f"fg:{GRAY}"),
+    ("disabled", f"fg:{GRAY}"),
+]
+
+
+def _pointer_at(choices: Sequence[Choice]) -> str | None:
+    """The value the pointer of a `select` starts on: the first checked entry that can be picked."""
+    return next((choice.value for choice in choices if choice.checked and choice.disabled is None), None)
+
+
+def _bind_escape(question) -> None:
+    """Make `Esc` end this list the way an end of input does (`Canceled`, exit `2`)."""
+    from prompt_toolkit.keys import Keys
+
+    @question.application.key_bindings.add(Keys.Escape, eager=True)
+    def _leave(event) -> None:
+        event.app.exit(exception=EOFError, style="class:aborting")
 
 
 def _questionary_choices(choices: Sequence[Choice]) -> list:
@@ -169,3 +279,24 @@ class FileAsker:
         if not isinstance(value, bool):
             raise AnswerInvalidError(f"the answer for {key!r} is {value!r}, not true or false")
         return value
+
+    def select_or_text(
+        self, key: str, question: str, choices: Sequence[Choice], text_value: str, text_question: str
+    ) -> str:
+        """The answer as text, whether it names an entry of the list or is the free text itself.
+
+        The list of the size scale offers its levels **and** a number of your own, so a file may
+        answer `"L"` or `"32768"` and both are right. An entry that is grayed out in this run is
+        refused with the reason it is grayed out for, exactly as a `select` refuses one; the
+        caller checks the rest (a number this ranking cannot be computed for is its message).
+        """
+        value = self._answer(key, question)
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise AnswerInvalidError(f"the answer for {key!r} is not text or a whole number: {value!r}")
+        # Stripped **before** the grayed-out entries are checked, and returned stripped: otherwise
+        # `" XXL "` would slip past a level the window forbids and be translated a step later.
+        answer = str(value).strip()
+        blocked = next((choice for choice in choices if choice.value == answer and choice.disabled is not None), None)
+        if blocked is not None:
+            raise AnswerInvalidError(f"the answer for {key!r} is {answer!r}, which this run cannot take: {blocked.disabled}")
+        return answer

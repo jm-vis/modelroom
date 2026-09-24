@@ -747,10 +747,11 @@ means no guided run wrote this file.
 folder shows the same ranking as the guided run that chose it (see "Render", "The scenario"). It
 takes exactly the values `Scenario.context_requested` takes (`> 0`, `<= 2**31 - 1`); `None` means
 no guided run has chosen a context yet, and a configuration written before this field existed
-reads and renders unchanged. The guided mode's context question starts at this value and writes the
-answer back whenever it differs from what the file holds by then (see "Guided mode", step 2) -- the
-first time as well, and for 8192 as well: a kept context is what the user chose, not the value the
-question started with. Both fields are optional, so the
+reads and renders unchanged. The size scale of the guided mode starts on this value -- on its level,
+or on a `custom` line of its own when it is no level -- and writes the answer back whenever it
+differs from what the file holds by then (see "Guided mode", step 3) -- the first time as well, and
+for 8192 as well: a kept context is what the user chose, not the value the question started with.
+The field always holds the **number of tokens**, never a level name. Both fields are optional, so the
 configuration's `schema_version` stays `2` and no migration step reads or writes them.
 
 | Field | Type | Constraint | Meaning |
@@ -2794,11 +2795,11 @@ schema-1 profile (`_speed_cell`) are gone.
 package, never a package's own `default_context` (that is shown in its own column, `unknown` when
 the package declares none). The guided mode passes the context the user just chose; a caller that
 passes none gets `render_cmd.scenario_from_config(config)` -- `[guided].context` when the folder
-kept one (origin `entered`, or `default` when that value is 8192), else
-`measurements.default_scenario()` (8192, origin `default`). So `modelroom render --config <toml>`
-of a folder a guided run wrote shows the ranking of that run, and a measurement taken at that
-context stays in measured group 0. The scenario and `ranking.RANKING_RULE` are printed in every
-view.
+kept one (origin `entered`, 8192 included: a kept context is one a guided run chose, and the
+dialog names it so), else `measurements.default_scenario()` (8192, origin `default`). So
+`modelroom render --config <toml>` of a folder a guided run wrote shows the ranking of that run
+with the same origin, and a measurement taken at that context stays in measured group 0. The
+scenario and `ranking.RANKING_RULE` are printed in every view.
 
 **The ranking** per machine is `ranking.rank_packages` ("Ranking rule" above): `ranked` holds the
 first `ranking.TOP_LIMIT` entries and `ranked_total` says how many there were, `not_covered`
@@ -2838,9 +2839,16 @@ and `Market rating unavailable: <message>` when the rating source failed), `## A
 `## Too tight: <machine>` -- the last two only when they have rows. Every machine section is a
 `##` heading, so a reader can cut the document at headings.
 
-**The terminal view** shows fewer columns than the Markdown table (a terminal is narrow):
-rank, packager, quantization, weights, fit and measured speed, then one line per note and one
-line per set-aside package. Every value comes from the same document.
+**The terminal view** is what step 5 of the guided mode shows, and it carries that step's head
+(`Step 5 of 5  Results`); `modelroom render` writes the two files and stays silent unless a caller
+asks for it. It shows fewer columns than the Markdown table (a terminal is narrow): rank,
+packager, quantization, weights, fit and measured speed, with a rule under the column names, then
+one line per note. `not covered` and `too tight` are then **grouped by reason**, one line each with
+the number of packages behind it and up to three of their names (`not covered: 12 packages --
+architecture not covered by v1 (a Q4_K_M, b Q4_K_M, c Q4_K_M and 9 more)`) -- 41 lines that all
+said the same thing pushed the ranking off the screen in the hand test of 2026-09-24. Every value
+comes from the same document, and the **Markdown view is unchanged to the byte**
+(`tests/test_render.py` compares it with a fixture written by the code before this change).
 
 **Exit codes**: `0` rendered (also when the rating source failed, and also when a profile file
 was skipped), `1` the lock is held, there is no snapshot, the existing document was rendered
@@ -3362,32 +3370,99 @@ answer. The one exception is `modelroom --answers <file>`: then the answers come
 and everything else is unchanged, the same steps in the same order with the same output.
 `--answers` together with a subcommand is exit `2`.
 
-**Ending the dialog.** Ctrl-C is exit `130`, an end of input exit `2`. Neither leaves a
-half-written file: every write is atomic (`atomic_write_json`/`atomic_write_text`), every write
-of the configuration, a profile, a measurement or the snapshot happens under `modelroom.lock`,
-and no write is started in the middle of a question.
+**Ending the dialog.** Ctrl-C is exit `130`, an end of input exit `2`, and so is `Esc` in a
+selection list (`dialog.TerminalAsker` binds it after `questionary` has built the question, which
+takes no key bindings of its own; a text question keeps prompt_toolkit's own `Esc`, which is the
+prefix of its editing keys). None of them leaves a half-written file: every write is atomic
+(`atomic_write_json`/`atomic_write_text`), every write of the configuration, a profile, a
+measurement or the snapshot happens under `modelroom.lock`, and no write is started in the middle
+of a question.
+
+**How every question looks** (`modelroom/dialog.py`, `modelroom/intro.py`). One style and one set
+of glyphs for the whole dialog, decided once per run in `intro.py` and read from there by every
+other module:
+
+- **Color** only when `sys.stdout` is a terminal and `NO_COLOR` is not set in the environment.
+  The colors are foreground colors from `docs/assets/banner.svg` -- white and a muted blue for
+  the mark, green for the pointer, the chosen answer and what is done, amber for what is tight,
+  cyan for a path, gray for a side note -- and the background belongs to the terminal.
+- **Glyphs** (`██ ▓▓ ░░ ✓ ❯ ↑↓ ·`) only when `sys.stdout.encoding` can encode them, else ASCII
+  (`## :: .. ok > ^v -`). A Windows console under `cp1252` encodes none of them, and printing one
+  would end a run with a `UnicodeEncodeError` instead of a dialog.
+- **Every question is a list** with the arrow keys, a green `❯` on the line the keyboard is on, the
+  grayed-out entries with their reason, and one instruction line under it: `↑↓ move   Enter
+  select   Esc leave`, or `↑↓ move   Space marks   Enter confirms   Esc leave` for a list that
+  marks. **Yes or no is a list of `Yes` and `No`** with the default under the pointer; there is no
+  `(Y/n)` anywhere. An answer file still answers it with `true`/`false`.
+- **The labels of a list are aligned in columns** (`dialog.columns`), so the scale, the search
+  hits and the load test read as tables. A cell wider than its column pushes its own row and is
+  never cut.
+
+**The start screen** (`modelroom/intro.py`), once per run, before the first question, with
+`--answers` as well (then without color): the mark's pictogram from `docs/assets/banner.svg` as
+three rows of four cells, next to it the name, the one-line description, and the version with the
+repository from the package metadata (`importlib.metadata`, `project.urls`; without that URL only
+the version). Then the three facts that are known before anything is asked, each as `label value
+note`:
+
+- `folder`: the results folder `--config` or the pointer file already names, with what is in it;
+  `not chosen yet` when the first question is still to come.
+- `daemon`: `Ollama <version>` from `GET /api/version` with the number of models from
+  `GET /api/tags`; `not reachable` when it does not answer. Read in `intro.py` and not through the
+  load test: the start screen must never end a run.
+- `machine`: this machine's host name, and the hardware of the profile this folder binds it to in
+  plain words (`one graphics card, 12 GB, 128 GB memory`); `not measured in this results folder
+  yet` when there is none.
+
+Under that, the five steps by name and one line about how this run behaves: **`Files are written as
+the run goes on. Esc leaves a list, Ctrl-C leaves at any point.`** It deliberately does not promise
+that nothing is written before the end, and it does not promise a line for every write either --
+step 1 writes a configuration as soon as the folder is known, a configuration of schema 1 is
+migrated on the way in before any question of a second run, and the pointer file that remembers the
+folder is written without a line of its own. What a reader needs is the true shape of it: this is
+not all-or-nothing at the end, and a run left in the middle has written what the steps before it
+wrote.
+
+There is no "press Enter": the first question follows. Under `modelroom --answers <file>` the start
+screen is printed **without color**, whatever terminal the run was started in: such a run is read
+from a log, and its output must not depend on the window (`cli._cmd_guided` passes `colored=False`,
+`intro.print_intro` takes it). Where `prompt_toolkit` cannot drive the console at all (measured: a
+Windows Python under a `xterm-256color` terminal), the same lines are printed without color -- the
+first thing a run prints is never a traceback.
 
 **Which folder.** `--config <path>` wins over the pointer file's `current`. A `--config` that
 names no file, and a remembered folder that no longer holds a `modelroom.toml`, are said out
 loud and the folder question is asked again -- neither is silently replaced by a new folder.
 
-**The steps and their questions.** Every question has a key, which is also its key in the
-answer file:
+**Five steps.** Each one begins with a head of its own, `Step <n> of 5  <name>`. Steps 1 to 4 leave
+one line behind when they are done -- a check mark, the step's name and the short form of its answer
+(`✓ Packages   2 repositories added, 7 packages fetched`). Step 5 ends the run and closes with the
+line that says where the result went (`Written to <markdown>   and   <state>`), which is its
+finishing line. The five are **1 Configuration** (the
+results folder, the configuration in it, the machines), **2 Packages** (search, choice, fetch),
+**3 Context** (the size scale), **4 Measurement** (the load test), **5 Results** (the render).
+
+The **fetch belongs to step 2**, before the context question and not after it: the scale of step 3
+counts how many of the packages the fetch just recorded still fit this machine, and the fetch
+itself does not depend on the context. An answer file is a table of keys and its order does not
+matter, so the move is invisible to it.
+
+**The questions.** Every question has a key, which is also its key in the answer file:
 
 | # | Key | Question | Answer |
 |---|---|---|---|
-| 0 | `results` | Where should results live? | `here` or `path` |
-| 0 | `results_path` | Path to the results folder | text (only after `path`) |
-| 0 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
+| 1 | `results` | Where should results live? | `here` or `path` |
+| 1 | `results_path` | Path to the results folder | text (only after `path`) |
+| 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
 | 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import` |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
 | 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`) |
 | 2 | `search` | What are you looking for? | text |
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
 | 2 | `select` | Which of these models should the result cover? | a list of repository ids |
-| 2 | `context` | How much context should the ranking assume? | a whole number; the default is `[guided].context` when this folder kept one, else 8192 |
-| 5 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **the one optional answer** -- an answer file that does not mention it does not measure |
-| 5 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
+| 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
+| 4 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **the one optional answer** -- an answer file that does not mention it does not measure |
+| 4 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
@@ -3401,23 +3476,32 @@ result. Whenever the guided mode has a configuration in hand, every profile in t
 an entry gets one, by the same rule `import-profile` uses (name from the `display_name`, reserves
 from `[defaults]`, `writer = false`).
 
-**Step 0, the results folder.** A new `modelroom.toml` is written with `schema_version = 2`,
+**Step 1, the results folder.** A new `modelroom.toml` is written with `schema_version = 2`,
 families empty, `packagers` empty (the search writes every resolved repository as an
 owner-bound `repos` target, so a speculative `<packager>/<name>-GGUF` probe under five accounts
 per base model would only spend the shared request budget), this device as `[machines.<host>]`
 with `writer = true`, `paths.state = <folder>/state`, `paths.markdown = <folder>/docs/models.md`
 and `[guided].results = <folder>`. The folder is remembered in the pointer file. A
 `modelroom.toml` of schema 1 in the folder is migrated first (`modelroom migrate`, under the
-lock, backup kept, idempotent), before anything is written. A folder that already holds results
-but no `modelroom.toml` is a question, never an assumption.
+lock, backup kept, idempotent), before anything is written, and the lines it prints have one
+sentence in front of them that says what happened in plain words: `This folder holds a
+configuration from an earlier version; it was updated, backup kept: modelroom.toml.v1.bak`. A
+folder that already holds results but no `modelroom.toml` is a question, never an assumption.
 
 **Step 1, the machines.** The list is built from every profile file in the results folder
 (`scan_profiles`), grouped by hardware class (GPU, VRAM, RAM) with the count and the names,
 alphabetical. The group is a matter of operation only -- the ranking is computed per device.
 Those entries are shown and cannot be picked: they are already part of the result. So are the
 schema-1 files (`run modelroom migrate`), the files that do not read (with their reason), and
-`enter a machine by hand` (`stage 2`). The two entries that can be picked are `this machine
-(measure now)` and `import a profile file`.
+`enter a machine by hand` (`stage 2`). The two entries that can be picked are `this machine` and
+`import a profile file`.
+
+**This machine is marked only when it has not been measured here.** With no profile bound to this
+machine for this folder the entry is `this machine (measure now)` and starts marked -- that is
+what a first run is for. Once there is one, it is `this machine (measure again, last measured
+<date>)` and starts **unmarked**: measuring again is a decision, and `Enter` alone must not make
+it. The key and the answer stay the same (`machines`, `this-machine`), so an answer file is
+unaffected.
 
 `this machine (measure now)` makes sure `[machines.<host>]` exists and is a writer -- this
 machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the
@@ -3430,37 +3514,85 @@ measurement the guided mode writes `[machines.<name>].profile` -- the one config
 `hardware` leaves to it. `import a profile file` runs `import-profile`, which never changes the
 binding; a file that does not import is reported and the run goes on.
 
-**Step 2, search, choice and context.** `run_search` with the run's shared request budget
+**Step 2, search, choice and fetch.** `run_search` with the run's shared request budget
 (`DEFAULT_GUIDED_BUDGET`, 60, shared with the fetch), then the summary line
-(`SearchOutcome.summary_line`), one line per unresolved hit with its reason, and the selection
-list of the resolved hits with seven facts each: repository, owner class, `repo created`, size,
-license, `latest`/`legacy`/`unknown` and the Ollama name or `none known`. With `filter_owners`
-on, a hit whose owner class is `other` is shown but cannot be picked. The chosen hits go through
-`apply_hits` into the configuration, which is written with `write_configuration`. A hit whose
-base model the shipped catalog has no family for gets the family name `search.family_name_for`
-derives from the repository name; the guided mode does not ask for one. The `context` answer is
-the one context of the whole ranking (`Scenario`, origin `default` at 8192, `entered`
-otherwise); anything that is not a whole number above zero ends the run with exit `2`.
+(`SearchOutcome.summary_line`), then the selection list of **every** hit with seven facts each:
+repository, owner class, `repo created`, size, license, `latest`/`legacy`/`unknown` and the Ollama
+name or `none known`. A hit that cannot be picked is shown grayed out with its reason in plain
+words, and under the list stands one line per reason with the number of repositories behind it
+(`3 repositories cannot be picked: the repository does not say it packages a base model`) -- never
+one line per repository, which said the same five things 28 times in the hand test of 2026-09-24.
+The reasons are `guided.UNRESOLVED_REASONS` (one sentence per `SearchHit.unresolved_reason`) and,
+with `filter_owners` on, `not a publisher or a listed packager` for an owner class of `other`. When
+nothing can be picked the list is shown all the same, `Enter` goes on, and the run says `no
+repository of a publisher or a listed packager was resolved; nothing added`. The chosen hits go
+through `apply_hits` into the configuration, which is written with `write_configuration`. A hit
+whose base model the shipped catalog has no family for gets the family name
+`search.family_name_for` derives from the repository name; the guided mode does not ask for one.
+Then `fetch_with_config` runs with the same budget object (nothing configured yet means nothing to
+fetch, said out loud).
 
-**The context is kept.** The question starts at `[guided].context` when this folder kept one, else
-at 8192 (`guided.context_default`). The file is then read again ("Every write reads the file again
-first"), and the answer is written to `[guided].context` whenever it differs from what **that** read
-holds -- the first time as well, and for 8192 as well, because a kept context is a decision and not
-a default. An answer that the file already holds writes nothing. The comparison is deliberately
-against the fresh read and not against this run's own copy: a run that skipped its write because
-its copy already said so would leave a context another process wrote in the file, and the next
+**Step 3, the context as a size scale** (`modelroom/guided_context.py`). Six levels, in this
+order, each a line of the list: `XS` 4096, `S` 8192, `M` 16384, `L` 32768, `XL` 65536, `XXL`
+131072, with the shown context (`4k` … `128k`), roughly how many words that is (three quarters of
+a token each, so `4k` is `3,000 words`), an example of what it is for, and the last column below.
+In front of the list stands `checking <machine>   <its hardware in plain words>`; that line is also
+where a later stage hangs the question of how many people use the machine at once.
+
+- **The pointer** starts on the level whose context this folder kept (`[guided].context`), else on
+  **`L`** -- the default of a folder that has chosen nothing yet.
+- **A kept context that is no level** gets a seventh line of its own, `custom <n> tokens kept in
+  this folder`, and the pointer starts there. An eighth line, `enter a number`, leads to the text
+  question for a number of tokens; it starts empty, because what this folder kept is already the
+  line under the pointer.
+- **The last column, "how many fit"**: for every level, fit contract v1's own formula
+  (`fit.count_fitting` over `compute_fit_v2`, one request, 16-bit KV cache) over the packages of
+  this folder's snapshot that a fit may be computed for (`render._eligible_packages`), against the
+  profile **the pointer file binds this machine to for this folder** (the same source step 4
+  measures into, and never `[machines.<name>].profile`), with the reserves of that machine's
+  `[machines.<name>]`. "Fits" is the ranking rule's own predicate -- a package
+  `ranking.rank_packages` ranks -- so for the same packages, the same profile and the same reserves,
+  the scale and the result table of that run say the same thing. It is one computation, not two. Text: `all N packages fit`, `k of N packages fit`, `none of N packages fits`. The
+  count does **not** have to fall as the scale goes up: fit v1 judges a package against the
+  graphics memory while it fits there and against system memory once it does not, so a bigger
+  context can move a package into a roomier pool and make it fit again. It is computed **when the
+  question is asked**, from the configuration and the snapshot as they are then; like every other
+  list of this dialog it is what was true at that moment, and the write that follows reads the file
+  again on its own. Without a bound profile there is no column and one line instead: `no measured
+  machine in this folder yet, so the scale shows no fit`; with a profile the fit must not compute
+  for (`profile.fit_block_reason`), that reason; when no `[machines.<name>]` names that profile,
+  that reason as well -- another machine's reserves under another machine's name would be a made-up
+  number; without a snapshot, every level says `no packages yet`.
+- **The cap**: when every base model of the snapshot declares an `Architecture.max_context`, the
+  levels above the smallest of those are grayed out with `beyond the window of <base model>` and
+  cannot be answered, in an answer file either (exit `2`, naming the reason). If one base model
+  declares none, nothing is grayed out -- a window nobody knows is no reason to forbid a level.
+- **The answer** is a level name or a number of tokens; the level is translated into its tokens
+  before anything is written. An answer out of a file is stripped of surrounding blanks **before**
+  it is held against the grayed-out entries, so `" XXL "` is refused exactly as `"XXL"` is.
+  Anything else ends the run with exit `2`, naming what was answered.
+  `context_origin` is **`entered`** for everything this dialog writes, 8192 included: `default` is
+  what the three automation commands assume when nobody chose a context
+  (`measurements.DEFAULT_CONTEXT_REQUESTED`, `measurements.default_scenario`), and choosing `S` is
+  not that.
+
+**The context is kept.** The file is read again ("Every write reads the file again first"), and the
+answer is written to `[guided].context` whenever it differs from what **that** read holds -- the
+first time as well, and for 8192 as well, because a kept context is a decision and not a default.
+An answer that the file already holds writes nothing. The comparison is deliberately against the
+fresh read and not against this run's own copy: a run that skipped its write because its copy
+already said so would leave a context another process wrote in the file, and the next
 `modelroom render` would compute a ranking this run never showed. The write goes through the same
 `write_configuration` every other step uses. What it buys: a `modelroom render` of this folder
 afterwards computes the same ranking (see "Render (schema 2)", "The scenario"), instead of falling
 back to 8192 and putting the run's own measurement into group 1.
 
-**Steps 3 to 5.** `fetch_with_config` with the same budget object (nothing configured yet means
-nothing to fetch, said out loud), then the load test, then `render_with_config` with the chosen
-scenario, which writes both views and prints the terminal one -- so a measurement the load test
-just wrote is in the ranking of that same run.
+**Step 5, the render.** `render_with_config` with the chosen scenario, which writes both views and
+prints the terminal one -- so a measurement the load test just wrote is in the ranking of that same
+run -- and then one line saying where the result went: `Written to <markdown>   and   <state>`.
 
-**Step 5, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
-which `guided.py` calls between the fetch and the render). It measures into the profile **the
+**Step 4, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
+which `guided.py` calls between the context and the render). It measures into the profile **the
 pointer file binds this machine to for this results folder**, and only when the takeover rule
 (`resolve_profile_target`, "Profile binding") says `bound` for it -- the profile file is in the
 folder and its `os_fingerprint` agrees with this machine's. Never into `[machines.<host>].profile`:
@@ -3477,12 +3609,17 @@ the daemon's inventory is read and matched against the snapshot's active package
   measured: <reason>` and exit `1`, with the document still written.
 - **No installed package matched.** One line, `no ranked package is installed on this machine;
   the load test measures installed packages only (stage 1: no download)`, and no question. What
-  was left out is named first: an installed model whose name matches a configured package but
-  whose digest the daemon does not show, and every cloud model.
+  was left out is named first, **one line per reason** with the number of installed models behind
+  it and up to three of their names (`not measured: 12 installed models -- <reason> (a, b, c and 9
+  more)`): an installed model whose name matches a configured package but whose digest the daemon
+  does not show, and every cloud model.
 - **At least one candidate.** `load_test` (default **no**), then `load_test_packages`: every
-  candidate, all checked, one line each with the local name, the base model, the quantization and
-  the weight size. Before the runs the step prints that the load is read once and that the model
-  behind the name must not change. Each measurement is written as its own file and reported in one
+  candidate, **none of them marked**, one line each with the local name, the base model, the
+  quantization and the weight size, aligned in columns. Nothing is marked because `Enter` measured
+  all three in the hand test of 2026-09-24 where the user had picked one; which models are measured
+  is a decision. A single candidate is a list with one entry as well -- one code path, and an
+  answer file reads the same on every machine. Before the runs the step prints that the load is
+  read once and that the model behind the name must not change. Each measurement is written as its own file and reported in one
   line: `measured <mean> tok/s (<min>-<max>), context <n>, valid, comparable`, or the reason
   instead. A daemon that lets a run down here is a step that did not finish as well: the line
   names the model and the reason, the exit code is `1`, and the document is still written.
@@ -3503,7 +3640,9 @@ machines = ["this-machine"]
 search = "qwen"
 filter_owners = true
 select = ["unsloth/Qwen3.5-9B-GGUF"]
-context = "8192"
+# A level of the scale, or a number of tokens: `context = 8192` and `context = "8192"` are the same
+# answer as `context = "S"`.
+context = "L"
 load_test = true
 load_test_packages = ["hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M"]
 ```

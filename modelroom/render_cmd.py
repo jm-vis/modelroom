@@ -17,7 +17,6 @@ from .config import Configuration
 from .contracts import SchemaVersionError
 from .importer import ProfileScan, scan_profiles
 from .measurements import (
-    DEFAULT_CONTEXT_REQUESTED,
     MeasurementRecord,
     Scenario,
     default_scenario,
@@ -43,30 +42,24 @@ from .state import (
 from .views import document_markdown, document_terminal
 
 
-def scenario_for(context: int) -> Scenario:
-    """The ranking's scenario for one context; `context_origin` says where the number came from.
-
-    `default` is reserved for 8192 (`Scenario`'s own rule), every other number is `entered`.
-    Raises `pydantic.ValidationError` for a context no ranking can be computed for, which the
-    caller that took the number from a user turns into its own message.
-    """
-    origin = "default" if context == DEFAULT_CONTEXT_REQUESTED else "entered"
-    return Scenario(
-        context_requested=context, context_origin=origin, kv_type="f16", kv_type_assumed=True, requests=1
-    )
-
-
 def scenario_from_config(config: Configuration) -> Scenario:
     """The context `render` computes for when no caller passes one: `[guided].context`, else 8192.
 
     A guided run keeps the context its ranking was computed for in the configuration, so a later
     `modelroom render --config` of that folder shows the same ranking and leaves a measurement of
-    that context in measured group 0. A configuration no guided run has chosen a context in
-    renders with `default_scenario()`, exactly as before.
+    that context in measured group 0. A kept context is `entered`, 8192 included: it is what
+    that run chose, and the dialog names it so -- `default` is only what a configuration no
+    guided run has chosen a context in gets, through `default_scenario()`, exactly as before.
     """
     if config.guided.context is None:
         return default_scenario()
-    return scenario_for(config.guided.context)
+    return Scenario(
+        context_requested=config.guided.context,
+        context_origin="entered",
+        kv_type="f16",
+        kv_type_assumed=True,
+        requests=1,
+    )
 
 
 def render_with_config(
@@ -235,6 +228,5 @@ def refusal_against_existing_document(markdown_path: Path, new_snapshot_run_at: 
 __all__ = [
     "refusal_against_existing_document",
     "render_with_config",
-    "scenario_for",
     "scenario_from_config",
 ]

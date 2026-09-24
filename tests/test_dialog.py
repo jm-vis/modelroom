@@ -21,14 +21,18 @@ from modelroom.dialog import (
     Choice,
     FileAsker,
     TerminalAsker,
+    columns,
     is_interactive,
     selectable,
 )
+from modelroom.guided_context import LEVELS, NUMBER_VALUE, scale_choices, tokens_of
 
 DOWN = "\x1b[B"
+UP = "\x1b[A"
 ENTER = "\r"
 CTRL_C = "\x03"
 CTRL_D = "\x04"
+ESC = "\x1b"
 
 
 @contextmanager
@@ -83,11 +87,78 @@ def test_a_checked_choice_starts_selected():
         assert asker.checkbox("machines", "Machines?", CHOICES) == ["this-machine"]
 
 
-def test_confirm_reads_yes_and_no():
-    with _asker("y" + ENTER) as asker:
+def test_confirm_is_a_list_with_the_default_under_the_pointer():
+    """Yes and no is a list like every other question -- there is no `(Y/n)` to read (decided 2026-09-24)."""
+    with _asker(ENTER) as asker:
         assert asker.confirm("filter_owners", "Filter?") is True
-    with _asker("n" + ENTER) as asker:
+    with _asker(DOWN + ENTER) as asker:
         assert asker.confirm("filter_owners", "Filter?") is False
+
+
+def test_confirm_starts_on_no_when_that_is_the_default():
+    with _asker(ENTER) as asker:
+        assert asker.confirm("load_test", "Measure?", default=False) is False
+    with _asker(UP + ENTER) as asker:
+        assert asker.confirm("load_test", "Measure?", default=False) is True
+
+
+def test_escape_leaves_a_list_the_way_an_end_of_input_does():
+    """The instruction line under every list promises it, so it has to be bound."""
+    with _asker(ESC) as asker, pytest.raises(Canceled):
+        asker.select("results", "Where?", [Choice("here", "this folder"), Choice("path", "a path")])
+
+
+def test_escape_leaves_a_checkbox_too():
+    with _asker(ESC) as asker, pytest.raises(Canceled):
+        asker.checkbox("machines", "Machines?", CHOICES)
+
+
+def test_the_pointer_of_a_select_starts_on_the_checked_entry():
+    with _asker(ENTER) as asker:
+        choices = [Choice("here", "this folder"), Choice("path", "a path", checked=True)]
+        assert asker.select("results", "Where?", choices) == "path"
+
+
+# --- the size scale at the terminal (`select_or_text`) -------------------------------------------
+
+
+def _scale(default_context: int, cap=None):
+    return scale_choices(LEVELS, default_context, {}, cap)
+
+
+def _ask_scale(keys: str, default_context: int, cap=None) -> str:
+    with _asker(keys) as asker:
+        scale = _scale(default_context, cap)
+        return asker.select_or_text("context", "How much?", scale, NUMBER_VALUE, "How many tokens?")
+
+
+def test_the_scale_answers_with_the_level_the_pointer_starts_on():
+    """A folder that kept no context starts on `L`, so Enter alone is 32768 (decided 2026-09-24)."""
+    assert tokens_of(_ask_scale(ENTER, 32768)) == 32768
+
+
+def test_the_scale_starts_on_the_kept_level():
+    assert tokens_of(_ask_scale(ENTER, 16384)) == 16384
+
+
+def test_a_kept_context_that_is_no_level_starts_on_custom():
+    assert tokens_of(_ask_scale(ENTER, 5000)) == 5000
+
+
+def test_the_last_entry_of_the_scale_leads_to_the_number_question():
+    """`enter a number` is the last entry, three lines under the pointer's start on `L`."""
+    down_to_the_number = DOWN * (len(LEVELS) - [level.name for level in LEVELS].index("L"))
+    keys = down_to_the_number + ENTER + "4096" + ENTER
+
+    assert tokens_of(_ask_scale(keys, 32768)) == 4096
+
+
+def test_a_level_beyond_the_window_is_grayed_out_with_its_reason():
+    choices = _scale(32768, (32768, "Qwen/Qwen3.5-9B"))
+
+    assert [choice.value for choice in choices if choice.disabled] == ["XL", "XXL"]
+    assert selectable(choices) == ["XS", "S", "M", "L", NUMBER_VALUE]
+    assert all(choice.disabled == "beyond the window of Qwen/Qwen3.5-9B" for choice in choices if choice.disabled)
 
 
 def test_end_of_input_is_a_clean_cancel():
@@ -160,6 +231,64 @@ def test_a_switch_has_to_be_true_or_false():
 def test_a_list_is_not_text():
     with pytest.raises(AnswerInvalidError):
         FileAsker({"search": ["qwen"]}).text("search", "What?")
+
+
+# --- the size scale from an answer file -----------------------------------------------------------
+
+
+def _answered_context(value, cap=None) -> str:
+    asker = FileAsker({"context": value})
+    return asker.select_or_text("context", "How much?", _scale(32768, cap), NUMBER_VALUE, "How many?")
+
+
+@pytest.mark.parametrize("value, expected", [("L", 32768), ("32768", 32768), (32768, 32768), ("XS", 4096)])
+def test_a_file_answers_the_scale_with_a_level_or_a_number(value, expected):
+    assert tokens_of(_answered_context(value)) == expected
+
+
+def test_a_level_beyond_the_window_cannot_be_answered_from_a_file():
+    with pytest.raises(AnswerInvalidError) as excinfo:
+        _answered_context("XXL", cap=(32768, "Qwen/Qwen3.5-9B"))
+
+    assert "beyond the window of Qwen/Qwen3.5-9B" in str(excinfo.value)
+
+
+def test_a_level_beyond_the_window_cannot_be_smuggled_in_with_a_space():
+    """`" XXL "` matched no entry, so it passed the check and was translated a step later."""
+    with pytest.raises(AnswerInvalidError, match="beyond the window"):
+        _answered_context(" XXL ", cap=(32768, "Qwen/Qwen3.5-9B"))
+
+
+def test_a_level_with_spaces_around_it_is_still_that_level():
+    assert tokens_of(_answered_context("  L  ")) == 32768
+
+
+def test_a_context_that_is_neither_a_level_nor_a_number_is_the_callers_error():
+    """The answer itself is text, so the list takes it; the step turns it into its own message."""
+    from modelroom.guided import GuidedError
+
+    with pytest.raises(GuidedError, match="neither a level"):
+        tokens_of(_answered_context("huge"))
+
+
+def test_a_context_no_ranking_can_be_computed_for_names_itself():
+    from modelroom.guided import GuidedError
+
+    with pytest.raises(GuidedError, match="not a context"):
+        tokens_of(_answered_context("0"))
+
+
+# --- the columns of a list ------------------------------------------------------------------------
+
+
+def test_columns_pad_every_cell_a_width_is_given_for():
+    rows = [["XS", "4k", "a"], ["XXL", "128k", "b"]]
+
+    assert columns(rows, (4, 6)) == ["XS    4k      a", "XXL   128k    b"]
+
+
+def test_a_cell_wider_than_its_column_pushes_its_own_row_and_is_never_cut():
+    assert columns([["overlong", "x"]], (4,)) == ["overlong  x"]
 
 
 # --- the answer file ----------------------------------------------------------------------------

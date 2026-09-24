@@ -14,7 +14,8 @@ Criteria (the plan's own numbering):
 1. the first start writes `modelroom.toml` with this device as the writer, and remembers the
    results folder in the pointer file;
 2. this machine is measured: `gpu_state: measured`, llmfit cross-check `confirmed`;
-3. the search resolves at least one publisher model and shows the unresolved hits with a reason;
+3. the search resolves at least one publisher model, and every repository that cannot be picked
+   stands behind one line per reason with the number of repositories it covers;
 4. the ranking carries the rule and the context in its header, and Qwen3.5 stands under
    "not covered";
 5. the prepared package is measured against the real local Ollama daemon: the measurement is
@@ -22,13 +23,17 @@ Criteria (the plan's own numbering):
    package stands in the ranking in measurement group 0 with its speed;
 6. the second start reuses the configuration, the binding, the measurement and the context: no
    clone question, no second profile file, no second measurement, `[guided].context` holds the
-   answered context, the configuration the second run reads offers that context again
-   (`guided.context_default`, the function the question itself uses), and a `modelroom render`
-   of its own writes that context into the document and keeps the measurement in group 0.
+   answered context, the configuration the second run reads starts the size scale at that context
+   again and on its level (`guided.context_default` and `guided_context.scale_choices`, the
+   functions the question itself uses), and a `modelroom render` of its own writes that context
+   into the document and keeps the measurement in group 0.
    What this run cannot show is a context other than the answered one carrying through: its
-   answer file stays at 8192 so that criteria 4 and 5 keep their pinned numbers, and 8192 is
-   also what a render with no stored context assumes. That case is a test of its own
-   (`tests/test_guided.py`, 4096 answered, measured, and rendered on its own afterwards).
+   answer file stays at the level `S` (8192) so that criteria 4 and 5 keep their pinned numbers,
+   and 8192 is also what a render with no stored context assumes. That case is a test of its own
+   (`tests/test_guided.py`, 4096 answered, measured, and rendered on its own afterwards);
+7. the run reads as the guided dialog it promises: the start screen with its three rows, the five
+   numbered step heads, a size scale that says how many packages fit on the measured machine, and
+   a result view that says each set-aside reason once with a number instead of once per package.
 
 The live search runs as a smoke afterwards and never decides the exit code.
 
@@ -61,13 +66,17 @@ UNSLOTH_GGUF = "unsloth/Qwen3.5-9B-GGUF"
 # test itself runs against the real local daemon -- that is what criterion 5 is about.
 DEEPSEEK_GGUF = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
 DEEPSEEK_OLLAMA_NAME = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
+# The scale's level `S`, which is 8192 tokens: criteria 4 and 5 keep the numbers they were pinned
+# with, and the answer file shows that a level is a valid answer (CONTRACTS.md, "Guided mode").
+ANSWERED_LEVEL = "S"
+ANSWERED_CONTEXT = 8192
 ANSWERS_FIRST = {
     "results": "here",
     "machines": ["this-machine"],
     "search": SEARCH_NAME,
     "filter_owners": True,
     "select": [UNSLOTH_GGUF, DEEPSEEK_GGUF],
-    "context": "8192",
+    "context": ANSWERED_LEVEL,
     "load_test": True,
     "load_test_packages": [DEEPSEEK_OLLAMA_NAME],
 }
@@ -139,27 +148,41 @@ def measurement_problems(profile: dict) -> list[str]:
 
 
 def search_problems(lines: list[str]) -> list[str]:
-    """Criterion 3: at least one resolved publisher model, every unresolved hit with a reason."""
+    """Criterion 3: at least one resolved publisher model, and every reason once with its number.
+
+    Since 2026-09-24 the step no longer prints one line per unresolved repository -- 28 of them
+    said five things over and over. Every repository is in the selection list with its reason, and
+    under the list stands one line per reason with how many repositories it covers.
+    """
     summary = next((line for line in lines if " repositories, " in line and " resolved, " in line), None)
     if summary is None:
         return ["no search summary line was printed"]
     problems = []
     resolved = int(summary.split(" repositories, ")[1].split(" resolved")[0])
+    unresolved = int(summary.split(" resolved, ")[1].split(" unresolved")[0])
     if resolved < 1:
         problems.append(f"the search resolved {resolved} repositories, expected at least one")
-    unresolved = [line for line in lines if line.startswith("unresolved ")]
-    if not unresolved:
-        problems.append("no unresolved hit was shown with its reason")
-    if any(line.rstrip().endswith(":") or line.rstrip().endswith("None") for line in unresolved):
-        problems.append("an unresolved hit was shown without a reason")
+    grouped = [line for line in lines if "cannot be picked:" in line]
+    if not grouped:
+        problems.append("no reason was shown for the repositories that cannot be picked")
+    if any(line.rstrip().endswith(("cannot be picked:", "None")) for line in grouped):
+        problems.append("a reason was shown as empty or as a raw status")
+    covered = sum(int(line.split(" ", 1)[0]) for line in grouped if line.split(" ", 1)[0].isdigit())
+    if grouped and covered < unresolved:
+        problems.append(f"the grouped lines cover {covered} repositories, expected at least {unresolved}")
     return problems
 
 
 def ranking_problems(text: str, machine: str, not_covered: list[dict]) -> list[str]:
-    """Criterion 4: the header carries rule and context, and Qwen3.5 stands under not covered."""
+    """Criterion 4: the header carries rule and context, and Qwen3.5 stands under not covered.
+
+    `entered` and not `default`: everything the dialog writes is a decision of the user, 8192
+    included -- `default` is what the three automation commands assume when nobody chose one
+    (CONTRACTS.md, "Guided mode", step 3).
+    """
     lines = text.splitlines()
     problems = []
-    for expected in ("Ranking rule: ", "Scenario: context 8192 (default)", f"## Ranking: {machine}"):
+    for expected in ("Ranking rule: ", f"Scenario: context {ANSWERED_CONTEXT} (entered)", f"## Ranking: {machine}"):
         if not any(line.startswith(expected) for line in lines):
             problems.append(f"the document has no line starting with {expected!r}")
     if not not_covered:
@@ -224,29 +247,63 @@ def second_start_problems(
     return problems
 
 
-def stored_context_problems(before: dict, offered: object, header: str | None, row: dict | None) -> list[str]:
+def stored_context_problems(
+    before: dict, offered: object, header: str | None, row: dict | None, level: str | None = None
+) -> list[str]:
     """Criterion 6, the kept context: written by run 1, offered again, and rendered on its own.
 
     `before` is the configuration as the first run left it, `offered` the context that
-    configuration makes the question start at (`guided.context_default`, read before the second
-    run -- an answer file answers every question outright, so what the dialog was offered cannot be
-    read off this run; `tests/test_guided.py` watches the real `Asker` for that), `header` the
-    `Scenario:` line of the document a standalone `modelroom render` wrote afterwards, and `row`
-    the measured package's row in that document.
+    configuration makes the scale start at (`guided.context_default`) and `level` the level of the
+    scale whose line carries the pointer for it (`guided_context.scale_choices`), both read before
+    the second run -- an answer file answers every question outright, so what the dialog was
+    offered cannot be read off this run; `tests/test_guided.py` watches the real `Asker` for that.
+    `header` is the `Scenario:` line of the document a standalone `modelroom render` wrote
+    afterwards, and `row` the measured package's row in that document.
     """
-    answered = int(ANSWERS_FIRST["context"])
+    answered = ANSWERED_CONTEXT
     problems = []
     stored = before.get("guided", {}).get("context")
     if stored != answered:
         problems.append(f"[guided].context is {stored!r} after the first run, expected {answered}")
     if offered != answered:
         problems.append(f"the configuration of the second run starts the question at {offered!r}, expected {answered}")
+    if level is not None and level != ANSWERED_LEVEL:
+        problems.append(f"the scale of the second run starts on level {level!r}, expected {ANSWERED_LEVEL!r}")
     if header is None:
         problems.append("the document of the standalone render carries no Scenario line")
     elif f"context {answered} " not in header:
         problems.append(f"the standalone render wrote {header!r}, expected context {answered}")
     if row is None or row["measurement_group"] != 0:
         problems.append("the standalone render does not keep the first run's measurement in group 0")
+    return problems
+
+
+def guided_mode_problems(lines: list[str], scale: list[str]) -> list[str]:
+    """Criterion 7: the run reads like the guided mode it is -- start screen, steps, scale, groups.
+
+    The four things the hand test of 2026-09-24 did not find: a start screen, a numbered step for
+    every question, a context question that says what still fits, and a result view that says a
+    reason once instead of once per package.
+    """
+    problems = []
+    if not any("ModelRoom" in line for line in lines[:6]):
+        problems.append("the run does not begin with the start screen")
+    for label in ("folder", "daemon", "machine"):
+        if not any(line.strip().startswith(label) for line in lines[:12]):
+            problems.append(f"the start screen has no {label} row")
+    heads = [line.splitlines()[0] for line in lines if line.startswith("Step ")]
+    expected = [f"Step {number} of 5" for number in range(1, 6)]
+    if [head.split("  ")[0] for head in heads] != expected:
+        problems.append(f"the five step heads are {heads}, expected {expected}")
+    if not any(line.startswith("checking ") for line in lines):
+        problems.append("step 3 does not say which machine the scale is about")
+    if not all(" packages fit" in label or " packages fits" in label for label in scale):
+        problems.append(f"a level of the scale carries no count of what fits: {scale}")
+    grouped = [line for line in "\n".join(lines).splitlines() if "not covered: " in line]
+    if not grouped:
+        problems.append("the result view has no grouped not-covered line")
+    elif not any(" packages -- " in line or " package -- " in line for line in grouped):
+        problems.append(f"the not-covered lines are not grouped by reason: {grouped}")
     return problems
 
 
@@ -338,8 +395,8 @@ def _machine_name(config_text: str) -> str:
     return next(name for name, entry in machines.items() if entry.get("writer"))
 
 
-def _first_run(results: Path, pointer: Path, transport, now: datetime) -> list[Step]:
-    """Criteria 1 to 4, from one guided run and the files it left behind."""
+def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[list[Step], list[str]]:
+    """Criteria 1 to 4, from one guided run and the files it left behind, plus that run's output."""
     answers = results.parent / "answers-first.toml"
     answers.write_text(answers_toml(ANSWERS_FIRST), encoding="utf-8", newline="\n")
     code, lines = _guided_run(answers, results, transport, now)
@@ -350,7 +407,7 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> list[S
     profile = json.loads(profiles[0].read_text(encoding="utf-8")) if profiles else {}
     text, payload = _document(results)
     block = _machine_block(payload, machine)
-    return [
+    steps = [
         Step("guided run 1 ended with exit 0", code == 0, f"exit {code}, {len(lines)} lines printed"),
         Step(
             "(1) first start writes the configuration and remembers the folder",
@@ -366,7 +423,7 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> list[S
             f"({profile['vram_source']}), ram {profile['ram_physical_gib']} GiB ({profile['ram_physical_source']})",
         ),
         Step(
-            "(3) the search resolves a publisher model and shows the unresolved hits",
+            "(3) the search resolves a publisher model and groups the reasons of the rest",
             not search_problems(lines),
             "\n".join(search_problems(lines))
             or next(line for line in lines if " repositories, " in line),
@@ -379,6 +436,7 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> list[S
             f"({block['not_covered'][0]['reason']})",
         ),
     ]
+    return steps, lines
 
 
 def _load_test_step(results: Path, machine: str) -> Step:
@@ -404,11 +462,39 @@ def _load_test_step(results: Path, machine: str) -> Step:
 
 
 def _offered_context(config_file: Path) -> int:
-    """What the context question of the next run starts with, from the configuration on disk."""
+    """What the size scale of the next run starts at, from the configuration on disk."""
     from modelroom.config import load_config
     from modelroom.guided import context_default
 
     return context_default(load_config(config_file))
+
+
+def _offered_level(config_file: Path) -> str:
+    """Which line of the scale carries the pointer for that context -- the level, not the number."""
+    from modelroom.config import load_config
+    from modelroom.guided_context import LEVELS, scale_choices
+
+    choices = scale_choices(LEVELS, _offered_context(config_file), {}, None)
+    return next((choice.value for choice in choices if choice.checked), "none")
+
+
+def _scale_labels(results: Path, pointer: Path) -> list[str]:
+    """The six level lines of the scale for this folder, built by the step's own functions.
+
+    An answer file answers the question outright, so the list itself is never printed. It is
+    built here from the same folder with the same functions the step uses -- the snapshot the run
+    fetched, the profile the pointer binds this machine to, the reserves of the configuration.
+    """
+    from modelroom.config import load_config
+    from modelroom.guided_context import LEVELS, context_cap, fit_texts, machine_checked, scale_choices, snapshot_packages
+
+    config = load_config(results / "modelroom.toml")
+    packages, base_models = snapshot_packages(config)
+    checked = machine_checked(pointer, config, results)
+    contexts = [level.tokens for level in LEVELS]
+    fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts)
+    choices = scale_choices(LEVELS, ANSWERED_CONTEXT, fits, context_cap(base_models))
+    return [choice.label for choice in choices if choice.value in {level.name for level in LEVELS}]
 
 
 def _standalone_render(results: Path, config_file: Path, now: datetime) -> tuple[int, str | None]:
@@ -426,6 +512,7 @@ def _second_run(results: Path, transport, now: datetime, machine: str) -> list[S
     config_file = results / "modelroom.toml"
     before = tomllib.loads(config_file.read_text(encoding="utf-8"))
     offered = _offered_context(config_file)
+    level = _offered_level(config_file)
     answers = results.parent / "answers-second.toml"
     answers.write_text(answers_toml(ANSWERS_SECOND), encoding="utf-8", newline="\n")
     code, lines = _guided_run(answers, results, transport, now)
@@ -438,7 +525,7 @@ def _second_run(results: Path, transport, now: datetime, machine: str) -> list[S
     if render_code != 0:
         problems.append(f"the standalone render ended with exit {render_code}")
     render_row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF)
-    problems += stored_context_problems(before, offered, header, render_row)
+    problems += stored_context_problems(before, offered, header, render_row, level)
     return [
         Step("guided run 2 ended with exit 0", code == 0, f"exit {code}"),
         Step(
@@ -446,7 +533,8 @@ def _second_run(results: Path, transport, now: datetime, machine: str) -> list[S
             not problems,
             "\n".join(problems)
             or f"one profile file ({names[0]}), one measurement still in group 0, no clone question, "
-            f"[guided].context {offered} starts the question again and is rendered on its own ({header})",
+            f"[guided].context {offered} starts the scale again on level {level} and is rendered on its "
+            f"own ({header})",
         ),
     ]
 
@@ -473,14 +561,23 @@ def run_steps(work: Path) -> list[Step]:
     results.mkdir(parents=True)
     transport = build_transport(guided_transport_mapping())
     started = datetime.now(timezone.utc).replace(microsecond=0)
-    steps = _first_run(results, pointer, transport, started)
+    steps, first_lines = _first_run(results, pointer, transport, started)
     machine = _machine_name((results / "modelroom.toml").read_text(encoding="utf-8"))
     steps.append(_load_test_step(results, machine))
+    scale = _scale_labels(results, pointer)
     steps += _second_run(
         results, build_transport(guided_transport_mapping()), started + timedelta(minutes=1), machine
     )
+    steps.append(_guided_mode_step(first_lines, scale))
     steps.append(_live_search_smoke())
     return steps
+
+
+def _guided_mode_step(lines: list[str], scale: list[str]) -> Step:
+    """Criterion 7: the dialog of the first run is the one the guided mode promises."""
+    problems = guided_mode_problems(lines, scale)
+    detail = "\n".join(problems) or "start screen, five step heads, scale: " + " / ".join(scale[:2])
+    return Step("(7) the run reads as a guided dialog: start screen, steps, scale, grouped reasons", not problems, detail)
 
 
 def main() -> int:

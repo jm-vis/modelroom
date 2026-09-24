@@ -7,8 +7,11 @@ through `dialog.Asker`, so the same run works at a terminal and from an answer f
 (`modelroom --answers <file>`). The questions, their keys and the order of the steps are
 CONTRACTS.md, "Guided mode".
 
-The steps: where results live -> migrate or write a configuration -> which machines -> search,
-choose, context -> fetch -> the load test of the installed packages -> render.
+Five steps, each with a head of its own and one line left behind when it is done: 1 the results
+folder, the configuration and the machines, 2 the search, the choice and the fetch, 3 the
+context (`modelroom/guided_context.py`), 4 the load test of the installed packages
+(`modelroom/guided_loadtest.py`), 5 the render. The fetch belongs to step 2 and not to a step
+of its own, because step 3 counts how many of the packages it found still fit.
 """
 
 from __future__ import annotations
@@ -18,8 +21,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
-
-from pydantic import ValidationError
 
 from .binding import KnownProfile, PointerFileError, default_pointer_path, read_pointer, resolve_profile_target, write_pointer
 from .catalog import Catalog, load_catalog
@@ -33,7 +34,10 @@ from .config import (
 )
 from .contracts import SchemaVersionError, validate_machine_name
 from .daemon import Daemon, LocalDaemon
-from .dialog import Asker, Choice, selectable
+from .dialog import Asker, Choice, columns, selectable
+from .guided_context import DEFAULT_CONTEXT, LEVELS
+from .guided_context import QUESTION as CONTEXT_QUESTION
+from .guided_context import context_step, snapshot_packages
 from .guided_contracts import SearchHit
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
 from .guided_loadtest import load_test_step
@@ -47,11 +51,11 @@ from .importer import (
     machine_name_for,
     scan_profiles,
 )
+from .intro import collect_intro, done_line, print_intro, step_head
 from .measure import Probes, read_os_identity
-from .measurements import DEFAULT_CONTEXT_REQUESTED, Scenario
-from .migrate import MigrationError, migrate
+from .measurements import Scenario
+from .migrate import BACKUP_SUFFIX, MigrationError, migrate
 from .profile import HardwareProfile, os_fingerprint
-from .render_cmd import scenario_for
 from .search import DEFAULT_GUIDED_BUDGET, DEFAULT_PACKAGERS, SearchError, apply_hits, ollama_label, run_search, write_configuration
 from .state import LockHeldError
 
@@ -71,8 +75,8 @@ QUESTIONS: dict[str, str] = {
     "search": "What are you looking for?",
     "filter_owners": "Show only repositories of a publisher or a listed packager?",
     "select": "Which of these models should the result cover?",
-    "context": "How much context should the ranking assume?",
-    # Step 5's two questions live with the step (`modelroom/guided_loadtest.py`); the answer file
+    "context": CONTEXT_QUESTION,
+    # Step 4's two questions live with the step (`modelroom/guided_loadtest.py`); the answer file
     # has one table of keys, so they are merged in here.
     **LOAD_TEST_QUESTIONS,
 }
@@ -107,7 +111,34 @@ class GuidedRun:
         self.problems.append(message)
 
 
-# --- step 0: which folder, and which configuration in it ---------------------------------------
+# --- step 1: which folder, which configuration in it, which machines -----------------------------
+
+
+def _configuration_step(run: GuidedRun, config_arg: Path | None) -> tuple[Path, Configuration]:
+    """Step 1: the results folder, the configuration in it, and the machines the result covers."""
+    run.out("")
+    run.out(step_head(1))
+    config_file = _config_file(run, config_arg)
+    config = _configuration(run, config_file)
+    config = _machines_step(run, config_file, config)
+    run.out(done_line(1, f"{config_file}, {len(config.machines)} machine(s)"))
+    return config_file, config
+
+
+def _known_config(run: GuidedRun, config_arg: Path | None) -> Path | None:
+    """The configuration this run can already read before its first question, for the start screen.
+
+    `--config` when it names a file, else the folder the pointer file remembers when it still
+    holds a configuration. Neither is decided here -- `_config_file` asks and says what it found;
+    this is only what the start screen may already show.
+    """
+    if config_arg is not None and config_arg.is_file():
+        return config_arg.resolve()
+    current = read_pointer(run.pointer_path).current
+    if current is None:
+        return None
+    candidate = Path(current) / CONFIG_NAME
+    return candidate.resolve() if candidate.is_file() else None
 
 
 def _ask_config_file(run: GuidedRun) -> Path:
@@ -224,6 +255,10 @@ def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
                 raise GuidedError("no configuration to work with; run again and name a folder")
         return _configure_found_profiles(run, config_file, _new_configuration(run, config_file))
     if _stored_schema_version(config_file) == 1:
+        run.out(
+            "This folder holds a configuration from an earlier version; it was updated, "
+            f"backup kept: {config_file.name}{BACKUP_SUFFIX}"
+        )
         try:
             for line in migrate(config_file, run.now):
                 run.out(line)
@@ -292,7 +327,7 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path, config: Configu
     return updated
 
 
-# --- step 1: which machines --------------------------------------------------------------------
+# --- step 1, second half: the machines this result covers ---------------------------------------
 
 
 def _hardware_class(profile: HardwareProfile) -> str:
@@ -332,9 +367,21 @@ def _profile_choices(scan: ProfileScan) -> list[Choice]:
     return choices
 
 
-def _machine_choices(scan: ProfileScan) -> list[Choice]:
+def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None) -> list[Choice]:
+    """The machine list. `bound` is the profile this folder already holds for this machine.
+
+    A machine that is already measured here is **not** marked: measuring it again is a decision,
+    not the default, and the entry says when it was last measured so that the decision can be
+    made. A machine with no profile in this folder is marked, because that is the one thing a
+    first run is for.
+    """
+    if bound is None:
+        this_machine = Choice("this-machine", "this machine (measure now)", checked=True)
+    else:
+        measured = bound.recorded_at.date().isoformat()
+        this_machine = Choice("this-machine", f"this machine (measure again, last measured {measured})")
     return [
-        Choice("this-machine", "this machine (measure now)", checked=True),
+        this_machine,
         *_profile_choices(scan),
         Choice("import", "import a profile file"),
         Choice("enter", "enter a machine by hand", disabled="stage 2"),
@@ -494,7 +541,8 @@ def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) 
 
 def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
     scan = scan_profiles(config.paths.hardware_dir)
-    picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan))
+    bound = _bound_profile(run, scan, config_file.parent)
+    picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound))
     if "this-machine" in picked:
         config = _measure_this_machine(run, config_file, config, scan)
     if "import" in picked:
@@ -502,27 +550,58 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     return config
 
 
-# --- step 2: search, choose, context ------------------------------------------------------------
+def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> HardwareProfile | None:
+    """The profile this folder binds this machine to, if the folder still holds it."""
+    bound = read_pointer(run.pointer_path).binding_for(results_dir)
+    return scan.profiles.get(bound) if bound is not None else None
+
+
+# --- step 2: search, choose, fetch ---------------------------------------------------------------
+
+# Why a repository cannot be picked, in the words a reader can act on. The technical status stays
+# in the answer file's own error message, which names the value a file would have to answer with.
+UNRESOLVED_REASONS: dict[str, str] = {
+    "derivative": "a fine-tune or a merge, not a quantization of one base model",
+    "relation_unknown": "the repository does not say it packages a base model",
+    "metadata_conflict": "the repository's own data names more than one base model",
+    "base_model_tag": "the repository names no base model of this search",
+    "publisher_unknown": "the base model's owner is not a publisher in this catalog",
+}
+OTHER_OWNER_REASON = "not a publisher or a listed packager"
+_HIT_WIDTHS = (38, 18, 20, 8, 14, 8)
 
 
 def _hit_label(hit: SearchHit) -> str:
     """One line of the selection list: the seven facts the plan asks for, `unknown` where absent."""
     created = hit.repo_created_at.date().isoformat() if hit.repo_created_at is not None else _UNKNOWN
     size = _UNKNOWN if hit.parameters_b is None else f"{hit.parameters_b:.1f}B"
-    return (
-        f"{hit.repo}  |  {hit.publisher_status}  |  repo created {created}  |  {size}  |  "
-        f"{hit.license}  |  {hit.age}  |  ollama: {ollama_label(hit)}"
-    )
+    cells = [hit.repo, hit.publisher_status, f"repo created {created}", size, hit.license, hit.age]
+    return columns([cells], _HIT_WIDTHS)[0] + f"   ollama: {ollama_label(hit)}"
+
+
+def _hit_reason(hit: SearchHit, filtered: bool) -> str | None:
+    """Why this repository cannot be picked, in plain words, or `None` when it can be."""
+    if not hit.resolved:
+        return UNRESOLVED_REASONS.get(str(hit.unresolved_reason), str(hit.unresolved_reason))
+    if filtered and hit.publisher_status == "other":
+        return OTHER_OWNER_REASON
+    return None
 
 
 def _hit_choices(hits: list[SearchHit], filtered: bool) -> list[Choice]:
+    """Every hit of the search, the ones that cannot be picked grayed out with their reason."""
+    return [Choice(hit.repo, _hit_label(hit), disabled=_hit_reason(hit, filtered)) for hit in hits]
+
+
+def _grouped_reasons(choices: list[Choice]) -> list[str]:
+    """One line per reason with the number of repositories behind it, instead of one line each."""
+    counted: dict[str, int] = {}
+    for choice in choices:
+        if choice.disabled is not None:
+            counted[choice.disabled] = counted.get(choice.disabled, 0) + 1
     return [
-        Choice(
-            hit.repo,
-            _hit_label(hit),
-            disabled="not a publisher or a listed packager" if filtered and hit.publisher_status == "other" else None,
-        )
-        for hit in hits
+        f"{count} repositor{'y' if count == 1 else 'ies'} cannot be picked: {reason}"
+        for reason, count in sorted(counted.items())
     ]
 
 
@@ -542,18 +621,16 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
     except SearchError as exc:
         raise GuidedError(str(exc)) from exc
     run.out(outcome.summary_line())
-    resolved = [hit for hit in outcome.hits if hit.resolved]
-    for hit in outcome.hits:
-        if not hit.resolved:
-            run.out(f"unresolved {hit.repo}: {hit.unresolved_reason}")
-    choices = _hit_choices(resolved, filtered)
-    if not selectable(choices):
-        run.out("no repository of a publisher or a listed packager was resolved; nothing added")
-        return config
+    choices = _hit_choices(outcome.hits, filtered)
+    for line in _grouped_reasons(choices):
+        run.out(line)
     picked = run.asker.checkbox("select", QUESTIONS["select"], choices)
-    chosen = [hit for hit in resolved if hit.repo in picked]
+    chosen = [hit for hit in outcome.hits if hit.repo in picked]
     if not chosen:
-        run.out("nothing chosen; the configuration stays as it is")
+        if not selectable(choices):
+            run.out("no repository of a publisher or a listed packager was resolved; nothing added")
+        else:
+            run.out("nothing chosen; the configuration stays as it is")
         return config
     # Read again here, after the last question of this step and immediately before the change is
     # applied and written: the search and the selection list both took time (see `_record_profile`).
@@ -567,48 +644,39 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
     return updated
 
 
+def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, str]:
+    """Step 2: search, choose, and fetch -- so that step 3 can count what really is in the folder."""
+    run.out("")
+    run.out(step_head(2))
+    before = _repository_count(config)
+    config = _search_step(run, config_file, config)
+    added = _repository_count(config) - before
+    _fetch_step(run, config)
+    fetched, _base_models = snapshot_packages(config)
+    return config, f"{added} repositories added, {len(fetched)} packages fetched"
+
+
+def _repository_count(config: Configuration) -> int:
+    """How many packaging repositories the configuration names, over every base model."""
+    return sum(len(base_model.repos) for family in config.families for base_model in family.base_models)
+
+
 def context_default(config: Configuration) -> int:
-    """What the context question starts with: the context this folder kept, else 8192.
+    """What the size scale starts at: the context this folder kept, else the default level.
 
-    A kept context is a decision of an earlier run, so it is the answer offered again -- the
-    number 8192 is only ever offered to a folder no guided run has chosen a context in.
+    A kept context is a decision of an earlier run, so it is the level the pointer starts on --
+    the default level is only ever offered to a folder no guided run has chosen a context in.
     """
-    return DEFAULT_CONTEXT_REQUESTED if config.guided.context is None else config.guided.context
+    return DEFAULT_CONTEXT if config.guided.context is None else config.guided.context
 
 
-def _scenario(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Scenario, Configuration]:
-    """One context for the whole ranking, kept in the configuration so a later render agrees.
-
-    The question starts at the context this folder kept when the run loaded it
-    (`context_default`), and the answer is written to `[guided].context` whenever it differs from
-    the context the file holds when the answer comes in -- the first time as well, and for 8192 as
-    well: a kept context is what the user chose, not the value the question started with. An
-    answer that is already in the file changes nothing and is not written.
-    """
-    answered = run.asker.text("context", QUESTIONS["context"], default=str(context_default(config))).strip()
-    try:
-        context = int(answered)
-    except ValueError as exc:
-        raise GuidedError(f"{answered!r} is not a whole number of tokens") from exc
-    try:
-        scenario = scenario_for(context)
-    except ValidationError as exc:
-        raise GuidedError(f"{context} is not a context this ranking can be computed for: {exc}") from exc
-    # Read again here, after the question and immediately before the change is written: the
-    # dialog takes as long as the user takes (see `_search_step`). The comparison is against that
-    # fresh read, not against this run's own copy -- a run that skipped the write because its copy
-    # already said so would leave a context another process wrote in the file, and the next
-    # `modelroom render` would compute a ranking this run never showed.
-    stored = _load(config_file)
-    if context == stored.guided.context:
-        return scenario, stored
-    updated = stored.model_copy(update={"guided": stored.guided.model_copy(update={"context": context})})
-    _write_config(run, config_file, updated)
-    run.out(f"kept context {context} in {config_file}")
-    return scenario, updated
+def context_label(context: int) -> str:
+    """How a chosen context is named in a line that looks back at it: `L 32k`, or the number."""
+    level = next((level for level in LEVELS if level.tokens == context), None)
+    return f"{level.name} {level.shown_tokens}" if level is not None else f"{context} tokens"
 
 
-# --- steps 3 to 5: fetch, the load test, render ---------------------------------------------------
+# --- the fetch of step 2, and step 5: the render --------------------------------------------------
 
 
 def _fetch_step(run: GuidedRun, config: Configuration) -> None:
@@ -626,7 +694,11 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
 def _render_step(run: GuidedRun, config: Configuration, scenario: Scenario) -> int:
     from .cli import render_with_config
 
-    return render_with_config(config, now=run.now, scenario=scenario, echo=run.out)
+    run.out("")
+    code = render_with_config(config, now=run.now, scenario=scenario, echo=run.out)
+    if code == 0:
+        run.out(f"Written to {config.paths.markdown}   and   {config.paths.state}")
+    return code
 
 
 def run_guided(
@@ -641,13 +713,16 @@ def run_guided(
     out: Callable[[str], None] = print,
     catalog: Catalog | None = None,
     daemon: Daemon | None = None,
+    colored: bool | None = None,
 ) -> int:
     """Run the whole guided mode; returns the exit code (`0` when a document was written).
 
     `here` is the folder "this folder" means -- the caller passes it in, this package never
     resolves a path against the working directory on its own. Everything else is the usual
     dependency injection: the transport, the daemon of this machine, the probes of this machine,
-    the clock, the pointer file and the shipped catalog.
+    the clock, the pointer file and the shipped catalog. `colored` says whether the start screen
+    may carry color; `modelroom --answers <file>` passes `False`, `None` asks the stream
+    (`intro.use_color`).
     """
     run = GuidedRun(
         asker=asker,
@@ -660,13 +735,15 @@ def run_guided(
         daemon=daemon if daemon is not None else LocalDaemon(),
         out=out,
     )
-    config_file = _config_file(run, config_arg)
-    config = _configuration(run, config_file)
-    config = _machines_step(run, config_file, config)
-    config = _search_step(run, config_file, config)
-    scenario, config = _scenario(run, config_file, config)
-    _fetch_step(run, config)
-    load_test_step(run, config, scenario, config_file.parent)
+    intro = collect_intro(run.daemon, run.probes, run.pointer_path, _known_config(run, config_arg))
+    print_intro(intro, run.out, colored=colored)
+    config_file, config = _configuration_step(run, config_arg)
+    config, packages = _packages_step(run, config_file, config)
+    run.out(done_line(2, packages))
+    scenario, config = context_step(run, config_file, config)
+    run.out(done_line(3, f"context {context_label(scenario.context_requested)}"))
+    measured = load_test_step(run, config, scenario, config_file.parent)
+    run.out(done_line(4, measured))
     code = _render_step(run, config, scenario)
     if code == 0 and run.problems:
         # The document was written, but a step before it did not do what it was asked. Exit `1`

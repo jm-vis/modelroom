@@ -216,6 +216,9 @@ def _cmd_guided(
             now=now,
             out=out if out is not None else print,
             daemon=daemon,
+            # A run that answers from a file is read from a log: no color, whatever the
+            # terminal it was started in (CONTRACTS.md, "Guided mode", the start screen).
+            colored=None if args.answers is None else False,
         )
     except KeyboardInterrupt:
         print("stopped at your request; nothing was left half written", file=sys.stderr)

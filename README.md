@@ -57,15 +57,38 @@ Type the command and answer the questions:
 modelroom
 ```
 
-It asks where the results should live, measures this machine, searches Hugging Face for a
-model name, takes your selection and the context, offers to measure the speed of the packages
-your local Ollama daemon already has, and prints the ranking per machine while writing it to
-`docs/models.md` and `docs/models.json`. The speed question defaults to no, and it never
-downloads anything -- it measures what is already there. The next run is the same command: it
-remembers the folder. Without an interactive terminal it prints the help and stops;
-`modelroom --answers <file>` takes the answers from a TOML file instead (for a self-test or
-CI), and `modelroom --config <file>` works on that configuration rather than the remembered
-folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
+It opens with what it already knows and then walks five numbered steps:
+
+```
+ ██ ██ ▓▓ ██   ModelRoom
+ ██ ██ ██ ░░   Which local model packages fit your machine.
+ ▓▓ ██ ░░ ░░   modelroom 0.1.0 · github.com/jm-vis/modelroom
+
+ folder    not chosen yet          the first question asks where results live
+ daemon    Ollama 0.34.2           reachable, 19 models installed
+ machine   workstation             one graphics card, 12 GB, 128 GB memory
+
+ Five steps: configuration, packages, context, measurement, results.
+ Files are written as the run goes on. Esc leaves a list, Ctrl-C leaves at any point.
+```
+
+1 **Configuration**: where the results should live, and which machines the result covers --
+this one is measured here. 2 **Packages**: a Hugging Face search for a model name, your
+selection out of every hit (the ones that cannot be picked are shown with the reason), and the
+fetch. 3 **Context**: how much text a model should handle at once, as a scale from XS to XXL
+with the words that are, an example, and how many of the packages just fetched still fit this
+machine -- that last column is the fit of the ranking itself, not a second calculation.
+4 **Measurement**: the speed of the packages your local Ollama daemon already has; nothing is
+marked, and it never downloads anything. 5 **Results**: the ranking per machine, written to
+`docs/models.md` and `docs/models.json`.
+
+Every question is a list with the arrow keys, including yes and no; `Esc` leaves a list and Ctrl-C
+leaves at any point, and each step writes as it goes. The next run is the same command:
+it remembers the folder, the machine it measured and the context you chose. Without an
+interactive terminal it prints the help and stops; `modelroom --answers <file>` takes the
+answers from a TOML file instead (for a self-test or CI) -- `context` there is a level (`"L"`)
+or a number of tokens -- and `modelroom --config <file>` works on that configuration rather
+than the remembered folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
 
 The six subcommands never ask anything, and they are what the guided mode calls. From a
 clone of this repository, after `uv sync --frozen`:

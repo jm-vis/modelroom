@@ -131,7 +131,8 @@ def test_criterion_two_names_a_cross_check_that_is_not_confirmed():
 
 GOOD_SEARCH = [
     "8 repositories, 3 resolved, 5 unresolved, budget 3/60",
-    "unresolved community-user/Qwen3.5-9B-Plain-GGUF: relation_unknown",
+    "2 repositories cannot be picked: a fine-tune or a merge, not a quantization of one base model",
+    "3 repositories cannot be picked: the repository does not say it packages a base model",
 ]
 
 
@@ -144,13 +145,24 @@ def test_criterion_three_names_a_missing_summary():
 
 
 def test_criterion_three_names_a_search_that_resolved_nothing():
-    lines = ["8 repositories, 0 resolved, 8 unresolved, budget 3/60", "unresolved a/B: derivative"]
+    lines = ["8 repositories, 0 resolved, 8 unresolved, budget 3/60", "8 repositories cannot be picked: derivative"]
     assert any("resolved 0" in problem for problem in st.search_problems(lines))
 
 
-def test_criterion_three_names_an_unresolved_hit_without_a_reason():
-    lines = [GOOD_SEARCH[0], "unresolved community-user/X-GGUF: None"]
-    assert any("without a reason" in problem for problem in st.search_problems(lines))
+def test_criterion_three_names_a_run_that_showed_no_reason_at_all():
+    assert any("no reason was shown" in problem for problem in st.search_problems([GOOD_SEARCH[0]]))
+
+
+def test_criterion_three_names_a_reason_that_is_a_raw_status():
+    lines = [GOOD_SEARCH[0], "5 repositories cannot be picked: None"]
+    assert any("raw status" in problem for problem in st.search_problems(lines))
+
+
+def test_criterion_three_names_grouped_lines_that_leave_repositories_out():
+    """One line per reason has to account for every unresolved repository of the summary."""
+    lines = [GOOD_SEARCH[0], "1 repository cannot be picked: the repository does not say it packages a base model"]
+
+    assert any("cover 1 repositories" in problem for problem in st.search_problems(lines))
 
 
 # --- criterion 4 -------------------------------------------------------------------------------------
@@ -158,7 +170,7 @@ def test_criterion_three_names_an_unresolved_hit_without_a_reason():
 
 GOOD_DOCUMENT = "\n".join(
     [
-        "Scenario: context 8192 (default), KV cache f16 (assumed), 1 request",
+        "Scenario: context 8192 (entered), KV cache f16 (assumed), 1 request",
         "Ranking rule: fit class (perfect, good, marginal), then measured group",
         "## Ranking: workstation",
     ]
@@ -247,9 +259,9 @@ def test_criterion_five_names_a_package_that_is_not_ranked_with_its_speed(row):
 
 
 BEFORE = {"machines": {"workstation": {"profile": "3f9a0c21d4e6b870"}}, "guided": {"results": str(RESULTS)}}
-ANSWERED_CONTEXT = int(st.ANSWERS_FIRST["context"])
+ANSWERED_CONTEXT = st.ANSWERED_CONTEXT
 KEPT = {"machines": BEFORE["machines"], "guided": {"results": str(RESULTS), "context": ANSWERED_CONTEXT}}
-GOOD_HEADER = f"Scenario: context {ANSWERED_CONTEXT} (default), KV cache f16 (assumed), 1 request"
+GOOD_HEADER = f"Scenario: context {ANSWERED_CONTEXT} (entered), KV cache f16 (assumed), 1 request"
 
 
 def test_criterion_six_passes_when_nothing_changed():
@@ -320,6 +332,79 @@ def test_criterion_six_names_a_document_without_a_scenario_line():
 def test_criterion_six_names_a_standalone_render_that_lost_the_measurement(row):
     problems = st.stored_context_problems(KEPT, ANSWERED_CONTEXT, GOOD_HEADER, row)
     assert any("group 0" in problem for problem in problems)
+
+
+def test_criterion_six_names_a_scale_that_starts_on_another_level():
+    problems = st.stored_context_problems(KEPT, ANSWERED_CONTEXT, GOOD_HEADER, _row(), "XXL")
+
+    assert any("starts on level 'XXL'" in problem for problem in problems)
+
+
+# --- criterion 7 -------------------------------------------------------------------------------------
+
+GOOD_SCALE = [
+    "XS      4k      3,000 words     short questions and answers           all 7 packages fit",
+    "S       8k      6,000 words     a long conversation                   all 7 packages fit",
+    "M       16k     12,000 words    a conversation plus a few documents   5 of 7 packages fit",
+    "L       32k     24,000 words    a report or a long contract           5 of 7 packages fit",
+    "XL      64k     48,000 words    several documents at once             2 of 7 packages fit",
+    "XXL     128k    96,000 words    a whole book                          none of 7 packages fits",
+]
+GOOD_DIALOG = [
+    " ## ## :: ##   ModelRoom",
+    " ## ## ## ..   Which local model packages fit your machine.",
+    " :: ## .. ..   modelroom 0.1.0",
+    "",
+    " folder    //models/results        a configuration, nothing rendered yet",
+    " daemon    Ollama 0.34.2           reachable, 19 models installed",
+    " machine   workstation             one graphics card, 12 GB, 128 GB memory",
+    "",
+    "Step 1 of 5  Configuration",
+    "ok Configuration //models/results/modelroom.toml, 1 machine(s)",
+    "Step 2 of 5  Packages",
+    "Step 3 of 5  Context",
+    "checking workstation   one graphics card, 12 GB, 128 GB memory",
+    "Step 4 of 5  Measurement",
+    "Step 5 of 5  Results\n  not covered: 7 packages -- architecture not covered by v1 (a Q4, b Q4, c Q4 and 4 more)",
+]
+
+
+def test_criterion_seven_passes_on_a_run_that_reads_as_a_guided_dialog():
+    assert st.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE) == []
+
+
+def test_criterion_seven_names_a_missing_start_screen():
+    without = [line for line in GOOD_DIALOG if "ModelRoom" not in line]
+
+    assert any("start screen" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE))
+
+
+def test_criterion_seven_names_a_missing_step_head():
+    without = [line for line in GOOD_DIALOG if not line.startswith("Step 3")]
+
+    assert any("step heads" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE))
+
+
+def test_criterion_seven_names_a_scale_without_its_last_column():
+    bare = [label.split("  ")[0] for label in GOOD_SCALE]
+
+    assert any("no count of what fits" in problem for problem in st.guided_mode_problems(GOOD_DIALOG, bare))
+
+
+def test_criterion_seven_names_a_result_view_that_lists_every_package_again():
+    one_per_package = [
+        line for line in GOOD_DIALOG if "not covered" not in line
+    ] + ["Step 5 of 5  Results\n  not covered: a Q4 -- architecture not covered by v1"]
+
+    problems = st.guided_mode_problems(one_per_package, GOOD_SCALE)
+
+    assert any("not grouped by reason" in problem for problem in problems)
+
+
+def test_criterion_seven_names_a_step_three_without_its_machine():
+    without = [line for line in GOOD_DIALOG if not line.startswith("checking ")]
+
+    assert any("which machine" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE))
 
 
 # --- the report ------------------------------------------------------------------------------------------

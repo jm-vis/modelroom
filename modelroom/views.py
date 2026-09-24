@@ -12,11 +12,14 @@ from datetime import datetime
 
 from .contracts import Area, Fit, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
+from .intro import STEP_COUNT, glyphs, step_head
 from .measurements import Scenario
 from .render import format_header_line
 
 _UNKNOWN = "unknown"
 _DASH = "–"
+# The terminal view is what the last step of the guided mode shows, so it carries that step's head.
+RESULTS_STEP = STEP_COUNT
 
 
 # --- shared wording ------------------------------------------------------------------------------
@@ -271,10 +274,39 @@ _TERMINAL_COLUMNS = (
     ("fit (computed)", 20),
     ("tok/s (measured)", 16),
 )
+# How many of the packages behind one reason are named before the rest is a number.
+_NAMED_PER_REASON = 3
 
 
 def _terminal_row(cells: list[str]) -> str:
-    return "  ".join(text.ljust(width)[:width] for text, (_name, width) in zip(cells, _TERMINAL_COLUMNS))
+    """One row of the terminal table; the padding of the last column is not printed."""
+    return "  ".join(text.ljust(width)[:width] for text, (_name, width) in zip(cells, _TERMINAL_COLUMNS)).rstrip()
+
+
+def _terminal_rule() -> str:
+    """The line under the table head, as wide as the columns are."""
+    width = sum(width for _name, width in _TERMINAL_COLUMNS) + 2 * (len(_TERMINAL_COLUMNS) - 1)
+    return glyphs().rule * width
+
+
+def _set_aside_lines(heading: str, entries: list[SetAsideEntry]) -> list[str]:
+    """One line per reason, with the number of packages behind it and up to three of their names.
+
+    41 lines of `not covered`, one per package, said the same thing 41 times and pushed the
+    ranking itself off the screen (hand test, 2026-09-24). The reason is what a reader can
+    act on, so the reason is the line, and the names are its evidence.
+    """
+    grouped: dict[str, list[str]] = {}
+    for entry in entries:
+        grouped.setdefault(entry.reason, []).append(f"{entry.packager} {entry.quantization}")
+    lines = []
+    for reason, names in sorted(grouped.items()):
+        shown = ", ".join(names[:_NAMED_PER_REASON])
+        rest = len(names) - _NAMED_PER_REASON
+        listed = f"{shown} and {rest} more" if rest > 0 else shown
+        count = f"{len(names)} package" + ("" if len(names) == 1 else "s")
+        lines.append(f"  {heading}: {count} -- {reason} ({listed})")
+    return lines
 
 
 def _terminal_ranking(block: MachineRanking) -> list[str]:
@@ -285,6 +317,7 @@ def _terminal_ranking(block: MachineRanking) -> list[str]:
         lines.append("  no package of the configured base models is ranked here")
     else:
         lines.append("  " + _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))
+        lines.append("  " + _terminal_rule())
         for entry in block.ranked:
             lines.append(
                 "  "
@@ -301,8 +334,8 @@ def _terminal_ranking(block: MachineRanking) -> list[str]:
             )
         lines.append(f"  showing {len(block.ranked)} of {block.ranked_total} ranked packages")
         lines += [f"  #{entry.rank} {entry.note.text}" for entry in block.ranked]
-    lines += [f"  not covered: {entry.packager} {entry.quantization} -- {entry.reason}" for entry in block.not_covered]
-    lines += [f"  too tight: {entry.packager} {entry.quantization} -- {entry.reason}" for entry in block.too_tight]
+    lines += _set_aside_lines("not covered", block.not_covered)
+    lines += _set_aside_lines("too tight", block.too_tight)
     return lines
 
 
@@ -310,9 +343,13 @@ def document_terminal(document: RenderDocument) -> str:
     """A compact terminal view of the same document: the ranking, the notes and both blocks.
 
     It shows fewer columns than the Markdown table on purpose (a terminal is narrow), never
-    other numbers: every value here is read from `document`, like the other two writers.
+    other numbers: every value here is read from `document`, like the other two writers. It is
+    step 5 of the guided mode, which is the only caller that asks for it, so it carries that
+    step's head; `modelroom render` writes the two files and stays silent.
     """
     lines = [
+        step_head(RESULTS_STEP),
+        "",
         f"Snapshot run at: {document.snapshot_run_at.isoformat()}",
         f"Scenario: {scenario_line(document.scenario)}",
         f"Ranking rule: {document.ranking_rule}",

@@ -87,6 +87,35 @@ def compute_fit_v2(
     )
 
 
+def count_fitting(
+    profile: HardwareProfile,
+    machine_config: MachineConfig,
+    packages: list[Package],
+    base_models: dict[str, BaseModelSpec],
+    context: int,
+) -> int:
+    """How many of `packages` the ranking would rank on `profile` at `context`.
+
+    The one question the size scale of the guided mode asks, six times over -- once per level --
+    so that each line can say how many packages still fit. Nothing new is computed here: the fit
+    is `compute_fit_v2`'s, unchanged, for one request and a 16-bit KV cache, and "fits" is the
+    ranking rule's own predicate, asked by handing the fits to `ranking.rank_packages` with no
+    measurements. So the scale and the ranking of the same folder can never disagree. A package
+    whose base model is not in `base_models` is not counted (the snapshot itself refuses one).
+    """
+    from .ranking import rank_packages  # imported here: the rule reads a fit, so it is the later layer
+
+    scenario = Scenario(
+        context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1
+    )
+    entries = [
+        (package, compute_fit_v2(profile, package, base_models[package.base_model_hf_repo], scenario, machine_config))
+        for package in packages
+        if package.base_model_hf_repo in base_models
+    ]
+    return len(rank_packages(entries, [], scenario).ranked)
+
+
 def _judgeable_or_reason(package: Package, base_model: BaseModelSpec) -> Fit | None:
     """`None` when fit v1 can judge this package, else the `unknown` result saying why."""
     if base_model.architecture.kind != "dense_classic":

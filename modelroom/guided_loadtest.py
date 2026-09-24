@@ -1,10 +1,10 @@
-"""Step 5 of the guided mode: the load test of the packages this machine already has.
+"""Step 4 of the guided mode: the load test of the packages this machine already has.
 
 The step itself -- the two questions, the selection list, the progress and the result lines.
 The work is `modelroom/loadtest.py`'s, the dialog is `modelroom/dialog.py`'s, and the order of
-the steps stays in `modelroom/guided.py`, which calls `load_test_step` between the fetch and the
-render. It lives in its own module so `guided.py` keeps holding the run and nothing else; it
-never imports `guided.py` back (CONTRACTS.md, "Guided mode", step 5).
+the steps stays in `modelroom/guided.py`, which calls `load_test_step` between the context and
+the render. It lives in its own module so `guided.py` keeps holding the run and nothing else; it
+never imports `guided.py` back (CONTRACTS.md, "Guided mode", step 4).
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ from typing import TYPE_CHECKING
 from .binding import KnownProfile, read_pointer, resolve_profile_target
 from .config import Configuration
 from .contracts import Package, SchemaVersionError
-from .dialog import AnswerMissingError, Choice
+from .dialog import AnswerMissingError, Choice, columns
 from .importer import scan_profiles
+from .intro import step_head
 from .loadtest import (
     CLOUD_REASON,
     Candidate,
@@ -38,6 +39,14 @@ if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never const
 
 _GIB = 1024**3
 _UNKNOWN = "unknown"
+_CANDIDATE_WIDTHS = (46, 40, 10)
+# How many of the models behind one reason are named before the rest is a number (as in `views`).
+_NAMED_PER_REASON = 3
+STEP = 4
+# The summary of a step that measured nothing. Deliberately not the wording of the fault
+# lines above ("nothing measured: <reason>"): a reader of the log must be able to tell the
+# step's own summary from a measurement that was asked for and did not happen.
+NOTHING_MEASURED = "no measurement in this run"
 
 QUESTIONS: dict[str, str] = {
     "load_test": "Measure the speed of the checked models that are already installed here?",
@@ -101,26 +110,49 @@ def _snapshot_packages(run: "GuidedRun", config: Configuration) -> list[Package]
     return snapshot.packages
 
 
-def _candidate_label(candidate: Candidate) -> str:
-    """One line of the load test's selection list: the four facts about what would be measured."""
-    package = candidate.package
-    weights = f"{candidate.weights_bytes / _GIB:.2f} GiB"
-    return (
-        f"{candidate.ollama_name}  |  {package.base_model_hf_repo}  |  "
-        f"{package.quantization or _UNKNOWN}  |  {weights}"
-    )
+def _candidate_rows(candidates: list[Candidate]) -> list[str]:
+    """The lines of the load test's selection list: the four facts, aligned in columns."""
+    rows = [
+        [
+            candidate.ollama_name,
+            candidate.package.base_model_hf_repo,
+            candidate.package.quantization or _UNKNOWN,
+            f"{candidate.weights_bytes / _GIB:.2f} GiB",
+        ]
+        for candidate in candidates
+    ]
+    return columns(rows, _CANDIDATE_WIDTHS)
 
 
 def _candidate_choices(candidates: list[Candidate]) -> list[Choice]:
-    return [Choice(candidate.ollama_name, _candidate_label(candidate), checked=True) for candidate in candidates]
+    """Nothing is marked: which models are measured is a decision, and Enter must not make it.
+
+    A single candidate is a list with one entry as well -- one code path, and an answer file that
+    names it reads the same on a machine with ten installed packages as on one with one.
+    """
+    return [
+        Choice(candidate.ollama_name, label)
+        for candidate, label in zip(candidates, _candidate_rows(candidates))
+    ]
 
 
 def _report_set_aside(run: "GuidedRun", inventory: Inventory) -> None:
-    """Say which installed models were left out, and why -- once per reason, never in silence."""
+    """Say which installed models were left out, and why: one line per reason, never in silence.
+
+    One line per model said the same reason a dozen times over and pushed the list of what can
+    be measured off the screen. The reason is what a reader can act on, so the reason is the
+    line; up to three names stand behind it as its evidence, the rest as a number.
+    """
+    grouped: dict[str, list[str]] = {}
     for entry in inventory.unmatched:
-        run.out(f"not measured: {entry.name} -- {entry.reason}")
-    if inventory.cloud:
-        run.out(f"not measured ({CLOUD_REASON}): {', '.join(inventory.cloud)}")
+        grouped.setdefault(entry.reason, []).append(entry.name)
+    for name in inventory.cloud:
+        grouped.setdefault(CLOUD_REASON, []).append(name)
+    for reason, names in sorted(grouped.items()):
+        rest = len(names) - _NAMED_PER_REASON
+        listed = ", ".join(names[:_NAMED_PER_REASON]) + (f" and {rest} more" if rest > 0 else "")
+        count = f"{len(names)} installed model" + ("" if len(names) == 1 else "s")
+        run.out(f"not measured: {count} -- {reason} ({listed})")
 
 
 def _measurement_line(record: MeasurementRecord) -> str:
@@ -163,7 +195,7 @@ def _no_daemon(run: "GuidedRun", reason: str) -> None:
 
 def _measure_candidate(
     run: "GuidedRun", config: Configuration, candidate: Candidate, scenario: Scenario, profile_id: str
-) -> None:
+) -> bool:
     """Measure one candidate and publish the record; a fault is one line, never a traceback."""
     try:
         record = run_load_test(
@@ -177,47 +209,60 @@ def _measure_candidate(
         )
     except LoadTestError as exc:
         run.failed(f"nothing measured for {candidate.ollama_name}: {exc}")
-        return
+        return False
     try:
         store_measurement(config.paths.state, record, run.now)
     except (LockHeldError, MeasurementExistsError, OSError) as exc:
         run.failed(f"the measurement of {candidate.ollama_name} was not stored: {exc}")
-        return
+        return False
     run.out(_measurement_line(record))
+    return True
 
 
-def load_test_step(run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path) -> None:
-    """Step 5: measure installed packages, with the context this ranking is computed for.
+def load_test_step(run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path) -> str:
+    """Step 4: measure installed packages, with the context this ranking is computed for.
 
-    Stage 1 measures what the daemon already has. A folder this machine is not bound to a profile
-    in, and one that holds no snapshot, are lines and no more -- there is nothing a load test
-    could even be about. From the daemon on, a `load_test` yes that cannot be honored is a step
-    that did not finish (`run.failed`, exit `1`), and the document is still written (CONTRACTS.md,
-    "Load test (stage 1)").
+    Returns the one line the finished step leaves behind. Stage 1 measures what the daemon
+    already has. A folder this machine is not bound to a profile in, and one that holds no
+    snapshot, are lines and no more -- there is nothing a load test could even be about. From the
+    daemon on, a `load_test` yes that cannot be honored is a step that did not finish
+    (`run.failed`, exit `1`), and the document is still written (CONTRACTS.md, "Load test
+    (stage 1)").
     """
+    run.out("")
+    run.out(step_head(STEP))
     profile_id = _bound_profile_id(run, config, results_dir)
     if profile_id is None:
-        return
+        return NOTHING_MEASURED
     packages = _snapshot_packages(run, config)
     if packages is None:
-        return
+        return NOTHING_MEASURED
     installed, reason = installed_models(run.daemon, run.now)
     if installed is None:
         _no_daemon(run, reason)
-        return
+        return NOTHING_MEASURED
     inventory = installed_candidates(packages, installed, lambda name: weight_digest(run.daemon, name))
     _report_set_aside(run, inventory)
     if not inventory.candidates:
         run.out(NO_CANDIDATE_LINE)
-        return
+        return NOTHING_MEASURED
     if not _wants_load_test(run):
-        return
+        return NOTHING_MEASURED
+    return _measure_picked(run, config, inventory, scenario, profile_id)
+
+
+def _measure_picked(
+    run: "GuidedRun", config: Configuration, inventory: Inventory, scenario: Scenario, profile_id: str
+) -> str:
+    """Ask which of the candidates to measure, measure them, and say how many were measured."""
     choices = _candidate_choices(inventory.candidates)
     picked = run.asker.checkbox("load_test_packages", QUESTIONS["load_test_packages"], choices)
     if not picked:
         run.out("nothing measured: no installed model was picked")
-        return
+        return NOTHING_MEASURED
     run.out(LOAD_NOTE_LINE)
+    measured = 0
     for candidate in inventory.candidates:
         if candidate.ollama_name in picked:
-            _measure_candidate(run, config, candidate, scenario, profile_id)
+            measured += _measure_candidate(run, config, candidate, scenario, profile_id)
+    return f"{measured} of {len(picked)} measured"

@@ -7,6 +7,30 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- The guided mode as a dialog for people who do not build this package (CONTRACTS.md, "Guided
+  mode"). **A start screen** (`modelroom/intro.py`): the mark's pictogram, the version with the
+  repository from the package metadata, and the three facts that are known before the first
+  question -- the results folder, the local Ollama daemon with its version and its number of
+  models, and this machine with its hardware in plain words. **Five numbered steps**, each with a
+  head (`Step 3 of 5  Context`) and one line left behind when it is done. The fetch moved into
+  step 2, ahead of the context question, so that question can count what was really fetched; an
+  answer file is a table of keys and does not notice.
+- **The context as a size scale** (`modelroom/guided_context.py`): six levels from `XS` 4096 to
+  `XXL` 131072, each with the context, roughly how many words that is, an example, and how many of
+  this folder's packages still fit the machine being checked. That last column is fit contract v1
+  itself (`fit.count_fitting`, unchanged formula, one request, 16-bit KV cache) with the ranking
+  rule's own "it fits" predicate, so the scale and the result table of one run cannot disagree. A
+  level above the smallest `Architecture.max_context` of the configured base models is grayed out
+  with that reason. The pointer starts on the context this folder kept, else on `L`; a kept context
+  that is no level gets a `custom` line, and `enter a number` still leads to a number of tokens. An
+  answer file answers `context` with a level (`"L"`) or a number as before.
+- **One style for every question** (`modelroom/dialog.py`): a green pointer, the grayed-out entries
+  with their reason, labels aligned in columns, and one instruction line under each list. Color
+  only at a terminal, only without `NO_COLOR` and never under `--answers` (a run that answers from
+  a file is read from a log); the drawn glyphs only where the console can encode them, else ASCII.
+  `Esc` leaves a selection list the way an end of input does.
+- `tests/conftest.py`: one fixture for the whole suite that moves `HOME` and `USERPROFILE` into the
+  test's own folder, so a call that forgets to pass a path cannot reach a real home folder.
 - `[guided].context`: the context a guided run's ranking was computed for is kept in
   `modelroom.toml` (CONTRACTS.md, "GuidedConfig"). The context question starts at the kept value
   instead of always at 8192, and writes the answer back whenever it differs from what the file
@@ -36,7 +60,7 @@ All notable changes to this project are documented in this file. The format foll
   is listed with its reason and never measured. `/api/ps` is read after every run, the warm-up
   included, and a name, digest or `context_length` that deviates at any observation makes the
   whole measurement `not comparable` with its reason -- stored, never ranked.
-- `modelroom/guided_loadtest.py`: the guided mode's step 5 around those two -- the two questions,
+- `modelroom/guided_loadtest.py`: the guided mode's load test step around those two -- the two questions,
   the selection list of candidates, the progress lines and the one result line per measurement.
 - Two answer-file keys for the load test, `load_test` and `load_test_packages` (CONTRACTS.md,
   "Guided mode"), and criteria (5) and (6) of `scripts/selftest.py` are now real: the prepared
@@ -104,6 +128,24 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **Yes or no is a selection list** of `Yes` and `No` with the default under the pointer; the
+  `(Y/n)` prompt is gone. An answer file still answers `true`/`false`.
+- **Nothing is marked that costs time or changes a measurement.** The load test's list of installed
+  models starts unmarked, and `this machine` in the machine list starts unmarked once this folder
+  already holds a profile of it (`this machine (measure again, last measured <date>)`). Both
+  answered `Enter` with work nobody had asked for.
+- **A reason is said once, with a number.** The search prints one line per reason with the number of
+  repositories behind it instead of one line per unresolved repository, and shows every hit in the
+  list with its reason in plain words. The terminal view of the render groups `not covered` and
+  `too tight` by reason with up to three names (`and 9 more`). The load test groups what it left out
+  the same way. The Markdown view is unchanged to the byte.
+- **`context_origin`** is `entered` for every context the guided dialog writes, 8192 included:
+  `default` is what the three automation commands assume when nobody chose one. A later
+  `modelroom render --config` of a folder that kept a context reads it back as `entered` too
+  (`render_cmd.scenario_from_config`); `render_cmd.scenario_for`, which called 8192 `default`,
+  is gone.
+- A schema-1 configuration that is migrated on the way in says so in one plain sentence before the
+  migration's own lines, and the run ends with the line that says where the result was written.
 - `render` reads schema 2 and ranks: per `[machines.<name>]` it takes the profile that
   `profile` names, computes `compute_fit_v2` for **every** eligible package against one context
   for the whole document (`Scenario`, 8192 unless the guided mode passes another), and shows the

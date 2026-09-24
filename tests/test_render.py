@@ -556,6 +556,52 @@ def test_the_terminal_view_lists_the_ranking_and_the_blocks():
     assert "too tight" in text.lower()
 
 
+def test_the_terminal_view_carries_the_head_of_the_last_step():
+    """It is what step 5 of the guided mode shows, and the only caller that asks for it."""
+    assert document_terminal(_document([_hf_package()])).startswith("Step 5 of 5  Results")
+
+
+def test_the_terminal_view_groups_what_was_set_aside_by_reason():
+    """41 lines that all said `not covered` pushed the ranking off the screen (hand test, 2026-09-24)."""
+    packages = [_hf_package(repo=f"packager/Nova-8B-{index}-GGUF") for index in range(5)]
+    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+
+    text = document_terminal(_document(packages, base_models=unknown))
+
+    set_aside = [line for line in text.splitlines() if "not covered" in line]
+    assert len(set_aside) == 1
+    assert "5 packages -- architecture not covered by v1" in set_aside[0]
+    assert set_aside[0].count("Q4_K_M") == 3
+    assert set_aside[0].endswith("and 2 more)")
+
+
+def test_one_package_behind_a_reason_is_named_in_the_singular():
+    text = document_terminal(_document([_hf_package()], base_models=[_base_model(architecture=_architecture(kind="unknown"))]))
+
+    assert "not covered: 1 package -- architecture not covered by v1 (packager Q4_K_M)" in text
+
+
+MARKDOWN_FIXTURE = "markdown_view_ap9_c2.md"
+
+
+def test_the_markdown_view_did_not_change_one_byte():
+    """The Markdown file is the product; the terminal view was rewritten, this was not.
+
+    The fixture was written by the code of the commit this work package started from, from the
+    very same document, and is compared as bytes -- a space or a column that moved would be a
+    change to a file other people diff.
+    """
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / MARKDOWN_FIXTURE
+    huge = _hf_package(weights_bytes=400 * GIB, repo="packager/Nova-8B-XL-GGUF")
+    document = _document([_hf_package(file_digest="sha256:" + "c" * 64), huge])
+
+    rendered = document_markdown(document)
+
+    assert rendered.encode("utf-8") == fixture.read_bytes()
+
+
 # --- Markdown cell escaping (R7-11) -------------------------------------------------------------
 
 
