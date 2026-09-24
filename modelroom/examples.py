@@ -443,6 +443,7 @@ EXAMPLES: dict[str, dict] = {
         "unresolved_reason": None,
         "resolved_base_model": "acme/Nova-7B",
         "repo_created_at": "2026-03-02T10:00:00Z",
+        "downloads": 68445,
         "parameters_b": 7.6,
         "license": "apache-2.0",
         "age": "legacy",

@@ -2556,7 +2556,9 @@ model is proven (relation `quantized`, publisher per catalog), so a resolved hit
 unresolved hit carries its
 `unresolved_reason` (a relation status or `publisher_unknown`) and gets neither a fit nor an
 Ollama name. `successor` is set exactly when `age` is `legacy`. `repo_created_at` is shown as
-"repo created", never as the model's release date.
+"repo created", never as the model's release date. `downloads` is how often the Hub says the
+repository was downloaded (`ge=0`, `None` when the answer carries no count): an indication of what
+many people take, **never a rank** -- the ranking rule alone orders the result.
 
 ```json
 {
@@ -2570,6 +2572,7 @@ Ollama name. `successor` is set exactly when `age` is `legacy`. `repo_created_at
   "unresolved_reason": null,
   "resolved_base_model": "acme/Nova-7B",
   "repo_created_at": "2026-03-02T10:00:00Z",
+  "downloads": 68445,
   "parameters_b": 7.6,
   "license": "apache-2.0",
   "age": "legacy",
@@ -2638,31 +2641,101 @@ that has already spent requests (the search, the resolution) passes what is left
 fetch; `FetchResult.request_used` and `request_budget` report that shared budget's totals. `BudgetExhaustedError`
 and the area outcome `budget exhausted` are unchanged.
 
-`modelroom/search.py::DEFAULT_GUIDED_BUDGET` is `60`: one guided run -- search, resolution,
+`modelroom/search.py::DEFAULT_GUIDED_BUDGET` is `150`: one guided run -- search, resolution,
 successor lookups, tree pages and the fetch -- shares that many requests unless the caller
-passes its own `RequestBudget`. `run_fetch`'s own default stays `400` for a plain `modelroom
-fetch`, which has no search in front of it.
+passes its own `RequestBudget`. It was `60` until the search asked one request per account
+(decided 2026-09-24): measured live, `qwen` with the owner filter on spends 47 requests before the
+selection list is shown -- 7 account pages and one age lookup per distinct resolved base model
+(40 of them for 80 resolved hits) -- and 60 left the fetch of two chosen repositories `incomplete
+(budget exhausted)`. `run_fetch`'s own default stays `400` for a plain `modelroom fetch`, which
+has no search in front of it.
 
 ### Search over the Hugging Face API
 
-`modelroom/search.py::search_url(name)` is the one request the search makes, over the transport
-this package already has -- there is no Hugging Face SDK dependency:
+**One request per account, and open lists only without the filter** (decided 2026-09-24). Until
+then the search made one request for the 50 most recently created GGUF repositories matching the
+word, and the positive list of packager accounts only *classified* whatever that answer happened to
+contain. Measured in an empty folder with `qwen` and with `deepseek`: the answer was 50 third-party
+uploads of the last few days and not one repository of `unsloth`, `bartowski` or `Qwen` -- those
+accounts are older and fall out of the window, so nothing was selectable, twice. The account steers
+the request now. `modelroom/search_pages.py` builds the three forms, over the transport this
+package already has -- there is no Hugging Face SDK dependency:
 
 ```
-GET https://huggingface.co/api/models?search=<name>&filter=gguf&sort=createdAt&direction=-1
-    &limit=50&expand=cardData&expand=createdAt&expand=safetensors&expand=tags
+account:         GET https://huggingface.co/api/models?author=<account>&search=<name>&filter=gguf
+                     &sort=createdAt&direction=-1&limit=20
+                     &expand=cardData&expand=createdAt&expand=downloads&expand=safetensors&expand=tags
+most downloaded: GET https://huggingface.co/api/models?search=<name>&filter=gguf&sort=downloads
+                     &direction=-1&limit=10&expand=... (the same five)
+newest:          GET https://huggingface.co/api/models?search=<name>&filter=gguf&sort=createdAt
+                     &direction=-1&limit=10&expand=... (the same five)
 ```
 
-`expand` is repeated once per field, not sent as a list. One request answers everything the
-resolution needs, so no hit costs a request of its own. Measured against the live API
-2026-09-23 (50 hits for `qwen`): every entry carries `_id`, `id`, `createdAt` and `tags`, 42 of
-50 a `cardData`, 3 of 50 a `safetensors` (a GGUF repo usually has no tensor index), and none an
-`author`, `sha` or `license` of its own -- so `parameters_b` and `license` are commonly
-`unknown`, and `expand=tags` is what makes the relation readable at all: 36 of the 50 stated
-their relation in `tags`, 10 in `cardData`.
+`expand` is repeated once per field, not sent as a list, and `expand=downloads` is required as soon
+as `expand` is set at all -- without it the field is simply absent (measured 2026-09-24, both forms
+`HTTP 200`). `HF_ACCOUNT_LIMIT` is `20`, `HF_OPEN_LIMIT` is `10`. One request answers everything the
+resolution needs of that page, so no hit costs a request of its own. Measured against the live API
+2026-09-23 and 2026-09-24: an entry carries `_id`, `id`, `createdAt` and `tags`, most of them a
+`cardData`, few a `safetensors` (a GGUF repo usually has no tensor index), and none an `author`,
+`sha` or `license` of its own -- so `parameters_b` and `license` are commonly `unknown`, and
+`expand=tags` is what makes the relation readable at all.
 
-`limit=50` is the whole answer; the summary line says so rather than pretending the list is
-complete: `"N repositories, M resolved, K unresolved, budget used/limit"`
+**Which accounts are asked, with the filter on and off alike** (`search_pages.search_accounts`):
+
+1. every **publisher account of a matching catalog family** first -- a family matches when the word
+   is part of its name, of its publisher account or of one of its model ids, compared without
+   regard to case and with the word stripped of surrounding blanks. So `qwen` asks `Qwen`,
+   `deepseek` asks `deepseek-ai`, and `r1` asks the account of the family that carries an
+   `...R1...` model. Each account once, in catalog order;
+2. then the **positive list** in its order (`config.packagers`, else `DEFAULT_PACKAGERS`). An
+   account on both lists is asked once.
+
+Age plays no part in any of it: each account answers with its own repositories, however old they
+are. When no catalog family matches the word, the summary says what *was* asked instead -- two
+shapes, because that differs with the filter: `no publisher in the catalog matches 'foo'; only the
+listed packagers were asked` with the filter on, and `... the listed packagers and the two open
+lists were asked` with it off.
+
+**The two open lists exist only with the filter off** (`run_search(..., open_pages=...)`, the guided
+mode passes `not filtered`): the ten most downloaded and the ten newest GGUF repositories for that
+word, asked after the account pages, so a fresh fine-tune under an account nobody listed is visible
+at all. Switching the filter off **extends** the list, it never replaces it -- the account groups
+stay. A repository more than one page answers with is listed **once**, in the first group that had
+it; the open list still says how many its page held: `most downloaded 10, 3 of them already
+listed`.
+
+**Every page costs one request of the shared budget.** A page that fails -- a status other than
+`200`, a body that is no JSON, a body that is no list, an entry with no repository id or one that is
+not a repository id -- ends the search with `SearchError` **naming the page**
+(`search for 'qwen' (mradermacher): unexpected status 503`); an account is never quietly
+left out, because "unsloth has nothing for this word" and "unsloth was not asked" are different
+answers. A budget that ends before the last page does the same and says how many accounts have no
+answer (`... not made: budget exhausted; 6 accounts were not asked: deepseek-ai, unsloth, ...`).
+
+**A repository is held against what earlier pages answered before it is resolved**, entry by entry,
+so a page that carries the same repository twice lists it once and the duplicate costs no age
+lookup. The answer is registry-controlled text, and nothing promises it holds each id once.
+
+**`SearchOutcome` carries the groups and the flat list.** `groups` is a `list[SearchGroup]`
+(`label`, `hits`, `page_size`, `page_full`, `already_listed`) in the order the pages were asked;
+`hits` is the same repositories flat in exactly that order, so `apply_hits`, the selection list and
+the answer file's `select` key are unchanged. `SearchOutcome.group_lines()` is the notes plus one
+line per group, above the summary -- an account that answered with nothing keeps its line, because
+"was my account asked at all" is the question this change exists to answer:
+
+```
+Qwen 1
+deepseek-ai 0
+unsloth 20 (page full: a more specific word shortens the list)
+bartowski 0
+most downloaded 10, 3 of them already listed
+newest 10
+```
+
+A full **account** page is never a silent truncation; the note is an invitation to use a more
+specific word. `page_full` is set for an account page only: an open list is ten by definition, so
+the note would stand on every search and say nothing about the word. The summary line under it stays
+one line: `"N repositories, M resolved, K unresolved, R requests, budget used/limit"`
 (`SearchOutcome.summary_line`).
 
 A hit becomes a `SearchHit` (above). It is `resolved` only when both hold:
@@ -3515,9 +3588,13 @@ measurement the guided mode writes `[machines.<name>].profile` -- the one config
 binding; a file that does not import is reported and the run goes on.
 
 **Step 2, search, choice and fetch.** `run_search` with the run's shared request budget
-(`DEFAULT_GUIDED_BUDGET`, 60, shared with the fetch), then the summary line
-(`SearchOutcome.summary_line`), then the selection list of **every** hit with seven facts each:
-repository, owner class, `repo created`, size, license, `latest`/`legacy`/`unknown` and the Ollama
+(`DEFAULT_GUIDED_BUDGET`, 150, shared with the fetch) and `open_pages=not filtered` -- so the owner
+filter is a question about the **request**, not only about the list: with it on, only the accounts
+are asked; switching it off adds the two open lists on top of the account groups (see "Search over
+the Hugging Face API"). Then one line per group (`SearchOutcome.group_lines`), then the summary line
+(`SearchOutcome.summary_line`), then the selection list of **every** hit with eight facts each:
+repository, owner class, `repo created`, size, license, `latest`/`legacy`/`unknown`, `downloads`
+(`12.0M`, `68k`, `3551`, `unknown`; an indication, not a rank) and the Ollama
 name or `none known`. A hit that cannot be picked is shown grayed out with its reason in plain
 words, and under the list stands one line per reason with the number of repositories behind it
 (`3 repositories cannot be picked: the repository does not say it packages a base model`) -- never

@@ -16,21 +16,41 @@ change with them until someone re-records them on purpose.
   carry sizes, so this fills them in for size-based ordering tests.
 - `hf_qwen_qwen35_9b_model.json` -- `GET https://huggingface.co/api/models/Qwen/Qwen3.5-9B`.
   The publisher repo; `sha` is its current revision (`c202236235762e1c871ad0ccb60c8ee5ba337b9a`).
-- `hf_search_qwen_gguf.json` -- the pinned answer for the guided search's one request,
-  `GET https://huggingface.co/api/models?search=qwen&filter=gguf&sort=createdAt&direction=-1&limit=50&expand=cardData&expand=createdAt&expand=safetensors&expand=tags`.
-  **Real shape, curated entries.** The live request was made once, 2026-09-23, and its answer
-  settled the shape this file follows: 50 objects, each carrying `_id`, `id`, `createdAt` and
-  `tags`, 42 of them a `cardData`, 3 a `safetensors`, none an `author`, `sha` or top-level
-  `license`; 36 stated the relation in `tags` and 10 in `cardData`, which is why
-  `expand=tags` is part of the request. That live answer itself is **not** committed: sorted by
-  creation date it is 50 unrelated third-party accounts that say nothing about this project's
-  own cases, and it would go stale within the hour. The seven entries here are built from it
-  instead, and are what the pinned run needs to be repeatable: the real `unsloth/Qwen3.5-9B-GGUF`
-  entry (resolved, `listed packager`), the publisher's own `Qwen/Qwen3.5-9B-GGUF` (resolved,
-  `publisher`, with a real `safetensors.total`), a third resolved entry whose base model the
-  catalog lists *without* an Ollama assignment (`unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF`, the
-  `none known` case), and one `community-user/...` entry per unresolved reason -- `derivative`,
-  `base_model_tag`, `relation_unknown`, `publisher_unknown` and `metadata_conflict`.
+- `hf_search_qwen_*.json` -- the pinned answers for the search's pages. Since 2026-09-24 a search
+  asks **one page per account** and, only with the owner filter off, two open pages on top
+  (`CONTRACTS.md`, "Search over the Hugging Face API"); `fixture_support.search_transport_mapping`
+  binds each account of a `qwen` search to one of these files. **Real shape, curated entries.**
+  The request forms were measured live on 2026-09-23 and again on 2026-09-24, both `HTTP 200`:
+  an account page (`author=unsloth&search=qwen3.5&...`) answers with that account's own
+  `Qwen3.5-*-GGUF` repositories whatever their age, each with a `downloads` count (3 551 to
+  68 445 in that answer) and its `base_model:quantized:` tags; the open `sort=downloads` page
+  answers with ten repositories between 1.6 M and 12.0 M downloads, among them several
+  `uncensored`/`abliterated` derivatives of accounts nobody listed. `expand=downloads` is
+  required as soon as `expand` is set at all -- without it the field is simply absent. Those live
+  answers themselves are **not** committed: they are third-party accounts that say nothing about
+  this project's own cases and would go stale within the hour. The entries here are built from
+  them instead, and are what a pinned run needs to be repeatable:
+  - `hf_search_qwen_publisher.json` -- the `Qwen` page: the publisher's own `Qwen/Qwen3.5-9B-GGUF`
+    (resolved, `publisher`, with a real `safetensors.total` and 12 031 627 downloads, the `12.0M`
+    case of the downloads column).
+  - `hf_search_qwen_unsloth.json` -- the `unsloth` page, newest first: an unresolved
+    `relation_unknown` repository (3 551 downloads, the plain-number case), the resolved
+    `unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF` whose base model the catalog lists *without* an
+    Ollama assignment (68 445 downloads, the `68k` case and the `none known` case), and the real
+    `unsloth/Qwen3.5-9B-GGUF` (resolved, `listed packager`, 1 626 475 downloads). One unresolved
+    repository of a listed account is what keeps the grouped-reason line testable with the owner
+    filter **on**.
+  - `hf_search_none.json` -- the empty list every other asked account answers with. An account
+    that answers with nothing still gets its own line in the summary.
+  - `hf_search_qwen_most_downloaded.json` -- the open `sort=downloads` page: a `derivative` of a
+    foreign account, `unsloth/Qwen3.5-9B-GGUF` **again** (the duplicate that has to appear once,
+    in its account group, and be counted as `already listed`), and a `publisher_unknown` entry.
+  - `hf_search_qwen_newest.json` -- the open `sort=createdAt` page: the `base_model_tag` entry
+    (the one entry with no `downloads` field at all, the `unknown` case), a `metadata_conflict`
+    entry and a `relation_unknown` entry with `downloads: 0`.
+  - `hf_search_qwen_page_full.json` -- exactly 20 generated entries, the account page limit, for
+    the one test about a full page; the same file minus its last entry is the 19-entry case that
+    must **not** be called full.
 - `hf_qwen_qwen35_9b_config.json` -- `GET https://huggingface.co/Qwen/Qwen3.5-9B/resolve/main/config.json`
   (redirects to the resolve-cache; fetched with `curl -L`). The language-model fields sit
   under `text_config`, and `text_config.layer_types` mixes `"linear_attention"` and

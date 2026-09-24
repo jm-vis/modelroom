@@ -27,7 +27,8 @@ class SearchHit(BaseModel):
     Every field but `repo` may be unknown: `None`, or the literal `unknown` for the labeled
     fields. `resolved` means exactly one publisher base model was proven (relation `quantized`,
     publisher per catalog); an unresolved hit carries its reason and gets no fit and no Ollama
-    name. `repo_created_at` is shown as "repo created", never as the model's release date.
+    name. `repo_created_at` is shown as "repo created", never as the model's release date;
+    `downloads` is shown as it is and is no rank.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -40,6 +41,9 @@ class SearchHit(BaseModel):
     unresolved_reason: RelationStatus | Literal["publisher_unknown"] | None = None
     resolved_base_model: str | None = None
     repo_created_at: datetime | None = None
+    # How often the Hub says this repository was downloaded: an indication of what many people
+    # take, never a rank. The ranking rule alone orders the result (decided 2026-09-24).
+    downloads: int | None = Field(default=None, ge=0)
     parameters_b: float | None = Field(default=None, gt=0)
     license: str = UNKNOWN
     age: Age = UNKNOWN

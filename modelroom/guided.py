@@ -56,7 +56,16 @@ from .measure import Probes, read_os_identity
 from .measurements import Scenario
 from .migrate import BACKUP_SUFFIX, MigrationError, migrate
 from .profile import HardwareProfile, os_fingerprint
-from .search import DEFAULT_GUIDED_BUDGET, DEFAULT_PACKAGERS, SearchError, apply_hits, ollama_label, run_search, write_configuration
+from .search import (
+    DEFAULT_GUIDED_BUDGET,
+    DEFAULT_PACKAGERS,
+    SearchError,
+    apply_hits,
+    ollama_label,
+    run_search,
+    write_configuration,
+)
+from .search_pages import format_downloads
 from .state import LockHeldError
 
 CONFIG_NAME = "modelroom.toml"
@@ -568,14 +577,24 @@ UNRESOLVED_REASONS: dict[str, str] = {
     "publisher_unknown": "the base model's owner is not a publisher in this catalog",
 }
 OTHER_OWNER_REASON = "not a publisher or a listed packager"
-_HIT_WIDTHS = (38, 18, 20, 8, 14, 8)
+# The eighth column is `downloads`, behind the age (decided 2026-09-24): what many people take is
+# an indication a reader asked for, and it is wide enough for `12.0M` and for `unknown`.
+_HIT_WIDTHS = (38, 18, 20, 8, 14, 8, 10)
 
 
 def _hit_label(hit: SearchHit) -> str:
-    """One line of the selection list: the seven facts the plan asks for, `unknown` where absent."""
+    """One line of the selection list: the eight facts the plan asks for, `unknown` where absent."""
     created = hit.repo_created_at.date().isoformat() if hit.repo_created_at is not None else _UNKNOWN
     size = _UNKNOWN if hit.parameters_b is None else f"{hit.parameters_b:.1f}B"
-    cells = [hit.repo, hit.publisher_status, f"repo created {created}", size, hit.license, hit.age]
+    cells = [
+        hit.repo,
+        hit.publisher_status,
+        f"repo created {created}",
+        size,
+        hit.license,
+        hit.age,
+        format_downloads(hit.downloads),
+    ]
     return columns([cells], _HIT_WIDTHS)[0] + f"   ollama: {ollama_label(hit)}"
 
 
@@ -617,9 +636,15 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
             catalog=run.catalog,
             listed_packagers=config.packagers or DEFAULT_PACKAGERS,
             budget=run.budget,
+            # The owner filter is a question about the request, not only about the list: with it
+            # on, only the accounts are asked; switching it off adds the two open lists on top
+            # (decided 2026-09-24).
+            open_pages=not filtered,
         )
     except SearchError as exc:
         raise GuidedError(str(exc)) from exc
+    for line in outcome.group_lines():
+        run.out(line)
     run.out(outcome.summary_line())
     choices = _hit_choices(outcome.hits, filtered)
     for line in _grouped_reasons(choices):

@@ -1,0 +1,402 @@
+[
+  {
+    "_id": "69a2f5edef408247323ef000",
+    "id": "unsloth/Qwen3.5-9B-Part01-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-20T10:00:00.000Z",
+    "downloads": 100000
+  },
+  {
+    "_id": "69a2f5edef408247323ef001",
+    "id": "unsloth/Qwen3.5-9B-Part02-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-19T10:00:00.000Z",
+    "downloads": 100001
+  },
+  {
+    "_id": "69a2f5edef408247323ef002",
+    "id": "unsloth/Qwen3.5-9B-Part03-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-18T10:00:00.000Z",
+    "downloads": 100002
+  },
+  {
+    "_id": "69a2f5edef408247323ef003",
+    "id": "unsloth/Qwen3.5-9B-Part04-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-17T10:00:00.000Z",
+    "downloads": 100003
+  },
+  {
+    "_id": "69a2f5edef408247323ef004",
+    "id": "unsloth/Qwen3.5-9B-Part05-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-16T10:00:00.000Z",
+    "downloads": 100004
+  },
+  {
+    "_id": "69a2f5edef408247323ef005",
+    "id": "unsloth/Qwen3.5-9B-Part06-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-15T10:00:00.000Z",
+    "downloads": 100005
+  },
+  {
+    "_id": "69a2f5edef408247323ef006",
+    "id": "unsloth/Qwen3.5-9B-Part07-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-14T10:00:00.000Z",
+    "downloads": 100006
+  },
+  {
+    "_id": "69a2f5edef408247323ef007",
+    "id": "unsloth/Qwen3.5-9B-Part08-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-13T10:00:00.000Z",
+    "downloads": 100007
+  },
+  {
+    "_id": "69a2f5edef408247323ef008",
+    "id": "unsloth/Qwen3.5-9B-Part09-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-12T10:00:00.000Z",
+    "downloads": 100008
+  },
+  {
+    "_id": "69a2f5edef408247323ef009",
+    "id": "unsloth/Qwen3.5-9B-Part10-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-11T10:00:00.000Z",
+    "downloads": 100009
+  },
+  {
+    "_id": "69a2f5edef408247323ef010",
+    "id": "unsloth/Qwen3.5-9B-Part11-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-10T10:00:00.000Z",
+    "downloads": 100010
+  },
+  {
+    "_id": "69a2f5edef408247323ef011",
+    "id": "unsloth/Qwen3.5-9B-Part12-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-09T10:00:00.000Z",
+    "downloads": 100011
+  },
+  {
+    "_id": "69a2f5edef408247323ef012",
+    "id": "unsloth/Qwen3.5-9B-Part13-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-08T10:00:00.000Z",
+    "downloads": 100012
+  },
+  {
+    "_id": "69a2f5edef408247323ef013",
+    "id": "unsloth/Qwen3.5-9B-Part14-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-07T10:00:00.000Z",
+    "downloads": 100013
+  },
+  {
+    "_id": "69a2f5edef408247323ef014",
+    "id": "unsloth/Qwen3.5-9B-Part15-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-06T10:00:00.000Z",
+    "downloads": 100014
+  },
+  {
+    "_id": "69a2f5edef408247323ef015",
+    "id": "unsloth/Qwen3.5-9B-Part16-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-05T10:00:00.000Z",
+    "downloads": 100015
+  },
+  {
+    "_id": "69a2f5edef408247323ef016",
+    "id": "unsloth/Qwen3.5-9B-Part17-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-04T10:00:00.000Z",
+    "downloads": 100016
+  },
+  {
+    "_id": "69a2f5edef408247323ef017",
+    "id": "unsloth/Qwen3.5-9B-Part18-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-03T10:00:00.000Z",
+    "downloads": 100017
+  },
+  {
+    "_id": "69a2f5edef408247323ef018",
+    "id": "unsloth/Qwen3.5-9B-Part19-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-02T10:00:00.000Z",
+    "downloads": 100018
+  },
+  {
+    "_id": "69a2f5edef408247323ef019",
+    "id": "unsloth/Qwen3.5-9B-Part20-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "unsloth",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-01T10:00:00.000Z",
+    "downloads": 100019
+  }
+]

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import modelroom
 from modelroom.daemon import TAGS_PATH, VERSION_PATH, DaemonError, FixtureDaemon
 from modelroom.http import Response
 from modelroom.intro import (
@@ -270,7 +271,7 @@ def test_a_finished_step_says_ok_where_a_check_mark_cannot_be_printed(monkeypatc
 
 
 def test_a_fact_is_shown_as_label_value_and_note():
-    intro = Intro(version="0.1.0", source=None, facts=(Fact("folder", "C:/results", "empty"),))
+    intro = Intro(version=modelroom.__version__, source=None, facts=(Fact("folder", "C:/results", "empty"),))
 
     line = _text(intro, _stream("utf-8")).splitlines()[4]
 
@@ -280,7 +281,7 @@ def test_a_fact_is_shown_as_label_value_and_note():
 def test_a_value_wider_than_its_column_does_not_grow_into_the_note():
     """A results folder of 120 characters left `...resultsa configuration` on one line."""
     long_path = "C:/" + "folder/" * 20 + "results"
-    intro = Intro(version="0.1.0", source=None, facts=(Fact("folder", long_path, "a configuration"),))
+    intro = Intro(version=modelroom.__version__, source=None, facts=(Fact("folder", long_path, "a configuration"),))
 
     line = _text(intro, _stream("utf-8")).splitlines()[4]
 

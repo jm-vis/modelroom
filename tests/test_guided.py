@@ -746,12 +746,49 @@ def test_the_search_summary_and_the_grouped_reasons_are_printed(tmp_path: Path):
     """One line per reason with its number, never one line per repository (decided 2026-09-24)."""
     _code, lines = _run(tmp_path)
 
-    assert any(line.startswith("8 repositories, 3 resolved, 5 unresolved, budget ") for line in lines)
+    assert any(line.startswith("4 repositories, 3 resolved, 1 unresolved, 7 requests, budget ") for line in lines)
     grouped = [line for line in lines if "cannot be picked:" in line]
     assert grouped
     assert not any(line.startswith("unresolved ") for line in lines)
-    assert sum(int(line.split(" ", 1)[0]) for line in grouped) == 5
-    assert any("a fine-tune or a merge, not a quantization of one base model" in line for line in grouped)
+    assert sum(int(line.split(" ", 1)[0]) for line in grouped) == 1
+    assert any("the repository does not say it packages a base model" in line for line in grouped)
+
+
+def test_with_the_filter_on_every_account_gets_its_line_and_no_open_list_is_asked(tmp_path: Path):
+    """Decided 2026-09-24: one request per account, so a reader can see that theirs was asked."""
+    _code, lines = _run(tmp_path)
+
+    assert "Qwen 1" in lines
+    assert "unsloth 3" in lines
+    assert "bartowski 0" in lines
+    assert not any(line.startswith(("most downloaded", "newest")) for line in lines)
+
+
+def test_with_the_filter_off_the_two_open_lists_are_named_as_well(tmp_path: Path):
+    _code, lines = _run(tmp_path, {**FULL_ANSWERS, "filter_owners": False})
+
+    assert "Qwen 1" in lines
+    assert "most downloaded 3, 1 of them already listed" in lines
+    assert "newest 3" in lines
+    assert any(line.startswith("9 repositories, 3 resolved, 6 unresolved, 9 requests, budget ") for line in lines)
+
+
+def test_without_the_filter_a_derivative_is_visible_and_grayed_out_with_its_reason(tmp_path: Path):
+    """"That it is apparent" is the point: a fine-tune is shown, not hidden (decided 2026-09-24)."""
+    _code, lines = _run(tmp_path, {**FULL_ANSWERS, "filter_owners": False})
+
+    assert any("a fine-tune or a merge, not a quantization of one base model" in line for line in lines)
+
+
+def test_the_answer_file_keys_of_step_2_are_unchanged(tmp_path: Path):
+    # The three keys stay `search`, `filter_owners` and `select`; switching the filter off only
+    # lengthens the list a `select` may pick from.
+    code, _lines = _run(tmp_path, {**FULL_ANSWERS, "filter_owners": False})
+
+    assert code == 0
+    assert sorted(load_config(_config_file(tmp_path)).families[0].base_models[0].repos) == sorted(
+        [QWEN_GGUF, UNSLOTH]
+    )
 
 
 def test_the_chosen_repositories_reach_the_configuration(tmp_path: Path):
@@ -765,7 +802,7 @@ def test_the_chosen_repositories_reach_the_configuration(tmp_path: Path):
     assert config.publishers == ["Qwen"]
 
 
-def _hit(repo: str, publisher_status: str) -> SearchHit:
+def _hit(repo: str, publisher_status: str, **overrides) -> SearchHit:
     return SearchHit(
         repo=repo,
         publisher_status=publisher_status,
@@ -773,6 +810,7 @@ def _hit(repo: str, publisher_status: str) -> SearchHit:
         base_model_relation="quantized",
         resolved=True,
         resolved_base_model="Qwen/Qwen3.5-9B",
+        **overrides,
     )
 
 
@@ -788,14 +826,28 @@ def test_the_owner_filter_grays_out_every_other_account():
     assert set(off.values()) == {None}
 
 
-def test_every_selectable_hit_shows_the_seven_facts():
-    label = _hit_label(_hit(UNSLOTH, "listed packager"))
+def test_every_selectable_hit_shows_the_eight_facts():
+    label = _hit_label(_hit(UNSLOTH, "listed packager", downloads=12_031_627))
 
     assert label.startswith(UNSLOTH)
     assert "listed packager" in label
     assert "repo created unknown" in label
     assert "unknown" in label  # size and license, both absent from this hit
+    assert "12.0M" in label
     assert "ollama: none known" in label
+
+
+def test_the_downloads_column_stands_behind_the_age():
+    """Decided 2026-09-24: the eighth fact, an indication of what many people take, not a rank."""
+    label = _hit_label(_hit(UNSLOTH, "listed packager", age="latest", downloads=68_445))
+
+    assert label.index("latest") < label.index("68k") < label.index("ollama:")
+
+
+def test_a_hit_without_a_download_count_shows_unknown_in_that_column():
+    label = _hit_label(_hit(UNSLOTH, "listed packager", age="latest"))
+
+    assert label[label.index("latest") :].startswith("latest    unknown")
 
 
 def test_choosing_nothing_leaves_the_configuration_as_it_is(tmp_path: Path):

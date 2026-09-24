@@ -1,0 +1,53 @@
+[
+  {
+    "_id": "69a2f5edef408247323ee7f7",
+    "id": "community-user/Qwen3.5-9B-Mystery-GGUF",
+    "cardData": {
+      "tags": [
+        "gguf"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "region:us"
+    ],
+    "createdAt": "2026-03-05T09:02:11.000Z"
+  },
+  {
+    "_id": "69a2f5edef408247323ee7fa",
+    "id": "community-user/Qwen3.5-9B-Conflict-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "other-org/Nebula-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-08T15:59:04.000Z",
+    "downloads": 41200
+  },
+  {
+    "_id": "69a2f5edef408247323ee7f8",
+    "id": "community-user/Qwen3.5-9B-Plain-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": [
+        "Qwen/Qwen3.5-9B"
+      ]
+    },
+    "tags": [
+      "gguf",
+      "base_model:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-03-06T11:47:52.000Z",
+    "downloads": 0
+  }
+]

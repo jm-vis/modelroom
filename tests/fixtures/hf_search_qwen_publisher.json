@@ -1,0 +1,31 @@
+[
+  {
+    "_id": "69a2f5edef408247323ee7f5",
+    "id": "Qwen/Qwen3.5-9B-GGUF",
+    "cardData": {
+      "library_name": "transformers",
+      "license": "apache-2.0",
+      "pipeline_tag": "image-text-to-text",
+      "base_model": "Qwen/Qwen3.5-9B",
+      "base_model_relation": "quantized"
+    },
+    "tags": [
+      "transformers",
+      "gguf",
+      "image-text-to-text",
+      "base_model:Qwen/Qwen3.5-9B",
+      "base_model:quantized:Qwen/Qwen3.5-9B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-02-27T16:11:03.000Z",
+    "downloads": 12031627,
+    "safetensors": {
+      "parameters": {
+        "BF16": 9653100528,
+        "F32": 3840
+      },
+      "total": 9653104368
+    }
+  }
+]

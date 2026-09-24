@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- **The search asks one request per account, and the open lists only without the filter**
+  (`modelroom/search_pages.py`, new; CONTRACTS.md, "Search over the Hugging Face API"). Until now
+  the search made one request for the 50 most recently created GGUF repositories matching the word,
+  and the positive list of packager accounts only *classified* whatever that answer happened to
+  contain. Measured in an empty folder with `qwen` and with `deepseek`: the answer was 50
+  third-party uploads of the last few days and not one repository of `unsloth`, `bartowski` or
+  `Qwen` -- those accounts are older and fall out of the window, so nothing was selectable, twice.
+  Now every publisher account of a matching catalog family and every account of the positive list
+  gets a request of its own (`author=<account>`, `limit=20`), and age plays no part in it. Saying no
+  to the owner filter adds two open lists on top of those groups -- the ten most downloaded and the
+  ten newest repositories for that word (`limit=10` each) -- so a fresh fine-tune under an account
+  nobody listed is visible, with its reason, instead of missing. `run_search` takes
+  `open_pages` (default `False`); `HF_SEARCH_LIMIT` is gone, `HF_ACCOUNT_LIMIT` (20) and
+  `HF_OPEN_LIMIT` (10) replace it. `SearchOutcome` now carries `groups` and prints one line per
+  group above the summary; `hits` stays the same flat list in group order, so the selection list and
+  the answer file's `select` key are unchanged.
+- **The selection list shows the downloads** as its eighth fact, behind the age: `12.0M`, `68k`,
+  `3551`, or `unknown` when the Hub answers no count (`SearchHit.downloads`, `expand=downloads`).
+  It is an indication of what many people take and **no rank** -- the ranking rule alone orders the
+  result.
+- **The shared request budget of a guided run is 150, not 60** (`DEFAULT_GUIDED_BUDGET`). Measured
+  live, `qwen` with the owner filter on spends 47 requests before the selection list is shown --
+  seven account pages and one age lookup per distinct resolved base model -- and 60 left the fetch
+  of two chosen repositories `incomplete (budget exhausted)`. A plain `modelroom fetch` keeps 400.
+
 ### Added
 
 - The guided mode as a dialog for people who do not build this package (CONTRACTS.md, "Guided

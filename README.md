@@ -73,9 +73,13 @@ It opens with what it already knows and then walks five numbered steps:
 ```
 
 1 **Configuration**: where the results should live, and which machines the result covers --
-this one is measured here. 2 **Packages**: a Hugging Face search for a model name, your
-selection out of every hit (the ones that cannot be picked are shown with the reason), and the
-fetch. 3 **Context**: how much text a model should handle at once, as a scale from XS to XXL
+this one is measured here. 2 **Packages**: a Hugging Face search for a model name -- one request
+per account, so the publisher of what you searched for and every packager you listed answer with
+their own repositories however old they are -- your selection out of every hit (the ones that
+cannot be picked are shown with the reason, and each one shows how often it was downloaded), and
+the fetch. Saying no to the owner filter adds two open lists on top: the ten most downloaded and
+the ten newest repositories for that word, whoever owns them.
+3 **Context**: how much text a model should handle at once, as a scale from XS to XXL
 with the words that are, an example, and how many of the packages just fetched still fit this
 machine -- that last column is the fit of the ranking itself, not a second calculation.
 4 **Measurement**: the speed of the packages your local Ollama daemon already has; nothing is

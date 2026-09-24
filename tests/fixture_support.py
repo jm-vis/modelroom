@@ -198,25 +198,50 @@ def qwen35_transport_mapping() -> dict[tuple[str, str], Response]:
     }
 
 
-def search_transport_mapping() -> dict[tuple[str, str], Response]:
-    """The pinned search answer for `qwen`, plus the two age lookups its resolution makes.
+# Which account page answers which fixture for the word `qwen` (decided 2026-09-24: one request
+# per account, and two open pages only when the owner filter is off). Every account the search
+# asks has an entry here, so a page is never silently missing from a fixture run.
+SEARCH_ACCOUNT_PAGES: dict[str, str] = {
+    "Qwen": "hf_search_qwen_publisher.json",
+    "deepseek-ai": "hf_search_none.json",
+    "unsloth": "hf_search_qwen_unsloth.json",
+    "bartowski": "hf_search_none.json",
+    "mradermacher": "hf_search_none.json",
+    "lmstudio-community": "hf_search_none.json",
+    "ggml-org": "hf_search_none.json",
+}
+SEARCH_OPEN_PAGES: dict[str, str] = {
+    "most downloaded": "hf_search_qwen_most_downloaded.json",
+    "newest": "hf_search_qwen_newest.json",
+}
+
+
+def search_transport_mapping(word: str = "qwen") -> dict[tuple[str, str], Response]:
+    """Every page one search for `word` asks for, plus the two age lookups its resolution makes.
 
     This is the "fixed search answer" the acceptance run uses: criteria about resolved and
-    unresolved hits must not depend on whichever 50 repositories the live Hub answers with today
-    (`tests/fixtures/README.md` records how the fixture was taken).
+    unresolved hits must not depend on whichever repositories the live Hub answers with today
+    (`tests/fixtures/README.md` records how the fixtures were taken). Both open pages are bound as
+    well, so one mapping serves a run with the owner filter on and one with it off.
     """
-    from modelroom.search import search_url
+    from modelroom.search_pages import account_search_url, most_downloaded_url, newest_url
 
     deepseek = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    return {
-        ("GET", search_url("qwen")): json_response("hf_search_qwen_gguf.json"),
-        ("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B"): json_response("hf_qwen_qwen35_9b_model.json"),
-        ("GET", f"https://huggingface.co/api/models/{deepseek}"): Response(
-            status=200,
-            headers={},
-            body=json.dumps({"id": deepseek, "sha": "b" * 40, "cardData": {"license": "mit"}}).encode("utf-8"),
-        ),
+    mapping: dict[tuple[str, str], Response] = {
+        ("GET", account_search_url(word, account)): json_response(name)
+        for account, name in SEARCH_ACCOUNT_PAGES.items()
     }
+    mapping[("GET", most_downloaded_url(word))] = json_response(SEARCH_OPEN_PAGES["most downloaded"])
+    mapping[("GET", newest_url(word))] = json_response(SEARCH_OPEN_PAGES["newest"])
+    mapping[("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B")] = json_response(
+        "hf_qwen_qwen35_9b_model.json"
+    )
+    mapping[("GET", f"https://huggingface.co/api/models/{deepseek}")] = Response(
+        status=200,
+        headers={},
+        body=json.dumps({"id": deepseek, "sha": "b" * 40, "cardData": {"license": "mit"}}).encode("utf-8"),
+    )
+    return mapping
 
 
 DEEPSEEK_BASE = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"

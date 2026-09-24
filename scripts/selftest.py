@@ -3,8 +3,9 @@
     uv run --frozen python scripts/selftest.py
 
 It runs the guided mode twice with `--answers` in a temporary results folder, against the
-pinned search answer from `tests/fixture_support.py` (criteria 3 and 4 must not depend on
-whichever repositories the live Hub answers with today), and reports each criterion with the
+pinned search answers from `tests/fixture_support.py` -- one page per account since 2026-09-24
+(criteria 3 and 4 must not depend on
+whichever repositories the live Hub answers with today) -- and reports each criterion with the
 evidence it read. Two things in the run are real, and they are the two gates: this machine is
 measured with its own sources (criterion 2), and the load test runs against the Ollama daemon
 of this machine (criterion 5). Everything else answers from the fixtures.
@@ -540,18 +541,28 @@ def _second_run(results: Path, transport, now: datetime, machine: str) -> list[S
 
 
 def _live_search_smoke() -> Step:
-    """The live search, as a smoke: it says what the Hub answers today and decides nothing."""
+    """The live search, as a smoke: it says what the Hub answers today and decides nothing.
+
+    Since 2026-09-24 a search costs one request per account, so the budget has to cover the
+    catalog's matching publishers plus the whole positive list plus one age lookup per distinct
+    resolved base model. `DEFAULT_GUIDED_BUDGET` is the number a real run has; using it here keeps
+    the smoke from reporting a budget failure that no real run would hit.
+    """
     from modelroom.catalog import load_catalog
     from modelroom.http import RequestBudget, UrllibTransport
-    from modelroom.search import run_search
+    from modelroom.search import DEFAULT_GUIDED_BUDGET, run_search
 
     try:
         outcome = run_search(
-            UrllibTransport(), SEARCH_NAME, catalog=load_catalog(), budget=RequestBudget(12)
+            UrllibTransport(), SEARCH_NAME, catalog=load_catalog(), budget=RequestBudget(DEFAULT_GUIDED_BUDGET)
         )
     except Exception as exc:  # noqa: BLE001 -- a smoke never fails the run
         return Step("live search (smoke, no gate effect)", True, f"not reached: {type(exc).__name__}: {exc}")
-    return Step("live search (smoke, no gate effect)", True, outcome.summary_line())
+    return Step(
+        "live search (smoke, no gate effect)",
+        True,
+        " | ".join([*outcome.group_lines(), outcome.summary_line()]),
+    )
 
 
 def run_steps(work: Path) -> list[Step]:
