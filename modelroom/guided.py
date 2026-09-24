@@ -611,6 +611,11 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
     run.out(count_line(models, outcome.hits, filtered))
     for line in unusable_reasons(outcome.hits, filtered):
         run.out(line)
+    if not models:
+        # A list with nothing in it is not a question: the dialog cannot show one, and there is
+        # nothing an answer could add (test round of 2026-09-24, `mistral` with the filter on).
+        run.out("no repository of a publisher or a listed packager was resolved; nothing added")
+        return config
     fit_at = fit_line(context, checked)
     if fit_at is not None:
         run.out(fit_at)
@@ -618,10 +623,7 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
     picked = ask_models(run.asker, QUESTIONS["select"], models)
     chosen = chosen_hits(models, picked, listed_packagers)
     if not chosen:
-        if not models:
-            run.out("no repository of a publisher or a listed packager was resolved; nothing added")
-        else:
-            run.out("nothing chosen; the configuration stays as it is")
+        run.out("nothing chosen; the configuration stays as it is")
         return config
     # Read again here, after the last question of this step and immediately before the change is
     # applied and written: the search and the selection list both took time (see `_record_profile`).

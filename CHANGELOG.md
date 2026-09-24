@@ -290,6 +290,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A search that resolves no model to pick from -- `mistral` with the owner filter on, whose
+  59 repositories all belong to owners the catalog does not list as publishers -- ended the run
+  with a traceback out of the dialog library, because the selection list was still asked with
+  nothing in it (test round of 2026-09-24). The step now prints its count and its reasons, says
+  that nothing was added, and goes on without the question (`modelroom/guided.py::_search_step`).
 - `merge_snapshot`: a repository that moved from one base model to another between two runs
   could end up deactivated under its old base model when the old base model's area was merged
   after the new one; the stale step now leaves an identity alone that another area of the same

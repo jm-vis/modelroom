@@ -26,6 +26,7 @@ from modelroom.dialog import AnswerMissingError, Canceled, Choice, FileAsker
 from modelroom.examples import EXAMPLES
 from modelroom.guided import GuidedError, run_guided
 from modelroom.guided_loadtest import NO_CANDIDATE_LINE
+from modelroom.http import Response
 from modelroom.intro import STEP_NAMES
 from modelroom.profile import HardwareProfile
 from modelroom.state import acquire_lock, atomic_write_json, release_lock
@@ -881,6 +882,41 @@ def test_a_model_is_fetched_from_the_publisher_and_from_one_listed_packager(tmp_
     assert code == 0
     base_model = load_config(_config_file(tmp_path)).families[0].base_models[0]
     assert sorted(base_model.repos) == sorted([QWEN_GGUF, UNSLOTH])
+
+
+def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
+    """Test round of 2026-09-24 22:49: `mistral` with the filter on found 59 repositories and no
+    model to pick, and the list question was asked anyway -- an empty list crashes the dialog."""
+    from modelroom.search import DEFAULT_PACKAGERS
+    from modelroom.search_pages import account_search_url
+
+    class _Refusing(FileAsker):
+        def checkbox(self, key: str, question: str, choices) -> list[str]:
+            assert list(choices), f"{key}: a list with nothing in it was asked"
+            return super().checkbox(key, question, choices)
+
+    empty = Response(status=200, headers={}, body=b"[]")
+    mapping = {
+        **guided_transport_mapping(),
+        **{("GET", account_search_url("mistral", account)): empty for account in DEFAULT_PACKAGERS},
+    }
+    lines: list[str] = []
+    code = run_guided(
+        _Refusing({**FULL_ANSWERS, "search": "mistral", "select": []}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(mapping),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    assert code == 1  # nothing to render: no family, so no snapshot
+    assert any(line.startswith("0 models can be picked") for line in lines)
+    assert any("nothing added" in line for line in lines)
+    assert not any(line.startswith("Space marks a model") for line in lines)
+    assert load_config(_config_file(tmp_path)).families == []
 
 
 def test_choosing_nothing_leaves_the_configuration_as_it_is(tmp_path: Path):
