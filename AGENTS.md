@@ -15,7 +15,7 @@ The commands:
 
 | Command | What it does |
 |---|---|
-| `modelroom` | the guided mode: asks, writes `modelroom.toml`, then runs the three commands below (`CONTRACTS.md`, "Guided mode") |
+| `modelroom` | the guided mode: asks, writes `modelroom.toml`, then runs the three commands below, and between the fetch and the render offers the load test of the packages this machine already has (`CONTRACTS.md`, "Guided mode", "Load test (stage 1)") |
 | `modelroom --answers <file>` | the same run with the dialog's answers from a TOML file, for a self-test or CI |
 | `modelroom --config <file>` | the guided mode on that configuration, rather than the folder it last used |
 | `modelroom hardware --config <file> [--machine <name>] [--cpu-only] [--new-identity]` | measure this machine and write its schema-2 profile |
@@ -147,10 +147,11 @@ genre folder carries a `README.md` index with one line per entry. `docs/README.m
 ## Security, definition of done
 
 Attack surface of this tool: outbound HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`,
-HTTP to a local Ollama daemon, a subprocess call to `llmfit`, and file writes under the
-configured state directory. No user-facing web surface, no uploads, no HTML rendering of
-whatever a registry returns. The tests therefore have to prove, with a deliberately broken
-input each:
+HTTP to the Ollama daemon on `127.0.0.1:11434` -- five read and generate calls, never `/api/pull`
+or `/api/delete` -- subprocess calls to `llmfit` and `nvidia-smi` with fixed argument lists, and
+file writes under the configured state directory. No user-facing web surface, no uploads, no HTML
+rendering of whatever a registry returns. The tests therefore have to prove, with a deliberately
+broken input each:
 
 - a configuration that points the state directory outside its own folder tree is rejected
   before anything is written;
@@ -160,7 +161,10 @@ input each:
   write (exit `3`);
 - a second command against the same state directory stops at the lock instead of waiting;
 - the `llmfit` subprocess is called with a fixed argument list, never with user-controlled
-  strings, and a missing or too old `llmfit` ends with exit `2` and an install hint.
+  strings, and a missing or too old `llmfit` ends with exit `2` and an install hint;
+- the daemon transport refuses every origin but `http://127.0.0.1:11434` and every call outside
+  its five, carries no proxy handler and follows no redirect, and no module of the package names
+  `/api/pull` or `/api/delete`.
 
 ## Versioning and releases
 

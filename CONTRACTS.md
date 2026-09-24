@@ -1996,6 +1996,11 @@ it has exactly `measured_runs` runs and every one is valid (`measurement_invalid
 invalid measurement is stored with its reason and never ranked. A change to the protocol is a
 new protocol version, never an edit of version 1.
 
+**Time limits** (`modelroom/daemon.py`): every short call to the daemon has 10 s, one
+`POST /api/generate` has 600 s of its own -- a CPU machine needs minutes for 128 tokens. A limit
+that is reached ends that measurement as a fault with its reason; it is never a `done_reason`
+and never a stored measurement.
+
 ### MeasurementRecord
 
 One speed measurement of one package on one profile, schema 2, never changed once written.
@@ -3214,6 +3219,118 @@ answered for; a base model that is not a key has no rating. A failed rating sour
 }
 ```
 
+## Load test (stage 1)
+
+The load test measures how fast a package really runs on this machine. **Stage 1 measures
+packages the local Ollama daemon already has**: it downloads nothing, removes nothing and says
+nothing about disk space. `modelroom/loadtest.py` is the work of it, `modelroom/daemon.py` the
+transport it talks through, and `modelroom/guided_loadtest.py` the guided mode's step 5 around
+both.
+
+**The transport** (`daemon.py`). `Daemon` is `(method, path, body) -> Response`, the second and
+much smaller transport of this package -- `http.py::Transport` is `(method, url, headers)` and
+cannot carry a JSON body, which `POST /api/show` and `POST /api/generate` need. `LocalDaemon`
+reaches exactly one origin, `http://127.0.0.1:11434`
+(`ollama_local.py::DEFAULT_BASE_URL`, the same origin `http.py::_ALLOWED_HTTP_ORIGINS` names);
+a base URL with another scheme, host, port or a path is refused in the constructor
+(`DaemonError`). Its opener carries `HTTPHandler` and the error handlers and **nothing else**:
+no `ProxyHandler` (a proxy would move this machine's own daemon traffic off the machine), no
+`HTTPSHandler`, no file/ftp/data handler, and a 3xx is returned as it came instead of being
+followed. `ALLOWED_CALLS` is the whole surface -- `GET /api/version`, `GET /api/tags`,
+`GET /api/ps`, `POST /api/show`, `POST /api/generate` -- checked before a connection is opened;
+anything else is a `DaemonError`. There is no call of `/api/pull` or `/api/delete` anywhere in
+`modelroom/`, and a test reads every module to prove it. **Time limits:** 10 s for every short
+call, 600 s for one `POST /api/generate` (a CPU machine needs minutes for 128 tokens). A limit
+that is reached, a refused connection or a body that is not JSON is a fault with a reason, never
+a traceback. **Documented limit:** whatever answers on that port is taken to be this machine's
+daemon -- nothing in the answer proves it, and nothing here pretends to check.
+
+**The inventory** (`installed_models`, `installed_candidates`). The daemon's own `/api/tags` is
+read through `ollama_local.py::fetch_installed_models`, the same reader `hardware` uses, so one
+place parses that answer. An entry whose size is `0`, or whose tag is `cloud` or ends in
+`-cloud`, is a model the daemon runs elsewhere and never a package on this machine (read from a
+real daemon on 2026-09-24: `kimi-k3:cloud` and `gpt-oss:20b-cloud` are listed with a stub of a
+few hundred bytes); those are listed by name with that reason and never measured.
+
+**The assignment rule is a digest, never a name.** An Ollama package is the entry whose
+`/api/tags` digest equals its `manifest_digest`. A Hugging Face package is an entry named
+`hf.co/<owner>/<repo>:<quantization>` whose `<owner>/<repo>` is the package's `repo` **and**
+whose weight digest, read with `POST /api/show`, is the digest of one of that package's own
+weight files (`weights`/`weights_shard`). `/api/show` answers with a Modelfile whose `FROM`
+line names the blob on disk as `…/blobs/sha256-<hex>` (the path may contain spaces, so only the
+digest at the end of that line is read); for a package pulled from Hugging Face that hex is the
+`sha256` of the GGUF file itself, which is exactly what the fetch recorded as that file's digest
+(measured 2026-09-24: `sha256-a86349…4ec1` for
+`hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M`, equal to the `Q4_K_M` file's LFS `oid` in
+the repository's tree). A name that matches without such a digest is listed as unmatched with its
+reason and **never measured**: a package may not claim what the daemon does not show. Only
+`active` packages are considered. The `PackageRef` a candidate carries is built so that
+`ranking.py::_matches` finds it -- Ollama: the manifest digest; Hugging Face: the package's `repo`
+and `revision` and the digest the daemon showed.
+
+**One blob proves one file.** A Hugging Face package whose weights are **several** files therefore
+stays unmatched in stage 1, with that as its reason: the daemon holds one blob, and crediting the
+whole package with a measurement of one of its files would state a speed for content that never
+ran. A package with exactly one weight file is the only one that can be measured here.
+
+**Known limit of the reader side.** `ranking.py::_matches` accepts a measurement whose
+`hf_file_digest` is **any** of a package's weight digests. So a repository revision that held both
+a single-file package and a several-file package sharing one of those digests would let the
+single-file package's measurement count for the several-file one as well. The writer is the
+conservative side of that pair and never produces a measurement *of* a several-file package; the
+reader's rule is unchanged here and is an open question for the ranking, not for this writer. Two
+single-file packages of the same repository, revision and weight digest are the same content under
+two names and share a measurement on purpose.
+
+**The protocol is not a parameter.** `run_load_test` always runs `shipped_protocol()`, because the
+record it writes says `protocol: v1` and `MeasurementRecord` checks a valid one against that same
+shipped definition. A run after another prompt, seed or warm-up count would be stored under a name
+it does not deserve, and no validator could tell afterwards. A new protocol version is a new
+writer.
+
+**The run** (`run_load_test`). In this order: `GET /api/version` (stored as `daemon_version`,
+never a validity criterion), the machine's load once (`LoadState`), the warm-up run, then the
+measured runs of protocol v1. **`/api/ps` is read after every run, the warm-up included**, so
+every measured run stands between two observations. Each `POST /api/generate` carries the local
+name, the protocol's prompt, `raw`, `stream` and its options plus `num_ctx` = the ranking's
+`context_requested`. The warm-up is not one of `runs`.
+
+**`/api/ps` decides `comparable`, not validity.** Every observation has to show the measured
+model under its own local name, with the manifest digest `/api/tags` showed for it, and with
+`context_length` equal to the scenario's `context_requested`. The model is looked up in the
+answer **by its local name**, not taken from the first entry: a daemon can hold several models at
+once, and another one of them standing first is no statement about this measurement. A deviation,
+or an observation that does not show the measured model at all (then the reason names what was
+loaded instead), makes the **whole** measurement `comparable = false` with that reason. It is stored all the same, with its own validity, and is never ranked (it lands in
+measurement group 1). Validity is decided only by `measurement_invalid_reason`; the three
+speeds are set only for a valid measurement. `tps_mean` is the mean of the measured speeds, held
+inside their own minimum and maximum: three runs of the same duration sum to a float one unit in
+the last place below that duration's speed, and the record's `tps_min <= tps_mean <= tps_max` rule
+would refuse a perfectly good measurement over it.
+
+**The machine's load** is read once, just before the runs: GPU utilization from `nvidia-smi
+--query-gpu=utilization.gpu --format=csv,noheader,nounits` through `Probes.runner` with the
+10 s limit, and the one-minute load average where the platform has one (`os.getloadavg`;
+Windows has none). Every source may be missing -- then there is no value and no failure. Load
+*during* a run is not measurable and is never claimed; the guided mode says so in a line of its
+own.
+
+**Faults.** A daemon that cannot be reached, a status other than 200, an answer without counters,
+an answer nested deeper than the JSON parser goes, counters the record's own rules refuse (a
+duration too large to compute a speed from, for instance), a limit that was reached, a model that
+is gone: each is a `LoadTestError` with its reason, and a run
+that raises it has written **nothing** -- no half file. An interrupted run (Ctrl-C) leaves no
+measurement behind for the same reason: the file is written after the last run.
+
+**The file.** `store_measurement(state_dir, record, now)` takes `modelroom.lock` of that state
+folder (command `load-test`), writes with `write_measurement` and releases it. Another process
+holding the lock reaches the caller as `LockHeldError`, which is exit `1` for every command
+here. Nothing outside `<state>/measurements/` and that lock file is written.
+
+**What never happens in stage 1:** no download, no `pull`, no `delete`, no clean-up, no disk
+space statement, and no second way of computing a speed. Stage 2 (download with a consent
+screen) is a work package of its own.
+
 ## Guided mode
 
 `modelroom` with **no subcommand** is the guided mode (`modelroom/guided.py`): a configuration
@@ -3252,6 +3369,8 @@ answer file:
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
 | 2 | `select` | Which of these models should the result cover? | a list of repository ids |
 | 2 | `context` | How much context should the ranking assume? | a whole number, default 8192 |
+| 5 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **the one optional answer** -- an answer file that does not mention it does not measure |
+| 5 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
@@ -3307,15 +3426,45 @@ the one context of the whole ranking (`Scenario`, origin `default` at 8192, `ent
 otherwise); anything that is not a whole number above zero ends the run with exit `2`.
 
 **Steps 3 to 5.** `fetch_with_config` with the same budget object (nothing configured yet means
-nothing to fetch, said out loud), then the load test's place -- work package E; the step prints
-`load test: not part of stage C` -- and then `render_with_config` with the chosen scenario, which
-writes both views and prints the terminal one.
+nothing to fetch, said out loud), then the load test, then `render_with_config` with the chosen
+scenario, which writes both views and prints the terminal one -- so a measurement the load test
+just wrote is in the ranking of that same run.
+
+**Step 5, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
+which `guided.py` calls between the fetch and the render). It measures into the profile **the
+pointer file binds this machine to for this results folder**, and only when the takeover rule
+(`resolve_profile_target`, "Profile binding") says `bound` for it -- the profile file is in the
+folder and its `os_fingerprint` agrees with this machine's. Never into `[machines.<host>].profile`:
+a configuration is shared, and a stale or foreign entry there would give this machine's speed to
+another device -- the very case the machine step declines with "put that profile file back".
+Without a binding, without that agreement, or without a snapshot to take packages from, the step
+says so in one line and the run stays `0` -- there is nothing a load test could be about. Otherwise
+the daemon's inventory is read and matched against the snapshot's active packages.
+
+- **The daemon could not be read.** The `load_test` question is asked first. A **no** (which is
+  also what an answer file without the key means) is one line, `no load test: <reason>`, and exit
+  `0`: the daemon is needed for this step and for nothing else, so a machine without one still
+  finishes cleanly. A **yes** that cannot be honored is a step that did not finish -- `nothing
+  measured: <reason>` and exit `1`, with the document still written.
+- **No installed package matched.** One line, `no ranked package is installed on this machine;
+  the load test measures installed packages only (stage 1: no download)`, and no question. What
+  was left out is named first: an installed model whose name matches a configured package but
+  whose digest the daemon does not show, and every cloud model.
+- **At least one candidate.** `load_test` (default **no**), then `load_test_packages`: every
+  candidate, all checked, one line each with the local name, the base model, the quantization and
+  the weight size. Before the runs the step prints that the load is read once and that the model
+  behind the name must not change. Each measurement is written as its own file and reported in one
+  line: `measured <mean> tok/s (<min>-<max>), context <n>, valid, comparable`, or the reason
+  instead. A daemon that lets a run down here is a step that did not finish as well: the line
+  names the model and the reason, the exit code is `1`, and the document is still written.
 
 **The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question
 with no answer ends the run with exit `2` and names the question; an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
-exit `3`.
+exit `3`. **The one exception is `load_test`:** a file that does not mention it does not measure,
+because whether that question is reached at all depends on the machine the file is run on, not on
+the file. A `load_test = true` without `load_test_packages` is a missing answer like any other.
 
 ```toml
 # modelroom guided answers
@@ -3326,6 +3475,8 @@ search = "qwen"
 filter_owners = true
 select = ["unsloth/Qwen3.5-9B-GGUF"]
 context = "8192"
+load_test = true
+load_test_packages = ["hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M"]
 ```
 
 **A step that did not do what it was asked does not end the run.** A measurement that failed, a

@@ -24,14 +24,19 @@ from modelroom.cli import main
 from modelroom.config import load_config
 from modelroom.dialog import AnswerMissingError, Canceled, FileAsker
 from modelroom.examples import EXAMPLES
-from modelroom.guided import LOAD_TEST_LINE, GuidedError, _hit_choices, _hit_label, run_guided
+from modelroom.guided import GuidedError, _hit_choices, _hit_label, run_guided
+from modelroom.guided_loadtest import NO_CANDIDATE_LINE
 from modelroom.guided_contracts import SearchHit
 from modelroom.profile import HardwareProfile
 from modelroom.state import acquire_lock, atomic_write_json, release_lock
 
 from fixture_support import (
+    DEEPSEEK_OLLAMA_NAME,
     build_transport,
     guided_transport_mapping,
+    loadtest_daemon,
+    offline_daemon,
+    ps_answer,
     windows_probes,
     v2_profile,
 )
@@ -43,6 +48,9 @@ RUN2 = datetime(2026, 9, 23, 9, 0, 0, tzinfo=timezone.utc)
 RUN3 = datetime(2026, 9, 23, 10, 0, 0, tzinfo=timezone.utc)
 UNSLOTH = "unsloth/Qwen3.5-9B-GGUF"
 QWEN_GGUF = "Qwen/Qwen3.5-9B-GGUF"
+# The one repository in the pinned search answer whose base model fit v1 can judge, and whose
+# `Q4_K_M` package is the one the load test fixtures show as installed.
+DEEPSEEK = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
 
 FULL_ANSWERS = {
     "results": "here",
@@ -52,6 +60,13 @@ FULL_ANSWERS = {
     "select": [UNSLOTH, QWEN_GGUF],
     "context": "8192",
 }
+# The same run, plus the repository the load test measures and its two answers.
+LOAD_TEST_ANSWERS = {
+    **FULL_ANSWERS,
+    "select": [UNSLOTH, QWEN_GGUF, DEEPSEEK],
+    "load_test": True,
+    "load_test_packages": [DEEPSEEK_OLLAMA_NAME],
+}
 
 
 def _pointer(tmp_path: Path) -> Path:
@@ -59,7 +74,11 @@ def _pointer(tmp_path: Path) -> Path:
 
 
 def _run(tmp_path: Path, answers: dict | None = None, *, here: Path | None = None, now=RUN1, **kwargs) -> tuple[int, list[str]]:
-    """One guided run; returns its exit code and every line it printed."""
+    """One guided run; returns its exit code and every line it printed.
+
+    The daemon is a fixture like every other source: without one of its own a run gets a machine
+    with no Ollama daemon at all, so no test here ever reaches the real one on port 11434.
+    """
     lines: list[str] = []
     asker = FileAsker(FULL_ANSWERS if answers is None else answers)
     code = run_guided(
@@ -68,6 +87,7 @@ def _run(tmp_path: Path, answers: dict | None = None, *, here: Path | None = Non
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
         probes=kwargs.pop("probes", None) or windows_probes(),
+        daemon=kwargs.pop("daemon", None) or offline_daemon(),
         now=now,
         out=lines.append,
         **kwargs,
@@ -273,6 +293,7 @@ def test_every_profile_in_the_folder_is_listed_grouped_and_not_selectable(tmp_pa
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
+        daemon=offline_daemon(),
         now=RUN2,
         out=lines.append,
     )
@@ -307,6 +328,7 @@ def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
+        daemon=offline_daemon(),
         now=RUN2,
         out=[].append,
     )
@@ -412,6 +434,7 @@ def test_a_change_made_during_the_dialog_is_not_written_over(tmp_path: Path):
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
+        daemon=offline_daemon(),
         now=RUN2,
         out=[].append,
     )
@@ -454,6 +477,7 @@ def test_a_change_made_during_any_question_is_not_written_over(tmp_path: Path, w
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
+        daemon=offline_daemon(),
         now=RUN2,
         out=[].append,
     )
@@ -472,6 +496,7 @@ def _guided_run_for(tmp_path: Path, out: list[str]):
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
+        daemon=offline_daemon(),
         now=RUN2,
         catalog=load_catalog(),
         out=out.append,
@@ -657,18 +682,230 @@ def test_a_context_the_scenario_cannot_take_ends_the_run_without_a_traceback(tmp
         _run(tmp_path, {**FULL_ANSWERS, "context": answer})
 
 
-# --- the last steps: fetch, the load test's place, render ---------------------------------------------
+# --- the last steps: fetch, the load test, render -----------------------------------------------------
 
 
-def test_the_run_ends_with_both_views_and_the_load_test_line(tmp_path: Path):
+def test_the_run_ends_with_both_views_and_a_word_on_the_load_test(tmp_path: Path):
     code, lines = _run(tmp_path)
 
     assert code == 0
-    assert LOAD_TEST_LINE in lines
+    assert any(line.startswith("no load test: ") for line in lines)
     assert (_results(tmp_path) / "docs" / "models.md").is_file()
     assert (_results(tmp_path) / "docs" / "models.json").is_file()
     assert any("Ranking rule: fit class" in line for line in lines)
     assert any("Ranking: workstation" in line for line in lines)
+
+
+def _ranked_deepseek(tmp_path: Path) -> dict:
+    """The row of the measured example package in the machine block the render wrote."""
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    rows = payload["machines"][0]["ranked"] + payload["machines"][0]["too_tight"]
+    return next(row for row in rows if row["package_identity"][1] == DEEPSEEK)
+
+
+def _measurement_files(tmp_path: Path) -> list[Path]:
+    folder = _results(tmp_path) / "state" / "measurements"
+    return sorted(folder.rglob("*.json")) if folder.is_dir() else []
+
+
+def test_the_load_test_measures_the_picked_model_and_the_ranking_shows_the_speed(tmp_path: Path):
+    code, lines = _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())
+
+    assert code == 0
+    files = _measurement_files(tmp_path)
+    assert len(files) == 1
+    record = json.loads(files[0].read_text(encoding="utf-8"))
+    assert (record["validity"], record["comparable"]) == ("valid", True)
+    assert record["package"]["hf_repo"] == DEEPSEEK
+    assert record["ollama_name"] == DEEPSEEK_OLLAMA_NAME
+    measured = next(line for line in lines if line.startswith(f"{DEEPSEEK_OLLAMA_NAME}: measured "))
+    assert "tok/s" in measured and measured.endswith("valid, comparable")
+    row = _ranked_deepseek(tmp_path)
+    assert row["measurement_group"] == 0
+    assert row["speed_tps"] == pytest.approx(record["tps_mean"])
+
+
+def test_a_no_to_the_load_test_measures_nothing_and_asks_for_no_package(tmp_path: Path):
+    answers = {**LOAD_TEST_ANSWERS, "load_test": False}
+    answers.pop("load_test_packages")
+
+    code, lines = _run(tmp_path, answers, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert _measurement_files(tmp_path) == []
+    assert not any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}:") for line in lines)
+
+
+def test_nothing_installed_that_is_ranked_is_one_line_and_no_question(tmp_path: Path):
+    """The answer file has no load-test answer at all, and the run still ends with exit 0."""
+    code, lines = _run(tmp_path, FULL_ANSWERS, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert NO_CANDIDATE_LINE in lines
+    assert _measurement_files(tmp_path) == []
+
+
+def test_a_cloud_model_is_named_as_one_and_never_measured(tmp_path: Path):
+    _code, lines = _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())
+
+    assert any("glm-5.3-flash:cloud" in line and "not measured" in line for line in lines)
+
+
+def test_the_selection_list_shows_every_candidate_checked_with_its_four_facts(tmp_path: Path):
+    asked: dict[str, list] = {}
+
+    class _Recording(FileAsker):
+        def checkbox(self, key, question, choices):
+            asked[key] = list(choices)
+            return super().checkbox(key, question, choices)
+
+    lines: list[str] = []
+    run_guided(
+        _Recording(LOAD_TEST_ANSWERS),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=loadtest_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    choices = asked["load_test_packages"]
+    assert [choice.value for choice in choices] == [DEEPSEEK_OLLAMA_NAME]
+    assert choices[0].checked is True
+    assert choices[0].label.count("|") == 3
+    assert "Q4_K_M" in choices[0].label
+
+
+def test_a_daemon_that_goes_away_after_the_yes_is_a_step_that_did_not_finish(tmp_path: Path):
+    from modelroom.daemon import DaemonError
+
+    daemon = loadtest_daemon(generates=[DaemonError("the Ollama daemon did not answer (refused)")])
+
+    code, lines = _run(tmp_path, LOAD_TEST_ANSWERS, daemon=daemon)
+
+    assert code == 1
+    assert _measurement_files(tmp_path) == []
+    assert any("nothing measured for" in line for line in lines)
+    assert (_results(tmp_path) / "docs" / "models.md").is_file()
+
+
+def test_a_digest_that_changes_mid_run_is_stored_as_not_comparable_and_ranks_in_group_one(tmp_path: Path):
+    observations = [ps_answer(), ps_answer(), ps_answer(digest="d" * 64), ps_answer()]
+
+    code, lines = _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon(observations=observations))
+
+    assert code == 0
+    record = json.loads(_measurement_files(tmp_path)[0].read_text(encoding="utf-8"))
+    assert record["comparable"] is False
+    assert "digest" in record["comparable_reason"]
+    assert any("not comparable" in line for line in lines)
+    row = _ranked_deepseek(tmp_path)
+    assert (row["measurement_group"], row["speed_tps"]) == (1, None)
+
+
+def test_an_answer_file_that_does_not_mention_the_load_test_measures_nothing(tmp_path: Path):
+    """The one optional answer: a file written for another machine still runs to the end."""
+    answers = {**LOAD_TEST_ANSWERS}
+    answers.pop("load_test")
+
+    code, lines = _run(tmp_path, answers, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert _measurement_files(tmp_path) == []
+    assert not any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}:") for line in lines)
+
+
+def test_a_yes_that_names_no_package_is_a_missing_answer(tmp_path: Path):
+    answers = {**LOAD_TEST_ANSWERS}
+    answers.pop("load_test_packages")
+
+    with pytest.raises(AnswerMissingError, match="load_test_packages"):
+        _run(tmp_path, answers, daemon=loadtest_daemon())
+
+
+def test_a_yes_against_a_daemon_that_is_not_there_is_a_step_that_did_not_finish(tmp_path: Path):
+    answers = {**LOAD_TEST_ANSWERS}
+    answers.pop("load_test_packages")
+
+    code, lines = _run(tmp_path, answers, daemon=offline_daemon())
+
+    assert code == 1
+    assert _measurement_files(tmp_path) == []
+    assert any(line.startswith("nothing measured: ") for line in lines)
+    assert (_results(tmp_path) / "docs" / "models.md").is_file()
+
+
+def test_a_configuration_that_names_a_profile_is_not_proof_that_it_is_this_machine(tmp_path: Path):
+    """Only the pointer file's binding decides which profile this machine measures into."""
+    assert _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())[0] == 0
+    first = _measurement_files(tmp_path)
+    assert len(first) == 1
+    # What a shared results folder looks like on a machine that never measured itself: the
+    # configuration still names the profile, the local binding does not.
+    pointer = read_pointer(_pointer(tmp_path))
+    write_pointer(_pointer(tmp_path), GuidedPointer(schema_version=1, current=pointer.current))
+    answers = {key: value for key, value in LOAD_TEST_ANSWERS.items() if key != "results"}
+    answers["machines"] = []
+
+    code, lines = _run(tmp_path, answers, now=RUN2, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert _measurement_files(tmp_path) == first
+    assert any("not bound to a profile" in line for line in lines)
+
+
+def test_a_bound_profile_the_folder_no_longer_holds_measures_nothing(tmp_path: Path):
+    assert _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())[0] == 0
+    for path in _profiles(tmp_path):
+        path.unlink()
+    answers = {key: value for key, value in LOAD_TEST_ANSWERS.items() if key != "results"}
+    answers["machines"] = []
+
+    code, lines = _run(tmp_path, answers, now=RUN2, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert any("is missing in the results folder" in line for line in lines)
+    assert len(_measurement_files(tmp_path)) == 1
+
+
+def test_a_bound_profile_of_another_machine_measures_nothing(tmp_path: Path):
+    """The takeover rule's own fingerprint check: a declined `same machine` must not measure here."""
+    assert _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())[0] == 0
+    bound = _profiles(tmp_path)[0]
+    profile = json.loads(bound.read_text(encoding="utf-8"))
+    profile["os_fingerprint"] = "a" * 16
+    bound.write_text(json.dumps(profile), encoding="utf-8")
+    answers = {key: value for key, value in LOAD_TEST_ANSWERS.items() if key != "results"}
+    answers["machines"] = []
+
+    code, lines = _run(tmp_path, answers, now=RUN2, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert any("another os_fingerprint" in line for line in lines)
+    assert len(_measurement_files(tmp_path)) == 1
+
+
+def test_a_no_against_a_daemon_that_is_not_there_is_one_line_and_exit_zero(tmp_path: Path):
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "load_test": False}, daemon=offline_daemon())
+
+    assert code == 0
+    assert any(line.startswith("no load test: ") for line in lines)
+
+
+def test_a_second_run_keeps_the_measurement_and_writes_no_second_file(tmp_path: Path):
+    assert _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())[0] == 0
+    first = _measurement_files(tmp_path)
+    answers = {key: value for key, value in LOAD_TEST_ANSWERS.items() if key != "results"}
+    answers["load_test"] = False
+    answers.pop("load_test_packages")
+
+    code, _lines = _run(tmp_path, answers, now=RUN2, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert _measurement_files(tmp_path) == first
+    assert _ranked_deepseek(tmp_path)["measurement_group"] == 0
 
 
 def test_qwen35_is_not_covered_by_fit_v1_and_says_so(tmp_path: Path):

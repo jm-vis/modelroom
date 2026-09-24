@@ -32,6 +32,8 @@ release. `CHANGELOG.md` lists what has landed.
   in the configuration (`[llmfit] min_version`).
 - `nvidia-smi` on `PATH` for a machine with an NVIDIA card; without it the profile records
   that an adapter is present but unmeasured, and no fit is computed for it.
+- An Ollama daemon on `http://127.0.0.1:11434` for the load test only. Without one the guided
+  mode says so in one line and goes on; nothing else in the tool needs it.
 - Internet access for `fetch` only.
 
 ## Installation
@@ -56,8 +58,10 @@ modelroom
 ```
 
 It asks where the results should live, measures this machine, searches Hugging Face for a
-model name, takes your selection and the context, and prints the ranking per machine while
-writing it to `docs/models.md` and `docs/models.json`. The next run is the same command: it
+model name, takes your selection and the context, offers to measure the speed of the packages
+your local Ollama daemon already has, and prints the ranking per machine while writing it to
+`docs/models.md` and `docs/models.json`. The speed question defaults to no, and it never
+downloads anything -- it measures what is already there. The next run is the same command: it
 remembers the folder. Without an interactive terminal it prints the help and stops;
 `modelroom --answers <file>` takes the answers from a TOML file instead (for a self-test or
 CI), and `modelroom --config <file>` works on that configuration rather than the remembered

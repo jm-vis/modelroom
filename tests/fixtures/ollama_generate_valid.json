@@ -1,0 +1,14 @@
+{
+  "model": "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M",
+  "created_at": "2026-09-24T08:43:19.1520798Z",
+  "response": " No markdown. Just write.\nOkay, I need to describe how a public library organizes books from arrival to borrowing. Let m",
+  "done": true,
+  "done_reason": "length",
+  "total_duration": 7891584000,
+  "load_duration": 5858046700,
+  "prompt_eval_count": 52,
+  "prompt_eval_cached_count": 0,
+  "prompt_eval_duration": 117254000,
+  "eval_count": 128,
+  "eval_duration": 1913390000
+}

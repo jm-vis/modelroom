@@ -1,0 +1,66 @@
+{
+  "_id": "68386c758c8e3b721707c6ae",
+  "id": "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
+  "private": false,
+  "pipeline_tag": "text-generation",
+  "library_name": "transformers",
+  "tags": [
+    "transformers",
+    "gguf",
+    "qwen3",
+    "text-generation",
+    "unsloth",
+    "deepseek",
+    "qwen",
+    "arxiv:2501.12948",
+    "base_model:deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+    "base_model:quantized:deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+    "license:mit",
+    "endpoints_compatible",
+    "region:us",
+    "conversational"
+  ],
+  "downloads": 56677,
+  "likes": 452,
+  "modelId": "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
+  "author": "unsloth",
+  "sha": "eb48357c179d34dbf515983f798dfb8752a0f261",
+  "lastModified": "2025-06-16T00:09:18.000Z",
+  "gated": false,
+  "disabled": false,
+  "model-index": null,
+  "config": {
+    "architectures": [
+      "Qwen3ForCausalLM"
+    ],
+    "model_type": "qwen3"
+  },
+  "cardData": {
+    "tags": [
+      "unsloth",
+      "deepseek",
+      "qwen"
+    ],
+    "base_model": [
+      "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    ],
+    "license": "mit",
+    "library_name": "transformers"
+  },
+  "transformersInfo": {
+    "auto_model": "AutoModelForCausalLM",
+    "pipeline_tag": "text-generation",
+    "processor": "AutoTokenizer"
+  },
+  "gguf": {
+    "total": 8190735360,
+    "architecture": "qwen3",
+    "context_length": 131072,
+    "chat_template": "{%- if not add_generation_prompt is defined %}\n    {%- set add_generation_prompt = false %}\n{%- endif %}\n{%- set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='', is_first_sp=true, is_last_user=false) %}\n{%- for message in messages %}\n    {%- if message['role'] == 'system' %}\n        {%- if ns.is_first_sp %}\n            {%- set ns.system_prompt = ns.system_prompt + message['content'] %}\n            {%- set ns.is_first_sp = false %}\n        {%- else %}\n            {%- set ns.system_prompt = ns.system_prompt + '\\n\\n' + message['content'] %}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n\n{#- Adapted from https://github.com/sgl-project/sglang/blob/main/examples/chat_template/tool_chat_template_deepseekr1.jinja #}\n{%- if tools is defined and tools is not none %}\n    {%- set tool_ns = namespace(text='You are a helpful assistant with tool calling capabilities. ' + 'When a tool call is needed, you MUST use the following format to issue the call:\\n' + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>FUNCTION_NAME\\n' + '```json\\n{\"param1\": \"value1\", \"param2\": \"value2\"}\\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>\\n\\n' + 'Make sure the JSON is valid.' + '## Tools\\n\\n### Function\\n\\nYou have the following functions available:\\n\\n') %}\n    {%- for tool in tools %}\n        {%- set tool_ns.text = tool_ns.text + '\\n```json\\n' + (tool | tojson) + '\\n```\\n' %}\n    {%- endfor %}\n    {%- if ns.system_prompt|length != 0 %}\n        {%- set ns.system_prompt = ns.system_prompt + '\\n\\n' + tool_ns.text %}\n    {%- else %}\n        {%- set ns.system_prompt = tool_ns.text %}\n    {%- endif %}\n{%- endif %}\n{{- bos_token }}\n{{- ns.system_prompt }}\n{%- set last_index = (messages|length - 1) %}\n{%- for message in messages %}\n    {%- set content = message['content'] %}\n    {%- if message['role'] == 'user' %}\n        {%- set ns.is_tool = false -%}\n        {%- set ns.is_first = false -%}\n        {%- set ns.is_last_user = true -%}\n        {%- if loop.index0 == last_index %}\n            {{- '<｜User｜>' + content }}\n        {%- else %}\n            {{- '<｜User｜>' + content + '<｜Assistant｜>'}}\n        {%- endif %}\n    {%- endif %}\n    {%- if message['role'] == 'assistant' %}\n        {%- if '</think>' in content %}\n            {%- set content = (content.split('</think>')|last) %}\n        {%- endif %}\n    {%- endif %}\n    {%- if message['role'] == 'assistant' and message['tool_calls'] is defined and message['tool_calls'] is not none %}\n        {%- set ns.is_last_user = false -%}\n        {%- if ns.is_tool %}\n            {{- '<｜tool▁outputs▁end｜>'}}\n        {%- endif %}\n        {%- set ns.is_first = false %}\n        {%- set ns.is_tool = false -%}\n        {%- set ns.is_output_first = true %}\n        {%- for tool in message['tool_calls'] %}\n            {%- set arguments = tool['function']['arguments'] %}\n            {%- if arguments is not string %}\n                {%- set arguments = arguments|tojson %}\n            {%- endif %}\n            {%- if not ns.is_first %}\n                {%- if content is none %}\n                    {{- '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + arguments + '\\n' + '```' + '<｜tool▁call▁end｜>'}}\n                }\n                {%- else %}\n                    {{- content + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + arguments + '\\n' + '```' + '<｜tool▁call▁end｜>'}}\n                {%- endif %}\n                {%- set ns.is_first = true -%}\n            {%- else %}\n                {{- '\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + arguments + '\\n' + '```' + '<｜tool▁call▁end｜>'}}\n            {%- endif %}\n        {%- endfor %}\n        {{- '<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}\n    {%- endif %}\n    {%- if message['role'] == 'assistant' and (message['tool_calls'] is not defined or message['tool_calls'] is none) %}\n        {%- set ns.is_last_user = false -%}\n        {%- if ns.is_tool %}\n            {{- '<｜tool▁outputs▁end｜>' + content + '<｜end▁of▁sentence｜>'}}\n            {%- set ns.is_tool = false -%}\n        {%- else %}\n            {{- content + '<｜end▁of▁sentence｜>'}}\n        {%- endif %}\n    {%- endif %}\n    {%- if message['role'] == 'tool' %}\n        {%- set ns.is_last_user = false -%}\n        {%- set ns.is_tool = true -%}\n        {%- if ns.is_output_first %}\n            {{- '<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + content + '<｜tool▁output▁end｜>'}}\n            {%- set ns.is_output_first = false %}\n        {%- else %}\n            {{- '\\n<｜tool▁output▁begin｜>' + content + '<｜tool▁output▁end｜>'}}\n        {%- endif %}\n    {%- endif %}\n{%- endfor -%}\n{%- if ns.is_tool %}\n    {{- '<｜tool▁outputs▁end｜>'}}\n{%- endif %}\n{#- if add_generation_prompt and not ns.is_last_user and not ns.is_tool #}\n{%- if add_generation_prompt and not ns.is_tool %}\n    {{- '<｜Assistant｜>'}}\n{%- endif %}",
+    "bos_token": "<｜begin▁of▁sentence｜>",
+    "eos_token": "<｜end▁of▁sentence｜>",
+    "totalFileSize": 16388045056
+  },
+  "createdAt": "2025-05-29T14:17:25.000Z",
+  "usedStorage": 668988711606
+}

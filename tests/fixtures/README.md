@@ -184,3 +184,37 @@ names, paths or people. Written 2026-09-23.
 The export and the invalid measurement were generated from `modelroom/examples.py` and
 validated before they were written; the relation check's positive case uses the recorded
 `hf_unsloth_qwen35_9b_gguf_model.json` above (relation only in `tags`).
+
+## The load test, stage 1 (AP9-E)
+
+Recorded from a real Ollama daemon (0.34.2) and the live Hugging Face API on **2026-09-24**. The
+example package throughout is `hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M`: a GGUF build
+of a dense base model, so fit v1 can judge it, and the one the acceptance run measures for real.
+Machine paths and user names are blacked out (`tests/test_public_hygiene.py`).
+
+- `ollama_version_local.json` -- `GET /api/version`.
+- `ollama_tags_local_loadtest.json` -- `GET /api/tags`: the three entries of
+  `ollama_tags_local.json` above, plus the example package (its manifest digest
+  `ecc092d5…3aec`) and one cloud entry (`glm-5.3-flash:cloud`) whose `size` was set to `0` so
+  both halves of the cloud rule have a case.
+- `ollama_ps_deepseek_loaded.json` -- `GET /api/ps` while that package is loaded: the local name,
+  the same `digest` as in `/api/tags` (bare hex, no `sha256:` prefix) and `context_length` 8192,
+  the three facts `comparable` is decided by.
+- `ollama_show_hf_gguf.json` -- `POST /api/show` for the same package, trimmed to the four fields
+  the load test reads. Its `FROM` line is the evidence for the assignment rule: the blob
+  `sha256-a86349…4ec1` is byte for byte the `Q4_K_M` file's LFS `oid` in
+  `hf_unsloth_deepseek_r1_qwen3_8b_gguf_tree.json`. The real line names a folder under the user's
+  home directory; the fixture says `/models/blobs/` instead.
+- `ollama_generate_valid.json` -- one `POST /api/generate` after protocol v1 (`num_ctx` 8192):
+  `done_reason: length`, `eval_count` 128 and the four other counters. The generated text is cut
+  to its first 120 characters -- nothing in the package reads it. `tests/fixture_support.py`
+  derives the other runs from this one by overriding `eval_duration` or `done_reason`.
+- `hf_deepseek_r1_qwen3_8b_model.json` / `hf_deepseek_r1_qwen3_8b_config.json` -- the base model's
+  card (`sha` `6e8885a6…25fa`) and its `config.json`: 36 layers, 8 key/value heads, head
+  dimension 128 and no mixture-of-experts field, so the architecture is `dense_classic`.
+- `hf_unsloth_deepseek_r1_qwen3_8b_gguf_model.json` /
+  `hf_unsloth_deepseek_r1_qwen3_8b_gguf_tree.json` -- the GGUF repository's card (`sha`
+  `eb48357c…f261`, relation `quantized` in both `cardData` and `tags`) and its file tree, with
+  every `.gguf` file but the `Q4_K_M` one dropped; the remaining LFS `oid` is the digest the
+  daemon shows. The cards keep only the fields the fetch reads (`siblings`, `spaces` and
+  `widgetData` removed).

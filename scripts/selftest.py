@@ -5,8 +5,9 @@
 It runs the guided mode twice with `--answers` in a temporary results folder, against the
 pinned search answer from `tests/fixture_support.py` (criteria 3 and 4 must not depend on
 whichever repositories the live Hub answers with today), and reports each criterion with the
-evidence it read. The measurement itself is real: this machine is measured with its own sources,
-which is what criterion 2 is about.
+evidence it read. Two things in the run are real, and they are the two gates: this machine is
+measured with its own sources (criterion 2), and the load test runs against the Ollama daemon
+of this machine (criterion 5). Everything else answers from the fixtures.
 
 Criteria (the plan's own numbering):
 
@@ -16,9 +17,11 @@ Criteria (the plan's own numbering):
 3. the search resolves at least one publisher model and shows the unresolved hits with a reason;
 4. the ranking carries the rule and the context in its header, and Qwen3.5 stands under
    "not covered";
-5. the load test -- not part of stage C; the step says so and passes;
-6. the second start reuses the configuration and the binding: no clone question, no second
-   profile file.
+5. the prepared package is measured against the real local Ollama daemon: the measurement is
+   valid and comparable, its file lies under `<state>/measurements/<profile_id>/`, and the
+   package stands in the ranking in measurement group 0 with its speed;
+6. the second start reuses the configuration, the binding and the measurement: no clone
+   question, no second profile file, no second measurement.
 
 The live search runs as a smoke afterwards and never decides the exit code.
 
@@ -46,16 +49,26 @@ REPO = Path(__file__).resolve().parent.parent
 SEARCH_NAME = "qwen"
 QWEN_BASE = "Qwen/Qwen3.5-9B"
 UNSLOTH_GGUF = "unsloth/Qwen3.5-9B-GGUF"
+# The prepared package of criterion 5: the one repository in the pinned search answer whose base
+# model fit v1 can judge, and whose `Q4_K_M` build has to be installed on this machine. The load
+# test itself runs against the real local daemon -- that is what criterion 5 is about.
+DEEPSEEK_GGUF = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
+DEEPSEEK_OLLAMA_NAME = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
 ANSWERS_FIRST = {
     "results": "here",
     "machines": ["this-machine"],
     "search": SEARCH_NAME,
     "filter_owners": True,
-    "select": [UNSLOTH_GGUF],
+    "select": [UNSLOTH_GGUF, DEEPSEEK_GGUF],
     "context": "8192",
+    "load_test": True,
+    "load_test_packages": [DEEPSEEK_OLLAMA_NAME],
 }
-# The second run answers the same questions, minus the folder: the pointer file remembers it.
-ANSWERS_SECOND = {key: value for key, value in ANSWERS_FIRST.items() if key != "results"}
+# The second run answers the same questions, minus the folder (the pointer file remembers it) and
+# with the load test declined: criterion 6 is that the first run's measurement is still there.
+ANSWERS_SECOND = {
+    key: value for key, value in ANSWERS_FIRST.items() if key not in ("results", "load_test_packages")
+} | {"load_test": False}
 
 
 class Step(NamedTuple):
@@ -151,8 +164,41 @@ def ranking_problems(text: str, machine: str, not_covered: list[dict]) -> list[s
     return problems
 
 
-def second_start_problems(before: dict, after: dict, profiles: list[str], lines: list[str]) -> list[str]:
-    """Criterion 6: the configuration and the binding are reused, and nothing is measured twice."""
+def load_test_problems(records: list[dict], row: dict | None) -> list[str]:
+    """Criterion 5: one valid, comparable measurement of the prepared package, ranked with it."""
+    if not records:
+        return [
+            f"nothing was measured: {DEEPSEEK_OLLAMA_NAME} has to be installed on this machine "
+            "for criterion 5 (`ollama list` shows what is)"
+        ]
+    if len(records) != 1:
+        return [f"{len(records)} measurement files, expected exactly one"]
+    record = records[0]
+    problems = []
+    if record["protocol"] != "v1":
+        problems.append(f"protocol is {record['protocol']!r}, expected 'v1'")
+    if record["validity"] != "valid":
+        problems.append(f"validity is {record['validity']!r}: {record['validity_reason']}")
+    if not record["comparable"]:
+        problems.append(f"the measurement is not comparable: {record['comparable_reason']}")
+    if record["package"].get("hf_repo") != DEEPSEEK_GGUF:
+        problems.append(f"the measurement names {record['package'].get('hf_repo')!r}, expected {DEEPSEEK_GGUF}")
+    if row is None:
+        problems.append(f"{DEEPSEEK_GGUF} stands in no ranking of this machine")
+    elif row["measurement_group"] != 0 or row["speed_tps"] is None:
+        problems.append(f"the ranked row is group {row['measurement_group']} with speed {row['speed_tps']!r}")
+    return problems
+
+
+def second_start_problems(
+    before: dict,
+    after: dict,
+    profiles: list[str],
+    lines: list[str],
+    measurements: list[dict] | None = None,
+    row: dict | None = None,
+) -> list[str]:
+    """Criterion 6: the configuration, the binding and the measurement are reused, not remade."""
     problems = []
     if len(profiles) != 1:
         problems.append(f"{len(profiles)} profile files after the second run, expected exactly one: {profiles}")
@@ -162,6 +208,12 @@ def second_start_problems(before: dict, after: dict, profiles: list[str], lines:
         problems.append("the second run changed [guided]")
     if any("clone" in line for line in lines):
         problems.append("the second run asked the clone question")
+    if measurements is not None and len(measurements) != 1:
+        problems.append(f"{len(measurements)} measurement files after the second run, expected exactly one")
+    if measurements is not None and (row is None or row["measurement_group"] != 0):
+        problems.append("the first run's measurement is no longer ranked in group 0")
+    if any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}: measured ") for line in lines):
+        problems.append("the second run measured the package a second time")
     return problems
 
 
@@ -233,6 +285,20 @@ def _machine_block(payload: dict, machine: str) -> dict:
     return next(block for block in payload["machines"] if block["machine"] == machine)
 
 
+def _measurement_records(results: Path) -> list[dict]:
+    """Every measurement file the run left behind, under `<state>/measurements/<profile_id>/`."""
+    folder = results / "state" / "measurements"
+    if not folder.is_dir():
+        return []
+    return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(folder.rglob("*.json"))]
+
+
+def _ranked_row(block: dict, repo: str) -> dict | None:
+    """The row of one packaging repository in a machine's block, wherever it was sorted to."""
+    rows = block["ranked"] + block["too_tight"]
+    return next((row for row in rows if row["package_identity"][1] == repo), None)
+
+
 def _machine_name(config_text: str) -> str:
     """The one machine the guided mode wrote into the configuration: this device."""
     machines = tomllib.loads(config_text)["machines"]
@@ -282,26 +348,46 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> list[S
     ]
 
 
-def _load_test_step() -> Step:
-    """Criterion 5's place: the load test is work package E, and this step says so and passes."""
-    return Step("(5) load test of an installed package", True, "not part of stage C")
+def _load_test_step(results: Path, machine: str) -> Step:
+    """Criterion 5: the prepared package was really measured here, and it is ranked with its speed.
+
+    The measurement is the one part of this run that talks to the real local Ollama daemon --
+    that is the gate. Everything else answers from the pinned fixtures.
+    """
+    records = _measurement_records(results)
+    _text, payload = _document(results)
+    row = _ranked_row(_machine_block(payload, machine), DEEPSEEK_GGUF)
+    problems = load_test_problems(records, row)
+    if problems:
+        return Step("(5) the prepared package is measured and ranked", False, "\n".join(problems))
+    record = records[0]
+    detail = (
+        f"{record['ollama_name']}: {record['tps_mean']:.1f} tok/s "
+        f"({record['tps_min']:.1f}-{record['tps_max']:.1f}), context "
+        f"{record['scenario']['context_requested']}, daemon {record['daemon_version']}, "
+        f"rank {row['rank']} in measurement group {row['measurement_group']}"
+    )
+    return Step("(5) the prepared package is measured and ranked", True, detail)
 
 
-def _second_run(results: Path, transport, now: datetime) -> list[Step]:
-    """Criterion 6: the same command again reuses the configuration and the binding."""
+def _second_run(results: Path, transport, now: datetime, machine: str) -> list[Step]:
+    """Criterion 6: the same command again reuses the configuration, the binding and the measurement."""
     before = tomllib.loads((results / "modelroom.toml").read_text(encoding="utf-8"))
     answers = results.parent / "answers-second.toml"
     answers.write_text(answers_toml(ANSWERS_SECOND), encoding="utf-8", newline="\n")
     code, lines = _guided_run(answers, results, transport, now)
     after = tomllib.loads((results / "modelroom.toml").read_text(encoding="utf-8"))
     names = [path.name for path in _profile_files(results)]
-    problems = second_start_problems(before, after, names, lines)
+    records = _measurement_records(results)
+    row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF)
+    problems = second_start_problems(before, after, names, lines, records, row)
     return [
         Step("guided run 2 ended with exit 0", code == 0, f"exit {code}"),
         Step(
-            "(6) the second start reuses the configuration and the binding",
+            "(6) the second start reuses the configuration, the binding and the measurement",
             not problems,
-            "\n".join(problems) or f"one profile file ({names[0]}), [machines] unchanged, no clone question",
+            "\n".join(problems)
+            or f"one profile file ({names[0]}), one measurement still in group 0, no clone question",
         ),
     ]
 
@@ -329,8 +415,11 @@ def run_steps(work: Path) -> list[Step]:
     transport = build_transport(guided_transport_mapping())
     started = datetime.now(timezone.utc).replace(microsecond=0)
     steps = _first_run(results, pointer, transport, started)
-    steps.append(_load_test_step())
-    steps += _second_run(results, build_transport(guided_transport_mapping()), started + timedelta(minutes=1))
+    machine = _machine_name((results / "modelroom.toml").read_text(encoding="utf-8"))
+    steps.append(_load_test_step(results, machine))
+    steps += _second_run(
+        results, build_transport(guided_transport_mapping()), started + timedelta(minutes=1), machine
+    )
     steps.append(_live_search_smoke())
     return steps
 

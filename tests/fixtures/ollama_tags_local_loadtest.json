@@ -1,0 +1,127 @@
+{
+  "models": [
+    {
+      "name": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL",
+      "model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL",
+      "modified_at": "2026-09-12T21:00:19.6464168+02:00",
+      "size": 18490325682,
+      "digest": "c66cf836b05b503a80e2c488e800dd4f1c1ad2497cb93c212cd41582373b8dda",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen35",
+        "families": [
+          "qwen35"
+        ],
+        "parameter_size": "27.3B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 262144,
+        "embedding_length": 5120
+      },
+      "capabilities": [
+        "tools",
+        "thinking",
+        "completion",
+        "vision"
+      ]
+    },
+    {
+      "name": "hf.co/unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
+      "model": "hf.co/unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
+      "modified_at": "2026-09-12T20:59:54.4072869+02:00",
+      "size": 3587679225,
+      "digest": "7acc5346e400f1b3de551a6f13ed893447ecb76a2c815ed94f28c02fcd7578e4",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen35",
+        "families": [
+          "qwen35"
+        ],
+        "parameter_size": "4.2B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 262144,
+        "embedding_length": 2560
+      },
+      "capabilities": [
+        "tools",
+        "thinking",
+        "completion",
+        "vision"
+      ]
+    },
+    {
+      "name": "granite4.2:8b",
+      "model": "granite4.2:8b",
+      "modified_at": "2026-09-12T20:27:19.3894595+02:00",
+      "size": 5347929757,
+      "digest": "f586c02fdecdf151b656207c339aa003997345774a41768bac1fd6d2fb85913b",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "granite",
+        "families": [
+          "granite"
+        ],
+        "parameter_size": "8.8B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 131072,
+        "embedding_length": 4096
+      },
+      "capabilities": [
+        "tools",
+        "thinking",
+        "completion"
+      ]
+    },
+    {
+      "name": "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M",
+      "model": "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M",
+      "modified_at": "2026-01-26T14:35:16+01:00",
+      "size": 5027786589,
+      "digest": "ecc092d5e10a34f7277b5748cbb9e940c0eb2bbea563f48517ff804939ce3aec",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen3",
+        "families": [
+          "qwen3"
+        ],
+        "parameter_size": "8.19B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 131072,
+        "embedding_length": 4096
+      },
+      "capabilities": [
+        "tools",
+        "thinking",
+        "completion"
+      ]
+    },
+    {
+      "name": "glm-5.3-flash:cloud",
+      "model": "glm-5.3-flash:cloud",
+      "remote_model": "glm-5.3-flash",
+      "remote_host": "https://ollama.com",
+      "modified_at": "2026-08-30T12:07:18.2429105+02:00",
+      "size": 0,
+      "digest": "3e780905abc0e7240dd1489935ec1e3c7fcf1854a6f4e7f8688f9bb0bdacb1a5",
+      "details": {
+        "parent_model": "",
+        "format": "",
+        "family": "",
+        "families": null,
+        "parameter_size": "321B",
+        "quantization_level": "FP8",
+        "context_length": 1048576,
+        "embedding_length": 4096
+      },
+      "capabilities": [
+        "completion",
+        "thinking",
+        "tools",
+        "vision"
+      ]
+    }
+  ]
+}

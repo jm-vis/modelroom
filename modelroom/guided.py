@@ -8,7 +8,7 @@ through `dialog.Asker`, so the same run works at a terminal and from an answer f
 CONTRACTS.md, "Guided mode".
 
 The steps: where results live -> migrate or write a configuration -> which machines -> search,
-choose, context -> fetch -> the load test's place (stage E) -> render.
+choose, context -> fetch -> the load test of the installed packages -> render.
 """
 
 from __future__ import annotations
@@ -32,8 +32,11 @@ from .config import (
     read_config_schema_version,
 )
 from .contracts import SchemaVersionError, validate_machine_name
+from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice, selectable
 from .guided_contracts import SearchHit
+from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
+from .guided_loadtest import load_test_step
 from .http import RequestBudget, Transport, UrllibTransport
 from .importer import (
     ImportConflictError,
@@ -54,7 +57,6 @@ from .state import LockHeldError
 CONFIG_NAME = "modelroom.toml"
 STATE_FOLDER = "state"
 MARKDOWN_PATH = ("docs", "models.md")
-LOAD_TEST_LINE = "load test: not part of stage C"
 _FRESH_ID_ATTEMPTS = 8
 _UNKNOWN = "unknown"
 
@@ -69,6 +71,9 @@ QUESTIONS: dict[str, str] = {
     "filter_owners": "Show only repositories of a publisher or a listed packager?",
     "select": "Which of these models should the result cover?",
     "context": "How much context should the ranking assume?",
+    # Step 5's two questions live with the step (`modelroom/guided_loadtest.py`); the answer file
+    # has one table of keys, so they are merged in here.
+    **LOAD_TEST_QUESTIONS,
 }
 
 
@@ -87,6 +92,7 @@ class GuidedRun:
     probes: Probes
     now: datetime
     catalog: Catalog
+    daemon: Daemon = field(default_factory=LocalDaemon)
     out: Callable[[str], None] = print
     budget: RequestBudget = field(default_factory=lambda: RequestBudget(DEFAULT_GUIDED_BUDGET))
     # Every step that could not do what it was asked, in the words the user already read. The run
@@ -576,7 +582,7 @@ def _scenario(run: GuidedRun) -> Scenario:
         raise GuidedError(f"{context} is not a context this ranking can be computed for: {exc}") from exc
 
 
-# --- steps 3 to 5: fetch, the load test's place, render ------------------------------------------
+# --- steps 3 to 5: fetch, the load test, render ---------------------------------------------------
 
 
 def _fetch_step(run: GuidedRun, config: Configuration) -> None:
@@ -608,13 +614,14 @@ def run_guided(
     now: datetime | None = None,
     out: Callable[[str], None] = print,
     catalog: Catalog | None = None,
+    daemon: Daemon | None = None,
 ) -> int:
     """Run the whole guided mode; returns the exit code (`0` when a document was written).
 
     `here` is the folder "this folder" means -- the caller passes it in, this package never
     resolves a path against the working directory on its own. Everything else is the usual
-    dependency injection: the transport, the probes of this machine, the clock, the pointer file
-    and the shipped catalog.
+    dependency injection: the transport, the daemon of this machine, the probes of this machine,
+    the clock, the pointer file and the shipped catalog.
     """
     run = GuidedRun(
         asker=asker,
@@ -624,6 +631,7 @@ def run_guided(
         probes=probes if probes is not None else Probes(),
         now=(now or datetime.now(timezone.utc)).replace(microsecond=0),
         catalog=catalog if catalog is not None else load_catalog(),
+        daemon=daemon if daemon is not None else LocalDaemon(),
         out=out,
     )
     config_file = _config_file(run, config_arg)
@@ -632,7 +640,7 @@ def run_guided(
     config = _search_step(run, config_file, config)
     scenario = _scenario(run)
     _fetch_step(run, config)
-    run.out(LOAD_TEST_LINE)
+    load_test_step(run, config, scenario, config_file.parent)
     code = _render_step(run, config, scenario)
     if code == 0 and run.problems:
         # The document was written, but a step before it did not do what it was asked. Exit `1`

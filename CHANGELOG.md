@@ -7,6 +7,31 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- The load test, stage 1 (CONTRACTS.md, "Load test (stage 1)"): the guided mode offers to measure
+  the speed of packages the local Ollama daemon already has, runs measurement protocol v1 against
+  them and writes each result as its own measurement file, which the same run's ranking then shows
+  in measurement group 0 with `Speed tok/s (measured)`. Stage 1 downloads nothing, removes nothing
+  and says nothing about disk space: there is no call of `/api/pull` or `/api/delete` anywhere in
+  the package, and a test reads every module to prove it.
+- `modelroom/daemon.py`: the transport for the Ollama daemon of this machine,
+  `(method, path, body) -> Response`, against `http://127.0.0.1:11434` and nothing else. Its
+  opener carries no proxy handler, no HTTPS handler and no redirect following, and it makes only
+  `GET /api/version`, `GET /api/tags`, `GET /api/ps`, `POST /api/show` and `POST /api/generate`;
+  10 s per short call, 600 s for one `generate`. A refused connection, a limit that was reached or
+  an unreadable answer is a message, never a traceback. What answers on that port is taken to be
+  this machine's daemon -- a documented limit.
+- `modelroom/loadtest.py`: the inventory, the run and the file. An installed model counts as a
+  package only when a digest says so -- the manifest digest for an Ollama package, the weight
+  digest the daemon shows in `POST /api/show` for a Hugging Face one; a matching name without one
+  is listed with its reason and never measured. `/api/ps` is read after every run, the warm-up
+  included, and a name, digest or `context_length` that deviates at any observation makes the
+  whole measurement `not comparable` with its reason -- stored, never ranked.
+- `modelroom/guided_loadtest.py`: the guided mode's step 5 around those two -- the two questions,
+  the selection list of candidates, the progress lines and the one result line per measurement.
+- Two answer-file keys for the load test, `load_test` and `load_test_packages` (CONTRACTS.md,
+  "Guided mode"), and criteria (5) and (6) of `scripts/selftest.py` are now real: the prepared
+  package is measured against the daemon of this machine, and the second start keeps that
+  measurement in group 0 without writing a second file.
 - `modelroom` with no subcommand is the guided mode (CONTRACTS.md, "Guided mode"): it asks where
   results should live, migrates and writes `modelroom.toml` with this device as the writer,
   measures this machine or imports a profile, searches Hugging Face, takes the selection and the

@@ -70,7 +70,16 @@ def test_the_answer_file_is_valid_toml_with_every_answer():
     assert raw["results"] == "here"
     assert raw["machines"] == ["this-machine"]
     assert raw["filter_owners"] is True
-    assert raw["select"] == [st.UNSLOTH_GGUF]
+    assert raw["select"] == [st.UNSLOTH_GGUF, st.DEEPSEEK_GGUF]
+    assert raw["load_test"] is True
+    assert raw["load_test_packages"] == [st.DEEPSEEK_OLLAMA_NAME]
+
+
+def test_the_second_answer_file_declines_the_load_test():
+    raw = tomllib.loads(st.answers_toml(st.ANSWERS_SECOND))
+
+    assert raw["load_test"] is False
+    assert "load_test_packages" not in raw
 
 
 def test_the_second_answer_file_asks_no_folder_question():
@@ -175,6 +184,65 @@ def test_criterion_four_names_another_reason_than_the_fit_rules_own():
     assert any("not the fit rule" in problem for problem in st.ranking_problems(GOOD_DOCUMENT, "workstation", other))
 
 
+# --- criterion 5 -------------------------------------------------------------------------------------
+
+
+def _record(**changes) -> dict:
+    data = {
+        "protocol": "v1",
+        "validity": "valid",
+        "validity_reason": None,
+        "comparable": True,
+        "comparable_reason": None,
+        "package": {"content_source": "huggingface", "hf_repo": st.DEEPSEEK_GGUF},
+        "ollama_name": st.DEEPSEEK_OLLAMA_NAME,
+    }
+    data.update(changes)
+    return data
+
+
+def _row(**changes) -> dict:
+    data = {"rank": 1, "measurement_group": 0, "speed_tps": 58.4}
+    data.update(changes)
+    return data
+
+
+def test_criterion_five_passes_on_one_valid_comparable_ranked_measurement():
+    assert st.load_test_problems([_record()], _row()) == []
+
+
+def test_criterion_five_names_a_machine_the_package_is_not_installed_on():
+    problems = st.load_test_problems([], None)
+
+    assert len(problems) == 1
+    assert st.DEEPSEEK_OLLAMA_NAME in problems[0]
+
+
+def test_criterion_five_names_a_second_measurement_file():
+    assert any("2 measurement files" in problem for problem in st.load_test_problems([_record(), _record()], _row()))
+
+
+@pytest.mark.parametrize(
+    "change, expected",
+    [
+        ({"validity": "invalid", "validity_reason": "run 1: done_reason 'stop'"}, "validity is"),
+        ({"comparable": False, "comparable_reason": "the digest changed"}, "not comparable"),
+        ({"protocol": "none"}, "protocol is"),
+        ({"package": {"content_source": "huggingface", "hf_repo": "other/Repo-GGUF"}}, "the measurement names"),
+    ],
+    ids=["invalid", "not comparable", "no protocol", "another package"],
+)
+def test_criterion_five_names_a_measurement_that_does_not_count(change, expected):
+    problems = st.load_test_problems([_record(**change)], _row())
+
+    assert any(expected in problem for problem in problems)
+
+
+@pytest.mark.parametrize("row", [None, _row(measurement_group=1, speed_tps=None)], ids=["absent", "group 1"])
+def test_criterion_five_names_a_package_that_is_not_ranked_with_its_speed(row):
+    assert st.load_test_problems([_record()], row)
+
+
 # --- criterion 6 -------------------------------------------------------------------------------------
 
 
@@ -183,6 +251,26 @@ BEFORE = {"machines": {"workstation": {"profile": "3f9a0c21d4e6b870"}}, "guided"
 
 def test_criterion_six_passes_when_nothing_changed():
     assert st.second_start_problems(BEFORE, dict(BEFORE), ["3f9a0c21d4e6b870.json"], ["a line"]) == []
+
+
+def test_criterion_six_passes_when_the_measurement_of_the_first_run_is_still_ranked():
+    assert st.second_start_problems(BEFORE, dict(BEFORE), ["a.json"], [], [_record()], _row()) == []
+
+
+def test_criterion_six_names_a_second_measurement_file():
+    problems = st.second_start_problems(BEFORE, dict(BEFORE), ["a.json"], [], [_record(), _record()], _row())
+    assert any("2 measurement files after the second run" in problem for problem in problems)
+
+
+def test_criterion_six_names_a_measurement_that_dropped_out_of_group_zero():
+    problems = st.second_start_problems(BEFORE, dict(BEFORE), ["a.json"], [], [_record()], _row(measurement_group=1))
+    assert any("no longer ranked in group 0" in problem for problem in problems)
+
+
+def test_criterion_six_names_a_second_measurement_of_the_same_package():
+    lines = [f"{st.DEEPSEEK_OLLAMA_NAME}: measured 58.4 tok/s (57.0-60.0), context 8192, valid, comparable"]
+    problems = st.second_start_problems(BEFORE, dict(BEFORE), ["a.json"], lines, [_record()], _row())
+    assert any("a second time" in problem for problem in problems)
 
 
 def test_criterion_six_names_a_second_profile_file():

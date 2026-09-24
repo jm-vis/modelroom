@@ -1,0 +1,23 @@
+{
+  "models": [
+    {
+      "name": "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M",
+      "model": "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M",
+      "size": 6097846926,
+      "digest": "ecc092d5e10a34f7277b5748cbb9e940c0eb2bbea563f48517ff804939ce3aec",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen3",
+        "families": [
+          "qwen3"
+        ],
+        "parameter_size": "8.19B",
+        "quantization_level": "unknown"
+      },
+      "expires_at": "2026-09-24T10:48:19.1520798+02:00",
+      "size_vram": 6097846926,
+      "context_length": 8192
+    }
+  ]
+}

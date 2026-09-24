@@ -99,6 +99,7 @@ def windows_runner(overrides: dict | None = None):
     import subprocess
 
     from modelroom.llmfit import FixtureRunner
+    from modelroom.loadtest import GPU_UTILIZATION_ARGS
     from modelroom.measure import NVIDIA_SMI_ARGS, WINDOWS_MACHINE_GUID_ARGS
 
     def completed(args, stdout=""):
@@ -107,6 +108,7 @@ def windows_runner(overrides: dict | None = None):
     guid = f"\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\n    MachineGuid    REG_SZ    {MACHINE_GUID}\n"
     responses = {
         NVIDIA_SMI_ARGS: completed(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_one_gpu.csv").read_text(encoding="utf-8")),
+        GPU_UTILIZATION_ARGS: completed(GPU_UTILIZATION_ARGS, "3\n"),
         WINDOWS_MACHINE_GUID_ARGS: completed(WINDOWS_MACHINE_GUID_ARGS, guid),
         ("llmfit", "--version"): completed(("llmfit", "--version"), "llmfit 1.1.16\n"),
         ("llmfit", "system", "--json"): completed(
@@ -217,9 +219,53 @@ def search_transport_mapping() -> dict[tuple[str, str], Response]:
     }
 
 
+DEEPSEEK_BASE = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+DEEPSEEK_REPO = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
+DEEPSEEK_BASE_SHA = "6e8885a6ff5c1dc5201574c8fd700323f23c25fa"
+DEEPSEEK_SHA = "eb48357c179d34dbf515983f798dfb8752a0f261"
+# The local name the Ollama daemon gives that package, its manifest digest in `/api/tags`, and
+# the digest of the one GGUF blob it was built from -- all three read from a real daemon
+# (2026-09-24) and pinned in `tests/fixtures/ollama_*`.
+DEEPSEEK_OLLAMA_NAME = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
+DEEPSEEK_MANIFEST_DIGEST = "sha256:ecc092d5e10a34f7277b5748cbb9e940c0eb2bbea563f48517ff804939ce3aec"
+DEEPSEEK_WEIGHTS_DIGEST = "sha256:a86349a4180c4e6bb43f874c29c404fa2be3f90b15509bd6d86f697dba724ec1"
+DEEPSEEK_WEIGHTS_BYTES = 5027785216
+GRANITE_MANIFEST_DIGEST = "sha256:f586c02fdecdf151b656207c339aa003997345774a41768bac1fd6d2fb85913b"
+
+
+def deepseek_transport_mapping() -> dict[tuple[str, str], Response]:
+    """Every request the fetch of the load test's example package makes.
+
+    The package is the one the acceptance run measures against the real local daemon, so its
+    Hugging Face answers are pinned from the live Hub (2026-09-24) rather than hand-written:
+    the base model's card and `config.json` (a dense architecture fit v1 can judge), the GGUF
+    repository's card and file tree with the `Q4_K_M` file's `sha256`, and the publisher's own
+    `-GGUF` repository, which does not exist.
+    """
+    return {
+        ("GET", f"https://huggingface.co/api/models/{DEEPSEEK_BASE}"): json_response(
+            "hf_deepseek_r1_qwen3_8b_model.json"
+        ),
+        (
+            "GET",
+            f"https://huggingface.co/{DEEPSEEK_BASE}/resolve/{DEEPSEEK_BASE_SHA}/config.json",
+        ): json_response("hf_deepseek_r1_qwen3_8b_config.json"),
+        ("GET", f"https://huggingface.co/api/models/{DEEPSEEK_REPO}"): json_response(
+            "hf_unsloth_deepseek_r1_qwen3_8b_gguf_model.json"
+        ),
+        (
+            "GET",
+            f"https://huggingface.co/api/models/{DEEPSEEK_REPO}/tree/{DEEPSEEK_SHA}?recursive=true",
+        ): json_response("hf_unsloth_deepseek_r1_qwen3_8b_gguf_tree.json"),
+        ("GET", f"https://huggingface.co/api/models/{DEEPSEEK_BASE}-GGUF"): envelope_response(
+            "hf_unsloth_does_not_exist_model.json"
+        ),
+    }
+
+
 def guided_transport_mapping() -> dict[tuple[str, str], Response]:
     """Every request one whole guided run makes: the search, its age lookups and the fetch."""
-    return {**search_transport_mapping(), **qwen35_transport_mapping()}
+    return {**search_transport_mapping(), **qwen35_transport_mapping(), **deepseek_transport_mapping()}
 
 
 def qwen35_example_config_dict(state_dir: str, markdown_path: str) -> dict:
@@ -244,3 +290,121 @@ def qwen35_example_config_dict(state_dir: str, markdown_path: str) -> dict:
         "machines": {"workstation": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True}},
         "paths": {"state": state_dir, "markdown": markdown_path},
     }
+
+
+# --- the Ollama daemon of this machine (AP9-E) --------------------------------------------------
+
+DAEMON_OBSERVED_AT = datetime(2026, 9, 24, 8, 43, 0, tzinfo=timezone.utc)
+# One warm-up run and three measured runs, each a little faster or slower than the next, so a
+# test can tell mean, minimum and maximum apart.
+MEASURED_DURATIONS = (2_000_000_000, 1_900_000_000, 2_100_000_000)
+
+
+def generate_answer(eval_duration: int | None = None, done_reason: str | None = None) -> Response:
+    """The pinned `/api/generate` answer, with its duration or its end reason overridden."""
+    data = json.loads((FIXTURES / "ollama_generate_valid.json").read_text(encoding="utf-8"))
+    if eval_duration is not None:
+        data["eval_duration"] = eval_duration
+    if done_reason is not None:
+        data["done_reason"] = done_reason
+    return Response(status=200, body=json.dumps(data).encode("utf-8"))
+
+
+def ps_answer(digest: str | None = None, context_length: int | None = None, name: str | None = None) -> Response:
+    """The pinned `/api/ps` answer for the loaded example package, with fields overridden."""
+    data = json.loads((FIXTURES / "ollama_ps_deepseek_loaded.json").read_text(encoding="utf-8"))
+    entry = data["models"][0]
+    if digest is not None:
+        entry["digest"] = digest
+    if context_length is not None:
+        entry["context_length"] = context_length
+    if name is not None:
+        entry["name"] = name
+        entry["model"] = name
+    return Response(status=200, body=json.dumps(data).encode("utf-8"))
+
+
+def empty_ps_answer() -> Response:
+    """What `/api/ps` answers while no model is loaded (read from a real daemon, 2026-09-24)."""
+    return Response(status=200, body=b'{"models": []}')
+
+
+def default_generates() -> list[Response]:
+    """The four `/api/generate` answers of one protocol-v1 run: a warm-up and three measured."""
+    return [generate_answer(), *(generate_answer(duration) for duration in MEASURED_DURATIONS)]
+
+
+def loadtest_daemon(generates=None, observations=None, tags: str = "ollama_tags_local_loadtest.json"):
+    """A `FixtureDaemon` that answers every call one whole load test makes.
+
+    `generates` is the answer sequence of `/api/generate`, `observations` that of `/api/ps` --
+    one observation after every run, so four by default.
+    """
+    from modelroom.daemon import GENERATE_PATH, PS_PATH, SHOW_PATH, TAGS_PATH, VERSION_PATH, FixtureDaemon
+
+    return FixtureDaemon(
+        {
+            ("GET", VERSION_PATH): json_response("ollama_version_local.json"),
+            ("GET", TAGS_PATH): json_response(tags),
+            ("POST", SHOW_PATH): json_response("ollama_show_hf_gguf.json"),
+            ("GET", PS_PATH): list(observations if observations is not None else [ps_answer()] * 4),
+            ("POST", GENERATE_PATH): default_generates() if generates is None else list(generates),
+        }
+    )
+
+
+def offline_daemon():
+    """A machine with no Ollama daemon: every call fails with the reason a user would read."""
+    from modelroom.daemon import FixtureDaemon
+    from modelroom.ollama_local import DEFAULT_BASE_URL
+
+    return FixtureDaemon({}, unreachable=f"{DEFAULT_BASE_URL}: the Ollama daemon did not answer (refused)")
+
+
+def deepseek_package(**overrides):
+    """The `Q4_K_M` package of the load test's example repository, as the fetch records it."""
+    from modelroom.contracts import Package, PackageFile
+
+    fields = {
+        "source": "huggingface",
+        "repo": DEEPSEEK_REPO,
+        "revision": DEEPSEEK_SHA,
+        "base_model_hf_repo": DEEPSEEK_BASE,
+        "format": "gguf",
+        "files": [
+            PackageFile(
+                name="DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf",
+                role="weights",
+                size_bytes=DEEPSEEK_WEIGHTS_BYTES,
+                digest=DEEPSEEK_WEIGHTS_DIGEST,
+            )
+        ],
+        "complete": True,
+        "quantization": "Q4_K_M",
+        "provenance": "metadata_ok",
+        "observed_at": DAEMON_OBSERVED_AT,
+        "last_seen": DAEMON_OBSERVED_AT,
+        "active": True,
+    }
+    return Package(**{**fields, **overrides})
+
+
+def granite_ollama_package(**overrides):
+    """An Ollama package whose manifest digest is the one `/api/tags` shows for `granite4.2:8b`."""
+    from modelroom.contracts import Package, PackageFile
+
+    fields = {
+        "source": "ollama",
+        "ollama_name": "granite4.2:8b",
+        "manifest_digest": GRANITE_MANIFEST_DIGEST,
+        "base_model_hf_repo": DEEPSEEK_BASE,
+        "format": "gguf",
+        "files": [PackageFile(name="model", role="weights", size_bytes=5_347_929_757, digest=None)],
+        "complete": True,
+        "quantization": "Q4_K_M",
+        "provenance": "metadata_ok",
+        "observed_at": DAEMON_OBSERVED_AT,
+        "last_seen": DAEMON_OBSERVED_AT,
+        "active": True,
+    }
+    return Package(**{**fields, **overrides})

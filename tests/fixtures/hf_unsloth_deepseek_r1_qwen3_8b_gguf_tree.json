@@ -1,0 +1,56 @@
+[
+  {
+    "type": "file",
+    "oid": "65c610fc5325120416e48b3d5d8972653732c3ee",
+    "size": 3525,
+    "path": ".gitattributes"
+  },
+  {
+    "type": "file",
+    "oid": "3552c35981e040dd624a4ae877abc080919a9787",
+    "size": 5027785216,
+    "lfs": {
+      "oid": "a86349a4180c4e6bb43f874c29c404fa2be3f90b15509bd6d86f697dba724ec1",
+      "size": 5027785216,
+      "pointerSize": 135
+    },
+    "xetHash": "d8be09a4e6b490b68df4262691283b3a31e9b25f65203ae7b24862469332df30",
+    "path": "DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf"
+  },
+  {
+    "type": "file",
+    "oid": "0b6f7c4833e70c7815b960ba82c8a4ea5ec6b2e2",
+    "size": 16931,
+    "path": "README.md"
+  },
+  {
+    "type": "file",
+    "oid": "0e2e2bf19e659ac90d0e6318f7efb2a75b91d228",
+    "size": 911,
+    "path": "config.json"
+  },
+  {
+    "type": "file",
+    "oid": "2e31123af3d42a056e92bcc898e3eba9ae0a7001",
+    "size": 5316795,
+    "lfs": {
+      "oid": "1430f7d2812ed9baded542047ec27930c18d1e6b7fad1b1fd9db1d33fcf0f1ca",
+      "size": 5316795,
+      "pointerSize": 132
+    },
+    "xetHash": "32dc97a12895676764b4ef893cb6f17f3de956982961c84dd0ca736fb1552e60",
+    "path": "imatrix_unsloth.dat"
+  },
+  {
+    "type": "file",
+    "oid": "f7b7c62d52760f931c147d9bb18c1460ebc02d10",
+    "size": 265,
+    "path": "params"
+  },
+  {
+    "type": "file",
+    "oid": "9773bd637c835d823bdeed96eb49eb85da48fad3",
+    "size": 556,
+    "path": "template"
+  }
+]

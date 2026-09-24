@@ -43,6 +43,7 @@ from .binding import (
 )
 from .config import ConfigError, Configuration, load_config
 from .contracts import HardwareSnapshot, SchemaVersionError
+from .daemon import Daemon
 from .dialog import (
     AnswerInvalidError,
     AnswerMissingError,
@@ -154,11 +155,12 @@ def main(
     asker: Asker | None = None,
     here: Path | None = None,
     out: Callable[[str], None] | None = None,
+    daemon: "Daemon | None" = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out)
+        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon)
     if args.answers is not None:
         print(f"--answers belongs to the guided mode; {args.command} never asks a question", file=sys.stderr)
         return 2
@@ -188,6 +190,7 @@ def _cmd_guided(
     asker: Asker | None,
     here: Path | None,
     out: Callable[[str], None] | None,
+    daemon: "Daemon | None" = None,
 ) -> int:
     """`modelroom` with no subcommand: the guided mode (`modelroom/guided.py`).
 
@@ -212,6 +215,7 @@ def _cmd_guided(
             probes=probes,
             now=now,
             out=out if out is not None else print,
+            daemon=daemon,
         )
     except KeyboardInterrupt:
         print("stopped at your request; nothing was left half written", file=sys.stderr)
