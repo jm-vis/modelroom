@@ -51,6 +51,7 @@ from .measure import Probes, read_os_identity
 from .measurements import DEFAULT_CONTEXT_REQUESTED, Scenario
 from .migrate import MigrationError, migrate
 from .profile import HardwareProfile, os_fingerprint
+from .render_cmd import scenario_for
 from .search import DEFAULT_GUIDED_BUDGET, DEFAULT_PACKAGERS, SearchError, apply_hits, ollama_label, run_search, write_configuration
 from .state import LockHeldError
 
@@ -566,20 +567,45 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
     return updated
 
 
-def _scenario(run: GuidedRun) -> Scenario:
-    """One context for the whole ranking: the default, or the number the user entered."""
-    answered = run.asker.text("context", QUESTIONS["context"], default=str(DEFAULT_CONTEXT_REQUESTED)).strip()
+def context_default(config: Configuration) -> int:
+    """What the context question starts with: the context this folder kept, else 8192.
+
+    A kept context is a decision of an earlier run, so it is the answer offered again -- the
+    number 8192 is only ever offered to a folder no guided run has chosen a context in.
+    """
+    return DEFAULT_CONTEXT_REQUESTED if config.guided.context is None else config.guided.context
+
+
+def _scenario(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Scenario, Configuration]:
+    """One context for the whole ranking, kept in the configuration so a later render agrees.
+
+    The question starts at the context this folder kept when the run loaded it
+    (`context_default`), and the answer is written to `[guided].context` whenever it differs from
+    the context the file holds when the answer comes in -- the first time as well, and for 8192 as
+    well: a kept context is what the user chose, not the value the question started with. An
+    answer that is already in the file changes nothing and is not written.
+    """
+    answered = run.asker.text("context", QUESTIONS["context"], default=str(context_default(config))).strip()
     try:
         context = int(answered)
     except ValueError as exc:
         raise GuidedError(f"{answered!r} is not a whole number of tokens") from exc
-    origin = "default" if context == DEFAULT_CONTEXT_REQUESTED else "entered"
     try:
-        return Scenario(
-            context_requested=context, context_origin=origin, kv_type="f16", kv_type_assumed=True, requests=1
-        )
+        scenario = scenario_for(context)
     except ValidationError as exc:
         raise GuidedError(f"{context} is not a context this ranking can be computed for: {exc}") from exc
+    # Read again here, after the question and immediately before the change is written: the
+    # dialog takes as long as the user takes (see `_search_step`). The comparison is against that
+    # fresh read, not against this run's own copy -- a run that skipped the write because its copy
+    # already said so would leave a context another process wrote in the file, and the next
+    # `modelroom render` would compute a ranking this run never showed.
+    stored = _load(config_file)
+    if context == stored.guided.context:
+        return scenario, stored
+    updated = stored.model_copy(update={"guided": stored.guided.model_copy(update={"context": context})})
+    _write_config(run, config_file, updated)
+    run.out(f"kept context {context} in {config_file}")
+    return scenario, updated
 
 
 # --- steps 3 to 5: fetch, the load test, render ---------------------------------------------------
@@ -638,7 +664,7 @@ def run_guided(
     config = _configuration(run, config_file)
     config = _machines_step(run, config_file, config)
     config = _search_step(run, config_file, config)
-    scenario = _scenario(run)
+    scenario, config = _scenario(run, config_file, config)
     _fetch_step(run, config)
     load_test_step(run, config, scenario, config_file.parent)
     code = _render_step(run, config, scenario)

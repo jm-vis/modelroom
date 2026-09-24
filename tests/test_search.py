@@ -814,6 +814,29 @@ def test_write_configuration_writes_a_file_that_reads_back_as_the_same_configura
     assert tomllib.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
 
 
+def test_write_configuration_leaves_out_a_context_no_guided_run_chose(tmp_path):
+    config = _config(tmp_path)
+    path = tmp_path / "modelroom.toml"
+    (tmp_path / "state").mkdir()
+
+    write_configuration(path, config, now=NOW)
+
+    assert "context" not in tomllib.loads(path.read_text(encoding="utf-8")).get("guided", {})
+    assert load_config(path).guided.context is None
+
+
+def test_write_configuration_keeps_the_context_a_guided_run_chose(tmp_path):
+    config = _config(tmp_path)
+    config = config.model_copy(update={"guided": config.guided.model_copy(update={"context": 4096})})
+    path = tmp_path / "modelroom.toml"
+    (tmp_path / "state").mkdir()
+
+    write_configuration(path, config, now=NOW)
+
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["guided"]["context"] == 4096
+    assert load_config(path).guided.context == 4096
+
+
 def test_write_configuration_writes_where_it_checked_even_through_a_symlink(tmp_path):
     # The check resolves the path (it has to, to know which directory confines `paths.state`), so
     # the write has to use the same resolved path: writing to the link itself would replace the

@@ -20,8 +20,15 @@ Criteria (the plan's own numbering):
 5. the prepared package is measured against the real local Ollama daemon: the measurement is
    valid and comparable, its file lies under `<state>/measurements/<profile_id>/`, and the
    package stands in the ranking in measurement group 0 with its speed;
-6. the second start reuses the configuration, the binding and the measurement: no clone
-   question, no second profile file, no second measurement.
+6. the second start reuses the configuration, the binding, the measurement and the context: no
+   clone question, no second profile file, no second measurement, `[guided].context` holds the
+   answered context, the configuration the second run reads offers that context again
+   (`guided.context_default`, the function the question itself uses), and a `modelroom render`
+   of its own writes that context into the document and keeps the measurement in group 0.
+   What this run cannot show is a context other than the answered one carrying through: its
+   answer file stays at 8192 so that criteria 4 and 5 keep their pinned numbers, and 8192 is
+   also what a render with no stored context assumes. That case is a test of its own
+   (`tests/test_guided.py`, 4096 answered, measured, and rendered on its own afterwards).
 
 The live search runs as a smoke afterwards and never decides the exit code.
 
@@ -217,6 +224,32 @@ def second_start_problems(
     return problems
 
 
+def stored_context_problems(before: dict, offered: object, header: str | None, row: dict | None) -> list[str]:
+    """Criterion 6, the kept context: written by run 1, offered again, and rendered on its own.
+
+    `before` is the configuration as the first run left it, `offered` the context that
+    configuration makes the question start at (`guided.context_default`, read before the second
+    run -- an answer file answers every question outright, so what the dialog was offered cannot be
+    read off this run; `tests/test_guided.py` watches the real `Asker` for that), `header` the
+    `Scenario:` line of the document a standalone `modelroom render` wrote afterwards, and `row`
+    the measured package's row in that document.
+    """
+    answered = int(ANSWERS_FIRST["context"])
+    problems = []
+    stored = before.get("guided", {}).get("context")
+    if stored != answered:
+        problems.append(f"[guided].context is {stored!r} after the first run, expected {answered}")
+    if offered != answered:
+        problems.append(f"the configuration of the second run starts the question at {offered!r}, expected {answered}")
+    if header is None:
+        problems.append("the document of the standalone render carries no Scenario line")
+    elif f"context {answered} " not in header:
+        problems.append(f"the standalone render wrote {header!r}, expected context {answered}")
+    if row is None or row["measurement_group"] != 0:
+        problems.append("the standalone render does not keep the first run's measurement in group 0")
+    return problems
+
+
 def format_report(steps: list[Step]) -> str:
     lines = []
     for number, step in enumerate(steps, start=1):
@@ -370,24 +403,50 @@ def _load_test_step(results: Path, machine: str) -> Step:
     return Step("(5) the prepared package is measured and ranked", True, detail)
 
 
+def _offered_context(config_file: Path) -> int:
+    """What the context question of the next run starts with, from the configuration on disk."""
+    from modelroom.config import load_config
+    from modelroom.guided import context_default
+
+    return context_default(load_config(config_file))
+
+
+def _standalone_render(results: Path, config_file: Path, now: datetime) -> tuple[int, str | None]:
+    """`modelroom render --config <file>` on its own, and the `Scenario:` line it wrote."""
+    from modelroom.cli import main
+
+    code = main(["render", "--config", str(config_file)], now=now)
+    header = next((line for line in _document(results)[0].splitlines() if line.startswith("Scenario: ")), None)
+    return code, header
+
+
 def _second_run(results: Path, transport, now: datetime, machine: str) -> list[Step]:
-    """Criterion 6: the same command again reuses the configuration, the binding and the measurement."""
-    before = tomllib.loads((results / "modelroom.toml").read_text(encoding="utf-8"))
+    """Criterion 6: the same command again reuses the configuration, the binding, the measurement
+    and the context -- the last one also for a `modelroom render` that runs on its own afterwards."""
+    config_file = results / "modelroom.toml"
+    before = tomllib.loads(config_file.read_text(encoding="utf-8"))
+    offered = _offered_context(config_file)
     answers = results.parent / "answers-second.toml"
     answers.write_text(answers_toml(ANSWERS_SECOND), encoding="utf-8", newline="\n")
     code, lines = _guided_run(answers, results, transport, now)
-    after = tomllib.loads((results / "modelroom.toml").read_text(encoding="utf-8"))
+    after = tomllib.loads(config_file.read_text(encoding="utf-8"))
     names = [path.name for path in _profile_files(results)]
     records = _measurement_records(results)
     row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF)
     problems = second_start_problems(before, after, names, lines, records, row)
+    render_code, header = _standalone_render(results, config_file, now + timedelta(minutes=1))
+    if render_code != 0:
+        problems.append(f"the standalone render ended with exit {render_code}")
+    render_row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF)
+    problems += stored_context_problems(before, offered, header, render_row)
     return [
         Step("guided run 2 ended with exit 0", code == 0, f"exit {code}"),
         Step(
-            "(6) the second start reuses the configuration, the binding and the measurement",
+            "(6) the second start reuses the configuration, the binding, the measurement and the context",
             not problems,
             "\n".join(problems)
-            or f"one profile file ({names[0]}), one measurement still in group 0, no clone question",
+            or f"one profile file ({names[0]}), one measurement still in group 0, no clone question, "
+            f"[guided].context {offered} starts the question again and is rendered on its own ({header})",
         ),
     ]
 

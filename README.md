@@ -93,7 +93,9 @@ cat docs/models.md
    Markdown one to `paths.markdown` (`docs/models.md` in the example) and the JSON one next
    to it under the same stem. It takes no `--machine`. A machine is ranked from the profile
    its `[machines.<name>].profile` names -- the guided mode writes that entry after it has
-   measured the machine.
+   measured the machine. It assumes the context the last guided run of that folder chose
+   (`[guided].context`), so the ranking it writes is the one that run showed; a configuration no
+   guided run has chosen a context in assumes 8192.
 5. Read the table. Only active, complete packages with `metadata_ok` or `approved`
    provenance are shown, and every one of them is ranked per machine: best fit first, a
    measured package ahead of an unmeasured one of the same fit class, with the rule and the

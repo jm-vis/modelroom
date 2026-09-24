@@ -11,7 +11,7 @@ import copy
 import re
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -163,15 +163,21 @@ class UpdatesConfig(BaseModel):
 
 
 class GuidedConfig(BaseModel):
-    """Schema 2: the results folder the guided mode recorded when it wrote this configuration.
+    """Schema 2: what the guided mode recorded when it wrote this configuration.
 
-    `results` is resolved against the configuration file's own directory by `load_config`,
-    exactly like `paths.state`; `None` means no guided run wrote this file.
+    `results` is the results folder; it is resolved against the configuration file's own
+    directory by `load_config`, exactly like `paths.state`, and `None` means no guided run wrote
+    this file. `context` is the context a guided run's ranking was computed for, kept so that a
+    later `modelroom render` of this folder shows the same ranking; `None` means no guided run
+    has chosen one yet. Its bounds are `Scenario.context_requested`'s own
+    (`modelroom/measurements.py`), which this module cannot import -- `modelroom/state.py` reads
+    `Configuration`, so the dependency only ever runs the other way.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     results: Path | None = None
+    context: Annotated[int, Field(gt=0, le=2**31 - 1)] | None = None
 
     @field_validator("results")
     @classmethod
@@ -615,6 +621,7 @@ EXAMPLES: dict[str, dict] = {
     },
     "GuidedConfig": {
         "results": "//models/modelroom",
+        "context": 4096,
     },
     "PathsConfig": {
         "state": "//models/modelroom/state",
@@ -656,6 +663,6 @@ EXAMPLES: dict[str, dict] = {
         "llmfit": {"min_version": "1.1.16"},
         "defaults": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0},
         "updates": {"check": True},
-        "guided": {"results": "//models/modelroom"},
+        "guided": {"results": "//models/modelroom", "context": 4096},
     },
 }

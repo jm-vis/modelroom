@@ -247,6 +247,9 @@ def test_criterion_five_names_a_package_that_is_not_ranked_with_its_speed(row):
 
 
 BEFORE = {"machines": {"workstation": {"profile": "3f9a0c21d4e6b870"}}, "guided": {"results": str(RESULTS)}}
+ANSWERED_CONTEXT = int(st.ANSWERS_FIRST["context"])
+KEPT = {"machines": BEFORE["machines"], "guided": {"results": str(RESULTS), "context": ANSWERED_CONTEXT}}
+GOOD_HEADER = f"Scenario: context {ANSWERED_CONTEXT} (default), KV cache f16 (assumed), 1 request"
 
 
 def test_criterion_six_passes_when_nothing_changed():
@@ -286,6 +289,37 @@ def test_criterion_six_names_a_changed_machine_table():
 def test_criterion_six_names_a_clone_question():
     lines = ["profile from home binding is missing. Is this the same machine or a clone?"]
     assert any("clone question" in problem for problem in st.second_start_problems(BEFORE, dict(BEFORE), ["a.json"], lines))
+
+
+def test_criterion_six_passes_when_the_context_is_kept_offered_and_rendered():
+    assert st.stored_context_problems(KEPT, ANSWERED_CONTEXT, GOOD_HEADER, _row()) == []
+
+
+def test_criterion_six_names_a_context_the_first_run_did_not_keep():
+    problems = st.stored_context_problems(BEFORE, ANSWERED_CONTEXT, GOOD_HEADER, _row())
+    assert any("[guided].context is None" in problem for problem in problems)
+
+
+def test_criterion_six_names_a_configuration_that_starts_the_question_at_another_context():
+    problems = st.stored_context_problems(KEPT, 4096, GOOD_HEADER, _row())
+    assert any("starts the question at 4096" in problem for problem in problems)
+
+
+def test_criterion_six_names_a_standalone_render_with_another_context():
+    header = "Scenario: context 4096 (entered), KV cache f16 (assumed), 1 request"
+    problems = st.stored_context_problems(KEPT, ANSWERED_CONTEXT, header, _row())
+    assert any("expected context" in problem for problem in problems)
+
+
+def test_criterion_six_names_a_document_without_a_scenario_line():
+    problems = st.stored_context_problems(KEPT, ANSWERED_CONTEXT, None, _row())
+    assert any("no Scenario line" in problem for problem in problems)
+
+
+@pytest.mark.parametrize("row", [None, _row(measurement_group=1)], ids=["absent", "group 1"])
+def test_criterion_six_names_a_standalone_render_that_lost_the_measurement(row):
+    problems = st.stored_context_problems(KEPT, ANSWERED_CONTEXT, GOOD_HEADER, row)
+    assert any("group 0" in problem for problem in problems)
 
 
 # --- the report ------------------------------------------------------------------------------------------

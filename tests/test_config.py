@@ -599,6 +599,61 @@ def test_load_config_resolves_a_relative_guided_results_path(tmp_path):
     assert config.guided.results == tmp_path / "results"
 
 
+# --- [guided].context: the context a guided run chose ----------------------------------------
+
+
+def test_guided_config_keeps_the_context_a_guided_run_chose():
+    assert GuidedConfig(results=Path(EXAMPLES["GuidedConfig"]["results"]), context=4096).context == 4096
+
+
+def test_guided_config_without_a_context_means_no_guided_run_chose_one():
+    assert GuidedConfig().context is None
+
+
+@pytest.mark.parametrize("value", [0, -1, 2**31, "lots", 4096.5], ids=["zero", "negative", "too large", "text", "fraction"])
+def test_guided_config_refuses_a_context_no_ranking_can_be_computed_for(value):
+    with pytest.raises(ValidationError):
+        GuidedConfig(context=value)
+
+
+@pytest.mark.parametrize("value", [1, 2**31 - 1], ids=["smallest", "largest"])
+def test_guided_context_takes_exactly_the_contexts_a_scenario_takes(value):
+    """The stored context is a `Scenario.context_requested`, so the two bounds have to agree."""
+    from modelroom.measurements import Scenario
+
+    assert GuidedConfig(context=value).context == value
+    assert Scenario(
+        context_requested=value, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1
+    ).context_requested == value
+
+
+def test_load_config_reads_a_stored_context(tmp_path):
+    config_path = tmp_path / "modelroom.toml"
+    config_path.write_text(
+        'schema_version = 2\n\n[paths]\nstate = "state"\nmarkdown = "docs/models.md"\n\n'
+        '[guided]\nresults = "results"\ncontext = 4096\n',
+        encoding="utf-8",
+    )
+    assert load_config(config_path).guided.context == 4096
+
+
+def test_load_config_without_a_stored_context_reads_the_rest_unchanged(tmp_path):
+    config_path = tmp_path / "modelroom.toml"
+    config_path.write_text(
+        'schema_version = 2\n\n[paths]\nstate = "state"\nmarkdown = "docs/models.md"\n\n'
+        '[guided]\nresults = "results"\n',
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    assert config.guided.context is None
+    assert config.guided.results == tmp_path / "results"
+
+
+def test_normalize_config_v1_adds_no_context(tmp_path):
+    """Schema 1 has no `[guided]` table at all, and the normalization does not invent one."""
+    assert "guided" not in normalize_config_v1(_schema_1_payload())
+
+
 def test_allowed_owners_is_the_union_of_packagers_and_publishers():
     config = Configuration.model_validate(EXAMPLES["Configuration"])
     assert config.allowed_owners() == frozenset(EXAMPLES["Configuration"]["packagers"]) | frozenset(

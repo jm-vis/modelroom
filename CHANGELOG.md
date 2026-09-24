@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- `[guided].context`: the context a guided run's ranking was computed for is kept in
+  `modelroom.toml` (CONTRACTS.md, "GuidedConfig"). The context question starts at the kept value
+  instead of always at 8192, and writes the answer back whenever it differs from what the file
+  holds by then (the file is read again first) -- the first time as well, and for 8192 as well,
+  because a kept context is a decision and not a default. A
+  `modelroom render --config <toml>` without a scenario of its own now computes with that context
+  (`render_cmd.scenario_from_config`), so it shows the ranking the guided run showed and leaves a
+  measurement taken at that context in measured group 0; before, it fell back to 8192 and a
+  measurement of another context dropped into group 1. The field is optional, the configuration's
+  `schema_version` stays `2`, and a configuration without it reads and renders exactly as before.
 - The load test, stage 1 (CONTRACTS.md, "Load test (stage 1)"): the guided mode offers to measure
   the speed of packages the local Ollama daemon already has, runs measurement protocol v1 against
   them and writes each result as its own measurement file, which the same run's ranking then shows

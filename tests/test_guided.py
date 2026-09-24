@@ -670,6 +670,125 @@ def test_an_entered_context_reaches_the_document(tmp_path: Path):
     assert any("context 4096 (entered)" in line for line in lines)
 
 
+def test_the_chosen_context_is_kept_in_the_configuration(tmp_path: Path):
+    assert _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})[0] == 0
+
+    assert tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))["guided"]["context"] == 4096
+    assert load_config(_config_file(tmp_path)).guided.context == 4096
+
+
+def test_the_default_context_is_kept_too_because_choosing_it_is_a_decision(tmp_path: Path):
+    """A stored 8192 is the answer the user gave, not the value the question started with."""
+    assert _run(tmp_path, FULL_ANSWERS)[0] == 0
+
+    assert load_config(_config_file(tmp_path)).guided.context == 8192
+
+
+def test_the_second_run_offers_the_kept_context_as_the_default(tmp_path: Path):
+    defaults: dict[str, str] = {}
+
+    class _Recording(FileAsker):
+        def text(self, key, question, default=""):
+            defaults[key] = default
+            return super().text(key, question, default=default)
+
+    assert _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})[0] == 0
+
+    run_guided(
+        _Recording({**FULL_ANSWERS, "context": "4096"}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN2,
+        out=lambda _line: None,
+    )
+
+    assert defaults["context"] == "4096"
+
+
+def test_the_same_context_again_is_not_written_a_second_time(tmp_path: Path):
+    """The step says so when it writes, so a run that writes nothing is visible in its output."""
+    code, first = _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})
+    assert code == 0
+    assert any(line.startswith("kept context 4096 in ") for line in first)
+
+    code, second = _run(tmp_path, {**FULL_ANSWERS, "context": "4096"}, now=RUN2)
+
+    assert code == 0
+    assert not any(line.startswith("kept context ") for line in second)
+    assert load_config(_config_file(tmp_path)).guided.context == 4096
+
+
+def _store_context(config_file: Path, context: int) -> None:
+    """Write `[guided].context` straight into the file -- what another process would leave behind."""
+    lines = [
+        f"context = {context}" if line.startswith("context = ") else line
+        for line in config_file.read_text(encoding="utf-8").splitlines()
+    ]
+    config_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_the_answer_is_compared_with_the_file_not_with_this_runs_own_copy(tmp_path: Path):
+    """Another process may write the file while the question stands; the file on disk decides.
+
+    Without this the run would skip its write because its own copy already said 4096, and leave
+    the other process' 8192 in the file -- the ranking of this run and the one a later
+    `modelroom render` computes would disagree again, which is the whole point of keeping it.
+    """
+
+    class _WritesInBetween(FileAsker):
+        def text(self, key, question, default=""):
+            if key == "context":
+                _store_context(_config_file(tmp_path), 8192)
+            return super().text(key, question, default=default)
+
+    assert _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})[0] == 0
+
+    run_guided(
+        _WritesInBetween({**FULL_ANSWERS, "context": "4096"}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN2,
+        out=lambda _line: None,
+    )
+
+    assert load_config(_config_file(tmp_path)).guided.context == 4096
+
+
+def test_a_later_render_of_its_own_uses_the_kept_context(tmp_path: Path):
+    """The whole point: `modelroom render` shows the ranking the guided run showed."""
+    # The daemon has to report the context the ranking asks for, or the measurement is stored as
+    # not comparable and would count in no ranking at all (`ps_answer`'s `context_length`).
+    daemon = loadtest_daemon(observations=[ps_answer(context_length=4096)] * 4)
+    assert _run(tmp_path, LOAD_TEST_ANSWERS | {"context": "4096"}, daemon=daemon)[0] == 0
+    measured = json.loads(_measurement_files(tmp_path)[0].read_text(encoding="utf-8"))
+    assert (measured["scenario"]["context_requested"], measured["comparable"]) == (4096, True)
+
+    assert main(["render", "--config", str(_config_file(tmp_path))], now=RUN2) == 0
+
+    text = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+    assert "Scenario: context 4096 (entered)" in text
+    assert _ranked_deepseek(tmp_path)["measurement_group"] == 0
+
+
+def test_a_configuration_without_a_kept_context_still_renders_with_8192(tmp_path: Path):
+    assert _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())[0] == 0
+    config_file = _config_file(tmp_path)
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace("context = 8192\n", ""), encoding="utf-8"
+    )
+
+    assert main(["render", "--config", str(config_file)], now=RUN2) == 0
+
+    text = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+    assert "Scenario: context 8192 (default)" in text
+
+
 def test_a_context_that_is_not_a_number_ends_the_run(tmp_path: Path):
     with pytest.raises(GuidedError, match="whole number"):
         _run(tmp_path, {**FULL_ANSWERS, "context": "lots"})

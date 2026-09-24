@@ -737,18 +737,31 @@ the lookup off.
 
 #### GuidedConfig
 
-Schema 2. The results folder the guided mode recorded when it wrote this configuration.
-`load_config` resolves a relative `results` against the configuration file's own directory,
-exactly like `paths.state`; it is not confined. `Configuration.from_dict` requires it absolute,
-like `paths`. `None` (the table absent) means no guided run wrote this file.
+Schema 2. What the guided mode recorded when it wrote this configuration: the results folder, and
+the context its ranking was computed for. `load_config` resolves a relative `results` against the
+configuration file's own directory, exactly like `paths.state`; it is not confined.
+`Configuration.from_dict` requires it absolute, like `paths`. `results = None` (the table absent)
+means no guided run wrote this file.
+
+`context` is the one context of the whole ranking, kept so that a later `modelroom render` of this
+folder shows the same ranking as the guided run that chose it (see "Render", "The scenario"). It
+takes exactly the values `Scenario.context_requested` takes (`> 0`, `<= 2**31 - 1`); `None` means
+no guided run has chosen a context yet, and a configuration written before this field existed
+reads and renders unchanged. The guided mode's context question starts at this value and writes the
+answer back whenever it differs from what the file holds by then (see "Guided mode", step 2) -- the
+first time as well, and for 8192 as well: a kept context is what the user chose, not the value the
+question started with. Both fields are optional, so the
+configuration's `schema_version` stays `2` and no migration step reads or writes them.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
 | `results` | `Path \| None` | default `None` | the folder the guided mode keeps its configuration and results in |
+| `context` | `int \| None` | `> 0`, `<= 2**31 - 1`; default `None` | the context the last guided run's ranking was computed for |
 
 ```json
 {
-  "results": "//models/modelroom"
+  "results": "//models/modelroom",
+  "context": 4096
 }
 ```
 
@@ -825,7 +838,7 @@ writing down one exact repository, and only that repository is ever fetched unde
 | `llmfit` | `LlmfitConfig` | default `LlmfitConfig()` | the minimum required `llmfit` version |
 | `defaults` | `DefaultsConfig` | schema 2, default `DefaultsConfig()` | reserves for an imported machine without its own table |
 | `updates` | `UpdatesConfig` | schema 2, default `UpdatesConfig()` | the release lookup switch |
-| `guided` | `GuidedConfig` | schema 2, default `GuidedConfig()` | the guided mode's results folder |
+| `guided` | `GuidedConfig` | schema 2, default `GuidedConfig()` | the guided mode's results folder and the context it chose |
 
 **Reading schema 1.** `CONFIG_SCHEMA_RANGE` is `(1, 3)`: `load_config` and
 `Configuration.from_dict` accept schema 1 and 2 and refuse 3 and above with `SchemaVersionError`
@@ -865,7 +878,7 @@ only by `modelroom migrate` (see "Migration").
   "llmfit": {"min_version": "1.1.16"},
   "defaults": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0},
   "updates": {"check": true},
-  "guided": {"results": "//models/modelroom"}
+  "guided": {"results": "//models/modelroom", "context": 4096}
 }
 ```
 
@@ -2779,9 +2792,13 @@ schema-1 profile (`_speed_cell`) are gone.
 
 **The scenario** is one context for the whole document: `scenario.context_requested` for every
 package, never a package's own `default_context` (that is shown in its own column, `unknown` when
-the package declares none). `modelroom render` always uses `measurements.default_scenario()`
-(8192, origin `default`); the guided mode passes the context the user chose. The scenario and
-`ranking.RANKING_RULE` are printed in every view.
+the package declares none). The guided mode passes the context the user just chose; a caller that
+passes none gets `render_cmd.scenario_from_config(config)` -- `[guided].context` when the folder
+kept one (origin `entered`, or `default` when that value is 8192), else
+`measurements.default_scenario()` (8192, origin `default`). So `modelroom render --config <toml>`
+of a folder a guided run wrote shows the ranking of that run, and a measurement taken at that
+context stays in measured group 0. The scenario and `ranking.RANKING_RULE` are printed in every
+view.
 
 **The ranking** per machine is `ranking.rank_packages` ("Ranking rule" above): `ranked` holds the
 first `ranking.TOP_LIMIT` entries and `ranked_total` says how many there were, `not_covered`
@@ -3368,7 +3385,7 @@ answer file:
 | 2 | `search` | What are you looking for? | text |
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
 | 2 | `select` | Which of these models should the result cover? | a list of repository ids |
-| 2 | `context` | How much context should the ranking assume? | a whole number, default 8192 |
+| 2 | `context` | How much context should the ranking assume? | a whole number; the default is `[guided].context` when this folder kept one, else 8192 |
 | 5 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **the one optional answer** -- an answer file that does not mention it does not measure |
 | 5 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
 
@@ -3424,6 +3441,18 @@ base model the shipped catalog has no family for gets the family name `search.fa
 derives from the repository name; the guided mode does not ask for one. The `context` answer is
 the one context of the whole ranking (`Scenario`, origin `default` at 8192, `entered`
 otherwise); anything that is not a whole number above zero ends the run with exit `2`.
+
+**The context is kept.** The question starts at `[guided].context` when this folder kept one, else
+at 8192 (`guided.context_default`). The file is then read again ("Every write reads the file again
+first"), and the answer is written to `[guided].context` whenever it differs from what **that** read
+holds -- the first time as well, and for 8192 as well, because a kept context is a decision and not
+a default. An answer that the file already holds writes nothing. The comparison is deliberately
+against the fresh read and not against this run's own copy: a run that skipped its write because
+its copy already said so would leave a context another process wrote in the file, and the next
+`modelroom render` would compute a ranking this run never showed. The write goes through the same
+`write_configuration` every other step uses. What it buys: a `modelroom render` of this folder
+afterwards computes the same ranking (see "Render (schema 2)", "The scenario"), instead of falling
+back to 8192 and putting the run's own measurement into group 1.
 
 **Steps 3 to 5.** `fetch_with_config` with the same budget object (nothing configured yet means
 nothing to fetch, said out loud), then the load test, then `render_with_config` with the chosen

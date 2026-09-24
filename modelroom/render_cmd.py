@@ -16,7 +16,13 @@ from typing import Callable
 from .config import Configuration
 from .contracts import SchemaVersionError
 from .importer import ProfileScan, scan_profiles
-from .measurements import MeasurementRecord, Scenario, default_scenario, read_measurements
+from .measurements import (
+    DEFAULT_CONTEXT_REQUESTED,
+    MeasurementRecord,
+    Scenario,
+    default_scenario,
+    read_measurements,
+)
 from .render import (
     MachineProfile,
     RatingSource,
@@ -37,6 +43,32 @@ from .state import (
 from .views import document_markdown, document_terminal
 
 
+def scenario_for(context: int) -> Scenario:
+    """The ranking's scenario for one context; `context_origin` says where the number came from.
+
+    `default` is reserved for 8192 (`Scenario`'s own rule), every other number is `entered`.
+    Raises `pydantic.ValidationError` for a context no ranking can be computed for, which the
+    caller that took the number from a user turns into its own message.
+    """
+    origin = "default" if context == DEFAULT_CONTEXT_REQUESTED else "entered"
+    return Scenario(
+        context_requested=context, context_origin=origin, kv_type="f16", kv_type_assumed=True, requests=1
+    )
+
+
+def scenario_from_config(config: Configuration) -> Scenario:
+    """The context `render` computes for when no caller passes one: `[guided].context`, else 8192.
+
+    A guided run keeps the context its ranking was computed for in the configuration, so a later
+    `modelroom render --config` of that folder shows the same ranking and leaves a measurement of
+    that context in measured group 0. A configuration no guided run has chosen a context in
+    renders with `default_scenario()`, exactly as before.
+    """
+    if config.guided.context is None:
+        return default_scenario()
+    return scenario_for(config.guided.context)
+
+
 def render_with_config(
     config: Configuration,
     rating: RatingSource | None = None,
@@ -53,10 +85,12 @@ def render_with_config(
 
     `rating` is a `RatingSource` for the Stars column; `None` (the CLI's own default -- there is
     no `--rating` flag) renders every Stars cell as `–` with no failure note. `scenario` is the
-    one context the whole document is computed for; `None` is `measurements.default_scenario()`
-    (8192), which is what `modelroom render` itself always uses -- the guided mode passes the
-    context the user chose. `echo`, when given, receives the terminal view (the guided mode
-    passes `print`); `modelroom render` passes nothing and stays silent on success.
+    one context the whole document is computed for; `None` is `scenario_from_config(config)` --
+    the context a guided run kept in `[guided].context`, else 8192. `modelroom render` passes
+    nothing and so shows the ranking of the last guided run of that folder; the guided mode
+    itself passes the context the user just chose. `echo`, when given, receives the terminal view
+    (the guided mode passes `print`); `modelroom render` passes nothing and stays silent on
+    success.
     """
     rendered_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     json_path = config.paths.markdown.with_suffix(".json")
@@ -89,7 +123,7 @@ def render_with_config(
         return 1
 
     try:
-        return _render_locked(config, rendered_at, rating, scenario or default_scenario(), json_path, echo)
+        return _render_locked(config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo)
     finally:
         release_lock(handle)
 
@@ -198,4 +232,9 @@ def refusal_against_existing_document(markdown_path: Path, new_snapshot_run_at: 
     )
 
 
-__all__ = ["refusal_against_existing_document", "render_with_config"]
+__all__ = [
+    "refusal_against_existing_document",
+    "render_with_config",
+    "scenario_for",
+    "scenario_from_config",
+]
