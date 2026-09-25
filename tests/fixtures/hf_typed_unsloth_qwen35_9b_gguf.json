@@ -1,0 +1,30 @@
+{
+  "_id": "69a2f5edef408247323ee7f4",
+  "id": "unsloth/Qwen3.5-9B-GGUF",
+  "cardData": {
+    "tags": [
+      "unsloth"
+    ],
+    "library_name": "transformers",
+    "license": "apache-2.0",
+    "license_link": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE",
+    "pipeline_tag": "image-text-to-text",
+    "base_model": [
+      "Qwen/Qwen3.5-9B"
+    ]
+  },
+  "downloads": 1443818,
+  "tags": [
+    "transformers",
+    "gguf",
+    "unsloth",
+    "image-text-to-text",
+    "base_model:Qwen/Qwen3.5-9B",
+    "base_model:quantized:Qwen/Qwen3.5-9B",
+    "license:apache-2.0",
+    "endpoints_compatible",
+    "region:us",
+    "conversational"
+  ],
+  "createdAt": "2026-02-28T14:04:29.000Z"
+}

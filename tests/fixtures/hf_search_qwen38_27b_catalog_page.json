@@ -1,0 +1,155 @@
+[
+  {
+    "_id": "6a7d8038d813eea1a14a8db4",
+    "id": "unsloth/Qwen3.8-27B-GGUF",
+    "cardData": {
+      "base_model": [
+        "Qwen/Qwen3.8-27B"
+      ],
+      "license": "apache-2.0",
+      "tags": [
+        "unsloth"
+      ]
+    },
+    "downloads": 7063930,
+    "tags": [
+      "gguf",
+      "qwen3_5",
+      "unsloth",
+      "base_model:Qwen/Qwen3.8-27B",
+      "base_model:quantized:Qwen/Qwen3.8-27B",
+      "license:apache-2.0",
+      "endpoints_compatible",
+      "region:us",
+      "imatrix",
+      "conversational"
+    ],
+    "createdAt": "2026-08-13T08:28:40.000Z"
+  },
+  {
+    "_id": "6a9678354e2541b828b4a40e",
+    "id": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "tags": [
+        "unsloth",
+        "fine tune",
+        "heretic",
+        "uncensored",
+        "abliterated",
+        "ara",
+        "MTP GGUF Quants",
+        "Regular GGUF Quants",
+        "qwen3_8",
+        "qwen3_6",
+        "qwen3_5",
+        "multi-stage tuned",
+        "thinking",
+        "reasoning",
+        "all use cases",
+        "coder",
+        "creative",
+        "creative writing",
+        "all genres",
+        "story",
+        "writing",
+        "fiction",
+        "roleplaying",
+        "bfloat16",
+        "all use cases",
+        "multi-stage-tune",
+        "multi-state-merge"
+      ],
+      "datasets": [
+        "DavidAU/Polar-STRICT-Datasets",
+        "DavidAU/F451-STRICT-Datasets"
+      ],
+      "pipeline_tag": "image-text-to-text",
+      "base_model": [
+        "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU"
+      ]
+    },
+    "downloads": 1502387,
+    "tags": [
+      "gguf",
+      "unsloth",
+      "fine tune",
+      "heretic",
+      "uncensored",
+      "abliterated",
+      "ara",
+      "MTP GGUF Quants",
+      "Regular GGUF Quants",
+      "qwen3_8",
+      "qwen3_6",
+      "qwen3_5",
+      "multi-stage tuned",
+      "thinking",
+      "reasoning",
+      "all use cases",
+      "coder",
+      "creative",
+      "creative writing",
+      "all genres",
+      "story",
+      "writing",
+      "fiction",
+      "roleplaying",
+      "bfloat16",
+      "multi-stage-tune",
+      "multi-state-merge",
+      "image-text-to-text",
+      "en",
+      "zh",
+      "dataset:DavidAU/Polar-STRICT-Datasets",
+      "dataset:DavidAU/F451-STRICT-Datasets",
+      "base_model:DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+      "base_model:quantized:DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+      "license:apache-2.0",
+      "endpoints_compatible",
+      "region:us",
+      "imatrix",
+      "conversational"
+    ],
+    "createdAt": "2026-09-01T07:01:09.000Z"
+  },
+  {
+    "_id": "6a838b56859b6056ecfa5667",
+    "id": "cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "base_model": "Qwen/Qwen3.8-27B",
+      "base_model_relation": "quantized",
+      "pipeline_tag": "image-text-to-text",
+      "tags": [
+        "gguf",
+        "qwen",
+        "qwen3.8",
+        "nvfp4",
+        "imatrix",
+        "mtp",
+        "llama.cpp",
+        "multimodal",
+        "256k-context"
+      ]
+    },
+    "downloads": 4955904,
+    "tags": [
+      "gguf",
+      "qwen",
+      "qwen3.8",
+      "nvfp4",
+      "imatrix",
+      "mtp",
+      "llama.cpp",
+      "multimodal",
+      "256k-context",
+      "image-text-to-text",
+      "base_model:Qwen/Qwen3.8-27B",
+      "base_model:quantized:Qwen/Qwen3.8-27B",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2026-08-17T22:29:42.000Z"
+  }
+]

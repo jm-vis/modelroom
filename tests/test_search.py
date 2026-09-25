@@ -21,6 +21,7 @@ from modelroom.catalog import Catalog, load_catalog
 from modelroom.config import ConfigError, Configuration, load_config, package_targets
 from modelroom.http import BudgetedTransport, RequestBudget, Response
 from modelroom.search import (
+    CATALOG_BUDGET_RESERVE,
     DEFAULT_PACKAGERS,
     DEFAULT_GUIDED_BUDGET,
     NO_OLLAMA_LABEL,
@@ -33,16 +34,31 @@ from modelroom.search import (
     run_search,
     write_configuration,
 )
-from modelroom.search_pages import account_search_url, most_downloaded_url, newest_url
+from modelroom.search_pages import (
+    account_downloads_url,
+    account_search_url,
+    catalog_page_url,
+    model_url,
+    most_downloaded_url,
+    newest_url,
+)
+from modelroom.search_word import latest_model_names
 from modelroom.state import LockHeldError, acquire_lock, release_lock
 
 from fixture_support import (
+    CATALOG_PAGE_FOREIGN_REPO,
+    CATALOG_PAGE_MODEL,
+    CATALOG_PAGE_REPO,
     SEARCH_ACCOUNT_PAGES,
+    TYPED_GGUF_REPO,
+    TYPED_NO_GGUF_REPO,
     build_transport,
+    catalog_transport_mapping,
     json_response,
     mistral_search_mapping,
     qwen35_example_config_dict,
     search_transport_mapping,
+    typed_transport_mapping,
 )
 
 NOW = datetime(2026, 9, 23, 12, 0, 0, tzinfo=timezone.utc)
@@ -67,18 +83,32 @@ def _search_mapping(extra: dict | None = None) -> dict:
     return mapping
 
 
+def _account_pages(
+    account: str, newest: Response, downloads: Response | None = None, word: str = "qwen"
+) -> dict:
+    """The two pages one account is asked with since 2026-09-25: its newest, and its most downloaded.
+
+    Without a second answer the same page stands for both sort orders, which is what an account
+    with few repositories really answers -- the duplicate is then counted as `already listed`.
+    """
+    return {
+        ("GET", account_search_url(word, account)): newest,
+        ("GET", account_downloads_url(word, account)): newest if downloads is None else downloads,
+    }
+
+
 def _one_page_mapping(entries: list[dict]) -> dict:
-    """Every account answers with nothing but `unsloth`, which answers with `entries`.
+    """Every account answers with nothing but `unsloth`, whose newest page answers with `entries`.
 
     For the cases about one entry (a malformed id, a `createdAt` at the edge of the calendar): the
     other accounts are still asked -- a page is never left out -- and answer with an empty list.
     """
-    mapping = {
-        ("GET", account_search_url("qwen", account)): json_response("hf_search_none.json")
-        for account in ASKED_ACCOUNTS
-    }
-    mapping[("GET", account_search_url("qwen", "unsloth"))] = Response(
-        status=200, body=json.dumps(entries).encode("utf-8")
+    empty = json_response("hf_search_none.json")
+    mapping: dict = {}
+    for account in ASKED_ACCOUNTS:
+        mapping.update(_account_pages(account, empty))
+    mapping.update(
+        _account_pages("unsloth", Response(status=200, body=json.dumps(entries).encode("utf-8")), empty)
     )
     return mapping
 
@@ -100,15 +130,23 @@ def _base_model_of(config: Configuration, hf_repo: str):
 # --- the request itself --------------------------------------------------------------------
 
 
-def test_the_filter_asks_one_page_per_account_in_the_order_of_the_groups():
+def test_the_filter_asks_two_pages_per_account_in_the_order_of_the_groups():
     transport = build_transport(_search_mapping())
 
     outcome = run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(60))
 
     pages = [call for call in transport.calls if "filter=gguf" in call[1]]
-    assert pages == [("GET", account_search_url("qwen", account)) for account in ASKED_ACCOUNTS]
+    expected = [
+        ("GET", url(account))
+        for account in ASKED_ACCOUNTS
+        for url in (lambda a: account_search_url("qwen", a), lambda a: account_downloads_url("qwen", a))
+    ]
+    assert pages == expected
+    # One group per account all the same: a reader asks "was my account asked" once, and the two
+    # sort orders are the package's business (decided 2026-09-25).
     assert [group.label for group in outcome.groups] == ASKED_ACCOUNTS
-    assert outcome.requests == len(ASKED_ACCOUNTS) == 7
+    assert [group.pages for group in outcome.groups] == [2] * 7
+    assert outcome.requests == 2 * len(ASKED_ACCOUNTS) == 14
 
 
 def test_the_filter_asks_no_open_page():
@@ -120,14 +158,14 @@ def test_the_filter_asks_no_open_page():
     assert ("GET", newest_url("qwen")) not in transport.calls
 
 
-def test_the_budget_is_one_request_per_account_plus_one_age_lookup_per_base_model():
+def test_the_budget_is_two_requests_per_account_plus_one_age_lookup_per_base_model():
     transport = build_transport(_search_mapping())
 
     outcome = run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(60))
 
-    # seven accounts, plus one age lookup per *distinct* resolved base model (two of them for
-    # three resolved hits): a hit itself costs no request
-    assert outcome.budget_used == 9
+    # seven accounts at two pages each, plus one age lookup per *distinct* resolved base model
+    # (two of them for three resolved hits): a hit itself costs no request
+    assert outcome.budget_used == 16
     assert outcome.budget_limit == 60
 
 
@@ -139,7 +177,8 @@ def test_without_the_filter_the_two_open_pages_follow_the_accounts():
     pages = [call for call in transport.calls if "filter=gguf" in call[1]]
     assert pages[-2:] == [("GET", most_downloaded_url("qwen")), ("GET", newest_url("qwen"))]
     assert [group.label for group in outcome.groups][-2:] == ["most downloaded", "newest"]
-    assert outcome.budget_used == 11
+    assert outcome.requests == 16
+    assert outcome.budget_used == 18
 
 
 def test_without_the_filter_the_account_groups_stay_and_the_open_lists_come_on_top():
@@ -190,11 +229,11 @@ def test_a_repository_answered_twice_is_listed_once_and_costs_no_second_age_look
     first = _quantization_of(repo, "Qwen/Qwen3.5-9B", 111)
     duplicate = _quantization_of(repo, EUROLLM, 222)
     unsloth_page = [first] if page != "unsloth" else [first, duplicate]
-    extra: dict = {
-        ("GET", account_search_url("qwen", "unsloth")): Response(
-            status=200, body=json.dumps(unsloth_page).encode("utf-8")
-        )
-    }
+    extra: dict = _account_pages(
+        "unsloth",
+        Response(status=200, body=json.dumps(unsloth_page).encode("utf-8")),
+        json_response("hf_search_none.json"),
+    )
     if page == "most downloaded":
         extra[("GET", most_downloaded_url("qwen"))] = Response(
             status=200, body=json.dumps([duplicate]).encode("utf-8")
@@ -217,9 +256,9 @@ def test_a_repository_answered_twice_is_listed_once_and_costs_no_second_age_look
     assert _hit(outcome, repo).resolved_base_model == "Qwen/Qwen3.5-9B"
     # the duplicate was never resolved, so its base model was never asked about
     assert ("GET", EUROLLM_INFO) not in transport.calls
-    # seven accounts (plus the two open pages in that case) and the one age lookup the only
-    # resolved base model of these pages costs -- nothing more
-    assert outcome.budget_used == (10 if page == "most downloaded" else 8)
+    # seven accounts at two pages each (plus the two open pages in that case) and the one age
+    # lookup the only resolved base model of these pages costs -- nothing more
+    assert outcome.budget_used == (17 if page == "most downloaded" else 15)
     counted = next(group for group in outcome.groups if group.label == page)
     assert counted.already_listed == 1
     assert counted.line() == ("unsloth 2, 1 of them already listed" if page == "unsloth" else "most downloaded 1, 1 of them already listed")
@@ -246,12 +285,14 @@ def test_a_full_open_page_carries_no_page_full_note():
 
 
 def test_a_group_line_per_account_names_the_account_and_its_number():
+    # One line per account, whatever it cost: both sort orders of the pinned answers carry the same
+    # repositories, so the second page of an account is entirely `already listed`.
     outcome = run_search(build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60))
 
     assert outcome.group_lines() == [
-        "Qwen 1",
+        "Qwen 2, 1 of them already listed",
         "deepseek-ai 0",
-        "unsloth 3",
+        "unsloth 6, 3 of them already listed",
         "bartowski 0",
         "mradermacher 0",
         "lmstudio-community 0",
@@ -269,7 +310,8 @@ def test_the_search_log_carries_one_entry_per_asked_page_with_its_class():
         filtered=True, run_at=datetime(2026, 9, 25, 8, 0, 0, tzinfo=timezone.utc), unresolved={"no base model": 1}
     )
 
-    assert log["schema_version"] == 1
+    assert log["schema_version"] == 2
+    assert log["mode"] == "word"
     assert (log["word"], log["filter_owners"], log["run_at"]) == ("qwen", True, "2026-09-25T08:00:00+00:00")
     assert [entry["account"] for entry in log["accounts"]] == [group.label for group in outcome.groups]
     assert [entry["hits"] for entry in log["accounts"]] == [group.page_size for group in outcome.groups]
@@ -317,7 +359,11 @@ def test_the_two_notes_of_the_screen_come_from_the_same_reading_as_the_file():
 def test_a_full_account_page_says_that_a_more_specific_word_shortens_the_list():
     transport = build_transport(
         _search_mapping(
-            {("GET", account_search_url("qwen", "unsloth")): json_response("hf_search_qwen_page_full.json")}
+            _account_pages(
+                "unsloth",
+                json_response("hf_search_qwen_page_full.json"),
+                json_response("hf_search_none.json"),
+            )
         )
     )
 
@@ -332,11 +378,11 @@ def test_a_page_one_entry_short_of_the_limit_is_not_called_full():
     full = json.loads((Path(__file__).parent / "fixtures" / "hf_search_qwen_page_full.json").read_text("utf-8"))
     transport = build_transport(
         _search_mapping(
-            {
-                ("GET", account_search_url("qwen", "unsloth")): Response(
-                    status=200, body=json.dumps(full[:19]).encode("utf-8")
-                )
-            }
+            _account_pages(
+                "unsloth",
+                Response(status=200, body=json.dumps(full[:19]).encode("utf-8")),
+                json_response("hf_search_none.json"),
+            )
         )
     )
 
@@ -348,10 +394,10 @@ def test_a_page_one_entry_short_of_the_limit_is_not_called_full():
 
 
 def _no_family_mapping(open_pages: bool = False) -> dict:
-    mapping = {
-        ("GET", account_search_url("nebula", account)): json_response("hf_search_none.json")
-        for account in DEFAULT_PACKAGERS
-    }
+    empty = json_response("hf_search_none.json")
+    mapping: dict = {}
+    for account in DEFAULT_PACKAGERS:
+        mapping.update(_account_pages(account, empty, word="nebula"))
     if open_pages:
         mapping[("GET", most_downloaded_url("nebula"))] = json_response("hf_search_none.json")
         mapping[("GET", newest_url("nebula"))] = json_response("hf_search_none.json")
@@ -384,10 +430,9 @@ def test_without_the_filter_that_note_names_the_open_lists_as_well():
 
 
 def test_a_publisher_that_is_also_a_listed_packager_is_asked_once():
-    mapping = {
-        ("GET", account_search_url("qwen", account)): json_response(name)
-        for account, name in SEARCH_ACCOUNT_PAGES.items()
-    }
+    mapping: dict = {}
+    for account, name in SEARCH_ACCOUNT_PAGES.items():
+        mapping.update(_account_pages(account, json_response(name)))
     mapping[("GET", QWEN_INFO)] = json_response("hf_qwen_qwen35_9b_model.json")
     mapping[("GET", DEEPSEEK_INFO)] = Response(
         status=200, body=json.dumps({"id": DEEPSEEK_REPO, "sha": "b" * 40}).encode("utf-8")
@@ -420,7 +465,7 @@ def test_run_search_defaults_to_the_shared_guided_budget():
 
 def test_run_search_reports_a_failing_status_and_names_the_account():
     transport = build_transport(
-        _search_mapping({("GET", account_search_url("qwen", "mradermacher")): Response(status=503, body=b"")})
+        _search_mapping(_account_pages("mradermacher", Response(status=503, body=b"")))
     )
 
     with pytest.raises(SearchError) as exc:
@@ -468,7 +513,7 @@ def test_a_budget_that_ends_before_the_open_pages_says_no_account_is_missing():
     transport = build_transport(_search_mapping())
 
     with pytest.raises(SearchError) as exc:
-        run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(9), open_pages=True)
+        run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(16), open_pages=True)
 
     assert str(exc.value) == (
         "search for 'qwen' (most downloaded) not made: budget exhausted; 2 pages were not asked"
@@ -490,14 +535,322 @@ def test_a_budget_that_ends_in_the_middle_names_the_accounts_still_unasked():
     transport = build_transport(_search_mapping())
 
     with pytest.raises(SearchError) as exc:
-        run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(2))
+        run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(3))
 
-    # the first page and the age lookup its resolved hit costs used both requests, so the second
-    # account is where the budget ends -- and six of the seven accounts have no answer
+    # `Qwen`'s two pages and the age lookup its resolved hit costs used all three requests, so the
+    # second account is where the budget ends -- and six of the seven accounts have no answer
     assert str(exc.value) == (
         "search for 'qwen' (deepseek-ai) not made: budget exhausted; 6 accounts were not asked: "
         "deepseek-ai, unsloth, bartowski, mradermacher, lmstudio-community, ggml-org"
     )
+
+
+# --- a typed repository id (B, decided 2026-09-25) ----------------------------------------------
+
+
+def test_a_typed_repository_id_is_one_request_and_one_group_labeled_typed():
+    transport = build_transport(typed_transport_mapping())
+
+    outcome = run_search(transport, TYPED_GGUF_REPO, catalog=_catalog(), budget=RequestBudget(60))
+
+    assert outcome.mode == "id"
+    assert outcome.typed == TYPED_GGUF_REPO
+    assert [group.label for group in outcome.groups] == ["typed"]
+    assert [hit.repo for hit in outcome.hits] == [TYPED_GGUF_REPO]
+    # one page, plus the one age lookup its resolved base model costs
+    assert outcome.requests == 1
+    assert outcome.budget_used == 2
+    assert transport.calls[0] == ("GET", model_url(TYPED_GGUF_REPO))
+
+
+def test_a_typed_repository_id_resolves_and_says_which_model_it_packages():
+    outcome = run_search(
+        build_transport(typed_transport_mapping()), TYPED_GGUF_REPO, catalog=_catalog(), budget=RequestBudget(60)
+    )
+
+    hit = _hit(outcome, TYPED_GGUF_REPO)
+    assert hit.resolved is True
+    assert hit.resolved_base_model == "Qwen/Qwen3.5-9B"
+    assert hit.publisher_status == "listed packager"
+    assert hit.downloads == 1_443_818
+
+
+def test_a_typed_id_resolves_although_no_catalog_publisher_owns_its_base_model():
+    # `publisher_unknown` does not apply to a repository somebody typed: they said which one they
+    # want, so the catalog has nothing left to prefer (decided 2026-09-25).
+    repo = "packager/Nebula-9B-GGUF"
+    answer = Response(
+        status=200,
+        body=json.dumps(
+            {
+                "id": repo,
+                "tags": ["gguf", "base_model:nebula-lab/Nebula-9B", "base_model:quantized:nebula-lab/Nebula-9B"],
+                "cardData": {"base_model": ["nebula-lab/Nebula-9B"], "license": "apache-2.0"},
+                "downloads": 42,
+            }
+        ).encode("utf-8"),
+    )
+    mapping = {
+        ("GET", model_url(repo)): answer,
+        ("GET", "https://huggingface.co/api/models/nebula-lab/Nebula-9B"): Response(
+            status=200, body=json.dumps({"id": "nebula-lab/Nebula-9B", "cardData": {}}).encode("utf-8")
+        ),
+    }
+
+    outcome = run_search(build_transport(mapping), repo, catalog=_catalog(), budget=RequestBudget(60))
+
+    hit = _hit(outcome, repo)
+    assert (hit.resolved, hit.unresolved_reason) == (True, None)
+    assert hit.resolved_base_model == "nebula-lab/Nebula-9B"
+    assert hit.publisher_status == "other"
+    assert hit.age == "unknown"  # no catalog statement and no `new_version`: no evidence either way
+
+
+def test_a_typed_id_without_a_gguf_file_says_so_and_searches_for_the_name():
+    mapping = {**search_transport_mapping(), **typed_transport_mapping()}
+    transport = build_transport(mapping)
+
+    outcome = run_search(transport, TYPED_NO_GGUF_REPO, catalog=_catalog(), budget=RequestBudget(60))
+
+    assert f"{TYPED_NO_GGUF_REPO} holds no GGUF file" in outcome.notes
+    assert outcome.mode == "word"
+    assert outcome.typed is None
+    # the word search over the name half followed: the accounts were asked with `qwen`
+    assert ("GET", account_search_url("qwen", "unsloth")) in transport.calls
+    assert TYPED_GGUF_REPO in [hit.repo for hit in outcome.hits]
+
+
+def test_a_typed_id_that_fell_back_still_counts_the_page_it_asked():
+    # It spent a request and left no group behind, so a `requests` built from the groups alone said
+    # two for a run that made three (second-model round, 2026-09-25).
+    mapping = {**search_transport_mapping(), **typed_transport_mapping()}
+
+    outcome = run_search(
+        build_transport(mapping), TYPED_NO_GGUF_REPO, catalog=_catalog(), budget=RequestBudget(60)
+    )
+
+    assert outcome.requests == sum(group.pages for group in outcome.groups) + 1
+    # The typed page, then two pages for each of the six accounts the name half asks: `Qwen` as the
+    # one matching publisher plus the five listed packagers.
+    assert outcome.requests == 13
+
+
+def test_a_typed_id_the_hub_does_not_answer_for_says_so_and_searches_for_the_name():
+    repo = "unsloth/Qwen3.5-9B-GGUF"
+    mapping = {**search_transport_mapping(), ("GET", model_url(repo)): Response(status=401, body=b"")}
+    transport = build_transport(mapping)
+
+    outcome = run_search(transport, repo, catalog=_catalog(), budget=RequestBudget(60))
+
+    assert f"{repo} is no repository this search could read" in outcome.notes
+    assert outcome.mode == "word"
+    assert ("GET", account_search_url("qwen", "unsloth")) in transport.calls
+
+
+def test_a_typed_id_answered_by_another_repository_is_not_taken_for_it():
+    # The transport follows redirects and the Hub answers a moved path with what it moved to.
+    repo = "unsloth/Qwen3.5-9B-GGUF"
+    moved = Response(status=200, body=json.dumps({"id": "other/Qwen3.5-9B-GGUF", "tags": ["gguf"]}).encode("utf-8"))
+    mapping = {**search_transport_mapping(), ("GET", model_url(repo)): moved}
+
+    outcome = run_search(build_transport(mapping), repo, catalog=_catalog(), budget=RequestBudget(60))
+
+    assert f"{repo} is no repository this search could read" in outcome.notes
+
+
+# --- no search word at all (C, decided 2026-09-25) ----------------------------------------------
+
+
+def test_no_search_word_asks_one_page_per_current_model_of_the_catalog():
+    transport = build_transport(catalog_transport_mapping())
+
+    outcome = run_search(transport, "", catalog=_catalog(), budget=RequestBudget(150))
+
+    planned = latest_model_names(_catalog())
+    assert outcome.mode == "catalog"
+    assert [group.label for group in outcome.groups] == planned
+    assert outcome.requests == len(planned)
+    assert [call for call in transport.calls][0] == ("GET", catalog_page_url(planned[0]))
+    assert outcome.notes == ["no search word: the catalog's current models, one page each"]
+
+
+def test_no_search_word_resolves_what_those_pages_answer_with():
+    outcome = run_search(
+        build_transport(catalog_transport_mapping()), "  ", catalog=_catalog(), budget=RequestBudget(150)
+    )
+
+    hit = _hit(outcome, CATALOG_PAGE_REPO)
+    assert hit.resolved is True
+    assert hit.resolved_base_model == "Qwen/Qwen3.8-27B"
+    assert hit.publisher_status == "listed packager"
+    group = next(group for group in outcome.groups if group.label == CATALOG_PAGE_MODEL)
+    assert group.page_size == 3
+
+
+@pytest.mark.parametrize("spare, asked", [(1, 1), (3, 3)])
+def test_the_catalog_pages_stop_at_the_reserve_instead_of_ending_the_search(spare, asked):
+    """The fetch of a chosen model shares this budget, so the catalog plan stops and says how far it
+    got -- a run that has a choice to offer is not ended by a `SearchError`. The threshold itself is
+    the assertion: with `reserve + n` requests, `n` pages are asked and no more."""
+    planned = len(latest_model_names(_catalog()))
+    transport = build_transport(catalog_transport_mapping())
+
+    outcome = run_search(
+        transport, "", catalog=_catalog(), budget=RequestBudget(CATALOG_BUDGET_RESERVE + spare)
+    )
+
+    # The first pages of the catalog answer with nothing, so no age lookup blurs the count.
+    assert len(outcome.groups) == asked
+    assert outcome.requests == asked
+    assert outcome.budget_used == asked
+    assert f"the request budget ended after {asked} of {planned} catalog pages" in outcome.notes
+    assert asked < planned
+
+
+def test_the_search_log_of_a_run_without_a_word_names_the_catalog_mode():
+    outcome = run_search(
+        build_transport(catalog_transport_mapping()), "", catalog=_catalog(), budget=RequestBudget(150)
+    )
+
+    log = outcome.search_log(filtered=True, run_at=NOW, unresolved={})
+
+    assert (log["mode"], log["word"]) == ("catalog", "")
+    # Not `open`: a catalog page is no open list, and a sentence built on that class said the two
+    # open lists were asked (live probe, 2026-09-25).
+    assert {entry["class"] for entry in log["accounts"]} == {"catalog"}
+
+
+def test_the_search_log_of_a_typed_id_names_that_page_as_typed():
+    outcome = run_search(
+        build_transport(typed_transport_mapping()), TYPED_GGUF_REPO, catalog=_catalog(), budget=RequestBudget(60)
+    )
+
+    log = outcome.search_log(filtered=True, run_at=NOW, unresolved={})
+
+    assert (log["mode"], log["word"]) == ("id", TYPED_GGUF_REPO)
+    assert log["accounts"] == [{"account": "typed", "class": "typed", "hits": 1, "page_full": False}]
+
+
+# --- the owner filter as a preference (D, decided 2026-09-25) ------------------------------------
+
+
+def test_with_the_filter_off_a_model_of_an_account_outside_the_catalog_resolves():
+    outcome = run_search(
+        build_transport(catalog_transport_mapping()),
+        "",
+        catalog=_catalog(),
+        budget=RequestBudget(150),
+        publisher_required=False,
+    )
+
+    hit = _hit(outcome, CATALOG_PAGE_FOREIGN_REPO)
+    assert hit.resolved is True
+    assert str(hit.resolved_base_model).startswith("DavidAU/")  # no publisher of this catalog
+    assert hit.publisher_status == "other"
+    assert hit.age == "unknown"
+    assert "publisher_unknown" not in [hit.unresolved_reason for hit in outcome.hits]
+
+
+def test_with_the_filter_on_that_same_model_stays_unresolved_with_its_reason():
+    outcome = run_search(
+        build_transport(catalog_transport_mapping()), "", catalog=_catalog(), budget=RequestBudget(150)
+    )
+
+    hit = _hit(outcome, CATALOG_PAGE_FOREIGN_REPO)
+    assert (hit.resolved, hit.unresolved_reason) == (False, "publisher_unknown")
+
+
+def test_the_most_downloaded_page_of_an_account_finds_what_its_newest_page_does_not():
+    """Measured live 2026-09-25: `unsloth` has more than twenty `qwen` repositories newer than
+    `Qwen3.5-9B-GGUF`, so one sort order alone cannot find the plain build of a listed model."""
+    newest = json_response("hf_search_none.json")
+    downloads = json_response("hf_search_qwen_unsloth_downloads.json")
+    mapping = _search_mapping(_account_pages("unsloth", newest, downloads))
+    mapping[("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-4B")] = Response(
+        status=200, body=json.dumps({"id": "Qwen/Qwen3.5-4B", "cardData": {}}).encode("utf-8")
+    )
+
+    outcome = run_search(build_transport(mapping), "qwen", catalog=_catalog(), budget=RequestBudget(60))
+
+    assert TYPED_GGUF_REPO in [hit.repo for hit in outcome.hits]
+    unsloth = next(group for group in outcome.groups if group.label == "unsloth")
+    assert unsloth.page_size == 2
+    assert unsloth.pages == 2
+
+
+# --- loose input, held against the answer locally (A, decided 2026-09-25) ------------------------
+
+
+def test_a_name_with_blanks_asks_one_word_and_drops_what_the_others_do_not_name():
+    transport = build_transport(_search_mapping())
+
+    outcome = run_search(transport, "qwen 3.5 9b", catalog=_catalog(), budget=RequestBudget(60))
+
+    # asked with `qwen`, the one word the Hub gets
+    assert ("GET", account_search_url("qwen", "unsloth")) in transport.calls
+    assert outcome.query == "qwen 3.5 9b"
+    repos = [hit.repo for hit in outcome.hits]
+    assert TYPED_GGUF_REPO in repos
+    # `unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF` carries `qwen` but neither `3.5` nor `9b`
+    assert "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF" not in repos
+    unsloth = next(group for group in outcome.groups if group.label == "unsloth")
+    assert unsloth.filtered_out > 0
+
+
+def test_one_word_is_never_held_against_the_answer_so_the_pinned_run_is_unchanged():
+    # `community-user/Nebula-9B-GGUF` carries the word `qwen` in neither half of its id, so a filter
+    # wrongly applied to a one-word search would drop it -- which is the case this test is about.
+    outcome = run_search(
+        build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60), open_pages=True
+    )
+
+    assert all(group.filtered_out == 0 for group in outcome.groups)
+    repos = [hit.repo for hit in outcome.hits]
+    assert "community-user/Nebula-9B-GGUF" in repos
+    assert "qwen" not in "community-user/Nebula-9B-GGUF".casefold()
+    assert "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF" in repos
+
+
+def test_a_typo_leads_to_the_candidates_the_catalog_knows():
+    empty = json_response("hf_search_none.json")
+    mapping: dict = {}
+    for account in DEFAULT_PACKAGERS:
+        mapping.update(_account_pages(account, empty, word="qwn"))
+
+    outcome = run_search(build_transport(mapping), "qwn", catalog=_catalog(), budget=RequestBudget(60))
+
+    assert "qwen" in outcome.candidates
+
+
+def test_a_word_the_catalog_knows_gets_no_candidates():
+    # A correct word with no answer today is a fact about the Hub, not a spelling mistake.
+    outcome = run_search(build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60))
+
+    assert outcome.candidates == []
+
+
+def test_a_typed_id_that_fell_back_can_still_lead_to_candidates():
+    # From the fallback on it is a word search, so its words are read like any others.
+    empty = json_response("hf_search_none.json")
+    mapping: dict = {("GET", model_url("acme/qwn")): Response(status=404, body=b"")}
+    for account in DEFAULT_PACKAGERS:
+        mapping.update(_account_pages(account, empty, word="qwn"))
+
+    outcome = run_search(build_transport(mapping), "acme/qwn", catalog=_catalog(), budget=RequestBudget(60))
+
+    assert outcome.mode == "word"
+    assert "qwen" in outcome.candidates
+
+
+def test_a_typed_id_and_a_run_without_a_word_get_no_candidates():
+    typed = run_search(
+        build_transport(typed_transport_mapping()), TYPED_GGUF_REPO, catalog=_catalog(), budget=RequestBudget(60)
+    )
+    catalog_run = run_search(
+        build_transport(catalog_transport_mapping()), "", catalog=_catalog(), budget=RequestBudget(150)
+    )
+
+    assert (typed.candidates, catalog_run.candidates) == ([], [])
 
 
 # --- resolution ------------------------------------------------------------------------------
@@ -619,7 +972,7 @@ def test_the_summary_line_counts_repositories_resolved_unresolved_requests_and_t
         build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60)
     )
 
-    assert outcome.summary_line() == "4 repositories, 3 resolved, 1 unresolved, 7 requests, budget 9/60"
+    assert outcome.summary_line() == "4 repositories, 3 resolved, 1 unresolved, 14 requests, budget 16/60"
 
 
 def test_the_summary_line_of_a_run_without_the_filter_counts_the_open_pages_too():
@@ -627,7 +980,7 @@ def test_the_summary_line_of_a_run_without_the_filter_counts_the_open_pages_too(
         build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60), open_pages=True
     )
 
-    assert outcome.summary_line() == "9 repositories, 3 resolved, 6 unresolved, 9 requests, budget 11/60"
+    assert outcome.summary_line() == "9 repositories, 3 resolved, 6 unresolved, 16 requests, budget 18/60"
 
 
 def test_the_flat_hit_list_is_the_groups_one_after_the_other():

@@ -238,14 +238,20 @@ def search_transport_mapping(word: str = "qwen") -> dict[tuple[str, str], Respon
     unresolved hits must not depend on whichever repositories the live Hub answers with today
     (`tests/fixtures/README.md` records how the fixtures were taken). Both open pages are bound as
     well, so one mapping serves a run with the owner filter on and one with it off.
+
+    Since 2026-09-25 an account is asked twice, newest and most downloaded, and **both** sort
+    orders are bound to that account's one curated answer: the curation is about which
+    repositories an account has, not about the order they come back in, and a duplicate is exactly
+    what the second page of an account usually is. What one sort order finds and the other does not
+    is a case of its own (`tests/test_search.py`, with the recorded two-entry downloads page).
     """
-    from modelroom.search_pages import account_search_url, most_downloaded_url, newest_url
+    from modelroom.search_pages import account_downloads_url, account_search_url, most_downloaded_url, newest_url
 
     deepseek = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    mapping: dict[tuple[str, str], Response] = {
-        ("GET", account_search_url(word, account)): json_response(name)
-        for account, name in SEARCH_ACCOUNT_PAGES.items()
-    }
+    mapping: dict[tuple[str, str], Response] = {}
+    for account, name in SEARCH_ACCOUNT_PAGES.items():
+        mapping[("GET", account_search_url(word, account))] = json_response(name)
+        mapping[("GET", account_downloads_url(word, account))] = json_response(name)
     mapping[("GET", most_downloaded_url(word))] = json_response(SEARCH_OPEN_PAGES["most downloaded"])
     mapping[("GET", newest_url(word))] = json_response(SEARCH_OPEN_PAGES["newest"])
     mapping[("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B")] = json_response(
@@ -259,6 +265,68 @@ def search_transport_mapping(word: str = "qwen") -> dict[tuple[str, str], Respon
     return mapping
 
 
+# The three cases of the input forms of 2026-09-25, all recorded live that day.
+TYPED_GGUF_REPO = "unsloth/Qwen3.5-9B-GGUF"  # holds GGUF files: the `gguf` tag is on it
+TYPED_NO_GGUF_REPO = "Qwen/Qwen3.5-9B"  # the base model itself: tensors, no `gguf` tag
+# The one current catalog model whose page answers with entries. `Qwen3.8-27B` and not
+# `Qwen3.5-9B`: a page per **current** model is what a run with no word asks, and the catalog's
+# current Qwen model is that one.
+CATALOG_PAGE_MODEL = "Qwen3.8-27B"
+CATALOG_PAGE_REPO = "unsloth/Qwen3.8-27B-GGUF"
+# A repository of that page whose base model belongs to an account the catalog does not name as a
+# publisher: `publisher_unknown` with the owner filter on, resolved with `other` when it is off.
+CATALOG_PAGE_FOREIGN_REPO = (
+    "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF"
+)
+# The base models the recorded catalog page declares, and therefore the age lookups it costs.
+CATALOG_PAGE_BASE_MODELS: tuple[str, ...] = (
+    "Qwen/Qwen3.8-27B",
+    "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+)
+
+
+def _card_answer(repo: str, license_name: str = "apache-2.0") -> Response:
+    """The answer one age lookup reads: the repository names itself and says no `new_version`."""
+    body = json.dumps({"id": repo, "sha": "d" * 40, "cardData": {"license": license_name}})
+    return Response(status=200, headers={}, body=body.encode("utf-8"))
+
+
+def typed_transport_mapping() -> dict[tuple[str, str], Response]:
+    """The one page a typed repository id asks for, both cases, plus the age lookup it costs."""
+    from modelroom.search_pages import model_url
+
+    return {
+        ("GET", model_url(TYPED_GGUF_REPO)): json_response("hf_typed_unsloth_qwen35_9b_gguf.json"),
+        ("GET", model_url(TYPED_NO_GGUF_REPO)): json_response("hf_typed_qwen_qwen35_9b.json"),
+        ("GET", f"https://huggingface.co/api/models/{TYPED_NO_GGUF_REPO}"): json_response(
+            "hf_qwen_qwen35_9b_model.json"
+        ),
+    }
+
+
+def catalog_transport_mapping() -> dict[tuple[str, str], Response]:
+    """One page per current model of the shipped catalog: one answers, every other with nothing.
+
+    Read from the catalog rather than written out here, so a current model added later is bound too
+    instead of ending the run at a URL no fixture answers.
+    """
+    from modelroom.catalog import load_catalog
+    from modelroom.search_pages import catalog_page_url
+    from modelroom.search_word import latest_model_names
+
+    mapping: dict[tuple[str, str], Response] = {}
+    for name in latest_model_names(load_catalog()):
+        page = (
+            json_response("hf_search_qwen38_27b_catalog_page.json")
+            if name == CATALOG_PAGE_MODEL
+            else json_response("hf_search_none.json")
+        )
+        mapping[("GET", catalog_page_url(name))] = page
+    for base in CATALOG_PAGE_BASE_MODELS:
+        mapping[("GET", f"https://huggingface.co/api/models/{base}")] = _card_answer(base)
+    return mapping
+
+
 def mistral_search_mapping(word: str = "mistral") -> dict[tuple[str, str], Response]:
     """Every page one search for `mistral` asks for, plus one age lookup per resolved base model.
 
@@ -268,15 +336,14 @@ def mistral_search_mapping(word: str = "mistral") -> dict[tuple[str, str], Respo
     """
     from modelroom.catalog import load_catalog
     from modelroom.search import DEFAULT_PACKAGERS
-    from modelroom.search_pages import account_search_url, search_accounts
+    from modelroom.search_pages import account_downloads_url, account_search_url, search_accounts
 
     accounts = search_accounts(load_catalog(), word, DEFAULT_PACKAGERS)
-    mapping: dict[tuple[str, str], Response] = {
-        ("GET", account_search_url(word, account)): json_response(
-            SEARCH_MISTRAL_PAGES.get(account, "hf_search_none.json")
-        )
-        for account in accounts
-    }
+    mapping: dict[tuple[str, str], Response] = {}
+    for account in accounts:
+        page = json_response(SEARCH_MISTRAL_PAGES.get(account, "hf_search_none.json"))
+        mapping[("GET", account_search_url(word, account))] = page
+        mapping[("GET", account_downloads_url(word, account))] = page
     for base in MISTRAL_BASE_MODELS:
         mapping[("GET", f"https://huggingface.co/api/models/{base}")] = Response(
             status=200,

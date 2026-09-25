@@ -37,9 +37,14 @@ Criteria (the plan's own numbering):
    heads of 72 characters, one answer line per question with its answer in words and none of the
    dialog library's own, a size scale that says how many packages fit on the measured machine, a
    result table whose notes are bundled by memory pool, and the card of six rows that closes the
-   run (the screen of 2026-09-24).
+   run (the screen of 2026-09-24);
+8. the search test set (`tests/search_testset.toml`) is asked **live**, one search per case, and
+   reported case by case: what a person types and which models come back for it -- a repository
+   id, a name with blanks, a typo, and nothing at all. Gate-free by decision (2026-09-25): the
+   Hub's answer for a word changes by the hour, so a missing model is a `WARN`. What the tests gate
+   is the shape of that report (`tests/test_selftest.py`).
 
-The live search runs as a smoke afterwards and never decides the exit code.
+The test set and the live search run as smokes afterwards and never decide the exit code.
 
 Nothing outside the temporary folder is written: `HOME`/`USERPROFILE` are moved into it before
 anything runs, and the run refuses to start if the pointer file would still land anywhere else.
@@ -63,6 +68,7 @@ from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parent.parent
 SEARCH_NAME = "qwen"
+SEARCH_LOG_VERSION = 2  # `search.json`'s own version (CONTRACTS.md, "Search log")
 QWEN_BASE = "Qwen/Qwen3.5-9B"
 UNSLOTH_GGUF = "unsloth/Qwen3.5-9B-GGUF"
 # The prepared package of criterion 5: the one repository in the pinned search answer whose base
@@ -160,9 +166,11 @@ def search_problems(log: dict, lines: list[str]) -> list[str]:
     where the search asked and how much of what it answered is a choice, and those are held
     against the screen here.
     """
+    if log.get("schema_version") != SEARCH_LOG_VERSION:
+        return [f"search.json has schema_version {log.get('schema_version')!r}, expected {SEARCH_LOG_VERSION}"]
     problems = []
-    if log.get("schema_version") != 1:
-        return [f"search.json has schema_version {log.get('schema_version')!r}, expected 1"]
+    if log.get("mode") != "word":
+        problems.append(f"search.json names mode {log.get('mode')!r}, expected 'word'")
     resolved = log.get("resolved", 0)
     if resolved < 1:
         problems.append(f"the search resolved {resolved} repositories, expected at least one")
@@ -691,6 +699,29 @@ def _live_search_smoke() -> Step:
     )
 
 
+def _testset_step() -> Step:
+    """Criterion 8: the search test set, asked live -- one line per case, no effect on the exit code.
+
+    Live because that is the only place the question can be answered: whether a person who types
+    `qwen 3.5 9b` gets the model is a fact about the Hub's answer today, not about a fixture. A
+    missing model is therefore a `WARN` and never a failure (decided 2026-09-25); what the tests
+    gate is the shape of this report (`scripts/searchset.py`, `tests/test_selftest.py`).
+    """
+    from searchset import TestsetError, ask_testset, load_testset, testset_problems
+
+    try:
+        cases = load_testset()
+    except TestsetError as exc:
+        return Step("(8) the search test set, live (no gate effect)", False, str(exc))
+    lines = ask_testset(cases)
+    problems = testset_problems(cases, lines)
+    return Step(
+        "(8) the search test set, live (no gate effect)",
+        not problems,
+        "\n".join(problems or lines),
+    )
+
+
 def run_steps(work: Path) -> list[Step]:
     build_transport, guided_transport_mapping = _import_test_support()
     pointer = _redirect_home(work / "home")
@@ -707,6 +738,7 @@ def run_steps(work: Path) -> list[Step]:
         results, build_transport(guided_transport_mapping()), started + timedelta(minutes=1), machine
     )
     steps.append(_guided_mode_step(first_lines, scale, models))
+    steps.append(_testset_step())
     steps.append(_live_search_smoke())
     return steps
 

@@ -1,0 +1,37 @@
+{
+  "_id": "69a194f2d29af86e5f085743",
+  "id": "Qwen/Qwen3.5-9B",
+  "cardData": {
+    "library_name": "transformers",
+    "license": "apache-2.0",
+    "license_link": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE",
+    "pipeline_tag": "image-text-to-text",
+    "base_model": [
+      "Qwen/Qwen3.5-9B-Base"
+    ]
+  },
+  "downloads": 9787242,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "qwen3_5",
+    "image-text-to-text",
+    "conversational",
+    "base_model:Qwen/Qwen3.5-9B-Base",
+    "base_model:finetune:Qwen/Qwen3.5-9B-Base",
+    "license:apache-2.0",
+    "eval-results",
+    "endpoints_compatible",
+    "deploy:sagemaker",
+    "deploy:azure",
+    "region:us"
+  ],
+  "createdAt": "2026-02-27T12:58:26.000Z",
+  "safetensors": {
+    "parameters": {
+      "BF16": 9653100528,
+      "F32": 3840
+    },
+    "total": 9653104368
+  }
+}

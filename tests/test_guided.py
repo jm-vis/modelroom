@@ -105,7 +105,7 @@ def _run(tmp_path: Path, answers: dict | None = None, *, here: Path | None = Non
         asker,
         here=here if here is not None else tmp_path / "results",
         pointer_path=_pointer(tmp_path),
-        transport=build_transport(guided_transport_mapping()),
+        transport=kwargs.pop("transport", None) or build_transport(guided_transport_mapping()),
         probes=kwargs.pop("probes", None) or windows_probes(),
         daemon=kwargs.pop("daemon", None) or offline_daemon(),
         now=now,
@@ -909,14 +909,18 @@ def test_the_search_leaves_two_notes_and_puts_the_accounts_into_search_json(tmp_
     assert "searched Hugging Face at the publisher Qwen and the five listed packagers" in notes
     assert "4 repositories, 2 of them models you can pick from" in notes
     # The seven account lines, the request count and the budget are in the file, not on the screen.
-    assert not any(line.strip().startswith(("Qwen 1", "unsloth 3", "bartowski 0")) for line in lines)
+    assert not any(line.strip().startswith(("Qwen 2", "unsloth 6", "bartowski 0")) for line in lines)
     assert not any("cannot be picked:" in line for line in lines)
     assert not any("budget " in line for line in lines)
     log = _search_log(tmp_path)
-    assert log["schema_version"] == 1
-    assert (log["word"], log["filter_owners"], log["requests"], log["resolved"]) == ("qwen", True, 7, 3)
+    assert log["schema_version"] == 2
+    assert log["mode"] == "word"
+    # Fourteen requests for seven accounts since 2026-09-25: newest and most downloaded each.
+    assert (log["word"], log["filter_owners"], log["requests"], log["resolved"]) == ("qwen", True, 14, 3)
     assert log["budget"]["limit"] == 150
-    assert {entry["account"]: entry["hits"] for entry in log["accounts"]}["Qwen"] == 1
+    # Two, because both sort orders of `Qwen` answer with its one repository (the fixture binds
+    # the same curated page to each); the duplicate is listed once and counted as already listed.
+    assert {entry["account"]: entry["hits"] for entry in log["accounts"]}["Qwen"] == 2
     assert {entry["account"]: entry["class"] for entry in log["accounts"]}["unsloth"] == "packager"
     assert log["unresolved"] == [{"reason": "the repository does not say it packages a base model", "count": 1}]
 
@@ -927,8 +931,9 @@ def test_the_search_log_holds_the_same_numbers_the_old_lines_said(tmp_path: Path
     log = _search_log(tmp_path)
 
     assert log["resolved"] + sum(entry["count"] for entry in log["unresolved"]) == 4
-    assert sum(entry["hits"] for entry in log["accounts"]) == 4
-    assert log["requests"] == len(log["accounts"])
+    # `hits` is what the two pages of an account answered with together, duplicates included.
+    assert sum(entry["hits"] for entry in log["accounts"]) == 8
+    assert log["requests"] == 2 * len(log["accounts"])
 
 
 def test_with_the_filter_off_the_two_open_lists_are_in_the_note_and_in_the_file(tmp_path: Path):
@@ -940,7 +945,7 @@ def test_with_the_filter_off_the_two_open_lists_are_in_the_note_and_in_the_file(
         "most downloaded",
         "newest",
     ]
-    assert log["requests"] == 9
+    assert log["requests"] == 16
     assert log["filter_owners"] is False
 
 
@@ -953,10 +958,15 @@ def test_without_the_filter_a_derivative_is_in_the_file_with_its_reason(tmp_path
 
 
 def test_a_full_account_page_invites_a_more_specific_word(tmp_path: Path):
-    from modelroom.search_pages import account_search_url
+    from modelroom.search_pages import account_downloads_url, account_search_url
 
     page = json_response("hf_search_qwen_page_full.json")
-    mapping = {**guided_transport_mapping(), ("GET", account_search_url("qwen", "unsloth")): page}
+    empty = json_response("hf_search_none.json")
+    mapping = {
+        **guided_transport_mapping(),
+        ("GET", account_search_url("qwen", "unsloth")): page,
+        ("GET", account_downloads_url("qwen", "unsloth")): empty,
+    }
     lines: list[str] = []
     run_guided(
         FileAsker({**FULL_ANSWERS, "select": []}),
@@ -971,6 +981,145 @@ def test_a_full_account_page_invites_a_more_specific_word(tmp_path: Path):
 
     assert any("a more specific word shortens the list" in line for line in lines)
     assert any(entry["page_full"] for entry in _search_log(tmp_path)["accounts"])
+
+
+def test_an_empty_search_answer_asks_the_catalog_pages_and_says_what_it_did(tmp_path: Path):
+    """"I have no model in mind, show me what fits" is a valid answer (decided 2026-09-25)."""
+    from fixture_support import catalog_transport_mapping
+
+    mapping = {**guided_transport_mapping(), **catalog_transport_mapping()}
+    lines: list[str] = []
+    run_guided(
+        FileAsker({**FULL_ANSWERS, "search": "", "select": []}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(mapping),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    assert any("anything that fits this machine" in line for line in lines)
+    assert any("no search word: the catalog's current models, one page each" in line for line in lines)
+    assert any("current models of this catalog" in line for line in lines)
+    assert not any("open lists" in line for line in lines)
+    log = _search_log(tmp_path)
+    assert (log["mode"], log["word"]) == ("catalog", "")
+    assert [entry["class"] for entry in log["accounts"]] == ["catalog"] * len(log["accounts"])
+
+
+def test_an_empty_search_answer_offers_the_models_those_pages_resolved(tmp_path: Path):
+    from fixture_support import CATALOG_PAGE_REPO, catalog_transport_mapping
+
+    mapping = {**guided_transport_mapping(), **catalog_transport_mapping()}
+    lines: list[str] = []
+    asker = _WatchingAsker({**FULL_ANSWERS, "search": "", "select": []}, lines)
+    run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(mapping),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    assert "Qwen3.8-27B" in [choice.value.partition("/")[2] for choice in asker.choices["select"]]
+    assert CATALOG_PAGE_REPO in [choice.value for choice in asker.choices["select"]]
+
+
+def test_a_typed_repository_id_is_searched_as_one_page_and_reaches_the_configuration(tmp_path: Path):
+    from fixture_support import typed_transport_mapping
+
+    mapping = {**guided_transport_mapping(), **typed_transport_mapping()}
+    code, lines = _run(
+        tmp_path,
+        {**FULL_ANSWERS, "search": UNSLOTH, "select": [UNSLOTH]},
+        transport=build_transport(mapping),
+    )
+
+    assert code == 0
+    assert any(f"? What are you looking for?  {UNSLOTH}" in line for line in lines)
+    assert any(f"searched Hugging Face for the repository {UNSLOTH}" in line for line in lines)
+    log = _search_log(tmp_path)
+    assert (log["mode"], log["word"], log["requests"]) == ("id", UNSLOTH, 1)
+    assert [entry["account"] for entry in log["accounts"]] == ["typed"]
+    assert [entry["class"] for entry in log["accounts"]] == ["typed"]
+    assert UNSLOTH in load_config(_config_file(tmp_path)).families[0].base_models[0].repos
+
+
+def test_a_typed_id_without_a_gguf_file_says_so_and_the_word_search_follows(tmp_path: Path):
+    from fixture_support import TYPED_NO_GGUF_REPO, typed_transport_mapping
+
+    mapping = {**guided_transport_mapping(), **typed_transport_mapping()}
+    code, lines = _run(
+        tmp_path,
+        {**FULL_ANSWERS, "search": TYPED_NO_GGUF_REPO},
+        transport=build_transport(mapping),
+    )
+
+    assert code == 0
+    assert any(f"{TYPED_NO_GGUF_REPO} holds no GGUF file" in line for line in lines)
+    assert _search_log(tmp_path)["mode"] == "word"
+
+
+def test_a_typo_ends_in_a_list_of_candidates_and_the_search_they_lead_to(tmp_path: Path):
+    from modelroom.search import DEFAULT_PACKAGERS
+    from modelroom.search_pages import account_downloads_url, account_search_url
+
+    empty = json_response("hf_search_none.json")
+    mapping = {**guided_transport_mapping()}
+    for account in ("Qwen", "deepseek-ai", *DEFAULT_PACKAGERS):
+        mapping[("GET", account_search_url("qwn", account))] = empty
+        mapping[("GET", account_downloads_url("qwn", account))] = empty
+    lines: list[str] = []
+    asker = _WatchingAsker({**FULL_ANSWERS, "search": "qwn", "did_you_mean": "qwen"}, lines)
+
+    code = run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(mapping),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    assert code == 0
+    assert "did_you_mean" in asker.asked
+    # The second search is the one the step reports on, so the file and the notes are about `qwen`.
+    assert _search_log(tmp_path)["word"] == "qwen"
+    assert any("? Nothing was found. Did you mean one of these?  qwen" in line for line in lines)
+    assert load_config(_config_file(tmp_path)).families[0].base_models[0].hf_repo == "Qwen/Qwen3.5-9B"
+
+
+def test_none_of_these_keeps_the_word_and_the_step_stays_empty(tmp_path: Path):
+    from modelroom.search import DEFAULT_PACKAGERS
+    from modelroom.search_pages import account_downloads_url, account_search_url
+
+    empty = json_response("hf_search_none.json")
+    mapping = {**guided_transport_mapping()}
+    for account in ("Qwen", "deepseek-ai", *DEFAULT_PACKAGERS):
+        mapping[("GET", account_search_url("qwn", account))] = empty
+        mapping[("GET", account_downloads_url("qwn", account))] = empty
+    lines: list[str] = []
+    run_guided(
+        FileAsker({**FULL_ANSWERS, "search": "qwn", "did_you_mean": "keep", "select": []}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(mapping),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    assert any("none of these" in line for line in lines)
+    assert any("nothing added" in line for line in lines)
+    assert _search_log(tmp_path)["word"] == "qwn"
 
 
 def test_the_answer_file_keys_of_step_2_are_unchanged(tmp_path: Path):
@@ -1064,7 +1213,7 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
     model to pick, and the list question was asked anyway -- an empty list crashes the dialog."""
     from modelroom.catalog import load_catalog
     from modelroom.search import DEFAULT_PACKAGERS
-    from modelroom.search_pages import account_search_url, search_accounts
+    from modelroom.search_pages import account_downloads_url, account_search_url, search_accounts
 
     class _Refusing(FileAsker):
         def checkbox(self, key: str, question: str, choices, instruction=None) -> list[str]:
@@ -1079,6 +1228,7 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
     mapping = {
         **guided_transport_mapping(),
         **{("GET", account_search_url("mistral", account)): empty for account in asked},
+        **{("GET", account_downloads_url("mistral", account)): empty for account in asked},
     }
     lines: list[str] = []
     code = run_guided(

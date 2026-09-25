@@ -7,6 +7,42 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **The search takes whatever someone types** (`modelroom/search_word.py`, new;
+  `modelroom/search_pages.py`, `modelroom/search.py`, `modelroom/guided_search.py`, new;
+  CONTRACTS.md, "What was typed, read as one of three things"). Until now every answer went to the
+  Hub as `search=<text>` word for word, so `unsloth/Qwen3.5-9B-GGUF` found nothing, `qwen 3.5 9b`
+  found nothing, and an empty answer was the error `no model name to search for`. The input is
+  parsed first, into one of three forms:
+  - **a repository id** (`owner/name`): one request for that repository, shown as `typed`. It is
+    always selectable -- the owner filter does not hide it and `publisher_unknown` does not apply,
+    because someone who names a repository has said which account they want. Without a GGUF file
+    (read off the repository's own `gguf` tag) the run says `<id> holds no GGUF file` and searches
+    for the words of the name half instead, so the input is never simply refused;
+  - **words**: the text cut at blanks, `-`, `_` and `:`, without the filler words `gguf`, `model`,
+    `models` and `the`. One of them goes to the Hub (the longest letter run) and the rest narrow the
+    answer locally, so `qwen 3.5 9b` and `Qwen3.5-9B` both find `unsloth/Qwen3.5-9B-GGUF`. A
+    one-word search is never narrowed -- that is the search this package has always made;
+  - **nothing at all**: a valid answer that means "show me what fits this machine". One page per
+    model the catalog calls `latest`, its ten most downloaded GGUF builds, with the note `no search
+    word: the catalog's current models, one page each`.
+- **A word close to something the catalog knows leads to a list, not to an empty step**
+  (`search_word.close_matches`, `guided_search.candidate_choices`; the new answer-file key
+  `did_you_mean`). `qwn` offers `qwen`, picked from the catalog's family names, publisher accounts,
+  model names and the letter runs of those names at `difflib` cutoff 0.75; picking one searches
+  again, `none of these` keeps the answer as it was.
+- **Two pages per account: its newest twenty, and its twenty most downloaded** (CONTRACTS.md,
+  "Search over the Hugging Face API"). Measured live 2026-09-25:
+  `author=unsloth&search=qwen&sort=createdAt&limit=20` answers with twenty repositories created
+  after 2026-05 and `unsloth/Qwen3.5-9B-GGUF` (2026-02-28) is not among them at all, while the same
+  account's `sort=downloads` page carries it in fourth place -- one sort order cannot find the plain
+  build of a model whose account publishes often, whatever word is typed. The two answers stay
+  **one** group under the account's label, and a group says how much of its answer an earlier page
+  already had and how much the words of a multi-word input do not name.
+- **`tests/search_testset.toml`**, and criterion 8 of the acceptance run
+  (`scripts/searchset.py`, new): eight lines of "what someone types" and "which models must come
+  back for it", asked **live** and reported case by case. Gate-free by decision -- the Hub's answer
+  for a word changes by the hour, so a missing model is a `WARN` and never ends the run; what the
+  tests gate is the shape of that report.
 - **The catalog names the publishers people actually search for** (`modelroom/catalog.toml`,
   README, "Publishers the search resolves"). It knew three accounts (`Qwen`, `deepseek-ai`,
   `utter-project`) and is at the same time the positive list of publishers, so a search for
@@ -67,6 +103,27 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **The owner filter is a preference, not a positive list** (`modelroom/search.py`,
+  `modelroom/guided_models.py`; CONTRACTS.md, "Search over the Hugging Face API", README,
+  "Publishers the search resolves"). With the filter on -- the default -- nothing changes: a base
+  model whose account the catalog does not name stays unresolved with `publisher_unknown`. Say no to
+  the filter and it resolves like any other, with its age `unknown` for want of evidence and its
+  owner class `other`; the reason `publisher_unknown` then appears nowhere. The open `sort=downloads`
+  page is twenty repositories instead of ten, because with the filter off that page is the only place
+  a model of an account nobody listed shows up at all.
+- **`search.json` is schema 2** (`modelroom/search.py`; CONTRACTS.md, "Search log"), for one new
+  field: `mode` says whether the search was a word search, a typed repository id or the catalog pages
+  of a search with no word. `requests` is the number of **pages** and is therefore no longer the
+  length of `accounts`, which stays one entry per account.
+- **Where a publisher of the catalog was asked and answered with nothing, the note names it**
+  (`modelroom/guided_search.py`): `searched Hugging Face at the five listed packagers; the publisher
+  deepseek-ai has no GGUF repository` in place of "at no publisher of this catalog that answered",
+  which was true and told a reader nothing they could act on.
+- **The search of step 2 lives beside the step** (`modelroom/guided_search.py`,
+  `modelroom/search_age.py`, `modelroom/search_apply.py`, all new and all moved unchanged): the two
+  search questions and the notes out of `guided.py`, the age verdict and the write-back into the
+  configuration out of `search.py`. `search.py` re-exports `AgeVerdict`, `decide_age`, `apply_hits`,
+  `family_name_for` and `write_configuration`, so no caller and no import changes.
 - **The guided mode reads as a report, not as a record** (`modelroom/screen.py`,
   `modelroom/dialog.py`, `modelroom/guided*.py`, `modelroom/views.py`; CONTRACTS.md, "Guided mode").
   The test round of 2026-09-24 called the run "not laid out, hard to take in, one thing chained to

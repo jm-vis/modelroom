@@ -66,6 +66,39 @@ change with them until someone re-records them on purpose.
   `hf_search_none.json` and pins one age lookup per resolved base model. The pages exist because
   `mistralai` became a publisher of the shipped catalog on 2026-09-25: before that, the same
   repositories were all `publisher_unknown`.
+- **The three forms of input** (decided 2026-09-25, all four files cut from live answers of that
+  day, every entry verbatim; only a long `language` list inside `cardData` was dropped, the same
+  curation the `mistral` pages above document):
+  - `hf_typed_unsloth_qwen35_9b_gguf.json` -- `GET
+    https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF?expand=cardData&expand=createdAt&expand=downloads&expand=safetensors&expand=tags`,
+    the whole object unchanged. A typed repository id that **holds** GGUF files: its `tags` carry
+    `gguf` and `base_model:quantized:Qwen/Qwen3.5-9B`, so one request resolves it.
+  - `hf_typed_qwen_qwen35_9b.json` -- the same request for `Qwen/Qwen3.5-9B`, the base model
+    itself. Its `tags` carry `safetensors` and **no** `gguf`, which is the "holds no GGUF file"
+    case: the search says so and falls back to the words of the name half.
+  - `hf_search_qwen_unsloth_downloads.json` -- two entries of `GET
+    ...?author=unsloth&search=qwen&filter=gguf&sort=downloads&direction=-1&limit=20`:
+    `unsloth/Qwen3.5-9B-GGUF` and `unsloth/Qwen3.5-4B-GGUF`. **The measurement this page exists
+    for:** the same account's `sort=createdAt` page answered with twenty repositories created after
+    2026-05 and `unsloth/Qwen3.5-9B-GGUF` (2026-02-28) was not among them at all, so one sort order
+    alone cannot find the plain build of a listed model. Since 2026-09-25 an account is therefore
+    asked twice.
+  - `hf_search_qwen38_27b_catalog_page.json` -- three entries of `GET
+    ...?search=Qwen3.8-27B&filter=gguf&sort=downloads&direction=-1&limit=10`, which is one page of
+    a search with **no word at all** (one per current model of the catalog, and `Qwen3.8-27B` is
+    the catalog's current Qwen model). The three are the cases the owner filter is about:
+    `unsloth/Qwen3.8-27B-GGUF` (resolved, `listed packager`), a `DavidAU/...` build whose declared
+    base model belongs to an account the catalog does not name as a publisher
+    (`publisher_unknown` with the filter on, resolved with `other` when it is off), and
+    `cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF`, a publisher's model packaged by an account of
+    neither list.
+
+  `fixture_support.typed_transport_mapping` and `catalog_transport_mapping` bind them; the second
+  reads the current models from the shipped catalog rather than listing them here, so a model added
+  later is bound too instead of ending a run at a URL no fixture answers. Both sort orders of an
+  account are bound to that account's **one** curated page in `search_transport_mapping`: the
+  curation is about which repositories an account has, not about the order they come back in, and a
+  page of duplicates is what an account with few repositories really answers.
 - `hf_qwen_qwen35_9b_config.json` -- `GET https://huggingface.co/Qwen/Qwen3.5-9B/resolve/main/config.json`
   (redirects to the resolve-cache; fetched with `curl -L`). The language-model fields sit
   under `text_config`, and `text_config.layer_types` mixes `"linear_attention"` and

@@ -2,13 +2,15 @@
 
 Four steps, all over the transport this package already has -- no SDK, no second HTTP stack:
 
-1. `run_search` asks the Hub's model API once per account and, with the owner filter off, twice
-   more without one (`search_pages.search_requests`), and turns every answer into `SearchHit`s.
+1. `run_search` reads the input first (`search_word.parse_search`) and asks the pages that input
+   leads to (`search_pages`): one for a typed repository id, two per account for words, one per
+   current catalog model for no word at all, plus the two open lists with the owner filter off.
    Everything the resolution needs (`tags`, `cardData`, `createdAt`, `downloads`, `safetensors`)
    is asked for in those requests, so a hit costs no further request.
 2. Resolution: a hit is `resolved` only when `relation.check_relation` proves it a `quantized`
-   build of exactly one base model *and* the catalog knows that base model's account as a
-   publisher. Everything else is shown with its reason, gets no Ollama name, no age and no fit.
+   build of exactly one base model, and -- with the owner filter on -- the catalog knows that base
+   model's account as a publisher. Everything else is shown with its reason, gets no Ollama name,
+   no age and no fit.
 3. `decide_age` states `latest`/`legacy` from positive evidence only: a valid `new_version` at
    the publisher repo, else the catalog's own statement, else `unknown`.
 4. `apply_hits` turns the resolved hits into families and owner-bound `repos` entries of a
@@ -26,42 +28,47 @@ import math
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
-from .catalog import Age, Catalog
-from .config import BaseModelConfig, ConfigError, Configuration, config_from_text
+from .catalog import Catalog
 from .contracts import validate_hf_repo, validate_ollama_name
 from .guided_contracts import UNKNOWN, SearchHit
 from .http import BudgetExhaustedError, BudgetedTransport, RedirectingTransport, RequestBudget, Transport
 from .relation import check_relation
+from .search_age import HF_API, MAX_SUCCESSOR_EDGES, AgeVerdict, decide_age
+from .search_apply import apply_hits, family_name_for, write_configuration
 from .search_pages import (
+    TYPED_LABEL,
+    GroupPlan,
     SearchGroup,
+    SearchMode,
+    SearchPlan,
     SearchRequest,
-    publisher_accounts,
+    accounts_for,
+    catalog_plan,
+    model_url,
+    publishers_for,
     read_downloads,
-    search_accounts,
-    search_requests,
+    typed_plan,
+    word_plan,
 )
-from .state import acquire_lock, atomic_write_text, release_lock
-from .toml_writer import dump_toml
+from .search_word import SearchWord, catalog_models, close_matches, latest_model_names, parse_search
 
-HF_API = "https://huggingface.co/api"
 # The whole guided run -- search, resolution, successor lookups, tree pages and the fetch --
 # shares this many requests unless the caller passes its own budget. 150 since the search asks
 # one request per account (decided 2026-09-24): measured live, `qwen` with the owner filter on
 # spends 47 requests before the selection list is shown, and 60 left the fetch of two chosen
 # repositories `incomplete (budget exhausted)`. A plain `modelroom fetch` has 400 on its own.
 DEFAULT_GUIDED_BUDGET = 150
-# At most two `new_version` edges are followed; the second one only names a younger successor
-# and never changes the verdict, which is already `legacy` after the first.
-MAX_SUCCESSOR_EDGES = 2
 # The shipped positive list of packager accounts, the same one `modelroom.example.toml` ships
 # (`test_search.py` keeps the two in step). A guided run that has no configuration yet uses it
 # to tell a listed packager from any other account.
 DEFAULT_PACKAGERS: tuple[str, ...] = ("unsloth", "bartowski", "mradermacher", "lmstudio-community", "ggml-org")
 NO_OLLAMA_LABEL = "none known"
-SEARCH_LOG_SCHEMA_VERSION = 1  # `search.json`, the file one search leaves behind ("Search log")
+# `search.json`, the file one search leaves behind ("Search log"). 2 since 2026-09-25: the file
+# names the `mode` of the search it records, so a reader can tell a word search from a typed
+# repository id and from the catalog pages of a search with no word at all.
+SEARCH_LOG_SCHEMA_VERSION = 2
 _OLLAMA_ENTRY_PREFIX = "ollama:"
 # A base id no repository can carry (a space is not allowed in a repo id), so `check_relation`
 # reports `base_model_tag` for a hit that does not declare exactly one base.
@@ -70,19 +77,28 @@ _NO_SINGLE_BASE = "(no single declared base)"
 # character, then letters, digits, `.`, `_` or `-`. Stricter than the shared `hf_repo` pattern
 # on purpose -- see `_is_repo_id`.
 _REPO_SEGMENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# The tag the Hub sets on a repository that holds at least one GGUF file, and the one the word
+# search filters by (`filter=gguf`). A typed repository id is read against the same tag, so both
+# ways into the search agree on what a GGUF repository is.
+GGUF_TAG = "gguf"
+# A typed id whose repository holds no GGUF file, and one the Hub does not answer for: both fall
+# back to the word search over the name half, so the input is never simply refused.
+NO_GGUF_NOTE = "{repo} holds no GGUF file"
+UNREADABLE_ID_NOTE = "{repo} is no repository this search could read"
+# What a search with no word at all says it did instead.
+NO_WORD_NOTE = "no search word: the catalog's current models, one page each"
+# With this many requests left or fewer, a search with no word asks no further catalog page. A stop
+# rule and not a fence: the page it is already allowed to ask resolves its own repositories, and
+# those age lookups spend from the reserve as well (second-model round, 2026-09-25). The number
+# exists so that the fetch of a chosen model, which shares this budget, still has requests -- the
+# catalog has more current models than one page each plus one age lookup per resolved base model
+# fits into 150 in the worst case.
+CATALOG_BUDGET_RESERVE = 20
+CATALOG_BUDGET_NOTE = "the request budget ended after {asked} of {planned} catalog pages"
 
 
 class SearchError(Exception):
     """The search request itself failed: a status, a body or a budget that ends the search."""
-
-
-@dataclass(frozen=True)
-class AgeVerdict:
-    """`latest`/`legacy`/`unknown` for one publisher model, with the evidence that decided it."""
-
-    age: Age
-    successor: str | None
-    evidence: str
 
 
 # What the summary says when the word matches no catalog family: the two shapes differ because
@@ -115,6 +131,19 @@ class SearchOutcome:
     # What class the search asked an account by: what it knew then, not what a reader can work out.
     publishers: list[str] = field(default_factory=list)
     listed_packagers: list[str] = field(default_factory=list)
+    # Which form the input had (`search_word.parse_search`), so a reader of `search.json` can tell
+    # a word search from a typed id and from the catalog pages of a search with no word.
+    mode: SearchMode = "word"
+    # The repository id that was typed, when one was: the one hit the owner filter never hides.
+    typed: str | None = None
+    # What the input could have meant, when the catalog names nothing that it does: the words the
+    # guided mode offers instead of an empty list (`guided_search.candidate_choices`).
+    candidates: list[str] = field(default_factory=list)
+    # Pages that were asked without leaving a group behind: the one page of a typed repository id
+    # that held no GGUF file, or that the Hub did not answer for. It spent a request and the word
+    # search followed, so `requests` has to count it -- otherwise the log says two requests for a
+    # run that made three (second-model round, 2026-09-25).
+    extra_requests: int = 0
 
     @property
     def resolved(self) -> int:
@@ -126,8 +155,8 @@ class SearchOutcome:
 
     @property
     def requests(self) -> int:
-        """How many pages were asked for -- one per account, plus the open ones."""
-        return len(self.groups)
+        """How many pages were asked -- two per account since 2026-09-25, plus the open ones."""
+        return sum(group.pages for group in self.groups) + self.extra_requests
 
     def group_lines(self) -> list[str]:
         """One line per group, above the summary: the account (or the list) and its number.
@@ -145,6 +174,19 @@ class SearchOutcome:
             f"budget {self.budget_used}/{self.budget_limit}"
         )
 
+    def _group_class(self, label: str, classes: Mapping[str, str]) -> str:
+        """What the search asked this group by: its account class, else the plan it belongs to.
+
+        A typed repository id and a catalog page are asked without an account, and calling either
+        one `open` would say the two open lists were asked (found in the live probe of 2026-09-25,
+        where the screen then read "and the two open lists" for a run that asked neither).
+        """
+        if self.mode == "id":
+            return "typed"
+        if self.mode == "catalog":
+            return "catalog"
+        return classes.get(label, "open")
+
     def search_log(self, *, filtered: bool, run_at: datetime, unresolved: dict[str, int]) -> dict:
         """What one search did, as the data `search.json` holds (CONTRACTS.md, "Search log").
 
@@ -157,16 +199,41 @@ class SearchOutcome:
         return {
             "schema_version": SEARCH_LOG_SCHEMA_VERSION,
             "word": self.query,
+            "mode": self.mode,
             "filter_owners": filtered,
             "run_at": run_at.isoformat(),
             "accounts": [
-                {"account": g.label, "class": classes.get(g.label, "open"), "hits": g.page_size, "page_full": g.page_full}
-                for g in self.groups],
+                {
+                    "account": g.label,
+                    "class": self._group_class(g.label, classes),
+                    "hits": g.page_size,
+                    "page_full": g.page_full,
+                }
+                for g in self.groups
+            ],
             "requests": self.requests,
             "budget": {"used": self.budget_used, "limit": self.budget_limit},
             "resolved": self.resolved,
             "unresolved": [{"reason": reason, "count": count} for reason, count in sorted(unresolved.items())],
         }
+
+
+@dataclass
+class _Resolution:
+    """What the resolution of one search carries from page to page.
+
+    `seen` holds every repository id an earlier page already answered with, `ages` one verdict per
+    distinct base model, so neither costs a second request. `publisher_required` is the owner
+    filter's half of the resolution: with the filter on, only a base model of a catalog publisher
+    resolves; with it off, any account's base model does. `packagers` keeps the order of the
+    positive list, because the order the accounts are asked in is the order the groups are shown in.
+    """
+
+    catalog: Catalog
+    packagers: tuple[str, ...]
+    publisher_required: bool
+    ages: dict[str, AgeVerdict] = field(default_factory=dict)
+    seen: set[str] = field(default_factory=set)
 
 
 def run_search(
@@ -178,96 +245,238 @@ def run_search(
     budget: RequestBudget | None = None,
     ollama_entries: Mapping[str, str] | None = None,
     open_pages: bool = False,
+    publisher_required: bool = True,
 ) -> SearchOutcome:
-    """Search for `name` per account and return every repository answered, resolved or not.
+    """Search for whatever was typed and return every repository answered, resolved or not.
 
-    One request per account -- the catalog's matching publisher accounts first, then the positive
-    list (`search_pages.search_accounts`) -- and, when `open_pages` is set, two more without an
-    account: the most downloaded and the newest repositories for that word. The guided mode passes
-    `open_pages=not filtered`, so the two open lists are what switching the owner filter *off*
-    adds; they never replace the account groups. On top of that one age lookup per *distinct*
-    resolved base model (`decide_age`); a hit costs no request of its own.
+    The input decides the pages (`search_word.parse_search`, `search_pages`):
 
-    A repository more than one page answers with is listed once, in the first group that had it.
-    A page that fails ends the search with `SearchError` naming the account -- an account is never
-    quietly left out, because "unsloth has nothing for this word" and "unsloth was not asked" are
-    different answers.
+    - a **repository id** is one request for that repository, shown under the label `typed` and
+      resolved without the publisher gate -- the person named it, so it is always selectable. A
+      repository with no GGUF file, and one the Hub does not answer for, leave a note and fall
+      through to the word search over the id's name half;
+    - **words** ask two pages per account -- the catalog's matching publisher accounts first, then
+      the positive list -- and, when `open_pages` is set, two more without an account. The guided
+      mode passes `open_pages=not filtered`, so the open lists are what switching the owner filter
+      *off* adds; they never replace the account groups. More than one word is sent to the Hub as
+      one (`SearchWord.hub_word`) and the answer is held against all of them locally;
+    - **no word at all** asks one page per current model of the catalog.
+
+    On top of that one age lookup per *distinct* resolved base model (`decide_age`); a hit costs no
+    request of its own. A repository more than one page answers with is listed once, in the first
+    group that had it. A page that fails ends the search with `SearchError` naming the account --
+    an account is never quietly left out, because "unsloth has nothing for this word" and "unsloth
+    was not asked" are different answers.
     """
     shared = budget if budget is not None else RequestBudget(DEFAULT_GUIDED_BUDGET)
     redirecting = RedirectingTransport(BudgetedTransport(transport, shared))
-    word = name.strip()
-    publishers = publisher_accounts(catalog, word)
-    requests = search_requests(word, search_accounts(catalog, word, listed_packagers), open_pages=open_pages)
-    note = NO_PUBLISHER_NOTE_OPEN if open_pages else NO_PUBLISHER_NOTE
-    notes = [] if publishers else [note.format(word=word)]
-
-    packagers = frozenset(listed_packagers)
-    ages: dict[str, AgeVerdict] = {}
-    seen: set[str] = set()
-    groups: list[SearchGroup] = []
-    for index, request in enumerate(requests):
-        groups.append(
-            _fetch_group(redirecting, catalog, packagers, ages, seen, word, request, requests[index + 1 :])
-        )
+    word = parse_search(name)
+    state = _Resolution(catalog, tuple(listed_packagers), publisher_required)
+    notes: list[str] = []
+    typed_group = _typed_group(redirecting, word, state, notes)
+    # The typed page is asked whenever the input is an id; without a group it still cost a request.
+    asked_typed = word.form == "id" and word.repo_id is not None
+    plan = SearchPlan("id", ()) if typed_group is not None else _plan_for(word, state, open_pages=open_pages)
+    publishers = publishers_for(catalog, word) if plan.mode == "word" else []
+    notes += _plan_notes(plan, word, publishers, open_pages=open_pages)
+    groups = [typed_group] if typed_group is not None else []
+    groups += _answer_plan(redirecting, plan, word, state, shared, notes)
     hits = _with_ollama_entries([hit for group in groups for hit in group.hits], ollama_entries or {})
     return SearchOutcome(
-        query=word,
+        query=word.text,
         hits=hits,
         budget_used=shared.used,
         budget_limit=shared.limit,
         groups=_regrouped(groups, hits),
         notes=notes,
         publishers=list(publishers), listed_packagers=list(listed_packagers),
+        mode=plan.mode,
+        typed=word.repo_id if typed_group is not None else None,
+        candidates=_candidates(word, state, plan),
+        extra_requests=1 if asked_typed and typed_group is None else 0,
     )
+
+
+def _plan_for(word: SearchWord, state: _Resolution, *, open_pages: bool) -> SearchPlan:
+    """The pages an input that is not a reachable repository id leads to."""
+    if word.form == "empty":
+        return catalog_plan(latest_model_names(state.catalog))
+    return word_plan(word, accounts_for(state.catalog, word, state.packagers), open_pages=open_pages)
+
+
+def _plan_notes(plan: SearchPlan, word: SearchWord, publishers: Sequence[str], *, open_pages: bool) -> list[str]:
+    """What this search has to say about the *request* rather than about a repository."""
+    if plan.mode == "catalog":
+        return [NO_WORD_NOTE]
+    if plan.mode == "word" and not publishers:
+        note = NO_PUBLISHER_NOTE_OPEN if open_pages else NO_PUBLISHER_NOTE
+        return [note.format(word=word.text)]
+    return []
+
+
+def _candidates(word: SearchWord, state: _Resolution, plan: SearchPlan) -> list[str]:
+    """What the input could have meant, when the catalog names nothing that it does.
+
+    Only for a word search: a typed id named its repository, and a search with no word is not a
+    guess at all. A word the catalog already knows gets no candidates either -- a correct word
+    with no answer today is a fact about the Hub, not a spelling mistake.
+    """
+    if plan.mode != "word" or catalog_models(state.catalog, word) or publishers_for(state.catalog, word):
+        return []
+    return close_matches(state.catalog, word)
+
+
+def _answer_plan(
+    transport: Transport,
+    plan: SearchPlan,
+    word: SearchWord,
+    state: _Resolution,
+    shared: RequestBudget,
+    notes: list[str],
+) -> list[SearchGroup]:
+    """Every group of the plan, asked in order; the catalog pages stop before the budget is gone.
+
+    The catalog pages are the one plan whose length the input does not bound -- one per current
+    model of the catalog -- and the fetch of a chosen model shares this budget. So that plan stops
+    asking once `CATALOG_BUDGET_RESERVE` requests or fewer are left and says how far it got,
+    rather than ending a run that has a choice to offer with `SearchError`. It is a stop rule before
+    a page, not a fence around the reserve: the last page it asks resolves its own repositories, and
+    those age lookups spend from the reserve too.
+    """
+    requests = plan.all_requests()
+    groups: list[SearchGroup] = []
+    asked = 0
+    for index, group in enumerate(plan.groups):
+        if plan.mode == "catalog" and shared.remaining <= CATALOG_BUDGET_RESERVE:
+            notes.append(CATALOG_BUDGET_NOTE.format(asked=index, planned=len(plan.groups)))
+            break
+        asked += len(group.requests)
+        groups.append(_fetch_group(transport, state, word, group, requests[asked:]))
+    return groups
+
+
+def _typed_group(
+    transport: Transport, word: SearchWord, state: _Resolution, notes: list[str]
+) -> SearchGroup | None:
+    """The one group a typed repository id leads to, or `None` with a note saying why not.
+
+    Resolved without the publisher gate (`publisher_required=False`): the person named this
+    repository, so `publisher_unknown` is no reason to hide it, and the owner class stays `other`
+    where neither list holds the account. The GGUF file is read off the repository's own `gguf`
+    tag -- the same fact the word search filters by -- so this stays one request.
+    """
+    if word.form != "id" or word.repo_id is None:
+        return None
+    entry = _typed_entry(transport, word.repo_id)
+    if entry is None:
+        notes.append(UNREADABLE_ID_NOTE.format(repo=word.repo_id))
+        return None
+    tags = entry.get("tags")
+    if not isinstance(tags, list) or GGUF_TAG not in tags:
+        notes.append(NO_GGUF_NOTE.format(repo=word.repo_id))
+        return None
+    state.seen.add(word.repo_id)
+    hit = _build_hit(transport, state, word.repo_id, entry, publisher_required=False)
+    return SearchGroup(label=TYPED_LABEL, hits=[hit], page_size=1, page_full=False, already_listed=0)
+
+
+def _typed_entry(transport: Transport, repo: str) -> dict | None:
+    """One typed repository as an answer entry, or `None` when it is not this repository's answer.
+
+    The answer has to name `repo` itself (`id`, or `modelId`): the transport follows redirects and
+    the Hub answers a moved repository's path with the repository it moved to, so without that
+    check a request for `acme/B` could be satisfied by `other/B`. A budget that ends here is the
+    one failure that ends the search -- it says nothing about the repository.
+    """
+    where = f"search for {repo!r} ({TYPED_LABEL})"
+    try:
+        response = transport("GET", model_url(repo))
+    except BudgetExhaustedError as exc:
+        raise SearchError(f"{where} not made: {exc}") from exc
+    except Exception:  # noqa: BLE001 -- an unreadable id falls back to the word search
+        return None
+    if response.status != 200:
+        return None
+    try:
+        payload = response.json()
+    except Exception:  # noqa: BLE001 -- so does an answer that is no JSON
+        return None
+    if not isinstance(payload, dict) or repo not in (payload.get("id"), payload.get("modelId")):
+        return None
+    return {**payload, "id": repo}
 
 
 def _fetch_group(
     transport: Transport,
-    catalog: Catalog,
-    packagers: frozenset[str],
-    ages: dict[str, AgeVerdict],
-    seen: set[str],
-    word: str,
-    request: SearchRequest,
+    state: _Resolution,
+    word: SearchWord,
+    group: GroupPlan,
     pending: Sequence[SearchRequest],
 ) -> SearchGroup:
-    """One page, asked and resolved; the repositories an earlier page already had are counted only.
+    """One group's pages, asked and resolved; what an earlier page already had is counted only.
 
-    A repository is held against `seen` and added to it **before** it is resolved, entry by entry.
-    Resolving it first and filtering afterwards would list a repository twice when one page carries
-    it twice -- the answer is registry-controlled text, and nothing promises it holds each id once
-    -- and would spend an age lookup on a duplicate whose declared base model differs from the one
-    the first page declared (found in the second-model round, 2026-09-24).
+    A repository is held against `state.seen` and added to it **before** it is resolved, entry by
+    entry. Resolving it first and filtering afterwards would list a repository twice when one page
+    carries it twice -- the answer is registry-controlled text, and nothing promises it holds each
+    id once -- and would spend an age lookup on a duplicate whose declared base model differs from
+    the one the first page declared (found in the second-model round, 2026-09-24).
+
+    A repository the words of a multi-word input do not name is counted and dropped here, before
+    it costs an age lookup: the Hub was asked with one of those words and answers with everything
+    that word matches.
     """
-    entries = _fetch_search_page(transport, word, request, pending)
+    entries, page_full = _group_pages(transport, word, group, pending)
     fresh: list[SearchHit] = []
     already_listed = 0
+    filtered_out = 0
     for entry in entries:
-        repo = _entry_repo(word, request, entry)
-        if repo in seen:
+        repo = _entry_repo(word.text, group.label, entry)
+        if repo in state.seen:
             already_listed += 1
             continue
-        seen.add(repo)
-        fresh.append(_build_hit(transport, catalog, packagers, ages, repo, entry))
+        state.seen.add(repo)
+        if word.filters_locally and not word.matches(repo):
+            filtered_out += 1
+            continue
+        fresh.append(_build_hit(transport, state, repo, entry, publisher_required=state.publisher_required))
     return SearchGroup(
-        label=request.label,
+        label=group.label,
         hits=fresh,
         page_size=len(entries),
-        # An open list is ten by definition, so only an account page can be "full" in the sense
-        # the note is about: there may be more under this account than one page shows.
-        page_full=request.account is not None and len(entries) >= request.limit,
+        page_full=page_full,
         already_listed=already_listed,
+        pages=len(group.requests),
+        filtered_out=filtered_out,
     )
 
 
-def _entry_repo(word: str, request: SearchRequest, entry: dict) -> str:
+def _group_pages(
+    transport: Transport, word: SearchWord, group: GroupPlan, pending: Sequence[SearchRequest]
+) -> tuple[list[dict], bool]:
+    """Every entry this group's pages answered with, and whether one of them was as long as it may be.
+
+    Only an **account** group can be "full" in the sense the note is about: there may be more
+    under this account than one page shows. An open list and a catalog page are as long as they
+    are by definition.
+    """
+    entries: list[dict] = []
+    page_full = False
+    for position, request in enumerate(group.requests):
+        rest = [*group.requests[position + 1 :], *pending]
+        page = _fetch_search_page(transport, word.text, request, rest)
+        entries += page
+        page_full = page_full or (request.account is not None and len(page) >= request.limit)
+    return entries, page_full
+
+
+def _entry_repo(word: str, label: str, entry: dict) -> str:
     """One answer entry's repository id, or `SearchError` naming the page it came from.
 
     The page belongs in the message: an answer of twenty entries under one of seven accounts is
     otherwise a malformed id with no address, and a reader cannot tell which request to look at.
     """
     repo = entry.get("id")
-    where = f"search for {word!r} ({request.label})"
+    where = f"search for {word!r} ({label})"
     if not isinstance(repo, str):
         raise SearchError(f"{where}: a result has no repository id: {entry!r}")
     try:
@@ -354,8 +563,16 @@ def _fetch_search_page(
 
 
 def _pending_note(request: SearchRequest, pending: Sequence[SearchRequest]) -> str:
-    """How many pages are still unasked, this one included, so a short list is explained."""
-    accounts = [page.account for page in (request, *pending) if page.account is not None]
+    """How many pages are still unasked, this one included, so a short list is explained.
+
+    Each account **once**, however many of its pages are left: a reader wants to know which
+    accounts have no answer, and an account asked twice would otherwise be named twice (found
+    while the second page per account was added, 2026-09-25).
+    """
+    accounts: list[str] = []
+    for page in (request, *pending):
+        if page.account is not None and page.account not in accounts:
+            accounts.append(page.account)
     if not accounts:
         return f"{1 + len(pending)} pages were not asked"
     return f"{len(accounts)} accounts were not asked: {', '.join(accounts)}"
@@ -363,13 +580,22 @@ def _pending_note(request: SearchRequest, pending: Sequence[SearchRequest]) -> s
 
 def _build_hit(
     transport: Transport,
-    catalog: Catalog,
-    listed_packagers: frozenset[str],
-    ages: dict[str, AgeVerdict],
+    state: _Resolution,
     repo: str,
     entry: dict,
+    *,
+    publisher_required: bool,
 ) -> SearchHit:
-    """One answer entry as a `SearchHit`; `repo` is its id, already validated by `_entry_repo`."""
+    """One answer entry as a `SearchHit`; `repo` is its id, already validated by `_entry_repo`.
+
+    `publisher_required` is the owner filter's half of the resolution (decided 2026-09-25): with
+    the filter on, a base model whose account the catalog does not name as a publisher stays
+    unresolved with `publisher_unknown`; with the filter off, and for a typed repository id, it
+    resolves and its owner class says `other`. The class alone places the account -- the catalog is
+    a preference, never a verdict.
+    """
+    catalog = state.catalog
+    ages = state.ages
     tags = entry.get("tags")
     card_data = entry.get("cardData")
     bases, relation = _declared(tags, card_data)
@@ -383,7 +609,7 @@ def _build_hit(
     common = {
         "repo": repo,
         "publisher_status": owner_class(
-            repo.split("/", 1)[0], catalog=catalog, listed_packagers=listed_packagers
+            repo.split("/", 1)[0], catalog=catalog, listed_packagers=state.packagers
         ),
         "base_model": bases or None,
         "base_model_relation": relation,
@@ -399,7 +625,7 @@ def _build_hit(
         return SearchHit(resolved=False, unresolved_reason=status, **common)
 
     base = usable_base
-    if not catalog.is_publisher(base.split("/", 1)[0]):
+    if publisher_required and not catalog.is_publisher(base.split("/", 1)[0]):
         return SearchHit(resolved=False, unresolved_reason="publisher_unknown", **common)
 
     if base not in ages:
@@ -539,252 +765,20 @@ def ollama_label(hit: SearchHit) -> str:
     return hit.ollama if hit.ollama is not None else NO_OLLAMA_LABEL
 
 
-# --- latest / legacy from positive evidence ---------------------------------------------------
-
-
-def decide_age(transport: Transport, catalog: Catalog, hf_repo: str) -> AgeVerdict:
-    """Whether `hf_repo` is the publisher's current model, a superseded one, or neither.
-
-    Positive evidence only, in this order:
-
-    1. a `new_version` on the publisher repo's own card whose target is a repository that
-       really exists under the same account: `legacy`, with that target as `successor`. At most
-       `MAX_SUCCESSOR_EDGES` edges are followed, and only to name a younger successor -- the
-       verdict stays `legacy` even when the second edge fails, is a cycle or runs out of budget;
-    2. no `new_version`: the catalog's own statement -- `latest` (with its evidence), `legacy`
-       with its successor, or `unknown` when the catalog says neither;
-    3. a `new_version` whose target is invalid, the repository itself, or unreachable, and a
-       budget that ends before the first edge could be checked: `unknown`. A broken pointer is
-       not evidence for the catalog's statement either, so it never falls back to it.
-
-    `transport` is the caller's already-budgeted transport (`run_search` composes
-    `RedirectingTransport(BudgetedTransport(...))` once for the whole search), so every request
-    here is booked against the run's shared budget like any other.
-    """
-    try:
-        card = _card_data(transport, hf_repo)
-    except BudgetExhaustedError:
-        return AgeVerdict("unknown", None, "budget exhausted before the first edge")
-
-    new_version = card.get("new_version") if card is not None else None
-    if not isinstance(new_version, str):
-        age, successor = catalog.age_of(hf_repo)
-        return AgeVerdict(age, successor, "catalog")
-
-    owner = hf_repo.split("/", 1)[0]
-    seen = {hf_repo}
-    successor: str | None = None
-    current_target = new_version
-    for edge in range(MAX_SUCCESSOR_EDGES):
-        if not _is_candidate_successor(current_target, owner, seen):
-            break
-        try:
-            target_card = _card_data(transport, current_target)
-        except BudgetExhaustedError:
-            break
-        if target_card is None:
-            break
-        seen.add(current_target)
-        successor = current_target
-        next_target = target_card.get("new_version")
-        if not isinstance(next_target, str) or edge + 1 >= MAX_SUCCESSOR_EDGES:
-            break
-        current_target = next_target
-
-    if successor is None:
-        return AgeVerdict("unknown", None, f"new_version {new_version!r} is not a reachable repo of {owner}")
-    return AgeVerdict("legacy", successor, f"new_version at {hf_repo}")
-
-
-def _is_candidate_successor(target: str, owner: str, seen: set[str]) -> bool:
-    """A `new_version` target worth one request: a well-formed repo of `owner`, not seen yet."""
-    try:
-        validate_hf_repo(target)
-    except ValueError:
-        return False
-    return target.split("/", 1)[0] == owner and target not in seen
-
-
-def _card_data(transport: Transport, hf_repo: str) -> dict | None:
-    """One repository's `cardData`, or `None` when *this* repository cannot be read at all.
-
-    The answer has to name `hf_repo` itself (`id`, or `modelId`): the transport follows
-    redirects, and the Hub answers a moved repository's path with the repository it moved to, so
-    without that check a request for `acme/B` could be satisfied by `other/B` -- and then the
-    same-account rule and the cycle check in `decide_age` would both be reading about a
-    repository nobody asked for. An answer that names nothing at all is no proof either.
-
-    `BudgetExhaustedError` is the one exception that passes through: it says nothing about the
-    repository and the caller has to tell it apart from "read, and it says nothing".
-    """
-    try:
-        response = transport("GET", f"{HF_API}/models/{hf_repo}")
-    except BudgetExhaustedError:
-        raise
-    except Exception:
-        return None
-    if response.status != 200:
-        return None
-    try:
-        info = response.json()
-    except Exception:
-        return None
-    if not isinstance(info, dict):
-        return None
-    if info.get("id") != hf_repo and info.get("modelId") != hf_repo:
-        return None
-    card = info.get("cardData")
-    return card if isinstance(card, dict) else {}
-
-
-# --- the resolution, written back into the configuration --------------------------------------
-
-
-def apply_hits(config: Configuration, hits: Iterable[SearchHit], *, catalog: Catalog) -> Configuration:
-    """`configuration + resolution -> new configuration`, pure: `config` is never changed.
-
-    Every resolved hit adds (or reuses) its base model's family, lists the base model's account
-    under `publishers`, and adds the hit's own repository as an owner-bound `repos` target of
-    that base model -- the search finds repositories under accounts the packager list does not
-    name, and `repos` is where such a target belongs (CONTRACTS.md, "BaseModelConfig").
-    Unresolved hits are ignored: nothing unproven ever reaches the configuration. Repeating the
-    same hits changes nothing. The result is validated like any other configuration, so a
-    target two base models would claim raises `ConfigError` here rather than at fetch time.
-
-    An Ollama name belongs to the **base model**, not to the repository that led to it, so it is
-    collected per base model before anything is written: the name the hits carry wins over one
-    the configuration already holds (the user has just decided it), and two hits of the same base
-    model naming *different* Ollama packages are contradictory input, refused with `ConfigError`
-    rather than settled by whichever hit came first.
-    """
-    resolved = [hit for hit in hits if hit.resolved and hit.resolved_base_model is not None]
-    ollama_by_base = _ollama_by_base(resolved)
-
-    data = config.model_dump(mode="json")
-    for hit in resolved:
-        base = str(hit.resolved_base_model)
-        publisher = base.split("/", 1)[0]
-        if publisher not in data["publishers"]:
-            data["publishers"] = [*data["publishers"], publisher]
-        family = _family_entry(data, base, catalog)
-        base_entry = _base_model_entry(family, base)
-        if hit.repo not in base_entry["repos"]:
-            base_entry["repos"] = [*base_entry["repos"], hit.repo]
-        name = ollama_by_base.get(base)
-        if name is not None:
-            base_entry["ollama_base"], _, base_entry["ollama_tag"] = name.partition(":")
-    return Configuration.from_dict(data)
-
-
-def _ollama_by_base(resolved: Sequence[SearchHit]) -> dict[str, str]:
-    """The one Ollama name each base model's hits agree on; `ConfigError` when they disagree."""
-    names: dict[str, set[str]] = {}
-    for hit in resolved:
-        if hit.ollama is not None:
-            names.setdefault(str(hit.resolved_base_model), set()).add(hit.ollama)
-    agreed: dict[str, str] = {}
-    for base, candidates in names.items():
-        if len(candidates) > 1:
-            raise ConfigError(
-                f"{base}: the selected repositories name different Ollama packages "
-                f"({', '.join(sorted(candidates))}); a base model has one"
-            )
-        agreed[base] = candidates.pop()
-    return agreed
-
-
-def _family_entry(data: dict, base: str, catalog: Catalog) -> dict:
-    """The family dict that holds `base`, created when no family lists it yet."""
-    for family in data["families"]:
-        if any(entry["hf_repo"] == base for entry in family["base_models"]):
-            return family
-    name = family_name_for(catalog, base)
-    for family in data["families"]:
-        if family["name"] == name:
-            return family
-    family: dict = {"name": name, "base_models": []}
-    data["families"] = [*data["families"], family]
-    return family
-
-
-def _base_model_entry(family: dict, base: str) -> dict:
-    """The base model dict inside `family`, created without an Ollama name when it is new.
-
-    The Ollama name is set by `apply_hits` afterwards, once per base model, so it does not
-    depend on which hit created the entry.
-    """
-    for entry in family["base_models"]:
-        if entry["hf_repo"] == base:
-            return entry
-    entry = BaseModelConfig(hf_repo=base).model_dump(mode="json")
-    family["base_models"].append(entry)
-    return entry
-
-
-def family_name_for(catalog: Catalog, hf_repo: str) -> str:
-    """The family a base model belongs to: the catalog's name, else one made from the repo name.
-
-    A made-up name is the repository's own name in the shape a family name has to have
-    (`[a-z0-9][a-z0-9.-]*`): lower case, every other character a hyphen.
-    """
-    for family in catalog.families:
-        if any(model.hf_repo == hf_repo for model in family.models):
-            return family.name
-    name = hf_repo.split("/", 1)[1].lower()
-    slug = "".join(character if character.isalnum() or character in ".-" else "-" for character in name)
-    slug = slug.lstrip(".-")
-    if not slug:
-        raise ValueError(f"cannot make a family name from {hf_repo!r}")
-    return slug
-
-
-_CONFIG_HEADER = (
-    "modelroom configuration, written by the guided mode.\n"
-    "Families and their owner-bound `repos` targets come from the search; everything else is\n"
-    "kept as it was. Edit it by hand at any time -- the guided mode reads it back."
-)
-
-
-def write_configuration(path: Path, config: Configuration, *, now: datetime) -> None:
-    """Write `config` to `path` as TOML, under the state lock, once it reads back unchanged.
-
-    `path` is resolved once, and the resolved path is used for both the check and the write --
-    the same thing `load_config` does when it reads the file back, so the directory that confines
-    `paths.state` is the same one in all three places. A path that is a symlink therefore lands in
-    the file it points at, not as a new file over the link.
-
-    The text is produced and read back through `config.config_from_text`, the very reader
-    `load_config` uses -- so the schema gate, the path resolution and both path confinement
-    checks are the ones the next `modelroom` command will apply -- and the result is compared
-    with `config`. All of that happens *before* the lock is taken and anything is written, so a
-    configuration that would not read back never reaches the disk (the same order `modelroom
-    migrate` uses). The lock is the same `modelroom.lock` every other writer takes: a `fetch`
-    running in parallel makes this stop with `LockHeldError` instead of writing over the file it
-    is reading, and it is released whether the write succeeds or fails. No backup is kept: the
-    guided mode has the user confirm the change before it calls this.
-    """
-    target = path.resolve()
-    text = dump_toml(config.model_dump(mode="json"), _CONFIG_HEADER)
-    reread = config_from_text(text, target)
-    if reread.model_dump(mode="json") != config.model_dump(mode="json"):
-        raise ConfigError(f"{target}: the written configuration does not read back unchanged")
-
-    config.paths.state.mkdir(parents=True, exist_ok=True)
-    handle = acquire_lock(config.paths.lock_file, "search", now)
-    try:
-        atomic_write_text(target, text)
-    finally:
-        release_lock(handle)
-
-
 __all__ = [
+    "CATALOG_BUDGET_NOTE",
+    "CATALOG_BUDGET_RESERVE",
     "DEFAULT_GUIDED_BUDGET",
     "DEFAULT_PACKAGERS",
+    "GGUF_TAG",
     "MAX_SUCCESSOR_EDGES",
+    "NO_GGUF_NOTE",
     "NO_OLLAMA_LABEL",
     "NO_PUBLISHER_NOTE",
     "NO_PUBLISHER_NOTE_OPEN",
+    "NO_WORD_NOTE",
     "SEARCH_LOG_SCHEMA_VERSION",
+    "UNREADABLE_ID_NOTE",
     "AgeVerdict",
     "SearchError",
     "SearchGroup",

@@ -13,21 +13,35 @@ from modelroom.catalog import Catalog, load_catalog
 from modelroom.guided_contracts import SearchHit
 from modelroom.search_pages import (
     HF_ACCOUNT_LIMIT,
+    HF_CATALOG_LIMIT,
+    HF_MOST_DOWNLOADED_LIMIT,
     HF_OPEN_LIMIT,
     MOST_DOWNLOADED_LABEL,
     NEWEST_LABEL,
+    TYPED_LABEL,
     SearchGroup,
+    account_downloads_url,
     account_search_url,
+    catalog_page_url,
+    catalog_plan,
     format_downloads,
+    model_url,
     most_downloaded_url,
     newest_url,
     publisher_accounts,
     read_downloads,
     search_accounts,
-    search_requests,
+    typed_plan,
+    word_plan,
 )
+from modelroom.search_word import parse_search
 
 _EXPAND = "&expand=cardData&expand=createdAt&expand=downloads&expand=safetensors&expand=tags"
+_EXPAND_ONE = "expand=cardData&expand=createdAt&expand=downloads&expand=safetensors&expand=tags"
+
+
+def _plan(word: str, accounts: list[str], *, open_pages: bool = False):
+    return word_plan(parse_search(word), accounts, open_pages=open_pages)
 
 
 def _catalog() -> Catalog:
@@ -45,10 +59,20 @@ def test_the_account_request_is_the_pinned_literal():
     )
 
 
+def test_the_second_account_request_is_the_pinned_literal():
+    # The page the newest one cannot replace: measured live 2026-09-25, `unsloth` has more than
+    # twenty `qwen` repositories newer than `Qwen3.5-9B-GGUF`, so only `sort=downloads` holds it.
+    assert account_downloads_url("qwen", "unsloth") == (
+        "https://huggingface.co/api/models?author=unsloth&search=qwen&filter=gguf"
+        "&sort=downloads&direction=-1"
+        "&limit=20" + _EXPAND
+    )
+
+
 def test_the_most_downloaded_request_is_the_pinned_literal():
     assert most_downloaded_url("qwen") == (
         "https://huggingface.co/api/models?search=qwen&filter=gguf&sort=downloads&direction=-1"
-        "&limit=10" + _EXPAND
+        "&limit=20" + _EXPAND
     )
 
 
@@ -59,23 +83,46 @@ def test_the_newest_request_is_the_pinned_literal():
     )
 
 
-def test_the_two_page_limits_are_pinned():
-    assert (HF_ACCOUNT_LIMIT, HF_OPEN_LIMIT) == (20, 10)
+def test_the_catalog_page_request_is_the_pinned_literal():
+    assert catalog_page_url("Qwen3.5-9B") == (
+        "https://huggingface.co/api/models?search=Qwen3.5-9B&filter=gguf&sort=downloads&direction=-1"
+        "&limit=10" + _EXPAND
+    )
+
+
+def test_the_typed_repository_request_is_the_pinned_literal():
+    assert model_url("unsloth/Qwen3.5-9B-GGUF") == (
+        "https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF?" + _EXPAND_ONE
+    )
+
+
+def test_the_four_page_limits_are_pinned():
+    assert (HF_ACCOUNT_LIMIT, HF_MOST_DOWNLOADED_LIMIT, HF_OPEN_LIMIT, HF_CATALOG_LIMIT) == (20, 20, 10, 10)
 
 
 def test_every_request_form_quotes_the_word_and_the_account():
     assert "search=qwen+3.5&filter=gguf" in account_search_url("qwen 3.5", "unsloth")
     assert "author=a%26b&search=qwen" in account_search_url("qwen", "a&b")
+    assert "author=a%26b&search=qwen" in account_downloads_url("qwen", "a&b")
     assert "search=a%26b&filter=gguf" in most_downloaded_url("a&b")
     assert "search=a%26b&filter=gguf" in newest_url("a&b")
+    assert "search=a%26b&filter=gguf" in catalog_page_url("a&b")
 
 
 def test_expand_is_repeated_once_per_field_and_names_downloads():
     # `downloads` is only answered when it is asked for, and only the moment `expand` is set at
     # all -- measured against the live API 2026-09-24.
-    for url in (account_search_url("qwen", "unsloth"), most_downloaded_url("qwen"), newest_url("qwen")):
+    listed = (
+        account_search_url("qwen", "unsloth"),
+        account_downloads_url("qwen", "unsloth"),
+        most_downloaded_url("qwen"),
+        newest_url("qwen"),
+        catalog_page_url("Qwen3.5-9B"),
+    )
+    for url in listed:
         assert url.count("&expand=") == 5
         assert "&expand=downloads" in url
+    assert model_url("unsloth/Qwen3.5-9B-GGUF").count("expand=") == 5
 
 
 # --- which accounts are asked -------------------------------------------------------------------
@@ -93,6 +140,16 @@ def test_a_word_only_a_model_id_carries_asks_that_familys_publisher():
     # `r1` is in no family name and in no publisher account; only
     # `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B` carries it.
     assert publisher_accounts(_catalog(), "r1") == ["deepseek-ai"]
+
+
+def test_a_name_with_blanks_asks_the_publisher_of_the_model_it_names():
+    # What the search of 2026-09-24 could not do: `qwen 3.5 9b` went to the Hub word for word and
+    # matched no family at all (decided 2026-09-25).
+    assert publisher_accounts(_catalog(), "qwen 3.5 9b") == ["Qwen"]
+
+
+def test_a_repository_id_asks_the_publisher_of_the_model_its_name_half_holds():
+    assert publisher_accounts(_catalog(), "unsloth/Qwen3.5-9B-GGUF") == ["Qwen"]
 
 
 def test_the_comparison_ignores_case_and_surrounding_blanks():
@@ -153,27 +210,65 @@ def test_a_word_without_a_family_asks_the_packagers_alone():
 # --- the pages of one search --------------------------------------------------------------------
 
 
-def test_with_the_filter_on_there_is_one_request_per_account_and_no_open_page():
-    requests = search_requests("qwen", ["Qwen", "unsloth"], open_pages=False)
+def test_an_account_is_one_group_of_two_pages_newest_and_most_downloaded():
+    plan = _plan("qwen", ["Qwen", "unsloth"])
 
-    assert [request.label for request in requests] == ["Qwen", "unsloth"]
-    assert [request.account for request in requests] == ["Qwen", "unsloth"]
-    assert [request.limit for request in requests] == [20, 20]
-    assert requests[0].url == account_search_url("qwen", "Qwen")
+    assert [group.label for group in plan.groups] == ["Qwen", "unsloth"]
+    assert [group.account for group in plan.groups] == ["Qwen", "unsloth"]
+    assert [request.url for request in plan.groups[0].requests] == [
+        account_search_url("qwen", "Qwen"),
+        account_downloads_url("qwen", "Qwen"),
+    ]
+    assert plan.requests == 4
+    assert plan.mode == "word"
+
+
+def test_with_the_filter_on_no_open_page_is_asked():
+    plan = _plan("qwen", ["Qwen", "unsloth"])
+
+    assert [group.label for group in plan.groups] == ["Qwen", "unsloth"]
 
 
 def test_with_the_filter_off_the_two_open_pages_come_after_the_accounts():
-    requests = search_requests("qwen", ["Qwen", "unsloth"], open_pages=True)
+    plan = _plan("qwen", ["Qwen", "unsloth"], open_pages=True)
 
-    assert [request.label for request in requests] == ["Qwen", "unsloth", MOST_DOWNLOADED_LABEL, NEWEST_LABEL]
-    assert [request.account for request in requests][-2:] == [None, None]
-    assert [request.limit for request in requests][-2:] == [10, 10]
-    assert requests[-2].url == most_downloaded_url("qwen")
-    assert requests[-1].url == newest_url("qwen")
+    assert [group.label for group in plan.groups] == ["Qwen", "unsloth", MOST_DOWNLOADED_LABEL, NEWEST_LABEL]
+    assert [group.account for group in plan.groups][-2:] == [None, None]
+    assert [group.requests[0].limit for group in plan.groups][-2:] == [20, 10]
+    assert plan.groups[-2].requests[0].url == most_downloaded_url("qwen")
+    assert plan.groups[-1].requests[0].url == newest_url("qwen")
+    assert plan.requests == 6
+
+
+def test_a_multi_word_input_asks_the_pages_of_its_one_hub_word():
+    plan = _plan("qwen 3.5 9b", ["unsloth"])
+
+    assert plan.groups[0].requests[0].url == account_search_url("qwen", "unsloth")
+
+
+def test_a_typed_id_is_one_page_of_its_own_under_the_label_typed():
+    plan = typed_plan("unsloth/Qwen3.5-9B-GGUF")
+
+    assert plan.mode == "id"
+    assert plan.requests == 1
+    assert [group.label for group in plan.groups] == [TYPED_LABEL]
+    assert plan.groups[0].requests[0].single is True
+    assert plan.groups[0].requests[0].url == model_url("unsloth/Qwen3.5-9B-GGUF")
+
+
+def test_the_catalog_plan_is_one_page_per_model_under_the_models_own_name():
+    plan = catalog_plan(["Qwen3.5-9B", "Ministral-3-8B-Instruct-2512"])
+
+    assert plan.mode == "catalog"
+    assert [group.label for group in plan.groups] == ["Qwen3.5-9B", "Ministral-3-8B-Instruct-2512"]
+    assert plan.requests == 2
+    assert plan.groups[0].requests[0].url == catalog_page_url("Qwen3.5-9B")
+    # Not an account page: a full one says nothing about the word there.
+    assert plan.groups[0].requests[0].account is None
 
 
 def test_the_labels_of_the_open_pages_are_the_words_of_the_language_standard():
-    assert (MOST_DOWNLOADED_LABEL, NEWEST_LABEL) == ("most downloaded", "newest")
+    assert (MOST_DOWNLOADED_LABEL, NEWEST_LABEL, TYPED_LABEL) == ("most downloaded", "newest", "typed")
 
 
 # --- the line a group prints --------------------------------------------------------------------
@@ -202,6 +297,17 @@ def test_an_open_page_counts_the_repositories_an_account_page_already_listed():
 
 def test_an_account_that_answered_with_nothing_still_gets_its_line():
     assert _group(label="bartowski", page_size=0).line() == "bartowski 0"
+
+
+def test_a_group_line_counts_what_the_words_of_a_multi_word_input_do_not_name():
+    assert _group(page_size=27, already_listed=1, filtered_out=25).line() == (
+        "unsloth 27, 1 of them already listed, 25 of them other models"
+    )
+
+
+def test_a_group_of_two_pages_says_how_many_requests_it_cost():
+    assert _group(pages=2).pages == 2
+    assert _group().pages == 1
 
 
 # --- downloads ----------------------------------------------------------------------------------

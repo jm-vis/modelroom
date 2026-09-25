@@ -1057,27 +1057,38 @@ the file can never say different numbers.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "word": "qwen",
+  "mode": "word",
   "filter_owners": true,
   "run_at": "2026-09-25T08:00:00+00:00",
   "accounts": [
-    {"account": "Qwen", "class": "publisher", "hits": 1, "page_full": false},
+    {"account": "Qwen", "class": "publisher", "hits": 2, "page_full": false},
     {"account": "unsloth", "class": "packager", "hits": 20, "page_full": true},
-    {"account": "most downloaded", "class": "open", "hits": 10, "page_full": false}
+    {"account": "most downloaded", "class": "open", "hits": 20, "page_full": false}
   ],
-  "requests": 3,
-  "budget": {"used": 9, "limit": 150},
+  "requests": 14,
+  "budget": {"used": 16, "limit": 150},
   "resolved": 3,
   "unresolved": [{"reason": "the repository does not say it packages a base model", "count": 1}]
 }
 ```
 
-`accounts` is one entry per asked page, in the order they were asked: `class` is what the search
+`schema_version` is **2** since 2026-09-25, for the one new field: `mode` is `word`, `id` or
+`catalog` (`SearchOutcome.mode`), so a reader can tell a word search from a typed repository id and
+from the catalog pages of a search with no word at all. `word` is what was typed, the empty string
+included.
+`accounts` is one entry per asked **group**, in the order they were asked: `class` is what the search
 asked it by -- `publisher` for a publisher account of a matching catalog family, `packager` for the
-positive list, `open` for one of the two open lists, which are asked without an account at all.
-`hits` is what that page answered with, the number its group line shows, and `page_full` is set for
-an **account** page only ("Search over the Hugging Face API"). `unresolved` is the reasons the
+positive list, `open` for one of the two open lists, `typed` for the one page of a typed repository
+id and `catalog` for a page of a search with no word. The last two are their own classes and not
+`open`: the note on the screen is built from these classes, and calling them `open` made it say that
+the two open lists were asked for a run that asked one request and no open list (live probe,
+2026-09-25).
+`hits` is what that group's pages answered with together, the number its group line shows, and
+`page_full` is set for an **account** group only ("Search over the Hugging Face API"). `requests` is
+the number of **pages**, two per account since 2026-09-25, so it is no longer the length of
+`accounts`. `unresolved` is the reasons the
 repositories of this search are no model of the selection list, each with the number behind it
 (`guided_models.unusable_counts`). Why the file: those seven lines, the request count and the budget
 answer "why did this account answer nothing", which is a question about the search and not about the
@@ -2834,30 +2845,89 @@ selection list is shown -- 7 account pages and one age lookup per distinct resol
 (budget exhausted)`. `run_fetch`'s own default stays `400` for a plain `modelroom fetch`, which
 has no search in front of it.
 
+### What was typed, read as one of three things
+
+**The input is parsed before anything is asked** (`modelroom/search_word.py`, decided 2026-09-25).
+Until then every answer went to the Hub as `search=<text>` word for word: a repository id
+(`unsloth/Qwen3.5-9B-GGUF`) found nothing, a name with blanks (`qwen 3.5 9b`) found nothing, and an
+empty answer was the error `no model name to search for`. `parse_search(text)` returns a
+`SearchWord` of one of three **forms**:
+
+| Form | When | What the search does |
+|---|---|---|
+| `id` | exactly one `/`, both halves Hub-shaped (`[A-Za-z0-9][A-Za-z0-9._-]*`) | one request for that repository ("A typed repository id") |
+| `words` | anything else that leaves a word | two pages per account, plus the open lists without the filter |
+| `empty` | nothing typed, or nothing but filler | one page per current model of the catalog ("No search word") |
+
+The words are the text cut at blanks, `-`, `_` and `:`, lower case, without the **filler words**
+`gguf`, `model`, `models` and `the`. `text` is what was typed with the surrounding blanks stripped
+-- what `search.json` and the screen call the word. For an `id` the typed spelling is kept
+(`repo_id`, a repository id is case sensitive) and `words` holds the words of its **name** half,
+which is what the search falls back to when that repository holds no GGUF file.
+
+**One word goes to the Hub, all of them are held against the answer.** The Hub's `search=` takes one
+string and a longer one finds less, so `SearchWord.hub_word` is sent: one word alone as it is (which
+is what every recorded answer of the test suite was taken with), and for more than one word the
+longest **letter run** -- `qwen 3.5 9b` and `Qwen3.5-9B` both ask `qwen`. The other words then filter
+the answer locally: a repository is kept only when every word is part of its id with the separators
+removed (`qwen3.59b` in `unslothqwen3.59bgguf`). A **one-word** search is never filtered
+(`SearchWord.filters_locally`): that is the search this package has always made, and its recorded
+answers carry repositories whose id holds the word only in the owner half
+(`mistralai/Ministral-3-14B-Instruct-2512-GGUF` under `mistral`). What a group dropped that way is
+counted and said: `unsloth 27, 1 of them already listed, 25 of them other models`.
+
+**A word the catalog does not know leads to candidates.** When no family of the catalog matches the
+input -- not by name, not by publisher account, not by one of its model ids -- `difflib.get_close_matches`
+at cutoff `0.75` runs over the family names, the publisher accounts, the model names and the
+**letter runs** of those names (the runs are what makes `qwn` reach `qwen`, from `Qwen3.5-9B`). At
+most five candidates, each once, in the order the words were typed. `SearchOutcome.candidates`
+carries them and the guided mode offers them as a list (see "Guided mode", step 2). A word the
+catalog *does* know gets none: a correct word with no answer today is a fact about the Hub, not a
+spelling mistake. An empty answer gets none either, and neither does a typed id the Hub answered
+for -- but an id that **fell back** to the word search is a word search from there on, so the words
+of its name half can lead to candidates like any others (second-model round, 2026-09-25).
+
 ### Search over the Hugging Face API
 
-**One request per account, and open lists only without the filter** (decided 2026-09-24). Until
-then the search made one request for the 50 most recently created GGUF repositories matching the
-word, and the positive list of packager accounts only *classified* whatever that answer happened to
-contain. Measured in an empty folder with `qwen` and with `deepseek`: the answer was 50 third-party
-uploads of the last few days and not one repository of `unsloth`, `bartowski` or `Qwen` -- those
-accounts are older and fall out of the window, so nothing was selectable, twice. The account steers
-the request now. `modelroom/search_pages.py` builds the three forms, over the transport this
-package already has -- there is no Hugging Face SDK dependency:
+**Two pages per account, and open lists only without the filter** (decided 2026-09-24, the second
+page 2026-09-25). Until 2026-09-24 the search made one request for the 50 most recently created GGUF
+repositories matching the word, and the positive list of packager accounts only *classified*
+whatever that answer happened to contain. Measured in an empty folder with `qwen` and with
+`deepseek`: the answer was 50 third-party uploads of the last few days and not one repository of
+`unsloth`, `bartowski` or `Qwen` -- those accounts are older and fall out of the window, so nothing
+was selectable, twice. The account steers the request now.
+
+**One sort order per account was not enough either.** Measured live 2026-09-25:
+`author=unsloth&search=qwen&sort=createdAt&limit=20` answers with twenty repositories created after
+2026-05, and `unsloth/Qwen3.5-9B-GGUF` (created 2026-02-28) is not among them at all; the same
+account's `sort=downloads` page carries it in fourth place. So an account is asked **twice**, its
+newest twenty and its twenty most downloaded, and the two answers are **one group** under that
+account's label -- a reader asks "was my account asked" once, and the sort orders are this package's
+business. `SearchGroup.pages` says how many requests that label cost.
+
+`modelroom/search_pages.py` builds the six forms, over the transport this package already has --
+there is no Hugging Face SDK dependency:
 
 ```
-account:         GET https://huggingface.co/api/models?author=<account>&search=<name>&filter=gguf
+account, newest: GET https://huggingface.co/api/models?author=<account>&search=<name>&filter=gguf
                      &sort=createdAt&direction=-1&limit=20
                      &expand=cardData&expand=createdAt&expand=downloads&expand=safetensors&expand=tags
+account, most
+downloaded:      GET https://huggingface.co/api/models?author=<account>&search=<name>&filter=gguf
+                     &sort=downloads&direction=-1&limit=20&expand=... (the same five)
 most downloaded: GET https://huggingface.co/api/models?search=<name>&filter=gguf&sort=downloads
-                     &direction=-1&limit=10&expand=... (the same five)
+                     &direction=-1&limit=20&expand=... (the same five)
 newest:          GET https://huggingface.co/api/models?search=<name>&filter=gguf&sort=createdAt
                      &direction=-1&limit=10&expand=... (the same five)
+catalog page:    GET https://huggingface.co/api/models?search=<model name>&filter=gguf&sort=downloads
+                     &direction=-1&limit=10&expand=... (the same five)
+typed id:        GET https://huggingface.co/api/models/<owner>/<name>?expand=... (the same five)
 ```
 
 `expand` is repeated once per field, not sent as a list, and `expand=downloads` is required as soon
 as `expand` is set at all -- without it the field is simply absent (measured 2026-09-24, both forms
-`HTTP 200`). `HF_ACCOUNT_LIMIT` is `20`, `HF_OPEN_LIMIT` is `10`. One request answers everything the
+`HTTP 200`). `HF_ACCOUNT_LIMIT` is `20`, `HF_MOST_DOWNLOADED_LIMIT` is `20`, `HF_OPEN_LIMIT` is
+`10`, `HF_CATALOG_LIMIT` is `10`. One request answers everything the
 resolution needs of that page, so no hit costs a request of its own. Measured against the live API
 2026-09-23 and 2026-09-24: an entry carries `_id`, `id`, `createdAt` and `tags`, most of them a
 `cardData`, few a `safetensors` (a GGUF repo usually has no tensor index), and none an `author`,
@@ -2881,12 +2951,43 @@ listed packagers were asked` with the filter on, and `... the listed packagers a
 lists were asked` with it off.
 
 **The two open lists exist only with the filter off** (`run_search(..., open_pages=...)`, the guided
-mode passes `not filtered`): the ten most downloaded and the ten newest GGUF repositories for that
+mode passes `not filtered`): the twenty most downloaded and the ten newest GGUF repositories for that
 word, asked after the account pages, so a fresh fine-tune under an account nobody listed is visible
-at all. Switching the filter off **extends** the list, it never replaces it -- the account groups
+at all. Twenty for the downloads page since 2026-09-25: with the filter off, what many people take is
+the only place a model of an account nobody listed shows up, and ten of them are mostly one family's
+siblings. Switching the filter off **extends** the list, it never replaces it -- the account groups
 stay. A repository more than one page answers with is listed **once**, in the first group that had
 it; the open list still says how many its page held: `most downloaded 10, 3 of them already
 listed`.
+
+**A typed repository id** (`search_pages.typed_plan`, decided 2026-09-25) is **one** request for that
+repository, shown under the label `typed`, and it is the whole search: the person named the
+repository, so no account page could add to it. Two things about it differ from a word search:
+
+- the **publisher gate does not apply** (`run_search(..., publisher_required=...)`, `False` for the
+  typed page whatever the owner filter says). `publisher_unknown` is a preference for the catalog's
+  publishers, and someone who types a repository has already said which account they want. Its owner
+  class stays what it is (`other` where neither list holds the account), and the owner filter of the
+  selection list does not hide it either (`guided_models.hit_reason(..., typed=...)`);
+- **without a GGUF file** the search says `<id> holds no GGUF file` and runs the normal word search
+  over the id's **name** half. The GGUF file is read off the repository's own `gguf` tag -- the same
+  fact `filter=gguf` selects by -- so this stays one request. An answer the Hub does not give, and an
+  answer that names another repository (the transport follows redirects, and a moved repository is
+  answered with the one it moved to), leave `<id> is no repository this search could read` and the
+  same fallback. The input is never simply refused.
+
+**No search word** (`search_pages.catalog_plan`, decided 2026-09-25) is a valid answer and means
+"show me what fits this machine": one page per model the catalog calls `latest`
+(`search_word.latest_model_names`, 22 of them as the catalog stands), each its ten most downloaded
+GGUF repositories, under the model's own name as the group label. The note is `no search word: the
+catalog's current models, one page each`. This is the one plan whose length the input does not bound
+and the fetch of a chosen model shares the same budget, so it **stops asking** once
+`CATALOG_BUDGET_RESERVE` (20) requests or fewer are left and says `the request budget ended after <n> of <m>
+catalog pages` instead of ending a run that has a choice to offer with `SearchError`. It is a stop
+rule before a page and not a fence around those 20: the last page it is allowed to ask resolves its
+own repositories, and each distinct base model of it costs an age lookup from the reserve as well, so
+a run can come out of the search with fewer than 20 requests left (second-model round, 2026-09-25).
+A fetch that then runs out says so and the run ends with exit `1`; nothing is written wrong.
 
 **Every page costs one request of the shared budget.** A page that fails -- a status other than
 `200`, a body that is no JSON, a body that is no list, an entry with no repository id or one that is
@@ -2901,9 +3002,13 @@ so a page that carries the same repository twice lists it once and the duplicate
 lookup. The answer is registry-controlled text, and nothing promises it holds each id once.
 
 **`SearchOutcome` carries the groups and the flat list.** `groups` is a `list[SearchGroup]`
-(`label`, `hits`, `page_size`, `page_full`, `already_listed`) in the order the pages were asked;
+(`label`, `hits`, `page_size`, `page_full`, `already_listed`, `pages`, `filtered_out`) in the order
+the pages were asked;
 `hits` is the same repositories flat in exactly that order, so `apply_hits`, the selection list and
-the answer file's `select` key are unchanged. `SearchOutcome.group_lines()` is the notes plus one
+the answer file's `select` key are unchanged. It also carries `mode` (`word`, `id` or `catalog`),
+`typed` (the repository id that was typed, else `None`) and `candidates` (see "What was typed").
+`SearchOutcome.requests` is the number of **pages** asked, which is two per account since
+2026-09-25, not the number of groups. `SearchOutcome.group_lines()` is the notes plus one
 line per group, above the summary -- an account that answered with nothing keeps its line, because
 "was my account asked at all" is the question this change exists to answer:
 
@@ -2931,8 +3036,12 @@ A hit becomes a `SearchHit` (above). It is `resolved` only when both hold:
    a resolved hit can still yield `unresolved (file_stem)` packages. A hit that declares no base,
    more than one, or one that is not a repository id gets `base_model_tag`; the other statuses
    pass through as they are (`derivative`, `relation_unknown`, `metadata_conflict`);
-2. the catalog knows that base model's account as a publisher (`Catalog.is_publisher`),
-   otherwise `publisher_unknown`.
+2. **with the owner filter on**, the catalog knows that base model's account as a publisher
+   (`Catalog.is_publisher`), otherwise `publisher_unknown`. With the filter **off** that gate is
+   gone (`publisher_required=False`, decided 2026-09-25): a model of an account the catalog does not
+   list resolves, its age is `unknown` for want of evidence and its owner class says `other` -- the
+   catalog is a preference, never a verdict, and `publisher_unknown` then appears nowhere. The typed
+   repository id is never gated at all (above).
 
 An unresolved hit is shown with its reason and gets no fit, no age and no Ollama name -- it is
 never silently dropped, and never treated as a package of the family. `search.py::owner_class`
@@ -3741,7 +3850,8 @@ with the answer in the words a reader gave it (`screen.answer_words` and the ste
 | `results` | `this folder`, or the path that was entered |
 | `machines` | `this machine`, `a profile file`, joined with `, `; nothing marked: `none` |
 | `clone` | `the same machine` / `a clone`, under the short question `The profile of this folder is gone. Is this the same machine or a clone?` (the profile id belongs to the question that was asked) |
-| `search` | the word |
+| `search` | the word as it was typed; nothing typed: `anything that fits this machine` |
+| `did_you_mean` | the candidate that was picked, or `none of these` |
 | `filter_owners`, `load_test` | `Yes` / `No` |
 | `select` | the model names joined with `, ` (`Qwen3.5-9B, Qwen3-0.6B`); nothing marked: `nothing`. A value an answer file names as a repository keeps its own spelling |
 | `context` | the line of the scale without its fit column, columns two spaces apart (`L  32k  24,000 words  a report or a long contract`); a number of its own: `40,000 tokens` |
@@ -3827,8 +3937,9 @@ matter, so the move is invisible to it.
 | 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import` |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
 | 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`; both measure -- `same` under the bound profile id, `clone` under a new one) |
-| 2 | `search` | What are you looking for? | text |
+| 2 | `search` | What are you looking for? | text: a word, a name with blanks, a repository id, or the empty string ("show me what fits this machine") |
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
+| 2 | `did_you_mean` | Nothing was found. Did you mean one of these? | one of the candidates, or `keep` (only when the search found no model and the catalog knows a word close to the one that was typed) |
 | 2 | `select` | Which of these models should the result cover? | a list of base model ids (`Qwen/Qwen3.5-9B`); an answer file may name repository ids instead, as before |
 | 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
 | 4 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **the one optional answer** -- an answer file that does not mention it does not measure |
@@ -3897,17 +4008,41 @@ measurement the guided mode writes `[machines.<name>].profile` -- the one config
 `hardware` leaves to it. `import a profile file` runs `import-profile`, which never changes the
 binding; a file that does not import is reported and the run goes on.
 
-**Step 2, search, choice and fetch.** `run_search` with the run's shared request budget
-(`DEFAULT_GUIDED_BUDGET`, 150, shared with the fetch) and `open_pages=not filtered` -- so the owner
-filter is a question about the **request**, not only about the list: with it on, only the accounts
-are asked; switching it off adds the two open lists on top of the account groups (see "Search over
-the Hugging Face API"). Then **two notes** (`screen.search_notes`, decided 2026-09-24): where it
+**Step 2, search, choice and fetch.** The two search questions, the search itself and its notes live
+in `modelroom/guided_search.py` (`search_step`, since 2026-09-25); the choice and the write-back into
+the configuration stay in `guided.py`, which owns the file. `run_search` gets the run's shared request
+budget (`DEFAULT_GUIDED_BUDGET`, 150, shared with the fetch), `open_pages=not filtered` and
+`publisher_required=filtered` -- so the owner
+filter is a question about the **request** and about the **resolution**, not only about the list: with
+it on, only the accounts
+are asked and only a base model of a catalog publisher resolves; switching it off adds the two open
+lists on top of the account groups and lets any account's base model resolve (see "Search over
+the Hugging Face API"). A typed repository id is never hidden by it.
+
+**A search that found no model, for a word the catalog does not know, ends in one more question**
+(decided 2026-09-25): the candidates as a list to pick from, `none of these` last and the closest one
+under the pointer. Picking one searches again with that word; `none of these` keeps the answer as it
+was. The **first** search leaves no line behind in that case -- the notes and `search.json` are
+written once, for the search that was really used, so the step still carries one reading.
+
+Then **two notes** (`guided_search.search_notes`, decided 2026-09-24): where it
 asked (`searched Hugging Face at the publisher Qwen and the five listed packagers`, the publishers
-whose page answered with something, by name; none of them: `no publisher of this catalog that
-answered` -- a publisher whose page came back empty was asked all the same, and `search.json` names
-it; with the filter off `, and the two open lists`) and how much of the answer is a choice (`120 repositories, 40
+whose page answered with something, by name; with the filter off `, and the two open lists`) and how
+much of the answer is a choice (`120 repositories, 40
 of them models you can pick from`; none: `none of them a model you can pick from`, and with a full
-account page ` · a more specific word shortens the list`). Everything else the search knows goes
+account page ` · a more specific word shortens the list`). Where a publisher of the catalog **was**
+asked and every one of them answered with nothing, the first note names them instead of saying "at no
+publisher of this catalog that answered" (decided 2026-09-25): `searched Hugging Face at the five
+listed packagers; the publisher deepseek-ai has no GGUF repository for this search` -- "for this
+search", because an account page is asked with the word and an empty answer says nothing about
+everything that account holds (second-model round, 2026-09-25). The two searches that ask no
+account page have a first note of their own -- `searched Hugging Face for the repository
+unsloth/Qwen3.5-9B-GGUF` and `searched Hugging Face for the 22 current models of this catalog` --
+because the account sentence claimed "the no listed packagers, and the two open lists" about them
+(live probe, 2026-09-25). Above those two stand the
+search's own sentences about the *request* wherever it has one -- a typed id with no GGUF file, a word
+no catalog family matches, a run with no word at all, a catalog plan that stopped at the budget.
+Everything else the search knows goes
 into `search.json` ("Search log"): the seven account lines, the request count, the budget and every
 reason a repository is no model of the list said the same thing seven times over on a screen that
 had a choice to offer. Then **the list of models** (`modelroom/guided_models.py`,
@@ -3931,7 +4066,8 @@ class), then the fit class, then the downloads, then the name, with `too tight` 
 last (decided 2026-09-24). How many models and how many repositories the search answered with is the
 second note above the list, and the reasons of the repositories that are no model of it are in
 `search.json` ("Search log"; `guided_models.UNRESOLVED_REASONS`, and with `filter_owners` on `not a
-publisher or a listed packager` for an owner class of `other`) -- the repositories themselves are no
+publisher or a listed packager` for an owner class of `other` -- except for the one repository the
+person typed, which that filter never hides) -- the repositories themselves are no
 lines of the list either. What the list has to say about itself is its **instruction line**
 (`guided_models.hint_line`): `nothing marked keeps the folder as it is. Fit is from the size of the
 model at 32k context; the exact fit comes after the fetch; (RAM) means the graphics memory is too

@@ -101,12 +101,28 @@ The run closes with a card of the whole run over the result table:
 ```
 
 1 **Configuration**: where the results should live, and which machines the result covers --
-this one is measured here. 2 **Packages**: a Hugging Face search for a model name -- one request
-per account, so the publisher of what you searched for and every packager you listed answer with
-their own repositories however old they are -- your selection out of every hit (the ones that
-cannot be picked are shown with the reason, and each one shows how often it was downloaded), and
-the fetch. Saying no to the owner filter adds two open lists on top: the ten most downloaded and
-the ten newest repositories for that word, whoever owns them.
+this one is measured here. 2 **Packages**: a Hugging Face search -- two requests per account, its
+newest and its most downloaded repositories, so the publisher of what you searched for and every
+packager you listed answer with their own builds however old they are -- then your selection, one
+line per model that can really be picked, with the fit its size allows on this machine and how often
+its packages were downloaded, and the fetch. What could not be picked, and why, is counted up in
+`state/search.json` rather than shown as rows nobody can choose.
+Saying no to the owner filter adds two open lists on top: the twenty most
+downloaded and the ten newest repositories for that word, whoever owns them, and it lets a model of
+an account this catalog does not list be picked as well.
+
+**You can answer that question in four ways**, and none of them has to be the exact spelling of
+anything:
+
+| What you type | What happens |
+|---|---|
+| `qwen` | the word goes to the Hub, and every account is asked for it |
+| `qwen 3.5 9b` | blanks, hyphens, underscores and colons all separate words; one of them is asked for and the rest narrow the answer, so a missing hyphen, a blank in the wrong place or a `gguf` you wrote out of habit still find the model. The words themselves have to be right: `9x` finds no `9B` |
+| `unsloth/Qwen3.5-9B-GGUF` | a repository you already know: one request for exactly that one, and the owner filter never hides it |
+| nothing at all | press Enter and the current models of the shipped catalog are looked up one by one -- the answer to "I have no model in mind, what fits this machine?" |
+
+A word close to something the catalog knows but not in it (`qwn`) ends in a short list of what you
+may have meant; picking one searches again.
 3 **Context**: how much text a model should handle at once, as a scale from XS to XXL
 with the words that are, an example, and how many of the packages just fetched still fit this
 machine -- that last column is the fit of the ranking itself, not a second calculation.
@@ -192,8 +208,12 @@ whoever packaged the GGUF build. Those accounts are `mistralai`, `utter-project`
 a model is called `latest` only with the publisher page or collection that says so and the date it
 was checked; without one the age stays `unknown`.
 
-A hit whose base model belongs to an account that is not in that list is shown with the reason
-`publisher_unknown` instead of being hidden. If a publisher you use is missing, open an issue in
+The list is a **preference, not a gate** (since 2026-09-25). With the owner filter on -- the default
+-- a hit whose base model belongs to an account that is not in that list is shown with the reason
+`publisher_unknown` instead of being hidden. Say no to the filter and it can be picked like any
+other, with its age left at `unknown` for want of evidence and its owner shown as `other`; and a
+repository you name yourself (`unsloth/Qwen3.5-9B-GGUF`) is never filtered out at all, whatever the
+catalog says about it. If a publisher you use is missing, open an issue in
 this repository naming the account and one of its models; the catalog is data in this repository
 and takes a new family with its evidence.
 

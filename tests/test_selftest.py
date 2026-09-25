@@ -21,6 +21,9 @@ if not (REPO / ".git").exists():
 _SPEC = importlib.util.spec_from_file_location("modelroom_selftest", SCRIPT)
 st = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(st)
+_SET_SPEC = importlib.util.spec_from_file_location("modelroom_searchset", REPO / "scripts" / "searchset.py")
+searchset = importlib.util.module_from_spec(_SET_SPEC)
+_SET_SPEC.loader.exec_module(searchset)
 
 RESULTS = Path("//models/results")
 
@@ -130,8 +133,9 @@ def test_criterion_two_names_a_cross_check_that_is_not_confirmed():
 
 
 GOOD_SEARCH_LOG = {
-    "schema_version": 1,
+    "schema_version": 2,
     "word": "qwen",
+    "mode": "word",
     "filter_owners": True,
     "run_at": "2026-09-25T08:00:00+00:00",
     "accounts": [
@@ -154,9 +158,15 @@ def test_criterion_three_passes_on_a_real_search_log():
 
 
 def test_criterion_three_names_a_log_of_another_schema():
-    problems = st.search_problems({"schema_version": 2}, GOOD_SEARCH)
+    problems = st.search_problems({"schema_version": 1}, GOOD_SEARCH)
 
-    assert problems == ["search.json has schema_version 2, expected 1"]
+    assert problems == ["search.json has schema_version 1, expected 2"]
+
+
+def test_criterion_three_names_a_log_of_another_mode():
+    log = GOOD_SEARCH_LOG | {"mode": "catalog"}
+
+    assert any("names mode 'catalog'" in problem for problem in st.search_problems(log, GOOD_SEARCH))
 
 
 def test_criterion_three_names_a_search_that_resolved_nothing():
@@ -534,6 +544,94 @@ def test_criterion_seven_names_a_row_that_still_says_unknown():
     ]
 
     assert any("says `unknown`" in problem for problem in st.result_table_problems(with_unknown))
+
+
+# --- criterion 8: the search test set --------------------------------------------------------------------
+
+
+def test_the_shipped_test_set_loads_and_holds_the_cases_the_decision_named():
+    cases = searchset.load_testset()
+
+    typed = [case["input"] for case in cases]
+    for expected in ("qwen", "qwen 3.5 9b", "Qwen3.5-9B", "unsloth/Qwen3.5-9B-GGUF", "mistral", "deepseek r1", "qwn", ""):
+        assert expected in typed, expected
+    assert all(isinstance(case["filter"], bool) for case in cases)
+    assert all(case.get("why") for case in cases)
+
+
+def test_a_test_set_of_another_schema_is_a_setup_error(tmp_path: Path):
+    path = tmp_path / "set.toml"
+    path.write_text("schema_version = 9\n[[cases]]\ninput = 'qwen'\nfilter = true\nmodels = []\n", encoding="utf-8")
+
+    with pytest.raises(searchset.TestsetError) as exc:
+        searchset.load_testset(path)
+
+    assert "schema_version is 9" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        ("schema_version = 1\n", "holds no case"),
+        ("schema_version = 1\n[[cases]]\nfilter = true\nmodels = []\n", "has no input"),
+        ("schema_version = 1\n[[cases]]\ninput = 'qwen'\nmodels = []\n", "no filter or no models"),
+        ("not toml at all = \n", "cannot read the search test set"),
+    ],
+)
+def test_a_test_set_that_is_not_a_test_set_is_a_setup_error(tmp_path: Path, body, message):
+    path = tmp_path / "set.toml"
+    path.write_text(body, encoding="utf-8")
+
+    with pytest.raises(searchset.TestsetError) as exc:
+        searchset.load_testset(path)
+
+    assert message in str(exc.value)
+
+
+def test_a_case_whose_models_all_came_back_is_reported_as_ok():
+    case = {"input": "qwen 3.5 9b", "filter": True, "models": ["Qwen/Qwen3.5-9B"]}
+
+    line = searchset.testset_line(case, ["Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-4B"], [])
+
+    assert line == "OK   qwen 3.5 9b: 2 models"
+
+
+def test_a_missing_model_is_a_warning_and_names_what_is_missing():
+    case = {"input": "mistral", "filter": True, "models": ["mistralai/Ministral-3-8B-Instruct-2512"]}
+
+    line = searchset.testset_line(case, [], [])
+
+    assert line.startswith("WARN mistral: 0 models, missing mistralai/Ministral-3-8B-Instruct-2512")
+
+
+def test_a_typo_case_reports_the_candidates_it_was_offered_instead():
+    case = {"input": "qwn", "filter": True, "models": []}
+
+    line = searchset.testset_line(case, [], ["qwen", "qwen3.5"])
+
+    assert line == "OK   qwn: 0 models, did you mean qwen, qwen3.5"
+
+
+def test_a_case_with_no_word_says_so_instead_of_showing_a_blank():
+    case = {"input": "", "filter": True, "models": []}
+
+    assert searchset.testset_line(case, [], []) == "OK   (no word): 0 models"
+
+
+def test_a_live_search_that_did_not_answer_is_a_warning_and_never_a_failure():
+    case = {"input": "qwen", "filter": True, "models": ["Qwen/Qwen3.8-27B"]}
+
+    line = searchset.testset_line(case, [], [], "SearchError: unexpected status 503")
+
+    assert line == "WARN qwen: SearchError: unexpected status 503"
+
+
+def test_the_criterion_watches_the_report_and_not_the_hub():
+    cases = [{"input": "qwen", "filter": True, "models": []}]
+
+    assert searchset.testset_problems(cases, ["WARN qwen: 0 models, missing x"]) == []
+    assert searchset.testset_problems(cases, []) == ["0 report lines for 1 cases"]
+    assert any("carries no verdict" in problem for problem in searchset.testset_problems(cases, ["qwen: nothing"]))
 
 
 # --- the report ------------------------------------------------------------------------------------------

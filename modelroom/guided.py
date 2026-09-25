@@ -20,7 +20,7 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from .binding import KnownProfile, PointerFileError, default_pointer_path, read_pointer, resolve_profile_target, write_pointer
 from .catalog import Catalog, load_catalog
@@ -35,13 +35,14 @@ from .config import (
 from .contracts import SchemaVersionError, validate_machine_name
 from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice
-from .guided_context import DEFAULT_CONTEXT
+from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
 from .guided_loadtest import load_test_step
 from .guided_models import (
+    ModelChoice,
     ask_models,
     chosen_hits,
     hint_line,
@@ -49,6 +50,13 @@ from .guided_models import (
     model_choices,
     picked_names,
     unusable_counts,
+)
+from .guided_search import (
+    DID_YOU_MEAN_KEY,
+    DID_YOU_MEAN_QUESTION,
+    FILTER_QUESTION,
+    SEARCH_QUESTION,
+    search_step,
 )
 from .http import RequestBudget, Transport, UrllibTransport
 from .importer import (
@@ -77,13 +85,13 @@ from .screen import (
     measured_note,
     names_words,
     packages_summary,
-    search_notes,
     yes_no,
 )
 from .search import (
     DEFAULT_GUIDED_BUDGET,
     DEFAULT_PACKAGERS,
     SearchError,
+    SearchOutcome,
     apply_hits,
     run_search,
     write_configuration,
@@ -109,8 +117,12 @@ QUESTIONS: dict[str, str] = {
     "machines": "Which machines should the result cover?",
     "import_file": "Path to the profile file to import",
     "clone": "Is this the same machine or a clone?",
-    "search": "What are you looking for?",
-    "filter_owners": "Show only repositories of a publisher or a listed packager?",
+    # Step 2's two search questions live with the search (`modelroom/guided_search.py`).
+    "search": SEARCH_QUESTION,
+    "filter_owners": FILTER_QUESTION,
+    # Asked only when the search found no model and the catalog knows a word close to the one that
+    # was typed, so an answer file that never runs into that case never needs the key.
+    DID_YOU_MEAN_KEY: DID_YOU_MEAN_QUESTION,
     "select": "Which of these models should the result cover?",
     "context": CONTEXT_QUESTION,
     # Step 4's two questions live with the step (`modelroom/guided_loadtest.py`); the answer file
@@ -617,58 +629,29 @@ def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> Hard
 
 
 def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, int]:
-    """Search, then the list of **models** (`modelroom/guided_models.py`), then the choice.
+    """The search of step 2 (`modelroom/guided_search.py`), then the choice, then the write-back.
 
-    One line per model with the fit its size allows, and only the ones that can be picked: a
-    hand test of 2026-09-24 showed 120 repository lines nobody could choose from. The
+    The list holds one line per **model** with the fit its size allows, and only the ones that can
+    be picked: a hand test of 2026-09-24 showed 120 repository lines nobody could choose from. The
     repositories behind a chosen model are `guided_models.chosen_hits`', and they go through the
     unchanged `apply_hits`. Returns the configuration and how many models were chosen.
 
-    Two notes stay on the screen: where the search asked, and how much of what it answered is a
-    choice. Which account answered what, the request count, the budget and the reasons go into
-    `search.json` (CONTRACTS.md, "Search log"), from the same reading.
+    **Every way out of this step reads the file again**, the two that change nothing included: the
+    fetch runs on what this step returns, and after a dialog that took as long as the user took, the
+    copy this run loaded before it may name another writer, another state directory or other models
+    than the file does (second-model round, 2026-09-25).
     """
-    name = run.asker.text("search", QUESTIONS["search"]).strip()
-    if not name:
-        raise GuidedError("no model name to search for")
-    run.screen.answer(QUESTIONS["search"], name)
-    filtered = run.asker.confirm("filter_owners", QUESTIONS["filter_owners"], default=True)
-    run.screen.answer(QUESTIONS["filter_owners"], yes_no(filtered))
-    try:
-        # The owner filter is a question about the request, not only about the list: with it on,
-        # only the accounts are asked; switching it off adds the two open lists (2026-09-24).
-        outcome = run_search(
-            run.transport,
-            name,
-            catalog=run.catalog,
-            listed_packagers=config.packagers or DEFAULT_PACKAGERS,
-            budget=run.budget,
-            open_pages=not filtered,
-        )
-    except SearchError as exc:
-        raise GuidedError(str(exc)) from exc
-    context = list_context(config.guided.context)
-    checked = machine_checked(run.pointer_path, config, config_file.parent)
-    models = model_choices(outcome.hits, filtered=filtered, checked=checked, context=context)
-    log = outcome.search_log(filtered=filtered, run_at=run.now, unresolved=unusable_counts(outcome.hits, filtered))
-    try:
-        write_search_log(config, log)
-    except OSError as exc:
-        # The search itself went through; its log is a record beside the run. A folder that cannot
-        # hold it is said out loud and the run goes on with the choice it has to offer.
-        run.failed(f"the log of this search was not written: {exc}")
-    for note in search_notes(log, len(outcome.hits), len(models), run.screen.glyphs.dot):
-        run.screen.note(note)
-    if not models:
+    step = search_step(run, config, config_file.parent)
+    if not step.models:
         # A list with nothing in it is not a question: the dialog cannot show one, and there is
         # nothing an answer could add (test round of 2026-09-24, `mistral` with the filter on).
         run.screen.note("no repository of a publisher or a listed packager was resolved; nothing added")
-        return config, 0
-    picked = ask_models(run.asker, QUESTIONS["select"], models, hint_line(checked, context))
-    run.screen.answer(QUESTIONS["select"], names_words(picked_names(models, picked)))
-    chosen = chosen_hits(models, picked, config.packagers or DEFAULT_PACKAGERS)
+        return _load(config_file), 0
+    picked = ask_models(run.asker, QUESTIONS["select"], step.models, hint_line(step.checked, step.context))
+    run.screen.answer(QUESTIONS["select"], names_words(picked_names(step.models, picked)))
+    chosen = chosen_hits(step.models, picked, config.packagers or DEFAULT_PACKAGERS)
     if not chosen:
-        return config, 0
+        return _load(config_file), 0
     # Read again here, after the last question of this step and immediately before the change is
     # applied and written: the search and the selection list both took time (see `_record_profile`).
     config = _load(config_file)

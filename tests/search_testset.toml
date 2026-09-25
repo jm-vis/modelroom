@@ -1,0 +1,62 @@
+# The search test set: what a person may type, and which models the search has to come back with.
+#
+# Read and asked **live** by `scripts/selftest.py`, one search per case, and reported line by line.
+# It is deliberately no gate: the Hub's answer for a word changes by the hour, so a model that is
+# missing today is a `WARN` and never ends the acceptance run (decided 2026-09-25). What it does
+# gate is the shape -- `tests/test_selftest.py` loads this file and checks the criterion against
+# recorded fixtures, so a broken line is a red test and not a surprise in a live run.
+#
+# Per case:
+#   input   what someone types into the search question (an empty string is a valid answer)
+#   filter  the answer to "Show only repositories of a publisher or a listed packager?"
+#   models  the base model ids the search has to offer for it, as the selection list values
+#   why     what this line is in the set for
+schema_version = 1
+
+[[cases]]
+input = "qwen"
+filter = true
+models = ["Qwen/Qwen3.8-27B"]
+why = "one word, the search this package has always made"
+
+[[cases]]
+input = "qwen 3.5 9b"
+filter = true
+models = ["Qwen/Qwen3.5-9B"]
+why = "a name with blanks: the Hub is asked with one word, the rest is held against the answer"
+
+[[cases]]
+input = "Qwen3.5-9B"
+filter = true
+models = ["Qwen/Qwen3.5-9B"]
+why = "the model's own name, hyphens and all"
+
+[[cases]]
+input = "unsloth/Qwen3.5-9B-GGUF"
+filter = true
+models = ["Qwen/Qwen3.5-9B"]
+why = "a repository id: one request, and the owner filter never hides it"
+
+[[cases]]
+input = "mistral"
+filter = true
+models = ["mistralai/Ministral-3-8B-Instruct-2512"]
+why = "a publisher that packages its own models"
+
+[[cases]]
+input = "deepseek r1"
+filter = true
+models = ["deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"]
+why = "two words, one of them a version"
+
+[[cases]]
+input = "qwn"
+filter = true
+models = []
+why = "a typo: no model, and the candidates the catalog knows instead"
+
+[[cases]]
+input = ""
+filter = true
+models = ["Qwen/Qwen3.8-27B"]
+why = "no word at all: one page per current model of the catalog"

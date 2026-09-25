@@ -211,16 +211,21 @@ def parameters_from_name(name: str) -> float | None:
     return max(counts) if counts else None
 
 
-def hit_reason(hit: SearchHit, filtered: bool) -> str | None:
-    """Why this repository is no model of the list, in plain words, or `None` when it is one."""
+def hit_reason(hit: SearchHit, filtered: bool, *, typed: str | None = None) -> str | None:
+    """Why this repository is no model of the list, in plain words, or `None` when it is one.
+
+    `typed` is the repository id the person typed, when they typed one: the owner filter never
+    hides it (decided 2026-09-25). Someone who names a repository has said which account they
+    want, so a preference for the publishers and the listed packagers has nothing left to decide.
+    """
     if not hit.resolved:
         return UNRESOLVED_REASONS.get(str(hit.unresolved_reason), str(hit.unresolved_reason))
-    if filtered and hit.publisher_status not in _PICKABLE_OWNERS:
+    if filtered and hit.publisher_status not in _PICKABLE_OWNERS and hit.repo != typed:
         return OTHER_OWNER_REASON
     return None
 
 
-def unusable_counts(hits: Sequence[SearchHit], filtered: bool) -> dict[str, int]:
+def unusable_counts(hits: Sequence[SearchHit], filtered: bool, *, typed: str | None = None) -> dict[str, int]:
     """Why repositories of this search are no model of the list, each reason with its count.
 
     The counts of `search.json`'s `unresolved` and of the lines below, from one reading of the
@@ -228,7 +233,7 @@ def unusable_counts(hits: Sequence[SearchHit], filtered: bool) -> dict[str, int]
     """
     counted: dict[str, int] = {}
     for hit in hits:
-        reason = hit_reason(hit, filtered)
+        reason = hit_reason(hit, filtered, typed=typed)
         if reason is not None:
             counted[reason] = counted.get(reason, 0) + 1
     return counted
@@ -243,19 +248,20 @@ def unusable_reasons(hits: Sequence[SearchHit], filtered: bool) -> list[str]:
 
 
 def model_choices(
-    hits: Sequence[SearchHit], *, filtered: bool, checked: Checked, context: int
+    hits: Sequence[SearchHit], *, filtered: bool, checked: Checked, context: int, typed: str | None = None
 ) -> list[ModelChoice]:
     """One `ModelChoice` per resolved base model of the search, best fit first.
 
     Only what can be picked: with the owner filter on, a repository of an account that is neither
     a publisher nor a listed packager is no target of this run and no part of a model's `repos`
-    either. The order is the memory pool (graphics memory first), then the fit class, then the
-    downloads, then the name, with `too tight` and `unknown` last -- the fit is what a reader is
-    choosing by, and the downloads say what many people take (never a rank).
+    either -- except the one repository `typed` names, which the filter never hides. The order is
+    the memory pool (graphics memory first), then the fit class, then the downloads, then the name,
+    with `too tight` and `unknown` last -- the fit is what a reader is choosing by, and the
+    downloads say what many people take (never a rank).
     """
     grouped: dict[str, list[SearchHit]] = {}
     for hit in hits:
-        if hit_reason(hit, filtered) is not None or hit.resolved_base_model is None:
+        if hit_reason(hit, filtered, typed=typed) is not None or hit.resolved_base_model is None:
             continue
         grouped.setdefault(str(hit.resolved_base_model), []).append(hit)
     models = [_model_choice(base, repos, checked, context) for base, repos in grouped.items()]
