@@ -7,7 +7,9 @@ All notable changes to this project are documented in this file. The format foll
 
 The first release on the package index. The guided mode is the way in; the six subcommands
 under it are what it calls. The entries under "The first cut" at the end of this section were
-written on 2026-09-23 for the same version, which was never published.
+written on 2026-09-23 for the same version, which was never published. Entries stand in the
+order they landed; where two of them name a number (a request budget, pages per account), the
+later one is what ships.
 
 ### Added
 
@@ -337,7 +339,7 @@ written on 2026-09-23 for the same version, which was never published.
   `document.RenderDocument`, so no output can state a number another one does not. The document
   is a contract of its own (`RankedEntry`, `SetAsideEntry`, `MachineRanking`, `RenderDocument`).
 - `scripts/selftest.py`: the acceptance run of the guided mode, one step per criterion of the
-  plan, twice through `--answers` against the pinned search answer, with the real measurement of
+  plan, twice through `--answers` against the pinned search answer, with the hardware measurement of
   this machine and the live search as a smoke that decides nothing. It moves its home folder into
   a temporary tree and refuses to start if the pointer file would land anywhere else.
 - Schema 2 contracts for the guided mode (CONTRACTS.md, "Schema 2: profiles, measurements,
@@ -419,16 +421,6 @@ written on 2026-09-23 for the same version, which was never published.
   profile `modelroom hardware` just measured in `[machines.<name>].profile`, the one write the
   guided mode does, and then checks the ranking header, the not-covered block and that the JSON
   view agrees with the Markdown one.
-- `render` reads schema 2 and ranks: per `[machines.<name>]` it takes the profile that
-  `profile` names, computes `compute_fit_v2` for **every** eligible package against one context
-  for the whole document (`Scenario`, 8192 unless the guided mode passes another), and shows the
-  full ranking per machine (top ten, with the total), a `not covered` block and a `too tight`
-  block, each with its reason and one plain-language note per package built from named facts.
-  The selection rule (one variant per packager), the no-recommendation row, the Installed column
-  and the Speed column that read measurements embedded in a schema-1 profile are gone; speeds now
-  come from the measurement files of that profile. A machine whose profile is a schema-1 file is
-  shown as `legacy` with the fit rule's own reason and nothing is persisted; a hardware file that
-  does not read is a `note:` line instead of ending the whole render with exit `3`.
 - `fetch_with_config` takes the request budget the caller already spent on, so the guided run's
   search and its fetch share one budget.
 - `scripts/release-smoke.py` no longer places a schema-1 profile for the renderer: it names the
