@@ -7,6 +7,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **The catalog names the publishers people actually search for** (`modelroom/catalog.toml`,
+  README, "Publishers the search resolves"). It knew three accounts (`Qwen`, `deepseek-ai`,
+  `utter-project`) and is at the same time the positive list of publishers, so a search for
+  `mistral` in the test round of 2026-09-24 answered with repositories of which not one could be
+  picked: every hit was `publisher_unknown`, because `mistralai` was no publisher of the catalog.
+  It now holds 29 families under 22 publisher accounts, Europe first (`mistralai`,
+  `utter-project`, `openGPT-X`), and per family the lines the publisher carries today in the sizes
+  a single machine runs. Every row names the model page it was read from on 2026-09-25 and has at
+  least one GGUF build of a listed packager or of the publisher itself; an Ollama name is only
+  written when the manifest of that exact size answers 200, and `latest` only with the publisher
+  page or collection that calls the model current plus the day it was checked -- 22 of the 62 rows
+  say so, the rest stay `unknown`. Two lines (DeepSeek V3.2/V4, GLM-5.3-Flash) are far above those
+  sizes and are listed anyway, so that a search resolves them and the computed fit answers instead
+  of the list hiding them.
 - **`modelroom hardware --same-machine`**, and "the same machine" in the guided mode's clone
   question, now **measure** (`modelroom/binding.py`, `modelroom/cli.py`, `modelroom/guided.py`;
   CONTRACTS.md, "Profile binding"). Until now the honest answer to "is this the same machine or a

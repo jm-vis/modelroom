@@ -215,6 +215,21 @@ SEARCH_OPEN_PAGES: dict[str, str] = {
     "newest": "hf_search_qwen_newest.json",
 }
 
+# The same for the word `mistral` (decided 2026-09-25, when `mistralai` became a publisher of the
+# shipped catalog): the publisher's page and the `unsloth` page answer with their own pinned
+# entries, every other asked account with the empty list.
+SEARCH_MISTRAL_PAGES: dict[str, str] = {
+    "mistralai": "hf_search_mistral_publisher.json",
+    "unsloth": "hf_search_mistral_unsloth.json",
+}
+# The base models those two pages resolve to, and therefore the age lookups such a run makes.
+MISTRAL_BASE_MODELS: tuple[str, ...] = (
+    "mistralai/Ministral-3-14B-Instruct-2512",
+    "mistralai/Magistral-Small-2509",
+    "mistralai/Mistral-Small-4-119B-2603",
+    "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+)
+
 
 def search_transport_mapping(word: str = "qwen") -> dict[tuple[str, str], Response]:
     """Every page one search for `word` asks for, plus the two age lookups its resolution makes.
@@ -241,6 +256,33 @@ def search_transport_mapping(word: str = "qwen") -> dict[tuple[str, str], Respon
         headers={},
         body=json.dumps({"id": deepseek, "sha": "b" * 40, "cardData": {"license": "mit"}}).encode("utf-8"),
     )
+    return mapping
+
+
+def mistral_search_mapping(word: str = "mistral") -> dict[tuple[str, str], Response]:
+    """Every page one search for `mistral` asks for, plus one age lookup per resolved base model.
+
+    The asked accounts are read from the shipped catalog rather than written out here, so a
+    publisher family added later whose name, account or model ids carry the word is bound too,
+    instead of ending the run at a URL no fixture answers.
+    """
+    from modelroom.catalog import load_catalog
+    from modelroom.search import DEFAULT_PACKAGERS
+    from modelroom.search_pages import account_search_url, search_accounts
+
+    accounts = search_accounts(load_catalog(), word, DEFAULT_PACKAGERS)
+    mapping: dict[tuple[str, str], Response] = {
+        ("GET", account_search_url(word, account)): json_response(
+            SEARCH_MISTRAL_PAGES.get(account, "hf_search_none.json")
+        )
+        for account in accounts
+    }
+    for base in MISTRAL_BASE_MODELS:
+        mapping[("GET", f"https://huggingface.co/api/models/{base}")] = Response(
+            status=200,
+            headers={},
+            body=json.dumps({"id": base, "sha": "c" * 40, "cardData": {"license": "apache-2.0"}}).encode("utf-8"),
+        )
     return mapping
 
 

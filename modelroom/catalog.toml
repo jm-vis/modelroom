@@ -3,26 +3,83 @@
 # Ollama name. Every model row names its evidence in `source`. Maintained in this repository;
 # a missing statement is never evidence: a model with neither `latest` nor `successor` is shown
 # with age `unknown`.
+#
+# The catalog is also the positive list of publishers: a search hit is resolved only when the
+# account of its base model is a publisher here. Which accounts and which model rows belong in it
+# was decided 2026-09-25 -- the publishers people search for, Europe first, and per family the
+# lines the publisher carries today in the sizes a single machine runs (about 120B and below;
+# the few larger rows are marked). Every row was read off the Hub API on 2026-09-25: the model
+# page (`source`), at least one GGUF package of a listed packager or of the publisher itself, and
+# for an Ollama name the manifest `registry.ollama.ai/v2/library/<base>/manifests/<tag>`
+# answering 200. Where no publisher page or collection calls a model current, `latest` is left
+# out and the age stays `unknown` -- a release number is no evidence.
 
 schema_version = 1
 
-[[families]]
-name = "qwen3.5"
-publisher = "Qwen"
-
-  [[families.models]]
-  hf_repo = "Qwen/Qwen3.5-9B"
-  ollama_base = "qwen3.5"
-  ollama_tag = "9b"
-  source = "https://huggingface.co/Qwen/Qwen3.5-9B"
+# --- Europe ------------------------------------------------------------------------------------
 
 [[families]]
-name = "deepseek-r1"
-publisher = "deepseek-ai"
+name = "mistral"
+publisher = "mistralai"
+
+  # The "Ministral 3" collection holds the 2512 release and nothing older, so it names these three
+  # as the publisher's current small models. Their GGUF builds come from the publisher itself
+  # (`mistralai/Ministral-3-*-2512-GGUF`) and from `unsloth`.
+  [[families.models]]
+  hf_repo = "mistralai/Ministral-3-14B-Instruct-2512"
+  latest = true
+  latest_source = "https://huggingface.co/collections/mistralai/ministral-3-6915edd974b567e0458435f9"
+  latest_checked = 2026-09-25
+  ollama_base = "ministral-3"
+  ollama_tag = "14b"
+  source = "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512"
 
   [[families.models]]
-  hf_repo = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-  source = "https://huggingface.co/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+  hf_repo = "mistralai/Ministral-3-8B-Instruct-2512"
+  latest = true
+  latest_source = "https://huggingface.co/collections/mistralai/ministral-3-6915edd974b567e0458435f9"
+  latest_checked = 2026-09-25
+  ollama_base = "ministral-3"
+  ollama_tag = "8b"
+  source = "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512"
+
+  [[families.models]]
+  hf_repo = "mistralai/Ministral-3-3B-Instruct-2512"
+  latest = true
+  latest_source = "https://huggingface.co/collections/mistralai/ministral-3-6915edd974b567e0458435f9"
+  latest_checked = 2026-09-25
+  ollama_base = "ministral-3"
+  ollama_tag = "3b"
+  source = "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512"
+
+  # 119B, the upper end of what this catalog lists. "Mistral Small 4" holds only the 2603 release.
+  [[families.models]]
+  hf_repo = "mistralai/Mistral-Small-4-119B-2603"
+  latest = true
+  latest_source = "https://huggingface.co/collections/mistralai/mistral-small-4-69b2bd9a27a0e6d1cfb4c054"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603"
+
+  # The coding line. The Ollama library's `devstral:24b` is the 2505 build, a different model, so
+  # this row carries no Ollama name.
+  [[families.models]]
+  hf_repo = "mistralai/Devstral-Small-2-24B-Instruct-2512"
+  latest = true
+  latest_source = "https://huggingface.co/collections/mistralai/devstral-2-6929a2650767caefdbc0bae3"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512"
+
+  # Reasoning build; no publisher page calls it current, and `magistral:24b` in the Ollama library
+  # is the 2506 build.
+  [[families.models]]
+  hf_repo = "mistralai/Magistral-Small-2509"
+  source = "https://huggingface.co/mistralai/Magistral-Small-2509"
+
+  [[families.models]]
+  hf_repo = "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
+  ollama_base = "mistral-small3.2"
+  ollama_tag = "24b"
+  source = "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506"
 
 [[families]]
 name = "eurollm"
@@ -38,3 +95,475 @@ publisher = "utter-project"
   [[families.models]]
   hf_repo = "utter-project/EuroLLM-9B-Instruct-2512"
   source = "https://huggingface.co/utter-project/EuroLLM-9B-Instruct-2512"
+
+  # The publisher's "EuroLLM" collection lists the 2024 models next to the 2512 ones, so it says
+  # which models belong to the line, not which of them is current: no `latest` for either row.
+  [[families.models]]
+  hf_repo = "utter-project/EuroLLM-22B-Instruct-2512"
+  source = "https://huggingface.co/utter-project/EuroLLM-22B-Instruct-2512"
+
+  [[families.models]]
+  hf_repo = "utter-project/EuroMoE-2.6B-A0.6B-Instruct-2512"
+  source = "https://huggingface.co/utter-project/EuroMoE-2.6B-A0.6B-Instruct-2512"
+
+[[families]]
+name = "teuken"
+publisher = "openGPT-X"
+
+  # The "Teuken-7B-v0.6" collection is the publisher's newest and holds the base and the
+  # instruction-tuned model of that version.
+  [[families.models]]
+  hf_repo = "openGPT-X/Teuken-7B-instruct-v0.6"
+  latest = true
+  latest_source = "https://huggingface.co/collections/openGPT-X/teuken-7b-v06-67584bc50e7fb3d65542ebea"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/openGPT-X/Teuken-7B-instruct-v0.6"
+
+# --- Qwen --------------------------------------------------------------------------------------
+
+[[families]]
+name = "qwen3.5"
+publisher = "Qwen"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.5-9B"
+  ollama_base = "qwen3.5"
+  ollama_tag = "9b"
+  source = "https://huggingface.co/Qwen/Qwen3.5-9B"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.5-4B"
+  ollama_base = "qwen3.5"
+  ollama_tag = "4b"
+  source = "https://huggingface.co/Qwen/Qwen3.5-4B"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.5-27B"
+  ollama_base = "qwen3.5"
+  ollama_tag = "27b"
+  source = "https://huggingface.co/Qwen/Qwen3.5-27B"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.5-35B-A3B"
+  ollama_base = "qwen3.5"
+  ollama_tag = "35b"
+  source = "https://huggingface.co/Qwen/Qwen3.5-35B-A3B"
+
+  # 125B; the Ollama library tag for it is `122b`, the name of the model rather than its count.
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.5-122B-A10B"
+  ollama_base = "qwen3.5"
+  ollama_tag = "122b"
+  source = "https://huggingface.co/Qwen/Qwen3.5-122B-A10B"
+
+[[families]]
+name = "qwen3.6"
+publisher = "Qwen"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.6-27B"
+  ollama_base = "qwen3.6"
+  ollama_tag = "27b"
+  source = "https://huggingface.co/Qwen/Qwen3.6-27B"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.6-35B-A3B"
+  ollama_base = "qwen3.6"
+  ollama_tag = "35b"
+  source = "https://huggingface.co/Qwen/Qwen3.6-35B-A3B"
+
+[[families]]
+name = "qwen3.8"
+publisher = "Qwen"
+
+  # The "Qwen3.8" collection is the publisher's newest language-model collection and holds this
+  # model; the other member of that release, `Qwen3.8-2.4T-A95B`, is far beyond one machine.
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3.8-27B"
+  latest = true
+  latest_source = "https://huggingface.co/collections/Qwen/qwen38-6a7d69d63a8fa0914eb7e54c"
+  latest_checked = 2026-09-25
+  ollama_base = "qwen3.8"
+  ollama_tag = "27b"
+  source = "https://huggingface.co/Qwen/Qwen3.8-27B"
+
+[[families]]
+name = "qwen3-coder"
+publisher = "Qwen"
+
+  # 80B. The "Qwen3-Coder-Next" collection supersedes "Qwen3-Coder" and holds this model.
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3-Coder-Next"
+  latest = true
+  latest_source = "https://huggingface.co/collections/Qwen/qwen3-coder-next-698064e6766edf09745bc51e"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/Qwen/Qwen3-Coder-Next"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+  ollama_base = "qwen3-coder"
+  ollama_tag = "30b"
+  source = "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct"
+
+[[families]]
+name = "qwen3-embedding"
+publisher = "Qwen"
+
+  # Embedding models with GGUF builds from the publisher itself, so `llama.cpp` and Ollama run
+  # them.
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3-Embedding-8B"
+  ollama_base = "qwen3-embedding"
+  ollama_tag = "8b"
+  source = "https://huggingface.co/Qwen/Qwen3-Embedding-8B"
+
+  [[families.models]]
+  hf_repo = "Qwen/Qwen3-Embedding-0.6B"
+  ollama_base = "qwen3-embedding"
+  ollama_tag = "0.6b"
+  source = "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B"
+
+# --- DeepSeek ----------------------------------------------------------------------------------
+
+[[families]]
+name = "deepseek-r1"
+publisher = "deepseek-ai"
+
+  [[families.models]]
+  hf_repo = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+  source = "https://huggingface.co/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+
+# Both DeepSeek rows below are far above the sizes the rest of this catalog lists (685B and 304B).
+# They are here because they are the lines the publisher carries and `unsloth` packages them as
+# GGUF, so a search for `deepseek` resolves them instead of showing them as `publisher_unknown`;
+# the computed fit then says what they need on the machine in front of you.
+[[families]]
+name = "deepseek-v3"
+publisher = "deepseek-ai"
+
+  [[families.models]]
+  hf_repo = "deepseek-ai/DeepSeek-V3.2"
+  source = "https://huggingface.co/deepseek-ai/DeepSeek-V3.2"
+
+[[families]]
+name = "deepseek-v4"
+publisher = "deepseek-ai"
+
+  [[families.models]]
+  hf_repo = "deepseek-ai/DeepSeek-V4-Flash-0731"
+  source = "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731"
+
+# --- the rest, by publisher --------------------------------------------------------------------
+
+[[families]]
+name = "llama"
+publisher = "meta-llama"
+
+  # Every `meta-llama` repository is gated: reading the weights needs an accepted license on the
+  # Hub. The GGUF builds of the packagers are not.
+  [[families.models]]
+  hf_repo = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+  ollama_base = "llama4"
+  ollama_tag = "16x17b"
+  source = "https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct"
+
+  [[families.models]]
+  hf_repo = "meta-llama/Llama-3.3-70B-Instruct"
+  ollama_base = "llama3.3"
+  ollama_tag = "70b"
+  source = "https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct"
+
+  [[families.models]]
+  hf_repo = "meta-llama/Llama-3.1-8B-Instruct"
+  ollama_base = "llama3.1"
+  ollama_tag = "8b"
+  source = "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct"
+
+  [[families.models]]
+  hf_repo = "meta-llama/Llama-3.2-3B-Instruct"
+  ollama_base = "llama3.2"
+  ollama_tag = "3b"
+  source = "https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct"
+
+[[families]]
+name = "gemma"
+publisher = "google"
+
+  # The "Gemma 4" collection is the publisher's current Gemma release and holds all four rows.
+  [[families.models]]
+  hf_repo = "google/gemma-4-31B-it"
+  latest = true
+  latest_source = "https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1"
+  latest_checked = 2026-09-25
+  ollama_base = "gemma4"
+  ollama_tag = "31b"
+  source = "https://huggingface.co/google/gemma-4-31B-it"
+
+  # The Ollama library carries this mixture model under the tag `26b`.
+  [[families.models]]
+  hf_repo = "google/gemma-4-26B-A4B-it"
+  latest = true
+  latest_source = "https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1"
+  latest_checked = 2026-09-25
+  ollama_base = "gemma4"
+  ollama_tag = "26b"
+  source = "https://huggingface.co/google/gemma-4-26B-A4B-it"
+
+  [[families.models]]
+  hf_repo = "google/gemma-4-12B-it"
+  latest = true
+  latest_source = "https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1"
+  latest_checked = 2026-09-25
+  ollama_base = "gemma4"
+  ollama_tag = "12b"
+  source = "https://huggingface.co/google/gemma-4-12B-it"
+
+  [[families.models]]
+  hf_repo = "google/gemma-4-E4B-it"
+  latest = true
+  latest_source = "https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1"
+  latest_checked = 2026-09-25
+  ollama_base = "gemma4"
+  ollama_tag = "e4b"
+  source = "https://huggingface.co/google/gemma-4-E4B-it"
+
+[[families]]
+name = "phi"
+publisher = "microsoft"
+
+  [[families.models]]
+  hf_repo = "microsoft/phi-4"
+  ollama_base = "phi4"
+  ollama_tag = "14b"
+  source = "https://huggingface.co/microsoft/phi-4"
+
+  [[families.models]]
+  hf_repo = "microsoft/Phi-4-mini-instruct"
+  ollama_base = "phi4-mini"
+  ollama_tag = "3.8b"
+  source = "https://huggingface.co/microsoft/Phi-4-mini-instruct"
+
+[[families]]
+name = "gpt-oss"
+publisher = "openai"
+
+  # The "gpt-oss" collection holds exactly these two models.
+  [[families.models]]
+  hf_repo = "openai/gpt-oss-120b"
+  latest = true
+  latest_source = "https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4"
+  latest_checked = 2026-09-25
+  ollama_base = "gpt-oss"
+  ollama_tag = "120b"
+  source = "https://huggingface.co/openai/gpt-oss-120b"
+
+  [[families.models]]
+  hf_repo = "openai/gpt-oss-20b"
+  latest = true
+  latest_source = "https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4"
+  latest_checked = 2026-09-25
+  ollama_base = "gpt-oss"
+  ollama_tag = "20b"
+  source = "https://huggingface.co/openai/gpt-oss-20b"
+
+[[families]]
+name = "glm"
+publisher = "zai-org"
+
+  # 321B, above the sizes of the rest of this catalog; listed because the "GLM-5.3" collection is
+  # the publisher's current release and `unsloth` packages it as GGUF.
+  [[families.models]]
+  hf_repo = "zai-org/GLM-5.3-Flash"
+  latest = true
+  latest_source = "https://huggingface.co/collections/zai-org/glm-53-6a8ef0ced35be795ff38d10a"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/zai-org/GLM-5.3-Flash"
+
+  # 31B, the GLM build a single machine runs. Its own collection is an older one, so no `latest`.
+  [[families.models]]
+  hf_repo = "zai-org/GLM-4.7-Flash"
+  source = "https://huggingface.co/zai-org/GLM-4.7-Flash"
+
+[[families]]
+name = "kimi"
+publisher = "moonshotai"
+
+  # 49B. The publisher's other current models (`Kimi-K3` and the K2 line) are hundreds of
+  # billions of parameters and are left out.
+  [[families.models]]
+  hf_repo = "moonshotai/Kimi-Linear-48B-A3B-Instruct"
+  source = "https://huggingface.co/moonshotai/Kimi-Linear-48B-A3B-Instruct"
+
+[[families]]
+name = "granite"
+publisher = "ibm-granite"
+
+  # The "Granite 4.2 Language Models" collection is the publisher's current release and holds all
+  # three rows, each with a GGUF build of the publisher itself.
+  [[families.models]]
+  hf_repo = "ibm-granite/granite-4.2-30b"
+  latest = true
+  latest_source = "https://huggingface.co/collections/ibm-granite/granite-42-language-models-6a7a0cded99d842065795d34"
+  latest_checked = 2026-09-25
+  ollama_base = "granite4.2"
+  ollama_tag = "30b"
+  source = "https://huggingface.co/ibm-granite/granite-4.2-30b"
+
+  [[families.models]]
+  hf_repo = "ibm-granite/granite-4.2-8b"
+  latest = true
+  latest_source = "https://huggingface.co/collections/ibm-granite/granite-42-language-models-6a7a0cded99d842065795d34"
+  latest_checked = 2026-09-25
+  ollama_base = "granite4.2"
+  ollama_tag = "8b"
+  source = "https://huggingface.co/ibm-granite/granite-4.2-8b"
+
+  [[families.models]]
+  hf_repo = "ibm-granite/granite-4.2-3b"
+  latest = true
+  latest_source = "https://huggingface.co/collections/ibm-granite/granite-42-language-models-6a7a0cded99d842065795d34"
+  latest_checked = 2026-09-25
+  ollama_base = "granite4.2"
+  ollama_tag = "3b"
+  source = "https://huggingface.co/ibm-granite/granite-4.2-3b"
+
+[[families]]
+name = "nemotron"
+publisher = "nvidia"
+
+  # The weights repository of the publisher's current Nemotron build is the `-BF16` one; the
+  # Ollama library's `nemotron` is a Llama-3.1 model of 2024, not this one.
+  [[families.models]]
+  hf_repo = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+  source = "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+
+[[families]]
+name = "olmo"
+publisher = "allenai"
+
+  # The "Olmo 3.1" collection is newer than "Olmo 3" and holds this model.
+  [[families.models]]
+  hf_repo = "allenai/Olmo-3.1-32B-Instruct"
+  latest = true
+  latest_source = "https://huggingface.co/collections/allenai/olmo-31-692b2eaa96c60fa30fa829a9"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/allenai/Olmo-3.1-32B-Instruct"
+
+  [[families.models]]
+  hf_repo = "allenai/Olmo-3-7B-Instruct"
+  source = "https://huggingface.co/allenai/Olmo-3-7B-Instruct"
+
+[[families]]
+name = "falcon"
+publisher = "tiiuae"
+
+  # The Falcon-H1 line; the Ollama library's `falcon3` and `falcon` are earlier lines.
+  [[families.models]]
+  hf_repo = "tiiuae/Falcon-H1-34B-Instruct"
+  source = "https://huggingface.co/tiiuae/Falcon-H1-34B-Instruct"
+
+  [[families.models]]
+  hf_repo = "tiiuae/Falcon-H1R-7B"
+  source = "https://huggingface.co/tiiuae/Falcon-H1R-7B"
+
+  [[families.models]]
+  hf_repo = "tiiuae/Falcon-H1-7B-Instruct"
+  source = "https://huggingface.co/tiiuae/Falcon-H1-7B-Instruct"
+
+[[families]]
+name = "command"
+publisher = "CohereLabs"
+
+  # 111B. The Ollama library's `command-a:111b` is the 03-2025 build, a different model.
+  [[families.models]]
+  hf_repo = "CohereLabs/command-a-reasoning-08-2025"
+  source = "https://huggingface.co/CohereLabs/command-a-reasoning-08-2025"
+
+  [[families.models]]
+  hf_repo = "CohereLabs/North-Mini-Code-1.0"
+  source = "https://huggingface.co/CohereLabs/North-Mini-Code-1.0"
+
+[[families]]
+name = "aya"
+publisher = "CohereLabs"
+
+  [[families.models]]
+  hf_repo = "CohereLabs/aya-expanse-8b"
+  ollama_base = "aya-expanse"
+  ollama_tag = "8b"
+  source = "https://huggingface.co/CohereLabs/aya-expanse-8b"
+
+  [[families.models]]
+  hf_repo = "CohereLabs/tiny-aya-global"
+  source = "https://huggingface.co/CohereLabs/tiny-aya-global"
+
+[[families]]
+name = "lfm"
+publisher = "LiquidAI"
+
+  # The "LFM2.5" collection is the publisher's current release; it holds the weights and the
+  # publisher's own GGUF builds.
+  [[families.models]]
+  hf_repo = "LiquidAI/LFM2.5-8B-A1B"
+  latest = true
+  latest_source = "https://huggingface.co/collections/LiquidAI/lfm25-695a8eaf38eec2b5748a4868"
+  latest_checked = 2026-09-25
+  ollama_base = "lfm2.5"
+  ollama_tag = "8b"
+  source = "https://huggingface.co/LiquidAI/LFM2.5-8B-A1B"
+
+  [[families.models]]
+  hf_repo = "LiquidAI/LFM2.5-2.6B"
+  latest = true
+  latest_source = "https://huggingface.co/collections/LiquidAI/lfm25-695a8eaf38eec2b5748a4868"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/LiquidAI/LFM2.5-2.6B"
+
+[[families]]
+name = "smollm"
+publisher = "HuggingFaceTB"
+
+  # The Ollama library carries SmolLM and SmolLM2, not this one.
+  [[families.models]]
+  hf_repo = "HuggingFaceTB/SmolLM3-3B"
+  source = "https://huggingface.co/HuggingFaceTB/SmolLM3-3B"
+
+[[families]]
+name = "minicpm"
+publisher = "openbmb"
+
+  # The "MiniCPM5" collection is the publisher's current release and holds this model with its
+  # own GGUF build.
+  [[families.models]]
+  hf_repo = "openbmb/MiniCPM5-2B"
+  latest = true
+  latest_source = "https://huggingface.co/collections/openbmb/minicpm5-6a0ff66aa339b290b0754514"
+  latest_checked = 2026-09-25
+  source = "https://huggingface.co/openbmb/MiniCPM5-2B"
+
+[[families]]
+name = "hunyuan"
+publisher = "tencent"
+
+  # 30B, with a GGUF build of the publisher itself. The publisher's larger current model
+  # (`Hy4-preview`, 780B) has no GGUF build of a listed account.
+  [[families.models]]
+  hf_repo = "tencent/Hy-MT2-30B-A3B"
+  source = "https://huggingface.co/tencent/Hy-MT2-30B-A3B"
+
+[[families]]
+name = "ernie"
+publisher = "baidu"
+
+  [[families.models]]
+  hf_repo = "baidu/ERNIE-4.5-21B-A3B-Thinking"
+  source = "https://huggingface.co/baidu/ERNIE-4.5-21B-A3B-Thinking"
+
+[[families]]
+name = "minimax"
+publisher = "MiniMaxAI"
+
+  # 33B. The publisher's larger models (`MiniMax-M3`, 427B) are beyond one machine.
+  [[families.models]]
+  hf_repo = "MiniMaxAI/MiniMax-H3"
+  source = "https://huggingface.co/MiniMaxAI/MiniMax-H3"

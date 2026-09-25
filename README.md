@@ -152,6 +152,22 @@ file is never deleted: the lock is a kernel lock on it, which the operating syst
 when its holder exits, and a second `fetch` or `render` against the same state directory
 stops at it instead of waiting.
 
+## Publishers the search resolves
+
+The shipped catalog `modelroom/catalog.toml` names the publisher accounts whose models a search
+resolves: a hit is only selectable when the Hugging Face account of its base model is one of them,
+whoever packaged the GGUF build. Those accounts are `mistralai`, `utter-project`, `openGPT-X`,
+`Qwen`, `deepseek-ai`, `meta-llama`, `google`, `microsoft`, `openai`, `zai-org`, `moonshotai`,
+`ibm-granite`, `nvidia`, `allenai`, `tiiuae`, `CohereLabs`, `LiquidAI`, `HuggingFaceTB`, `openbmb`,
+`tencent`, `baidu` and `MiniMaxAI`. Every row of the catalog carries the page it was read from, and
+a model is called `latest` only with the publisher page or collection that says so and the date it
+was checked; without one the age stays `unknown`.
+
+A hit whose base model belongs to an account that is not in that list is shown with the reason
+`publisher_unknown` instead of being hidden. If a publisher you use is missing, open an issue in
+this repository naming the account and one of its models; the catalog is data in this repository
+and takes a new family with its evidence.
+
 ## What the fit class means
 
 For a judged fit, the cell reads `<class> (<mode>, need <n> / pool <n> GiB)`. The class is

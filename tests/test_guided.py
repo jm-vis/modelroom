@@ -887,8 +887,9 @@ def test_a_model_is_fetched_from_the_publisher_and_from_one_listed_packager(tmp_
 def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
     """Test round of 2026-09-24 22:49: `mistral` with the filter on found 59 repositories and no
     model to pick, and the list question was asked anyway -- an empty list crashes the dialog."""
+    from modelroom.catalog import load_catalog
     from modelroom.search import DEFAULT_PACKAGERS
-    from modelroom.search_pages import account_search_url
+    from modelroom.search_pages import account_search_url, search_accounts
 
     class _Refusing(FileAsker):
         def checkbox(self, key: str, question: str, choices) -> list[str]:
@@ -896,9 +897,13 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
             return super().checkbox(key, question, choices)
 
     empty = Response(status=200, headers={}, body=b"[]")
+    # Every account the search asks, the catalog's matching publishers included -- `mistralai` is
+    # a publisher since 2026-09-25 -- each answering with the empty list: this test is about the
+    # list question that follows a search nothing resolves, not about Mistral.
+    asked = search_accounts(load_catalog(), "mistral", DEFAULT_PACKAGERS)
     mapping = {
         **guided_transport_mapping(),
-        **{("GET", account_search_url("mistral", account)): empty for account in DEFAULT_PACKAGERS},
+        **{("GET", account_search_url("mistral", account)): empty for account in asked},
     }
     lines: list[str] = []
     code = run_guided(

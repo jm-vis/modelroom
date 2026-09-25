@@ -1,0 +1,51 @@
+[
+  {
+    "_id": "690477a27cb19909ee4312a8",
+    "id": "mistralai/Ministral-3-14B-Instruct-2512-GGUF",
+    "cardData": {
+      "library_name": "vllm",
+      "license": "apache-2.0",
+      "inference": false,
+      "base_model": [
+        "mistralai/Ministral-3-14B-Instruct-2512"
+      ],
+      "tags": [
+        "mistral-common"
+      ]
+    },
+    "tags": [
+      "vllm",
+      "gguf",
+      "mistral-common",
+      "base_model:mistralai/Ministral-3-14B-Instruct-2512",
+      "base_model:quantized:mistralai/Ministral-3-14B-Instruct-2512",
+      "license:apache-2.0",
+      "region:us",
+      "conversational"
+    ],
+    "createdAt": "2025-10-31T08:47:30.000Z",
+    "downloads": 43984
+  },
+  {
+    "_id": "68c3ebd0222f1fccb04a9414",
+    "id": "mistralai/Magistral-Small-2509-GGUF",
+    "cardData": {
+      "license": "apache-2.0",
+      "library_name": "llama.cpp",
+      "inference": false,
+      "base_model": [
+        "mistralai/Magistral-Small-2509"
+      ]
+    },
+    "tags": [
+      "llama.cpp",
+      "gguf",
+      "base_model:mistralai/Magistral-Small-2509",
+      "base_model:quantized:mistralai/Magistral-Small-2509",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "createdAt": "2025-09-12T09:45:52.000Z",
+    "downloads": 3391
+  }
+]

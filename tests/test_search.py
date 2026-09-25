@@ -40,6 +40,7 @@ from fixture_support import (
     SEARCH_ACCOUNT_PAGES,
     build_transport,
     json_response,
+    mistral_search_mapping,
     qwen35_example_config_dict,
     search_transport_mapping,
 )
@@ -463,6 +464,28 @@ def test_the_unsloth_hit_resolves_to_its_publisher_base_model():
     assert hit.repo_created_at == datetime(2026, 2, 28, 14, 4, 29, tzinfo=timezone.utc)
     assert hit.parameters_b is None
     assert hit.downloads == 1_626_475
+
+
+def test_a_search_for_mistral_resolves_the_publishers_own_build_and_a_packagers():
+    """Test round of 2026-09-24: `mistral` found repositories and not one of them was selectable,
+    because `mistralai` was no publisher of the catalog. It is one since 2026-09-25."""
+    outcome = run_search(
+        build_transport(mistral_search_mapping()), "mistral", catalog=_catalog(), budget=RequestBudget(60)
+    )
+
+    assert outcome.notes == []
+    assert [hit.unresolved_reason for hit in outcome.hits] == [None, None, None, None]
+    publisher_hit = _hit(outcome, "mistralai/Ministral-3-14B-Instruct-2512-GGUF")
+    assert publisher_hit.resolved is True
+    assert publisher_hit.publisher_status == "publisher"
+    assert publisher_hit.resolved_base_model == "mistralai/Ministral-3-14B-Instruct-2512"
+    assert publisher_hit.ollama == "ministral-3:14b"
+    assert publisher_hit.age == "latest"
+    packager_hit = _hit(outcome, "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF")
+    assert packager_hit.resolved is True
+    assert packager_hit.publisher_status == "listed packager"
+    assert packager_hit.resolved_base_model == "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
+    assert packager_hit.ollama == "mistral-small3.2:24b"
 
 
 def test_the_publishers_own_gguf_repo_is_marked_publisher_and_carries_its_parameter_count():

@@ -51,6 +51,21 @@ change with them until someone re-records them on purpose.
   - `hf_search_qwen_page_full.json` -- exactly 20 generated entries, the account page limit, for
     the one test about a full page; the same file minus its last entry is the 19-entry case that
     must **not** be called full.
+- `hf_search_mistral_publisher.json` / `hf_search_mistral_unsloth.json` -- the two answered pages of
+  a search for `mistral`, **cut from the live answers of 2026-09-25**, both `HTTP 200`:
+  `GET https://huggingface.co/api/models?author=mistralai&search=mistral&filter=gguf&sort=createdAt&direction=-1&limit=20&expand=...`
+  (11 entries) and the same request with `author=unsloth` (7 entries). Two entries were kept from
+  each, with the long `language` lists dropped and nothing else changed:
+  - the publisher page keeps `mistralai/Ministral-3-14B-Instruct-2512-GGUF` and
+    `mistralai/Magistral-Small-2509-GGUF` -- the publisher packaging its own models, the case that
+    resolves to `publisher_status: publisher`;
+  - the `unsloth` page keeps `unsloth/Mistral-Small-4-119B-2603-GGUF` and
+    `unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF`, each with its
+    `base_model:quantized:mistralai/...` tag.
+  `fixture_support.mistral_search_mapping` binds them, answers every other asked account with
+  `hf_search_none.json` and pins one age lookup per resolved base model. The pages exist because
+  `mistralai` became a publisher of the shipped catalog on 2026-09-25: before that, the same
+  repositories were all `publisher_unknown`.
 - `hf_qwen_qwen35_9b_config.json` -- `GET https://huggingface.co/Qwen/Qwen3.5-9B/resolve/main/config.json`
   (redirects to the resolve-cache; fetched with `curl -L`). The language-model fields sit
   under `text_config`, and `text_config.layer_types` mixes `"linear_attention"` and
