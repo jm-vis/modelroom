@@ -105,6 +105,13 @@ def test_the_two_notes_are_the_sentence_and_the_two_numbers():
     assert notes[1] == "4 repositories, 2 of them models you can pick from"
 
 
+def test_the_second_note_of_a_search_with_one_repository_counts_it_once():
+    log = _log([_account("Qwen", "publisher", 1)])
+
+    assert search_notes(log, 1, 1)[1] == "1 repository, a model you can pick from"
+    assert search_notes(log, 1, 0)[1] == "1 repository, not a model you can pick from"
+
+
 def test_a_full_account_page_reaches_the_second_note():
     log = _log([_account("unsloth", "packager", 20, page_full=True)])
 

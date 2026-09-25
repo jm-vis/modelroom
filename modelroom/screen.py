@@ -315,9 +315,15 @@ def searched_note(publishers: Sequence[str], packagers: int, *, open_lists: bool
 
 
 def repositories_note(repositories: int, models: int, *, page_full: bool, dot: str = "·") -> str:
-    """How much the search answered with, and how much of it is a choice: the two numbers that matter."""
+    """How much the search answered with, and how much of it is a choice: the two numbers that matter.
+
+    One repository is said without `of them`: `1 repository, 1 of them a model you can pick from`
+    read askew (decided 2026-09-25).
+    """
     counted = f"{repositories} repository" if repositories == 1 else f"{repositories} repositories"
-    if not models:
+    if repositories == 1:
+        text = f"{counted}, {'a' if models else 'not a'} model you can pick from"
+    elif not models:
         text = f"{counted}, none of them a model you can pick from"
     elif models == 1:
         text = f"{counted}, 1 of them a model you can pick from"

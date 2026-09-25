@@ -8,6 +8,7 @@ touch the network or the wall clock -- the real CLI entry point (`transport=None
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -788,6 +789,58 @@ def _v1_profile(machine: str) -> dict:
         "installed_unavailable_reason": "not queried in this test",
         "measurements": [],
     }
+
+
+@pytest.mark.parametrize("flag", ["--version", "-V"])
+def test_version_prints_the_package_version_without_a_terminal_and_without_the_pointer_file(tmp_path: Path, flag: str):
+    """A real child process, stdin from the null device: the flag needs no terminal and no home.
+
+    Testers typed `modelroom --version` after the install and got an argparse error (2026-09-25).
+    """
+    import modelroom
+
+    home = tmp_path / "child-home"
+    # A pointer file that does not read: any look at it would end the run with exit 3.
+    pointer = home / ".modelroom" / "guided.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text("{ not a pointer file", encoding="utf-8")
+    program = "import sys; from modelroom.cli import main; sys.exit(main())"
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    with open(os.devnull) as devnull:
+        finished = subprocess.run(
+            [sys.executable, "-c", program, flag],
+            stdin=devnull,
+            capture_output=True,
+            cwd=tmp_path,
+            env=env,
+            text=True,
+            encoding="utf-8",
+        )
+
+    assert finished.returncode == 0, finished.stderr
+    assert finished.stdout == f"modelroom {modelroom.__version__}\n"
+    assert finished.stderr == ""
+    assert sorted(home.rglob("*")) == [pointer.parent, pointer]
+    assert pointer.read_text(encoding="utf-8") == "{ not a pointer file"
+
+
+def test_version_in_process_exits_0_with_the_package_version(capsys):
+    import modelroom
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["--version"])
+
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out.strip() == f"modelroom {modelroom.__version__}"
+
+
+def test_the_help_names_the_version_flag_next_to_answers(capsys):
+    with pytest.raises(SystemExit):
+        main(["--help"])
+
+    help_text = capsys.readouterr().out
+    assert "-V, --version" in help_text
+    assert "--answers" in help_text
 
 
 def test_render_with_config_defaults_to_the_real_clock(tmp_path: Path):

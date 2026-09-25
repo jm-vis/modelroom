@@ -32,6 +32,7 @@ from typing import Callable
 
 from pydantic import ValidationError
 
+from . import __version__
 from .answers import AnswerFileError, read_answers
 from .binding import (
     KnownProfile,
@@ -100,6 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--answers", type=Path, help="Guided mode: take the dialog's answers from this TOML file instead of asking"
     )
+    # Answered by argparse itself, before a subcommand, a terminal or the pointer file is looked at.
+    parser.add_argument("-V", "--version", action="version", version=f"modelroom {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
     fetch_parser = subparsers.add_parser(

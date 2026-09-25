@@ -9,6 +9,7 @@ read or written.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import json
 import os
@@ -843,6 +844,113 @@ def test_a_configuration_that_moved_on_leaves_the_measured_profile_unrecorded(tm
     assert any("is gone from the configuration" in line for line in out)
 
 
+# What a second run leaves in a new results folder: settings this run must not replace.
+FOREIGN_CONFIGURATION = (
+    "schema_version = 2\n"
+    "families = []\n"
+    "packagers = []\n"
+    'publishers = ["acme"]\n\n'
+    "[machines.other]\nreserve_ram_gib = 8.0\nreserve_vram_gib = 1.0\nwriter = false\n\n"
+    '[paths]\nstate = "state"\nmarkdown = "docs/models.md"\n\n'
+    "[defaults]\nreserve_ram_gib = 12.0\nreserve_vram_gib = 2.0\n\n"
+    "[updates]\ncheck = false\n"
+)
+
+
+def test_two_runs_that_create_the_configuration_at_once_keep_the_first_ones_file(tmp_path: Path):
+    """The second run found no file, and one is there when it writes: it takes it over as it is.
+
+    The other run writes its file while this one asks this machine's host name -- after the
+    folder was chosen and found empty, before the first write. The initial values of a new file
+    replace nothing; this machine's own entry comes from the writer step, as in any folder.
+    """
+    config_file = _config_file(tmp_path)
+    chosen: list[str] = []
+
+    class _Asker(FileAsker):
+        def select(self, key, question, choices, instruction=None):
+            chosen.append(key)
+            return super().select(key, question, choices, instruction)
+
+    def hostname() -> str:
+        if "results" in chosen and not config_file.exists():
+            config_file.write_text(FOREIGN_CONFIGURATION, encoding="utf-8")
+        return "workstation"
+
+    probes = dataclasses.replace(windows_probes(), hostname=hostname)
+    lines: list[str] = []
+    code = run_guided(
+        _Asker(FULL_ANSWERS),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=probes,
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    assert code == 0, lines
+    stored = load_config(config_file)
+    assert "other" in stored.machines
+    assert (stored.defaults.reserve_ram_gib, stored.updates.check) == (12.0, False)
+    assert "acme" in stored.publishers
+    assert stored.machines["workstation"].writer is True
+
+
+def test_a_second_conflict_in_a_row_is_a_dialog_error(tmp_path: Path):
+    """Exit `2` like every other step that cannot go on; the other run's file stays as it is."""
+    from modelroom.guided import _write_config
+
+    assert _run(tmp_path)[0] == 0
+    run = _guided_run_for(tmp_path, [])
+    config_file = _config_file(tmp_path)
+    calls = {"count": 0}
+
+    def change(current):
+        calls["count"] += 1
+        text = config_file.read_text(encoding="utf-8")
+        config_file.write_text(text + f"\n[machines.other-{calls['count']}]\nreserve_ram_gib = 8.0\n"
+                               "reserve_vram_gib = 1.0\nwriter = false\n", encoding="utf-8")
+        return current.model_copy(update={"guided": current.guided.model_copy(update={"context": 4096})})
+
+    with pytest.raises(GuidedError, match="changed by another run since it was read"):
+        _write_config(run, config_file, change)
+
+    assert {"other-1", "other-2"} <= set(load_config(config_file).machines)
+
+
+def test_an_ollama_pair_of_the_configuration_stands_in_the_list(tmp_path: Path):
+    """A pair the catalog does not know was a dash in the list, while the fetch used it."""
+    assert _run(tmp_path)[0] == 0
+    config_file = _config_file(tmp_path)
+    data = load_config(config_file).model_dump(mode="json")
+    data["families"].append(
+        {"name": "deepseek-r1", "base_models": [{"hf_repo": DEEPSEEK_BASE, "ollama_base": "my-deepseek", "ollama_tag": "8b"}]}
+    )
+    data["publishers"] = [*data["publishers"], "deepseek-ai"]
+    from modelroom.toml_writer import dump_toml
+
+    config_file.write_text(dump_toml(data, "a pair the catalog does not know"), encoding="utf-8")
+    lines: list[str] = []
+    answers = {key: value for key, value in FULL_ANSWERS.items() if key != "results"}
+    asker = _WatchingAsker(answers, lines)
+
+    run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN2,
+        out=lines.append,
+    )
+
+    row = next(choice for choice in asker.choices["select"] if choice.value == DEEPSEEK_BASE)
+    assert row.label.rstrip().endswith("my-deepseek:8b")
+
+
 def test_a_machine_name_that_cannot_be_freed_leaves_one_profile_unconfigured(tmp_path: Path):
     """`machine_name_for` raises when base, short-id and full-id names are all taken.
 
@@ -1187,7 +1295,8 @@ def test_the_list_shows_one_line_per_model_with_its_fit_and_its_packagers(tmp_pa
     qwen = next(choice for choice in listed[1:3] if choice.value == "Qwen/Qwen3.5-9B")
     assert qwen.label.startswith("Qwen3.5-9B")
     assert any(word in qwen.label for word in ("good", "marginal", "too tight", "unknown"))
-    assert "Qwen, unsloth" in qwen.label
+    # Twelve characters for the packagers since 2026-09-25: the first account and a count.
+    assert "Qwen +1" in qwen.label
     assert all(len(choice.label) <= 95 for choice in listed[:3])
 
 

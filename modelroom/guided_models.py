@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -60,14 +60,16 @@ _PICKABLE_OWNERS = ("publisher", "listed packager")
 # the head, the documentation and a test can never name it differently.
 RELEASE_COLUMN = "Release"
 # The columns of one line: name, fit, size, release, packagers, downloads -- and the Ollama name,
-# which is the last one and takes what is left.
+# which is the last one and takes what is left. Since 2026-09-25 the packagers have 12 characters
+# (`unsloth +3`) and the Ollama name the 14 that frees: 27 of the 32 names of the shipped catalog
+# stand whole, where 10 characters cut 24 of them.
 COLUMN_NAMES = ("Model", "Fit", "Size", RELEASE_COLUMN, "Packagers", "Downl.", "Ollama")
-_COLUMN_WIDTHS = (24, 14, 6, 7, 16, 6)
+_COLUMN_WIDTHS = (24, 14, 6, 7, 12, 6)
 # 100 characters is what a terminal window holds without wrapping, and it is a promise, not a hope:
 # every cell is cut to its column and the Ollama name to what is left of the line. Since 2026-09-25
 # the promise covers the **whole** line: `questionary` draws ` ❯ ○ ` in front of a row -- the one
 # space every line of this screen carries, the pointer and the marker -- and a label of 100 made a
-# line of 105. The `Release` column is what that costs the Ollama name; the install line of step 5
+# line of 105. A registry name longer than the Ollama column is cut; the install line of step 5
 # carries the whole name.
 LINE_LIMIT = 100
 POINTER_WIDTH = 5
@@ -85,9 +87,6 @@ _RELEASE_WORDS = {"latest": "latest", "legacy": "legacy", UNKNOWN: DASH}
 # `latest` first, then a release nobody knows, then `legacy`: a reader is choosing what to fetch,
 # and a model whose family has moved on belongs under the ones that have not (decided 2026-09-25).
 _RELEASE_ORDER = ("latest", UNKNOWN, "legacy")
-# Up to three packager accounts are named; beyond that the first two and a count, so the column
-# stays a column (`unsloth, bartowski +2`).
-NAMED_PACKAGERS = 3
 _FIT_WORDS = {"perfect": "good", "good": "good", "marginal": "marginal", "too_tight": "too tight", "unknown": UNKNOWN}
 _CLASS_ORDER = ("perfect", "good", "marginal", "too_tight", "unknown")
 # A fit against system memory says so behind its word: fit v1 caps that pool at `good`, and live
@@ -186,21 +185,20 @@ class ModelChoice(BaseModel):
 
     @property
     def packagers_text(self) -> str:
-        """The packager accounts, shortened to the width of their column."""
+        """The packager accounts in the width of their column: all of them where they fit, else the
+        first one and how many more (`unsloth +3`), else cut (decided 2026-09-25)."""
         width = _COLUMN_WIDTHS[4]
         full = ", ".join(self.packagers)
-        if len(self.packagers) <= NAMED_PACKAGERS and len(full) <= width:
+        if len(full) <= width:
             return full
-        if len(self.packagers) > 2:
-            shortened = ", ".join(self.packagers[:2]) + f" +{len(self.packagers) - 2}"
-            if len(shortened) <= width:
-                return shortened
-        return _clip(full, width)
+        counted = f"{self.packagers[0]} +{len(self.packagers) - 1}"
+        return counted if len(counted) <= width else _clip(full, width)
 
     @property
     def ollama_text(self) -> str:
-        """The Ollama name, or a dash where the registry maps none (`search.NO_OLLAMA_LABEL` is
-        what the search log says; a column of a list has room for one character, 2026-09-25)."""
+        """The Ollama name, or a dash where neither a hit nor the configuration names one
+        (`search.NO_OLLAMA_LABEL` is what the search log says; a column of a list has room for one
+        character, 2026-09-25)."""
         return self.ollama if self.ollama is not None else DASH
 
 
@@ -287,7 +285,13 @@ def unusable_reasons(hits: Sequence[SearchHit], filtered: bool) -> list[str]:
 
 
 def model_choices(
-    hits: Sequence[SearchHit], *, filtered: bool, checked: Checked, context: int, typed: str | None = None
+    hits: Sequence[SearchHit],
+    *,
+    filtered: bool,
+    checked: Checked,
+    context: int,
+    typed: str | None = None,
+    configured_ollama: Mapping[str, str] | None = None,
 ) -> list[ModelChoice]:
     """One `ModelChoice` per resolved base model of the search, best fit first.
 
@@ -297,13 +301,17 @@ def model_choices(
     the memory pool (graphics memory first), then the fit class, then the downloads, then the name,
     with `too tight` and `unknown` last -- the fit is what a reader is choosing by, and the
     downloads say what many people take (never a rank).
+
+    `configured_ollama` is the `ollama_base:ollama_tag` pair the configuration holds per base
+    model: where no hit names an Ollama name, the list shows that pair, which the fetch uses anyway.
     """
     grouped: dict[str, list[SearchHit]] = {}
     for hit in hits:
         if hit_reason(hit, filtered, typed=typed) is not None or hit.resolved_base_model is None:
             continue
         grouped.setdefault(str(hit.resolved_base_model), []).append(hit)
-    models = [_model_choice(base, repos, checked, context) for base, repos in grouped.items()]
+    configured = configured_ollama or {}
+    models = [_model_choice(base, repos, checked, context, configured.get(base)) for base, repos in grouped.items()]
     models.sort(key=_list_order)
     return models
 
@@ -323,7 +331,9 @@ def _list_order(model: ModelChoice) -> tuple:
     )
 
 
-def _model_choice(base_model: str, repos: list[SearchHit], checked: Checked, context: int) -> ModelChoice:
+def _model_choice(
+    base_model: str, repos: list[SearchHit], checked: Checked, context: int, configured_ollama: str | None
+) -> ModelChoice:
     publisher, _slash, name = base_model.partition("/")
     parameters_b = next((hit.parameters_b for hit in repos if hit.parameters_b is not None), None)
     if parameters_b is None:
@@ -336,7 +346,7 @@ def _model_choice(base_model: str, repos: list[SearchHit], checked: Checked, con
         repos=repos,
         packagers=_accounts(repos),
         downloads=sum(counts) if counts else None,
-        ollama=next((hit.ollama for hit in repos if hit.ollama is not None), None),
+        ollama=next((hit.ollama for hit in repos if hit.ollama is not None), configured_ollama),
         age=next((hit.age for hit in repos if hit.age != UNKNOWN), UNKNOWN),
         parameters_b=parameters_b,
         fit=model_fit(parameters_b, checked, context),

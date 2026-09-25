@@ -3,6 +3,7 @@
 Split out of `modelroom/search.py` on 2026-09-25, unchanged: the search grew the three forms of
 input it reads and the file passed the house code-mass threshold. `search.py` re-exports
 `apply_hits`, `family_name_for` and `write_configuration`, so every caller still reads them there.
+`ConfigChangedError` is read here, where the comparison that raises it lives.
 """
 
 from __future__ import annotations
@@ -123,8 +124,19 @@ _CONFIG_HEADER = (
 )
 
 
-def write_configuration(path: Path, config: Configuration, *, now: datetime) -> None:
+class ConfigChangedError(ConfigError):
+    """The configuration file is no longer what the change about to be written was computed from."""
+
+
+def write_configuration(path: Path, config: Configuration, *, now: datetime, expected_text: str | None) -> None:
     """Write `config` to `path` as TOML, under the state lock, once it reads back unchanged.
+
+    `expected_text` is the text of the read `config` was computed from -- `None` when there was no
+    file to read. Under the lock the file is compared with it, and a file another run wrote in
+    between (or created, or removed) is never written over: `ConfigChangedError`, and the caller
+    reads again (decided 2026-09-25). A hash read afterwards would not do: it would describe the
+    file as it is now, not the one the change was computed from. A writer that takes no lock -- an
+    editor saving between the comparison and the replace -- stays outside this guarantee.
 
     `path` is resolved once, and the resolved path is used for both the check and the write --
     the same thing `load_config` does when it reads the file back, so the directory that confines
@@ -140,6 +152,13 @@ def write_configuration(path: Path, config: Configuration, *, now: datetime) -> 
     running in parallel makes this stop with `LockHeldError` instead of writing over the file it
     is reading, and it is released whether the write succeeds or fails. No backup is kept: the
     guided mode has the user confirm the change before it calls this.
+
+    The lock is the one of the configuration **that was read**, not of the one about to be written:
+    two runs that read the same text take the same lock even when one of them moves `paths.state`,
+    so their comparisons cannot both pass (second-model round, 2026-09-25). Only a new file, with
+    nothing read, takes the lock of the configuration it writes -- so two callers that create the
+    same file at once are kept apart only when they name the same `paths.state`, which every guided
+    run does (`<folder>/state`); two library callers naming different state folders are not.
     """
     target = path.resolve()
     text = dump_toml(config.model_dump(mode="json"), _CONFIG_HEADER)
@@ -147,12 +166,26 @@ def write_configuration(path: Path, config: Configuration, *, now: datetime) -> 
     if reread.model_dump(mode="json") != config.model_dump(mode="json"):
         raise ConfigError(f"{target}: the written configuration does not read back unchanged")
 
-    config.paths.state.mkdir(parents=True, exist_ok=True)
-    handle = acquire_lock(config.paths.lock_file, "search", now)
+    read_paths = config.paths if expected_text is None else config_from_text(expected_text, target).paths
+    read_paths.state.mkdir(parents=True, exist_ok=True)
+    handle = acquire_lock(read_paths.lock_file, "search", now)
     try:
+        if _text_on_disk(target) != expected_text:
+            raise ConfigChangedError(f"{target}: changed by another run since it was read")
         atomic_write_text(target, text)
     finally:
         release_lock(handle)
 
 
-__all__ = ["apply_hits", "family_name_for", "write_configuration"]
+def _text_on_disk(target: Path) -> str | None:
+    """The file as `load_config` would read it now, or `None` when there is none."""
+    try:
+        return target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except UnicodeDecodeError as exc:
+        # It was read as UTF-8 before, so whatever it holds now is not what was read.
+        raise ConfigChangedError(f"{target}: changed by another run since it was read ({exc})") from exc
+
+
+__all__ = ["ConfigChangedError", "apply_hits", "family_name_for", "write_configuration"]

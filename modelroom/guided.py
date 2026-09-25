@@ -59,13 +59,13 @@ from .guided_search import (
     search_step,
 )
 from .http import RequestBudget, Transport, UrllibTransport
+from .guided_write import Change, Said, create_config, update_config, with_found_profiles, with_profile, with_writer
 from .importer import (
     ImportConflictError,
     PrerequisiteError,
     ProfileScan,
     StoredFileError,
     import_profile,
-    machine_name_for,
     scan_profiles,
 )
 from .intro import STEP_COUNT, collect_intro, print_intro
@@ -94,7 +94,6 @@ from .search import (
     SearchOutcome,
     apply_hits,
     run_search,
-    write_configuration,
 )
 from .state import LockHeldError, write_search_log
 from .views import context_short, show_nothing, show_result
@@ -248,6 +247,7 @@ def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
     `repos` target, so a speculative `<packager>/<name>-GGUF` probe under five accounts per base
     model would only spend the shared budget on repositories nobody asked about. The owner classes
     the list shows come from `search.DEFAULT_PACKAGERS`; whoever wants the probes writes the list.
+    A file another run created meanwhile is taken over as it is (`guided_write.create_config`).
     """
     folder = config_file.parent
     name = _machine_key(run.probes.hostname())
@@ -268,15 +268,22 @@ def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
             "guided": {"results": str(folder)},
         }
     )
-    _write_config(run, config_file, config)
+    config = _write_config(run, config_file, config)
     _remember_folder(run, folder)
     return config
 
 
-def _write_config(run: GuidedRun, config_file: Path, config: Configuration) -> None:
-    """Write the configuration; a held lock keeps its own exit code (`1`), it is not a dialog error."""
+def _write_config(run: GuidedRun, config_file: Path, change: Change | Configuration) -> Configuration:
+    """Write and return what is in the file now: a new file's first state, or a step's change.
+
+    A change goes through `guided_write.update_config` -- read, change, write, and once more on a
+    conflict -- and a second conflict in a row is a dialog error (exit `2`). A held lock keeps its
+    own exit code (`1`), it is not a dialog error.
+    """
     try:
-        write_configuration(config_file, config, now=run.now)
+        if isinstance(change, Configuration):
+            return create_config(config_file, change, now=run.now)
+        return update_config(config_file, change, now=run.now)
     except (ConfigError, OSError) as exc:
         raise GuidedError(f"{config_file}: the configuration could not be written ({exc})") from exc
 
@@ -306,7 +313,8 @@ def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
             run.screen.answer(QUESTIONS["write_config"], yes_no(answered))
             if not answered:
                 raise GuidedError("no configuration to work with; run again and name a folder")
-        return _configure_found_profiles(run, config_file, _new_configuration(run, config_file))
+        _new_configuration(run, config_file)
+        return _configure_found_profiles(run, config_file)
     if _stored_schema_version(config_file) == 1:
         run.screen.note(
             "this folder holds a configuration from an earlier version; it was updated, "
@@ -317,9 +325,9 @@ def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
                 run.screen.note(line)
         except ConfigError as exc:
             raise GuidedError(str(exc)) from exc
-    config = _load(config_file)
+    _load(config_file)  # a file that does not read ends the run before the folder is remembered
     _remember_folder(run, config_file.parent)
-    return _configure_found_profiles(run, config_file, config)
+    return _configure_found_profiles(run, config_file)
 
 
 def _load(config_file: Path) -> Configuration:
@@ -342,7 +350,7 @@ def _stored_schema_version(config_file: Path) -> int:
     return read_config_schema_version(raw, str(config_file))
 
 
-def _configure_found_profiles(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
+def _configure_found_profiles(run: GuidedRun, config_file: Path) -> Configuration:
     """Give every profile in the folder a `[machines.<name>]` entry, so the render covers it.
 
     The render computes one ranking per configured machine, so a profile the configuration does
@@ -350,34 +358,16 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path, config: Configu
     results folder" about a machine that is in no result at all. This is the same rule
     `import-profile` follows for a profile it finds without an entry (CONTRACTS.md, "Export and
     import"): the name comes from the `display_name`, the reserves from `[defaults]`, `writer`
-    is false.
+    is false. The matching is worked out on the file as it is at the write, and again after a
+    conflict (`guided_write.with_found_profiles`).
     """
-    scan = scan_profiles(config.paths.hardware_dir)
-    configured = {machine.profile for machine in config.machines.values() if machine.profile is not None}
-    missing = [profile for key, profile in sorted(scan.profiles.items()) if key not in configured]
-    if not missing:
-        return config
-    data = config.model_dump(mode="json")
-    added = 0
-    for profile in missing:
-        try:
-            name = machine_name_for(profile.display_name, profile.profile_id, set(data["machines"]))
-        except ImportConflictError as exc:
-            run.failed(f"the profile {profile.profile_id} stays without a machine entry: {exc}")
-            continue
-        data["machines"][name] = {
-            "reserve_ram_gib": config.defaults.reserve_ram_gib,
-            "reserve_vram_gib": config.defaults.reserve_vram_gib,
-            "writer": False,
-            "profile": profile.profile_id,
-        }
-        added += 1
-        run.screen.note(f"machine {name!r} added for the profile {profile.profile_id} found in this folder")
-    if not added:
-        return config
-    updated = Configuration.from_dict(data)
-    _write_config(run, config_file, updated)
-    return updated
+    said = Said()
+    config = _write_config(run, config_file, with_found_profiles(said))
+    for problem in said.problems:
+        run.failed(problem)
+    for note in said.notes:
+        run.screen.note(note)
+    return config
 
 
 # --- step 1, second half: the machines this result covers ---------------------------------------
@@ -441,29 +431,13 @@ def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None) -> list[C
     ]
 
 
-def _ensure_this_machine(run: GuidedRun, config_file: Path, config: Configuration, name: str) -> Configuration:
+def _ensure_this_machine(run: GuidedRun, config_file: Path, name: str) -> Configuration:
     """Make sure `[machines.<name>]` is there and is a writer -- this machine runs the fetch.
 
     Reads the file again first: the machine question stood on screen in between, and the copy this
     run loaded before it would write over whatever another process changed meanwhile.
     """
-    config = _load(config_file)
-    machine = config.machines.get(name)
-    if machine is not None and machine.writer:
-        return config
-    data = config.model_dump(mode="json")
-    entry = data["machines"].get(name, {})
-    entry.update(
-        {
-            "reserve_ram_gib": entry.get("reserve_ram_gib", config.defaults.reserve_ram_gib),
-            "reserve_vram_gib": entry.get("reserve_vram_gib", config.defaults.reserve_vram_gib),
-            "writer": True,
-        }
-    )
-    data["machines"][name] = entry
-    updated = Configuration.from_dict(data)
-    _write_config(run, config_file, updated)
-    return updated
+    return _write_config(run, config_file, with_writer(name))
 
 
 def _fresh_profile_id(run: GuidedRun, scan: ProfileScan) -> str:
@@ -511,7 +485,7 @@ def _measure_this_machine(
 
     results_dir = config_file.parent
     name = _machine_key(run.probes.hostname())
-    config = _ensure_this_machine(run, config_file, config, name)
+    config = _ensure_this_machine(run, config_file, name)
     mode = _clone_mode(run, config, name, scan, results_dir)
     code = hardware_with_config(
         config,
@@ -553,23 +527,14 @@ def _record_profile(
     a file this measurement no longer belongs to -- the machine entry gone or renamed, or
     `[paths]` pointing at another state folder, where this `profile_id` names nothing. Then the
     entry is left alone and the run says so; the profile itself is written and bound either way.
+    Both checks hold again for the read after a conflict (`guided_write.with_profile`).
     """
+    said = Said()
     profile_id = read_pointer(run.pointer_path).binding_for(results_dir)
-    stored_paths = config.paths
-    config = _load(config_file)
-    if config.paths != stored_paths:
-        run.failed(f"{config_file}: [paths] changed while this machine was measured; run again")
-        return config
-    if name not in config.machines:
-        run.failed(f"{config_file}: the machine {name!r} is gone from the configuration; run again")
-        return config
-    if profile_id is None or config.machines[name].profile == profile_id:
-        return config
-    data = config.model_dump(mode="json")
-    data["machines"][name]["profile"] = profile_id
-    updated = Configuration.from_dict(data)
-    _write_config(run, config_file, updated)
-    return updated
+    config = _write_config(run, config_file, with_profile(name, profile_id, config.paths, config_file, said))
+    for problem in said.problems:
+        run.failed(problem)
+    return config
 
 
 def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
@@ -650,12 +615,14 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tu
         return _load(config_file), 0
     # Read again here, after the last question of this step and immediately before the change is
     # applied and written: the search and the selection list both took time (see `_record_profile`).
-    config = _load(config_file)
-    try:
-        updated = apply_hits(config, chosen, catalog=run.catalog)
-    except ConfigError as exc:
-        raise GuidedError(str(exc)) from exc
-    _write_config(run, config_file, updated)
+    # `apply_hits` is pure, so after a conflict it is simply applied to the new state again.
+    def change(current: Configuration) -> Configuration:
+        try:
+            return apply_hits(current, chosen, catalog=run.catalog)
+        except ConfigError as exc:
+            raise GuidedError(str(exc)) from exc
+
+    updated = _write_config(run, config_file, change)
     # Base models, not answers: an answer file may name two repositories of one model, and the
     # configuration and the card then hold one (second-model round, 2026-09-24).
     return updated, len({str(hit.resolved_base_model) for hit in chosen})

@@ -269,8 +269,16 @@ def test_a_count_of_ten_or_less_is_said_in_words(count, word):
 
 def test_the_second_note_says_how_much_of_the_answer_is_a_choice():
     assert repositories_note(120, 40, page_full=False) == "120 repositories, 40 of them models you can pick from"
-    assert repositories_note(1, 1, page_full=False) == "1 repository, 1 of them a model you can pick from"
     assert repositories_note(59, 0, page_full=False) == "59 repositories, none of them a model you can pick from"
+
+
+def test_one_repository_is_counted_without_of_them():
+    """`1 repository, 1 of them a model you can pick from` read askew (decided 2026-09-25)."""
+    assert repositories_note(1, 1, page_full=False) == "1 repository, a model you can pick from"
+    assert repositories_note(1, 0, page_full=False) == "1 repository, not a model you can pick from"
+    assert repositories_note(1, 1, page_full=True) == (
+        "1 repository, a model you can pick from · a more specific word shortens the list"
+    )
 
 
 def test_a_full_page_invites_a_more_specific_word():

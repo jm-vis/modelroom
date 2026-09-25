@@ -29,6 +29,7 @@ from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Package, SchemaVersionError
 from .dialog import Choice, columns
 from .fit import count_fitting
+from .guided_write import with_context
 from .importer import scan_profiles
 from .measurements import Scenario
 from .profile import HardwareProfile, fit_block_reason
@@ -146,14 +147,10 @@ def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> 
         run.screen.note(checked.reason)
     context = _answered_context(run, config, checked)
     run.screen.answer(QUESTION, scale_words(context))
-    stored = _reload(run, config_file)
-    if context == stored.guided.context:
-        return context_scenario(context), stored
-    updated = stored.model_copy(update={"guided": stored.guided.model_copy(update={"context": context})})
     from .guided import _write_config  # imported here: the step is called by that module in turn
 
-    _write_config(run, config_file, updated)
-    return context_scenario(context), updated
+    # Read, compare, write -- and once more on the new state when another run wrote in between.
+    return context_scenario(context), _write_config(run, config_file, with_context(context))
 
 
 def machine_checked(pointer_path: Path, config: Configuration, results_dir: Path) -> Checked:
@@ -317,12 +314,6 @@ def tokens_of(answered: str) -> int:
     except ValidationError as exc:
         raise GuidedError(f"{context} is not a context this ranking can be computed for: {exc}") from exc
     return context
-
-
-def _reload(run: "GuidedRun", config_file: Path) -> Configuration:
-    from .guided import _load  # imported here: that module calls this step in turn
-
-    return _load(config_file)
 
 
 def _machine_entry(config: Configuration, profile_id: str) -> tuple[str, MachineConfig] | None:

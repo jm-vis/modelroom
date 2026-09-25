@@ -2554,6 +2554,21 @@ the same line does not make an earlier model `legacy`, only an explicit `success
 `unknown`. A model with a successor is never `latest`; successors stay under the family's
 publisher and never form a cycle, within a family or across families; family names and
 `hf_repo` are unique across the catalog.
+
+**How a successor is proven in the shipped catalog** (decided 2026-09-25). A `successor` names one
+concrete model of the same publisher that is itself a `latest` row of the catalog, and the comment
+above the row names the publisher's page that says so -- the successor's model card naming this
+very model as the one it replaces, next to the collection that carries the successor as current --
+with the day it was checked. A line the publisher carries as current is on its own no such proof: it
+does not say that every model of the line before it was replaced. Neither is a model of the same
+size or a benchmark table: the card of `Qwen3.8-27B` follows "the Qwen3.5 and Qwen3.6 series" and
+compares itself with `Qwen3.6-27B`, but names no model as replaced, so both 27B rows keep age
+`unknown`. `Magistral-Small-2509` has a successor: the card of `Mistral-Small-4-119B-2603` names it
+as one of the previous Magistral models of the family it now carries. The one successor that is no
+`latest` row is `EuroLLM-9B-Instruct`'s: the card of `EuroLLM-9B-Instruct-2512` calls itself an
+improved version of it, but the publisher's collection lists both lines side by side.
+`tests/test_catalog.py` holds the shipped file to both rules.
+
 `load_catalog` raises `SchemaVersionError` for an unsupported version and `CatalogError` for a
 file that does not read or validate.
 
@@ -2741,7 +2756,9 @@ fetch works through can be picked from it; `packagers` are their accounts in the
 the column that shows them. `downloads` is the sum over the repositories that state one (`None`
 when none does), `parameters_b` what a repository states, else what the name says, else `None`,
 and `fit` is the fit from that size ("Fit from size"), or `unknown` with `machine not measured`
-or `parameter count unknown`. `name` and `publisher` are the two halves of `base_model`.
+or `parameter count unknown`. `name` and `publisher` are the two halves of `base_model`. `ollama`
+is the first Ollama name a repository names, else the pair the configuration holds for the base
+model (`model_choices(..., configured_ollama=...)`, since 2026-09-25), else `None`.
 
 ```json
 {
@@ -3073,10 +3090,19 @@ neither is shown as `none known` (`ollama_label`). The search never infers one f
 a family, its account joins `publishers`, and the hit's own repository is added to that base
 model's `repos` -- an owner-bound target, because the search finds repositories under accounts
 the packager list does not name. Repeating the same hits changes nothing.
-`write_configuration(path, config, now=...)` renders that configuration with
+`write_configuration(path, config, now=..., expected_text=...)` renders that configuration with
 `toml_writer.dump_toml`, proves it reads back unchanged *before* touching the disk, and writes
-it under `modelroom.lock`, the same lock every other writer takes. No backup is kept: the guided
-mode has the user confirm the change first.
+it under `modelroom.lock`, the same lock every other writer takes. `expected_text` is the text of
+the read `config` was computed from, `None` when there was no file. Under the lock the file is
+compared with it; a file another run wrote, created or removed since that read is never written
+over but raises `ConfigChangedError` (a `ConfigError`: the file and `changed by another run since
+it was read`), and the caller reads again ("Guided mode", "Every write reads the file again
+first"). The lock is the one of the configuration that was read, so two runs that read the same
+text take the same lock even when one of them moves `paths.state`. A new file has nothing read and
+takes the lock of the configuration it writes: two callers creating the same file at once are kept
+apart when they name the same `paths.state` -- every guided run does (`<folder>/state`) -- and not
+when a library caller names another one. No backup is kept: the guided mode has the user confirm
+the change first.
 
 ### Target set and areas
 
@@ -4000,8 +4026,34 @@ matter, so the move is invisible to it.
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
 process added in between (an `import-profile` on a shared folder) is otherwise thrown away by the
-copy this run loaded at the start. The remaining window is the one `write_configuration` has
-anyway, between its own read-back check and the lock.
+copy this run loaded at the start.
+
+**And nothing written in between is lost** (decided 2026-09-25; until then the window between that
+read and the write stood open). Every write of this mode goes through `guided_write.update_config`:
+the step hands in its **change** (a function from the configuration it reads to the one it writes,
+or nothing to write), the file is read once and the text of that very read kept, the change is
+applied, and `write_configuration` compares the file with that text under the lock. When another
+run wrote in between, the step reads again, applies **its own change** to the new state, writes
+once more and goes on with what it really wrote; a second conflict in a row ends the run with exit
+`2`, like any other step that cannot go on (a held lock stays `1`, an unsupported schema `3`). No
+merge of two configurations is attempted: the five changes are the machine entries for the profiles
+the folder holds, this machine as the writer, the profile a measurement recorded, the models the
+search added and the context the scale kept. Two of them have a rule of their own:
+
+- **The first write of a new file** is no change that could be applied again -- it is a whole initial
+  state with empty families. When another run created the file meanwhile, this run takes that file
+  over as it is and writes nothing: the initial values never replace existing ones, and this
+  machine's entry is added by the writer step, as in any folder someone else set up
+  (`guided_write.create_config`).
+- **The machine entries for the profiles the folder holds** are worked out again as a whole on the
+  new state -- the scan, which profiles are configured, the names, the reserves -- so a name another
+  run took meanwhile is not written over and a profile it entered is not entered twice; with nothing
+  left to add, nothing is written.
+
+The checks of the profile record (a `[paths]` that moved, a machine entry that is gone) hold again for
+the read after a conflict. `migrate` and `import-profile` read the file under the lock already and are
+unchanged. The guarantee covers writers that take `modelroom.lock`: an editor that saves between the
+comparison and the replace is outside it.
 
 **Profiles the folder already holds get a machine entry.** The render computes one ranking per
 configured machine, so a profile that no `[machines.<name>]` names would be left out of the
@@ -4081,7 +4133,9 @@ Then **two notes** (`guided_search.search_notes`, decided 2026-09-24): where it
 asked (`searched Hugging Face at the publisher Qwen and the five listed packagers`, the publishers
 whose page answered with something, by name; with the filter off `, and the two open lists`) and how
 much of the answer is a choice (`120 repositories, 40
-of them models you can pick from`; none: `none of them a model you can pick from`, and with a full
+of them models you can pick from`; none: `none of them a model you can pick from`; one repository
+without `of them`, decided 2026-09-25: `1 repository, a model you can pick from` or `1 repository,
+not a model you can pick from`; and with a full
 account page ` · a more specific word shortens the list`). Where a publisher of the catalog **was**
 asked and every one of them answered with nothing, the first note names them instead of saying "at no
 publisher of this catalog that answered" (decided 2026-09-25): `searched Hugging Face at the five
@@ -4117,9 +4171,18 @@ graphics memory is too small and the fit is against system memory: fit v1 caps t
 and live on 2026-09-24 a 122B model stood as `good` above a 9B `marginal` that fits the graphics
 card, with nothing to tell the two apart), its size (6: `9B`, `0.6B`, `2.4T`, `unknown`), where it
 stands in its family (`Release`, 7: `latest`, `legacy`, `–`), the packager accounts that have it
-(16), the downloads of all of them together (6; an indication, not a rank) and the Ollama name (the
-rest of the line, 10). `Release` is one constant (`guided_models.RELEASE_COLUMN`), so the head, this
-section and the tests cannot name it differently.
+(12: all of them where they fit, else the first one and how many more, `unsloth +3`, else cut), the
+downloads of all of them together (6; an indication, not a rank) and the Ollama name (the rest of the
+line, 14). `Release` is one constant (`guided_models.RELEASE_COLUMN`), so the head, this section and
+the tests cannot name it differently. The packagers had 16 characters and the Ollama name 10 until
+2026-09-25, which cut 24 of the 32 Ollama names of the shipped catalog; with 12 and 14, 27 of them
+stand whole (decided 2026-09-25).
+
+**The Ollama name of a line** is the one a hit of the model names (the catalog's, or one the user
+typed), else the `ollama_base:ollama_tag` pair the configuration holds for that base model -- the
+fetch uses that pair, so the list shows it rather than a `–` (decided 2026-09-25). Which name wins
+when the configuration **writes** the choice back is unchanged: a name a hit carries replaces a
+configured pair, and a hit without one leaves the pair as it is (`apply_hits`).
 
 **A `–`, not a word, where a cell has nothing to say**: `none known` and `unknown` read as facts
 about the model in a column of their own (test round, 2026-09-25), so the Ollama column and the
@@ -4127,8 +4190,8 @@ about the model in a column of their own (test round, 2026-09-25), so the Ollama
 a list or a table). `none known` stays the word of the search log (`search.NO_OLLAMA_LABEL`), which
 has room for it. **Every cell is cut to its column** with `…`:
 `dialog.columns` pads and never cuts, and a name, an account, a download count and an Ollama name
-all come from a registry. The `Release` column costs the Ollama column four of its characters, so a
-registry name longer than ten is cut here; the install line of step 5 carries the whole one.
+all come from a registry. A registry name longer than the Ollama column (`qwen3-embedding:0.6b`) is
+cut here; the install line of step 5 carries the whole one.
 
 The order is the memory pool (a fit in graphics memory before one in system memory, whatever its
 class), then the fit class, then the release (`latest`, then a release nobody knows, then `legacy`),

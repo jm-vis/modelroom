@@ -143,8 +143,21 @@ def _searched(
         )
     except SearchError as exc:
         raise GuidedError(str(exc)) from exc
+    # The pair the configuration holds per base model, for a model no hit names an Ollama name of:
+    # the fetch uses it, so the list shows it rather than a dash (decided 2026-09-25).
+    configured = {
+        entry.hf_repo: f"{entry.ollama_base}:{entry.ollama_tag}"
+        for family in config.families
+        for entry in family.base_models
+        if entry.ollama_base is not None
+    }
     models = model_choices(
-        outcome.hits, filtered=filtered, checked=checked, context=context, typed=outcome.typed
+        outcome.hits,
+        filtered=filtered,
+        checked=checked,
+        context=context,
+        typed=outcome.typed,
+        configured_ollama=configured,
     )
     return SearchStep(outcome=outcome, models=models, checked=checked, context=context, filtered=filtered)
 

@@ -3,6 +3,50 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
+## [Unreleased]
+
+### Added
+
+- **`modelroom --version`** (and `-V`) prints `modelroom <version>` and ends with `0`, without a
+  terminal and without reading the pointer file (`modelroom/cli.py`, argparse's own `version`
+  action, the text from `modelroom.__version__`). Testers typed it after the install and got an
+  argparse error. The README's install section names it as the check that the command is there.
+- **How a successor is proven in the shipped catalog, and one more of them**
+  (`modelroom/catalog.toml`, CONTRACTS.md, "Catalog rules"). The catalog's head says it now: one
+  concrete model that is a `latest` row of the same publisher, whose card names this very model as
+  the one it replaces, with the page and the day it was checked in a comment above the row -- never
+  a stand-in rule for a whole line. `Magistral-Small-2509` names `Mistral-Small-4-119B-2603` (its
+  card carries the Reasoning family "previously called Magistral" and names this model), so the
+  list says `legacy` for it instead of `–`. The other candidates were checked on 2026-09-25 and stay
+  `unknown`, each with a comment that says why: `Qwen3.5-27B` and `Qwen3.6-27B` (the card of
+  `Qwen3.8-27B` follows both series and compares itself in its tables, but names no model as
+  replaced), `Mistral-Small-3.2-24B-Instruct-2506` (compared with "Mistral Small 3", a version number
+  and no statement), Llama 3 (gated cards) and DeepSeek-V3.2 (the V4 collection names no one current
+  build). `tests/test_catalog.py` holds the file to the rule: every successor is a `latest` row of
+  the same publisher (one stated exception, EuroLLM, whose collection lists both lines side by side).
+
+### Changed
+
+- **Nothing another run writes into `modelroom.toml` is lost any more** (`modelroom/search_apply.py`,
+  `modelroom/guided_write.py`, new; `modelroom/guided.py`, `modelroom/guided_context.py`;
+  CONTRACTS.md, "Configuration" and "Guided mode"). The guided mode read the file, computed its
+  change and wrote the result under the lock; a run that wrote in between was written over.
+  `write_configuration` now takes the text of the read the change was computed from
+  (`expected_text`, `None` for no file) and compares the file with it under the lock:
+  `ConfigChangedError` when it differs. Every write of the guided mode hands in its own change,
+  which is applied once more to the new state after a conflict, and goes on with what was really
+  written; a second conflict in a row ends the run with exit `2`. Two runs that create the file at
+  once: the second takes the first one's file over as it is. The machine entries for the profiles
+  of the folder are worked out again as a whole, so no name is taken twice.
+- **The list of models: 12 characters for the packagers, 14 for the Ollama name**
+  (`modelroom/guided_models.py`; CONTRACTS.md, "Guided mode"). The packagers are all of them where
+  they fit, else the first account and a count (`unsloth +3`); 27 of the 32 Ollama names of the
+  catalog now stand whole, where 24 were cut before. A model no hit names an Ollama name for shows
+  the pair the configuration holds for it rather than `–`; which name wins when the choice is
+  written back is unchanged.
+- **One repository is counted without `of them`**: `1 repository, a model you can pick from`, or
+  `not a model you can pick from` (`modelroom/screen.py`).
+
 ## [0.1.0] - 2026-09-25
 
 The first release on the package index. The guided mode is the way in; the six subcommands

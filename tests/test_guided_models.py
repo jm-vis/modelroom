@@ -275,7 +275,8 @@ def test_the_list_shows_name_fit_size_release_packagers_downloads_and_ollama():
     assert "good" in label
     assert "9B" in label
     assert "legacy" in label
-    assert "Qwen, unsloth" in label
+    # `Qwen, unsloth` is 13 characters and the column 12: the first account and a count.
+    assert "Qwen +1" in label
     assert "13.6M" in label
     assert label.rstrip().endswith("qwen3.5:9b")
 
@@ -339,13 +340,58 @@ def test_an_account_with_two_builds_of_one_model_stands_once():
     assert len(model.repos) == 3
 
 
-def test_more_than_three_packagers_are_cut_to_their_column():
-    """`+3` no longer fits the 16 characters this column has, so the names are cut with `…`."""
+def test_packagers_that_do_not_fit_their_column_are_the_first_account_and_a_count():
+    """Twelve characters since 2026-09-25: the first account and how many more (`unsloth +4`)."""
     hits = [_hit(f"{owner}/Qwen3.5-9B-GGUF") for owner in ("unsloth", "bartowski", "mradermacher", "ggml-org", "lmstudio-community")]
 
     label = _labels(_models(hits))[0]
 
-    assert "unsloth, bartow…" in label
+    assert "unsloth +4" in label
+    assert "bartowski" not in label
+
+
+def test_packagers_that_fit_their_column_stand_whole_whatever_their_number():
+    """Up to 2026-09-25 a fourth account always became a count; the rule is the width now."""
+    hits = [_hit(f"{owner}/Qwen3.5-9B-GGUF") for owner in ("a", "b", "c", "d")]
+
+    assert _models(hits)[0].packagers_text == "a, b, c, d"
+
+
+@pytest.mark.parametrize(
+    "owners, shown",
+    [
+        (("unsloth",), "unsloth"),
+        (("unsloth", "Qwen"), "unsloth +1"),
+        (("unsloth", "a", "b", "c"), "unsloth +3"),
+        (("Qwen", "unsloth"), "Qwen +1"),
+        (("mistralai", "unsloth"), "mistralai +1"),
+        (("lmstudio-community", "unsloth"), "lmstudio-co…"),
+    ],
+)
+def test_the_packagers_rule_is_whole_else_first_and_count_else_cut(owners, shown):
+    hits = [_hit(f"{owner}/Qwen3.5-9B-GGUF") for owner in owners]
+
+    text = _models(hits)[0].packagers_text
+
+    assert text == shown
+    assert len(text) <= 12
+
+
+def test_the_packagers_column_is_twelve_and_the_ollama_column_fourteen_characters():
+    """Measured at the labels, not at constants: a line with every cell at its widest."""
+    hits = [_hit(f"{owner}/Nova-9B-GGUF", base="acme/Nova-9B", ollama="abcdefghijklmnopqrst:9b") for owner in ("unsloth", "a", "b", "c")]
+
+    label = _labels(_models(hits))[0]
+    head = list_header().label
+
+    packagers_at = head.index("Packagers") - 2
+    downloads_at = head.index("Downl.") - 2
+    ollama_at = head.index("Ollama") - 2
+    assert downloads_at - packagers_at == 12 + 2
+    assert label[packagers_at:downloads_at].rstrip() == "unsloth +3"
+    assert len(label) - ollama_at == 14
+    assert label[ollama_at:] == "abcdefghijklm…"
+    assert len(label) <= LABEL_LIMIT
 
 
 def test_no_line_of_the_list_is_wider_than_a_hundred_characters():
@@ -387,15 +433,59 @@ def test_the_hundred_characters_hold_for_the_longest_names_there_are():
     omni = next(label for label in labels if label.startswith("Qwen3-Omni"))
     nova = next(label for label in labels if label.startswith("Nova-9B"))
     assert "…" in omni, "a cell that does not fit its column says so"
-    # The `Release` column costs the Ollama name four of its characters, so a registry name longer
-    # than ten is cut here as well; the install line of step 5 carries the whole one.
-    assert nova.rstrip().endswith("…")
+    # Fourteen characters since 2026-09-25: `deepseek-r1:8b` stands whole, a longer registry name is
+    # still cut here; the install line of step 5 carries the whole one.
+    assert nova.rstrip().endswith("deepseek-r1:8b")
+    assert omni.rstrip().endswith("…")
 
 
-def test_an_ollama_name_of_ten_characters_is_shown_whole():
+def test_an_ollama_name_of_fourteen_characters_is_shown_whole():
+    hits = [_hit("unsloth/Qwen3.5-9B-GGUF", ollama="granite4.2:30b")]
+
+    assert _labels(_models(hits))[0].rstrip().endswith("granite4.2:30b")
+
+
+def test_the_catalog_names_that_stand_whole_and_the_five_that_are_cut():
+    """27 of the 32 Ollama names of the shipped catalog fit fourteen characters (2026-09-25)."""
+    from modelroom.catalog import load_catalog
+
+    names = {
+        f"{model.ollama_base}:{model.ollama_tag}"
+        for family in load_catalog().families
+        for model in family.models
+        if model.ollama_base is not None
+    }
+    cut = sorted(name for name in names if len(name) > 14)
+
+    assert len(names) == 32
+    assert cut == sorted(
+        ["ministral-3:14b", "qwen3-coder:30b", "qwen3-embedding:8b", "mistral-small3.2:24b", "qwen3-embedding:0.6b"]
+    )
+    for name in names:
+        label = _labels(_models([_hit("unsloth/Qwen3.5-9B-GGUF", ollama=name)]))[0]
+        assert label.rstrip().endswith(name if name not in cut else "…"), label
+
+
+def test_an_ollama_pair_of_the_configuration_is_shown_where_no_hit_names_one():
+    """A pair the catalog does not know was a dash in the list, though the fetch uses it."""
+    hits = [_hit("unsloth/Qwen3.5-9B-GGUF")]
+
+    models = model_choices(
+        hits, filtered=True, checked=_measured(), context=8192, configured_ollama={QWEN: "my-qwen:9b"}
+    )
+
+    assert models[0].ollama == "my-qwen:9b"
+    assert _labels(models)[0].rstrip().endswith("my-qwen:9b")
+
+
+def test_a_hit_that_names_an_ollama_name_still_wins_in_the_list():
     hits = [_hit("unsloth/Qwen3.5-9B-GGUF", ollama="qwen3.5:9b")]
 
-    assert _labels(_models(hits))[0].rstrip().endswith("qwen3.5:9b")
+    models = model_choices(
+        hits, filtered=True, checked=_measured(), context=8192, configured_ollama={QWEN: "my-qwen:9b"}
+    )
+
+    assert models[0].ollama == "qwen3.5:9b"
 
 
 def test_a_size_and_a_download_count_of_any_length_keep_their_columns():

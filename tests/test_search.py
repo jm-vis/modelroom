@@ -1639,7 +1639,7 @@ def test_write_configuration_writes_a_file_that_reads_back_as_the_same_configura
     path = tmp_path / "modelroom.toml"
     (tmp_path / "state").mkdir()
 
-    write_configuration(path, config, now=NOW)
+    write_configuration(path, config, now=NOW, expected_text=None)
 
     reread = load_config(path)
     assert reread.model_dump(mode="json") == config.model_dump(mode="json")
@@ -1651,7 +1651,7 @@ def test_write_configuration_leaves_out_a_context_no_guided_run_chose(tmp_path):
     path = tmp_path / "modelroom.toml"
     (tmp_path / "state").mkdir()
 
-    write_configuration(path, config, now=NOW)
+    write_configuration(path, config, now=NOW, expected_text=None)
 
     assert "context" not in tomllib.loads(path.read_text(encoding="utf-8")).get("guided", {})
     assert load_config(path).guided.context is None
@@ -1663,7 +1663,7 @@ def test_write_configuration_keeps_the_context_a_guided_run_chose(tmp_path):
     path = tmp_path / "modelroom.toml"
     (tmp_path / "state").mkdir()
 
-    write_configuration(path, config, now=NOW)
+    write_configuration(path, config, now=NOW, expected_text=None)
 
     assert tomllib.loads(path.read_text(encoding="utf-8"))["guided"]["context"] == 4096
     assert load_config(path).guided.context == 4096
@@ -1684,14 +1684,15 @@ def test_write_configuration_writes_where_it_checked_even_through_a_symlink(tmp_
         link_path.symlink_to(Path("..") / "real" / "modelroom.toml")
     except (OSError, NotImplementedError) as exc:  # pragma: no cover - platform dependent
         pytest.skip(f"this platform does not allow creating a symlink here: {exc}")
-    real_path.write_text("", encoding="utf-8")
     data = qwen35_example_config_dict(str(real_dir / "state"), str(real_dir / "models.md"))
     data["schema_version"] = 2
     data["families"] = []
     data["publishers"] = []
     config = Configuration.from_dict(data)
+    write_configuration(real_path, config, now=NOW, expected_text=None)
+    config = config.model_copy(update={"guided": config.guided.model_copy(update={"context": 4096})})
 
-    write_configuration(link_path, config, now=NOW)
+    write_configuration(link_path, config, now=NOW, expected_text=real_path.read_text(encoding="utf-8"))
 
     assert link_path.is_symlink(), "the link must still be a link, not a file of its own"
     assert load_config(real_path).model_dump(mode="json") == config.model_dump(mode="json")
@@ -1704,7 +1705,7 @@ def test_write_configuration_releases_the_lock_when_the_write_fails(tmp_path):
     path.mkdir()  # a directory where the file should go: os.replace cannot overwrite it
 
     with pytest.raises(OSError):
-        write_configuration(path, config, now=NOW)
+        write_configuration(path, config, now=NOW, expected_text=None)
 
     handle = acquire_lock(config.paths.lock_file, "fetch", NOW)
     release_lock(handle)
@@ -1717,7 +1718,7 @@ def test_write_configuration_stops_at_another_processs_lock(tmp_path):
     handle = acquire_lock(config.paths.lock_file, "fetch", NOW)
     try:
         with pytest.raises(LockHeldError):
-            write_configuration(path, config, now=NOW)
+            write_configuration(path, config, now=NOW, expected_text=None)
     finally:
         release_lock(handle)
 
@@ -1736,7 +1737,7 @@ def test_write_configuration_refuses_a_state_directory_the_reader_would_reject(t
     path.parent.mkdir()
 
     with pytest.raises(ConfigError):
-        write_configuration(path, config, now=NOW)
+        write_configuration(path, config, now=NOW, expected_text=None)
 
     assert not path.exists()
 
@@ -1746,7 +1747,7 @@ def test_write_configuration_releases_the_lock_afterwards(tmp_path):
     path = tmp_path / "modelroom.toml"
     (tmp_path / "state").mkdir()
 
-    write_configuration(path, config, now=NOW)
+    write_configuration(path, config, now=NOW, expected_text=None)
 
     handle = acquire_lock(config.paths.lock_file, "fetch", NOW)
     release_lock(handle)

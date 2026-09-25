@@ -52,6 +52,12 @@ uv tool install modelroom
 pipx install modelroom
 ```
 
+Then check that the command is there; it prints the version and asks nothing:
+
+```bash
+modelroom --version
+```
+
 Both need Python 3.11 or newer and the installer itself ([uv](https://docs.astral.sh/uv/) or
 [pipx](https://pipx.pypa.io/)), and both put `modelroom` into an environment of its own. If the
 command is not found afterwards, the installer's folder is not on `PATH` yet: run
@@ -133,8 +139,10 @@ folder): `good`, `marginal`, `too tight`; `good (RAM)` means it needs system mem
 the graphics card's. After the fetch the fit is computed per package from what the fetch found. **Size** is the parameter count. **Release** says `latest` when the publisher's own page
 names this model as the current one of its family, `legacy` when the publisher named a successor,
 and `–` when the catalog holds no evidence either way. **Packagers** are the accounts that offer a
-GGUF build of it, **Downl.** the downloads of all of them together, **Ollama** the name of the same
-model in the Ollama registry when the catalog knows one. `Space` marks a row, `Enter` takes the
+GGUF build of it (the first one and how many more, `unsloth +3`, where they do not all fit),
+**Downl.** the downloads of all of them together, **Ollama** the name of the same model in the
+Ollama registry when the catalog or your configuration knows one; a name longer than its 14
+characters is cut, and the install line at the end carries it whole. `Space` marks a row, `Enter` takes the
 marked rows or, with nothing marked, the row under the pointer. Here `Qwen3.5-4B` is marked. The
 repositories that are no model of the list, and why, are counted in `state/search.json` rather
 than shown as rows nobody can choose. After the choice the run fetches, per model, the packages of

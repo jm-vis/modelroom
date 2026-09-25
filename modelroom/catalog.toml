@@ -13,6 +13,14 @@
 # for an Ollama name the manifest `registry.ollama.ai/v2/library/<base>/manifests/<tag>`
 # answering 200. Where no publisher page or collection calls a model current, `latest` is left
 # out and the age stays `unknown` -- a release number is no evidence.
+#
+# A `successor` names one concrete model of the same publisher that is a `latest` row here, and
+# the comment above the row names the publisher's page that says so -- a model card of the
+# successor that names this very model as the one it replaces, next to the collection that carries
+# the successor as current -- with the day it was checked (decided 2026-09-25). A line the
+# publisher carries as current is on its own no evidence that every model of the line before it
+# was replaced, and neither is a model of the same size or a benchmark table: such a model keeps
+# age `unknown`, with a comment that says what was checked.
 
 schema_version = 1
 
@@ -69,12 +77,19 @@ publisher = "mistralai"
   latest_checked = 2026-09-25
   source = "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512"
 
-  # Reasoning build; no publisher page calls it current, and `magistral:24b` in the Ollama library
-  # is the 2506 build.
+  # Reasoning build; `magistral:24b` in the Ollama library is the 2506 build. Successor, checked
+  # 2026-09-25: the card of Mistral Small 4
+  # (https://huggingface.co/mistralai/Mistral-Small-4-119B-2603) says it carries the Reasoning
+  # family "(previously called Magistral)" and names this model as one of the "previous Magistral
+  # models"; the "Mistral Small 4" collection carries it as current.
   [[families.models]]
   hf_repo = "mistralai/Magistral-Small-2509"
+  successor = "mistralai/Mistral-Small-4-119B-2603"
   source = "https://huggingface.co/mistralai/Magistral-Small-2509"
 
+  # No successor, checked 2026-09-25: the card of Mistral Small 4
+  # (https://huggingface.co/mistralai/Mistral-Small-4-119B-2603) compares itself with "Mistral
+  # Small 3" but names no Mistral Small 3 model as replaced; a version number is no such statement.
   [[families.models]]
   hf_repo = "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
   ollama_base = "mistral-small3.2"
@@ -85,8 +100,9 @@ publisher = "mistralai"
 name = "eurollm"
 publisher = "utter-project"
 
-  # The model card of EuroLLM-9B-Instruct-2512 calls itself "an improved version of
-  # utter-project/EuroLLM-9B-Instruct".
+  # The model card of EuroLLM-9B-Instruct-2512
+  # (https://huggingface.co/utter-project/EuroLLM-9B-Instruct-2512) calls itself "an improved
+  # version of utter-project/EuroLLM-9B-Instruct", checked again 2026-09-25.
   [[families.models]]
   hf_repo = "utter-project/EuroLLM-9B-Instruct"
   successor = "utter-project/EuroLLM-9B-Instruct-2512"
@@ -137,6 +153,9 @@ publisher = "Qwen"
   ollama_tag = "4b"
   source = "https://huggingface.co/Qwen/Qwen3.5-4B"
 
+  # No successor, checked 2026-09-25: the card of Qwen3.8-27B
+  # (https://huggingface.co/Qwen/Qwen3.8-27B) follows "the Qwen3.5 and Qwen3.6 series" as a whole
+  # and names no Qwen3.5 model as replaced; a model of the same size is no such statement.
   [[families.models]]
   hf_repo = "Qwen/Qwen3.5-27B"
   ollama_base = "qwen3.5"
@@ -160,6 +179,9 @@ publisher = "Qwen"
 name = "qwen3.6"
 publisher = "Qwen"
 
+  # No successor, checked 2026-09-25: the card of Qwen3.8-27B
+  # (https://huggingface.co/Qwen/Qwen3.8-27B) compares itself with this model in its tables but
+  # does not name it as replaced.
   [[families.models]]
   hf_repo = "Qwen/Qwen3.6-27B"
   ollama_base = "qwen3.6"
@@ -241,6 +263,8 @@ publisher = "deepseek-ai"
 name = "deepseek-v3"
 publisher = "deepseek-ai"
 
+  # No successor, checked 2026-09-25: the "DeepSeek-V4" collection lists several V4 builds side by
+  # side (`DeepSeek-V4.1-Flash` among them), so no row of this catalog is its current one.
   [[families.models]]
   hf_repo = "deepseek-ai/DeepSeek-V3.2"
   source = "https://huggingface.co/deepseek-ai/DeepSeek-V3.2"
@@ -260,7 +284,9 @@ name = "llama"
 publisher = "meta-llama"
 
   # Every `meta-llama` repository is gated: reading the weights needs an accepted license on the
-  # Hub. The GGUF builds of the packagers are not.
+  # Hub. The GGUF builds of the packagers are not. No successor for the Llama 3 rows, checked
+  # 2026-09-25: the model cards are gated, and no page of the publisher names a Llama 4 model as the
+  # successor of one of them.
   [[families.models]]
   hf_repo = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
   ollama_base = "llama4"
