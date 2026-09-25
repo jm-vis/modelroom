@@ -13,8 +13,8 @@ families you care about:
    computes, per package, whether weights plus KV cache plus a configured reserve fit into the
    memory that machine has.
 
-The result is a JSON snapshot, one hardware profile per machine and a rendered Markdown table
-with one fit column per configured machine. Nothing in the tool is tied to a specific
+The result is a JSON snapshot, one hardware profile per machine and a rendered Markdown document
+with a ranking per configured machine. Nothing in the tool is tied to a specific
 operator: you bring a configuration file with your families, packagers and machines, run it
 on the machine you want to size, and keep the files wherever you keep your notes.
 
@@ -155,7 +155,7 @@ measurement runs a short prompt through the package and records tokens per secon
 downloads anything. The gray line says what was found: here the daemon has a `Qwen3.5-4B`, but
 its weights are Ollama's own build and not one of the fetched packages, so there is nothing to
 measure as such. **No** skips new measurements; a measurement stored earlier for the same package
-stays in the ranking, and a row without one shows `–` for speed.
+content at the same context stays in the ranking, and a row without one shows `–` for speed.
 
 ### Step 5, Results
 
@@ -251,8 +251,8 @@ stops at it instead of waiting.
 ## Publishers the search resolves
 
 The shipped catalog `modelroom/catalog.toml` names the publisher accounts whose models a search
-resolves: a hit is only selectable when the Hugging Face account of its base model is one of them,
-whoever packaged the GGUF build. Those accounts are `mistralai`, `utter-project`, `openGPT-X`,
+resolves: with the owner filter on, a hit is selectable when the Hugging Face account of its base
+model is one of them, whoever packaged the GGUF build, or when you typed that repository yourself. Those accounts are `mistralai`, `utter-project`, `openGPT-X`,
 `Qwen`, `deepseek-ai`, `meta-llama`, `google`, `microsoft`, `openai`, `zai-org`, `moonshotai`,
 `ibm-granite`, `nvidia`, `allenai`, `tiiuae`, `CohereLabs`, `LiquidAI`, `HuggingFaceTB`, `openbmb`,
 `tencent`, `baidu` and `MiniMaxAI`. Every row of the catalog carries the page it was read from, and
@@ -261,7 +261,7 @@ was checked; without one the age stays `unknown`.
 
 The list is a **preference, not a gate** (since 2026-09-25). With the owner filter on -- the default
 -- a hit whose base model belongs to an account that is not in that list is no row of the list of
-models; it is counted in `state/search.json` with the reason `publisher_unknown`. Say no to the
+models; it is counted in `state/search.json` among the owners the catalog does not list. Say no to the
 filter and it can be picked like any
 other, with its age left at `unknown` for want of evidence and its owner shown as `other`; and a
 repository you name yourself (`unsloth/Qwen3.5-9B-GGUF`) is never filtered out at all, whatever the

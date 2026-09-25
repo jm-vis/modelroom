@@ -7,9 +7,9 @@ All notable changes to this project are documented in this file. The format foll
 
 The first release on the package index. The guided mode is the way in; the six subcommands
 under it are what it calls. The entries under "The first cut" at the end of this section were
-written on 2026-09-23 for the same version, which was never published. Entries stand in the
-order they landed; where two of them name a number (a request budget, pages per account), the
-later one is what ships.
+written on 2026-09-23 for the same version, which was never published. Entries stand newest
+first; where two of them name a number (a request budget, pages per account), the one nearer the
+top is what ships: two pages per account, a budget of 150 requests.
 
 ### Added
 
@@ -415,12 +415,6 @@ later one is what ships.
   come from the measurement files of that profile. A machine whose profile is a schema-1 file is
   shown as `legacy` with the fit rule's own reason and nothing is persisted; a hardware file that
   does not read is a `note:` line instead of ending the whole render with exit `3`.
-- `fetch_with_config` takes the request budget the caller already spent on, so the guided run's
-  search and its fetch share one budget.
-- `scripts/release-smoke.py` no longer places a schema-1 profile for the renderer: it names the
-  profile `modelroom hardware` just measured in `[machines.<name>].profile`, the one write the
-  guided mode does, and then checks the ranking header, the not-covered block and that the JSON
-  view agrees with the Markdown one.
 - `fetch_with_config` takes the request budget the caller already spent on, so the guided run's
   search and its fetch share one budget.
 - `scripts/release-smoke.py` no longer places a schema-1 profile for the renderer: it names the
