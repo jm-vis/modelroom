@@ -68,6 +68,8 @@ PICTOGRAM = (("f", "f", "m", "f"), ("f", "f", "f", "x"), ("m", "f", "x", "x"))
 
 _LABEL_WIDTH = 8
 _VALUE_WIDTH = 22
+# Which rows of a `label value note` block carry a file-system path, and are cyan for it.
+_PATH_LABELS = ("folder", "result")
 # Two spaces stand between the columns of a fact row, so a value wider than its column pushes the
 # note along instead of growing into it. A results folder of 120 characters is an ordinary value.
 _GAP = "  "
@@ -75,21 +77,32 @@ _GAP = "  "
 
 @dataclass(frozen=True)
 class Glyphs:
-    """The characters the dialog draws with, in a set this terminal can encode."""
+    """The characters the dialog draws with, in a set this terminal can encode.
+
+    `lower` and `block` are the two halves of one cell of the colored mark (E, decided
+    2026-09-24): a row of lower half blocks over a row of full blocks makes a square of 24 pixels
+    with a gap of 8 in both directions. Without color the mark keeps its three shading glyphs, so
+    the two are unused there -- the set is complete all the same, because the question "can this
+    console encode what the dialog draws" is asked of the whole set at once.
+    """
 
     full: str
     muted: str
     empty: str
+    lower: str
+    block: str
     check: str
+    skip: str
     pointer: str
     move: str
     dot: str
     rule: str
 
 
-UNICODE_GLYPHS = Glyphs(full="██", muted="▓▓", empty="░░", check="✓",
-                        pointer="❯", move="↑↓", dot="·", rule="─")
-ASCII_GLYPHS = Glyphs(full="##", muted="::", empty="..", check="ok", pointer=">", move="^v", dot="-", rule="-")
+UNICODE_GLYPHS = Glyphs(full="██", muted="▓▓", empty="░░", lower="▄▄▄", block="███", check="✓",
+                        skip="–", pointer="❯", move="↑↓", dot="·", rule="─")
+ASCII_GLYPHS = Glyphs(full="##", muted="::", empty="..", lower="...", block="###", check="ok",
+                      skip="-", pointer=">", move="^v", dot="-", rule="-")
 
 
 def glyphs(stream=None) -> Glyphs:
@@ -159,21 +172,13 @@ class Intro:
     facts: tuple[Fact, ...]
 
 
-def step_head(number: int) -> str:
-    """The head every step begins with: `Step 3 of 5  Context`."""
-    return f"Step {number} of {STEP_COUNT}  {STEP_NAMES[number - 1]}"
-
-
-def done_line(number: int, summary: str, stream=None) -> str:
-    """The one line a finished step leaves behind: a check mark, its name and its answer."""
-    return f"{glyphs(stream).check} {STEP_NAMES[number - 1].ljust(_LABEL_WIDTH + 3)} {summary}"
-
-
 def intro_lines(intro: Intro, stream=None, colored: bool = False) -> list[list[tuple[str, str]]]:
     """The start screen as lines of `(class name, text)` fragments -- one list per line.
 
-    `colored` says which mark is drawn: in color every cell is a full block and its own color
-    tells it apart, without color the three shading glyphs do (`_pictogram_row`).
+    `colored` says which mark is drawn: in color it is mark E, two terminal lines per row of
+    cells, and the color of each cell tells it apart; without color the three shading glyphs do
+    (`_mark_lines`). The name, the description and the version stand on the second, third and
+    fourth line of the mark in color, and on its three lines without it.
     """
     marks = glyphs(stream)
     version = f"modelroom {intro.version}"
@@ -182,11 +187,9 @@ def intro_lines(intro: Intro, stream=None, colored: bool = False) -> list[list[t
         [("class:tagline", TAGLINE)],
         [("class:note", version if intro.source is None else f"{version} {marks.dot} {intro.source}")],
     ]
-    lines = [
-        [*_pictogram_row(row, marks, colored), ("", "   ")] + fragments for row, fragments in zip(PICTOGRAM, right)
-    ]
+    lines = _mark_lines(marks, colored, right)
     lines.append([])
-    lines += [_fact_line(fact) for fact in intro.facts]
+    lines += [fact_line(fact) for fact in intro.facts]
     lines.append([])
     lines += [[("class:note", text)] for text in CLOSING_LINES]
     return lines
@@ -233,18 +236,8 @@ def _print_in_color(lines: list[list[tuple[str, str]]]) -> bool:
     return True
 
 
-def _pictogram_row(row: Sequence[str], marks: Glyphs, colored: bool = False) -> list[tuple[str, str]]:
-    """One row of the mark: three shading glyphs without color, twelve full blocks with it.
-
-    `▓▓` and `░░` are drawn as a coarse dot raster by the console this package is used at most
-    (measured 2026-09-24, Windows Terminal), which the mark of a brand is not. Where there is
-    color, the block is the same for every cell and the color is what tells the three apart; where
-    there is none, the glyph has to, exactly as before.
-    """
-    if colored:
-        cells = {key: (f"class:mark{suffix}", marks.full) for key, suffix in (("f", ""), ("m", "-muted"), ("x", "-empty"))}
-    else:
-        cells = {"f": ("class:mark", marks.full), "m": ("class:mark-muted", marks.muted), "x": ("class:mark-empty", marks.empty)}
+def _pictogram_row(row: Sequence[str], cells: dict[str, tuple[str, str]]) -> list[tuple[str, str]]:
+    """One row of cells, with one space between them -- the smallest gap a terminal has sideways."""
     fragments: list[tuple[str, str]] = []
     for index, cell in enumerate(row):
         if index:
@@ -253,16 +246,48 @@ def _pictogram_row(row: Sequence[str], marks: Glyphs, colored: bool = False) -> 
     return fragments
 
 
-def _fact_line(fact: Fact) -> list[tuple[str, str]]:
-    # The folder row carries a path, and a path is cyan wherever this dialog prints one.
-    style = "class:path" if fact.label == "folder" else "class:value"
-    return [
-        ("class:label", fact.label.ljust(_LABEL_WIDTH)),
-        ("", _GAP),
-        (style, fact.value.ljust(_VALUE_WIDTH)),
-        ("", _GAP),
-        ("class:note", fact.note),
-    ]
+def _mark_lines(marks: Glyphs, colored: bool, right: list[list[tuple[str, str]]]) -> list[list[tuple[str, str]]]:
+    """The mark, with the three text lines beside it: mark E in color, the shading glyphs without.
+
+    In color every cell is a square of 24 pixels with a gap of 8 in both directions (E, decided
+    2026-09-24): a row of lower half blocks carries the gap above and a row of full blocks the
+    square, so one row of cells is two terminal lines and the rows do not touch. The color of the
+    cell tells the three kinds apart -- `▓▓` and `░░` are drawn as a coarse dot raster by the
+    console this package is used at most (measured 2026-09-24, Windows Terminal), which the mark
+    of a brand is not. Without color the glyph has to say it, exactly as before, and then the mark
+    is three lines: a log is no place for a brand surface, and half blocks cannot be shaded.
+    """
+    classes = {"f": "class:mark", "m": "class:mark-muted", "x": "class:mark-empty"}
+    if colored:
+        rows = [
+            _pictogram_row(row, {key: (name, glyph) for key, name in classes.items()})
+            for row in PICTOGRAM
+            for glyph in (marks.lower, marks.block)
+        ]
+        first_text = 1
+    else:
+        shaded = {"f": marks.full, "m": marks.muted, "x": marks.empty}
+        rows = [_pictogram_row(row, {key: (name, shaded[key]) for key, name in classes.items()}) for row in PICTOGRAM]
+        first_text = 0
+    lines = []
+    for index, fragments in enumerate(rows):
+        text = right[index - first_text] if first_text <= index < first_text + len(right) else None
+        lines.append([*fragments, ("", "   "), *text] if text is not None else list(fragments))
+    return lines
+
+
+def fact_line(fact: Fact) -> list[tuple[str, str]]:
+    """One `label value note` row, as the start screen and the card of step 5 both draw it.
+
+    A value wider than its column pushes the note along instead of growing into it; a fact with
+    no note at all is not padded, so no line ends in blanks nobody can see.
+    """
+    # The folder row and the result row carry a path, and a path is cyan wherever this dialog prints one.
+    style = "class:path" if fact.label in _PATH_LABELS else "class:value"
+    label: list[tuple[str, str]] = [("class:label", fact.label.ljust(_LABEL_WIDTH)), ("", _GAP)]
+    if not fact.note:
+        return [*label, (style, fact.value)]
+    return [*label, (style, fact.value.ljust(_VALUE_WIDTH)), ("", _GAP), ("class:note", fact.note)]
 
 
 # --- reading the three facts ---------------------------------------------------------------------
@@ -371,12 +396,11 @@ __all__ = [
     "Glyphs",
     "Intro",
     "collect_intro",
-    "done_line",
+    "fact_line",
     "glyphs",
     "hardware_words",
     "intro_lines",
     "print_intro",
-    "step_head",
     "style_rules",
     "use_color",
 ]

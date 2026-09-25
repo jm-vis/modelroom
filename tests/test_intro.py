@@ -23,13 +23,11 @@ from modelroom.intro import (
     Fact,
     Intro,
     collect_intro,
-    done_line,
     glyphs,
     hardware_words,
     intro_lines,
     print_intro,
     source_url,
-    step_head,
     style_rules,
     use_color,
 )
@@ -243,17 +241,35 @@ def test_the_start_screen_promises_nothing_it_does_not_keep():
     assert "before you say yes" not in printed
 
 
-# --- the pictogram: shading without color, three colors with it -------------------------------------
+# --- the pictogram: shading without color, mark E with it -------------------------------------------
 
 
-def test_with_color_every_cell_of_the_mark_is_a_full_block():
-    """Windows Terminal draws the shading glyphs as a coarse dot raster (measured 2026-09-24)."""
-    lines = intro_lines(_intro(), _stream("utf-8"), colored=True)
+def _mark(colored: bool, encoding: str = "utf-8"):
+    """The lines of the mark alone: everything above the blank line that follows it."""
+    lines = intro_lines(_intro(), _stream(encoding), colored=colored)
+    return lines[: lines.index([])]
 
-    drawn = "".join(text for line in lines[:3] for _class, text in line)
-    assert UNICODE_GLYPHS.muted not in drawn
-    assert UNICODE_GLYPHS.empty not in drawn
-    assert drawn.count(UNICODE_GLYPHS.full) == 12
+
+def test_with_color_the_mark_is_mark_e_two_lines_per_row_of_cells():
+    """Squares of 24 pixels with a gap of 8 in both directions (E, decided 2026-09-24)."""
+    lines = _mark(colored=True)
+
+    assert len(lines) == 6
+    drawn = ["".join(text for _class, text in line) for line in lines]
+    assert drawn[0].startswith(f"{UNICODE_GLYPHS.lower} {UNICODE_GLYPHS.lower}")
+    assert drawn[1].startswith(f"{UNICODE_GLYPHS.block} {UNICODE_GLYPHS.block}")
+    assert UNICODE_GLYPHS.muted not in "".join(drawn)
+    assert UNICODE_GLYPHS.empty not in "".join(drawn)
+
+
+def test_with_color_the_name_the_tagline_and_the_version_stand_on_lines_two_to_four():
+    lines = _mark(colored=True)
+
+    texts = ["".join(text for _class, text in line) for line in lines]
+    assert texts[1].endswith("ModelRoom")
+    assert texts[2].endswith("Which local model packages fit your machine.")
+    assert "modelroom " in texts[3]
+    assert [index for index, text in enumerate(texts) if "   " in text.rstrip()] == [1, 2, 3]
 
 
 def test_the_three_cell_colors_are_white_and_two_blues():
@@ -265,58 +281,47 @@ def test_the_three_cell_colors_are_white_and_two_blues():
 
 
 def test_with_color_the_three_cell_kinds_keep_their_own_class():
-    lines = intro_lines(_intro(), _stream("utf-8"), colored=True)
+    lines = _mark(colored=True)
 
-    pictogram = lines[0][: lines[0].index(("", "   "))]
-    assert [name for name, _text in pictogram if name] == [
-        "class:mark",
-        "class:mark",
-        "class:mark-muted",
-        "class:mark",
-    ]
+    for line in lines[:2]:
+        # Only the cells: the text beside the mark begins after the three-space gap.
+        cells = line[: line.index(("", "   "))] if ("", "   ") in line else line
+        assert [name for name, _text in cells if name] == [
+            "class:mark",
+            "class:mark",
+            "class:mark-muted",
+            "class:mark",
+        ]
 
 
 def test_without_color_the_shading_glyphs_stay_as_they_are():
     printed = _text(_intro(), _stream("utf-8"))
 
+    assert len(_mark(colored=False)) == 3
     assert UNICODE_GLYPHS.muted in printed
     assert UNICODE_GLYPHS.empty in printed
+    assert UNICODE_GLYPHS.lower not in printed
 
 
 def test_a_console_without_the_block_glyphs_keeps_its_ascii_mark_in_color():
-    lines = intro_lines(_intro(), _stream("cp1252"), colored=True)
+    drawn = "".join(text for line in _mark(colored=True, encoding="cp1252") for _class, text in line)
 
-    drawn = "".join(text for line in lines[:3] for _class, text in line)
-    assert ASCII_GLYPHS.full in drawn
-    assert drawn.count(ASCII_GLYPHS.full) == 12
-
-
-# --- the step heads --------------------------------------------------------------------------------
+    assert ASCII_GLYPHS.block in drawn
+    assert drawn.count(ASCII_GLYPHS.block) == 12
+    assert drawn.count(ASCII_GLYPHS.lower) == 12
 
 
-@pytest.mark.parametrize(
-    "number, expected",
-    [(1, "Step 1 of 5  Configuration"), (3, "Step 3 of 5  Context"), (5, "Step 5 of 5  Results")],
-)
-def test_every_step_has_a_head_with_its_number_and_its_name(number, expected):
-    assert step_head(number) == expected
+def test_the_skip_glyph_is_an_en_dash_and_a_hyphen_in_ascii():
+    """The mark of a step that did nothing; a check mark cannot say "there was nothing to do"."""
+    assert UNICODE_GLYPHS.skip == "–"
+    assert ASCII_GLYPHS.skip == "-"
+
+
+# --- the steps ------------------------------------------------------------------------------------
 
 
 def test_there_are_five_steps():
     assert STEP_COUNT == 5
-
-
-def test_a_finished_step_leaves_one_line_with_a_check_mark(monkeypatch):
-    monkeypatch.setattr("sys.stdout", _stream("utf-8"))
-
-    assert done_line(2, "7 packages fetched").startswith(f"{UNICODE_GLYPHS.check} Packages")
-    assert done_line(2, "7 packages fetched").endswith("7 packages fetched")
-
-
-def test_a_finished_step_says_ok_where_a_check_mark_cannot_be_printed(monkeypatch):
-    monkeypatch.setattr("sys.stdout", _stream("cp1252"))
-
-    assert done_line(2, "done").startswith("ok Packages")
 
 
 def test_a_fact_is_shown_as_label_value_and_note():

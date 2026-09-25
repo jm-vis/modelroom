@@ -37,18 +37,18 @@ from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT
 from .guided_context import QUESTION as CONTEXT_QUESTION
-from .guided_context import context_step, machine_checked, snapshot_packages
+from .guided_context import context_step, machine_checked, snapshot_facts
+from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
 from .guided_loadtest import load_test_step
 from .guided_models import (
     ask_models,
     chosen_hits,
-    count_line,
-    fit_line,
     hint_line,
     list_context,
     model_choices,
-    unusable_reasons,
+    picked_names,
+    unusable_counts,
 )
 from .http import RequestBudget, Transport, UrllibTransport
 from .importer import (
@@ -60,11 +60,26 @@ from .importer import (
     machine_name_for,
     scan_profiles,
 )
-from .intro import collect_intro, done_line, print_intro, step_head
+from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_os_identity
 from .measurements import Scenario
 from .migrate import BACKUP_SUFFIX, MigrationError, migrate
 from .profile import HardwareProfile, os_fingerprint
+from .screen import (
+    CLONE_QUESTION,
+    NOTHING_CHOSEN_SUMMARY,
+    THIS_FOLDER,
+    Screen,
+    clone_words,
+    import_notes,
+    machines_summary,
+    machines_words,
+    measured_note,
+    names_words,
+    packages_summary,
+    search_notes,
+    yes_no,
+)
 from .search import (
     DEFAULT_GUIDED_BUDGET,
     DEFAULT_PACKAGERS,
@@ -73,7 +88,8 @@ from .search import (
     run_search,
     write_configuration,
 )
-from .state import LockHeldError
+from .state import LockHeldError, write_search_log
+from .views import context_short, show_result
 
 CONFIG_NAME = "modelroom.toml"
 # How this machine is measured, as `_clone_mode` answers it: the takeover rule as it stands, a new
@@ -120,6 +136,9 @@ class GuidedRun:
     catalog: Catalog
     daemon: Daemon = field(default_factory=LocalDaemon)
     out: Callable[[str], None] = print
+    # Every line with a pattern goes through the screen (`modelroom/screen.py`); `out` stays for the
+    # fault sentences and for the blocks of the result view, which bring their own layout.
+    screen: Screen = field(default_factory=lambda: Screen(print))
     budget: RequestBudget = field(default_factory=lambda: RequestBudget(DEFAULT_GUIDED_BUDGET))
     # Every step that could not do what it was asked, in the words the user already read. The run
     # goes on with what is there -- a failed measurement must not cost the ranking of the other
@@ -137,12 +156,12 @@ class GuidedRun:
 
 def _configuration_step(run: GuidedRun, config_arg: Path | None) -> tuple[Path, Configuration]:
     """Step 1: the results folder, the configuration in it, and the machines the result covers."""
-    run.out("")
-    run.out(step_head(1))
+    run.screen.blank()
+    run.screen.head(1)
     config_file = _config_file(run, config_arg)
     config = _configuration(run, config_file)
     config = _machines_step(run, config_file, config)
-    run.out(done_line(1, f"{config_file}, {len(config.machines)} machine(s)"))
+    run.screen.done(1, f"{config_file.parent}, {machines_summary(len(config.machines))}")
     return config_file, config
 
 
@@ -167,13 +186,15 @@ def _ask_config_file(run: GuidedRun) -> Path:
     choice = run.asker.select(
         "results",
         QUESTIONS["results"],
-        [Choice("here", f"this folder ({run.here})"), Choice("path", "another path")],
+        [Choice("here", f"{THIS_FOLDER} ({run.here})"), Choice("path", "another path")],
     )
     if choice == "here":
         folder = run.here
+        run.screen.answer(QUESTIONS["results"], THIS_FOLDER)
     else:
         answered = Path(run.asker.text("results_path", QUESTIONS["results_path"]).strip()).expanduser()
         folder = answered if answered.is_absolute() else run.here / answered
+        run.screen.answer(QUESTIONS["results"], str(folder.resolve()), path=True)
     return folder.resolve() / CONFIG_NAME
 
 
@@ -182,14 +203,16 @@ def _config_file(run: GuidedRun, config_arg: Path | None) -> Path:
     if config_arg is not None:
         if config_arg.is_file():
             return config_arg.resolve()
-        run.out(f"{config_arg}: there is no configuration at this path")
+        run.screen.note(f"{config_arg}: there is no configuration at this path")
         return _ask_config_file(run)
     pointer = read_pointer(run.pointer_path)
     if pointer.current is not None:
         candidate = Path(pointer.current) / CONFIG_NAME
         if candidate.is_file():
             return candidate.resolve()
-        run.out(f"{pointer.current}: the results folder of the last run no longer holds a {CONFIG_NAME}")
+        # Without the path in front of it: the answer to the question that follows says which
+        # folder this run works in, and it said the same path twice (test round, 2026-09-24).
+        run.screen.note(f"the results folder of the last run no longer holds a {CONFIG_NAME}")
     return _ask_config_file(run)
 
 
@@ -237,7 +260,6 @@ def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
     )
     _write_config(run, config_file, config)
     _remember_folder(run, folder)
-    run.out(f"wrote {config_file} with {name} as the writer of this results folder")
     return config
 
 
@@ -272,17 +294,19 @@ def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
     if not config_file.is_file():
         if _looks_like_results_folder(config_file.parent):
             question = f"{config_file.parent} already holds results but no {CONFIG_NAME}. {QUESTIONS['write_config']}"
-            if not run.asker.confirm("write_config", question):
+            answered = run.asker.confirm("write_config", question)
+            run.screen.answer(QUESTIONS["write_config"], yes_no(answered))
+            if not answered:
                 raise GuidedError("no configuration to work with; run again and name a folder")
         return _configure_found_profiles(run, config_file, _new_configuration(run, config_file))
     if _stored_schema_version(config_file) == 1:
-        run.out(
-            "This folder holds a configuration from an earlier version; it was updated, "
+        run.screen.note(
+            "this folder holds a configuration from an earlier version; it was updated, "
             f"backup kept: {config_file.name}{BACKUP_SUFFIX}"
         )
         try:
             for line in migrate(config_file, run.now):
-                run.out(line)
+                run.screen.note(line)
         except ConfigError as exc:
             raise GuidedError(str(exc)) from exc
     config = _load(config_file)
@@ -340,7 +364,7 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path, config: Configu
             "profile": profile.profile_id,
         }
         added += 1
-        run.out(f"machine {name!r} added for the profile {profile.profile_id} found in this folder")
+        run.screen.note(f"machine {name!r} added for the profile {profile.profile_id} found in this folder")
     if not added:
         return config
     updated = Configuration.from_dict(data)
@@ -431,7 +455,6 @@ def _ensure_this_machine(run: GuidedRun, config_file: Path, config: Configuratio
     data["machines"][name] = entry
     updated = Configuration.from_dict(data)
     _write_config(run, config_file, updated)
-    run.out(f"{name} is now a writer of this results folder")
     return updated
 
 
@@ -467,11 +490,13 @@ def _clone_mode(run: GuidedRun, config: Configuration, name: str, scan: ProfileS
         return MODE_NORMAL
     question = f"{target.reason} ({target.profile_id}). {QUESTIONS['clone']}"
     answer = run.asker.select("clone", question, [Choice("same", "the same machine"), Choice("clone", "a clone")])
+    # The short form in the answer line: the profile id belongs to the question, not to the answer.
+    run.screen.answer(CLONE_QUESTION, clone_words(answer))
     return MODE_NEW_IDENTITY if answer == "clone" else MODE_SAME_MACHINE
 
 
 def _measure_this_machine(
-    run: GuidedRun, config_file: Path, config: Configuration, scan: ProfileScan
+    run: GuidedRun, config_file: Path, config: Configuration, scan: ProfileScan, measured_before: bool
 ) -> Configuration:
     """Measure this machine, then write `[machines.<name>].profile` -- the one write A leaves to C."""
     from .cli import hardware_with_config  # imported here: the CLI imports this module in turn
@@ -489,13 +514,24 @@ def _measure_this_machine(
         new_identity=mode == MODE_NEW_IDENTITY,
         same_machine=mode == MODE_SAME_MACHINE,
         results_dir=results_dir,
+        # The readings are the profile file's business; this step says in one note what was measured.
+        summary=False,
     )
     if code != 0:
         run.failed(
             f"the measurement ended with exit {code}; the ranking uses the profiles the folder already holds"
         )
         return config
-    return _record_profile(run, config_file, config, name, results_dir)
+    config = _record_profile(run, config_file, config, name, results_dir)
+    _measured(run, config, results_dir, again=measured_before or mode == MODE_SAME_MACHINE)
+    return config
+
+
+def _measured(run: GuidedRun, config: Configuration, results_dir: Path, *, again: bool) -> None:
+    """The one note a measurement leaves behind: what this machine is, and who confirmed it."""
+    profile = _bound_profile(run, scan_profiles(config.paths.hardware_dir), results_dir)
+    if profile is not None:
+        run.screen.note(measured_note(profile, again=again))
 
 
 def _record_profile(
@@ -525,7 +561,6 @@ def _record_profile(
     data["machines"][name]["profile"] = profile_id
     updated = Configuration.from_dict(data)
     _write_config(run, config_file, updated)
-    run.out(f"{name} is measured as profile {profile_id}")
     return updated
 
 
@@ -533,9 +568,10 @@ def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) 
     """`modelroom import-profile` from inside the guided mode; the binding is never changed."""
     answered = Path(run.asker.text("import_file", QUESTIONS["import_file"]).strip()).expanduser()
     path = answered if answered.is_absolute() else run.here / answered
+    run.screen.answer(QUESTIONS["import_file"], str(path), path=True)
+    before = set(scan_profiles(config.paths.hardware_dir).profiles)
     try:
-        for line in import_profile(config_file, path, run.now):
-            run.out(line)
+        report = import_profile(config_file, path, run.now)
     except (
         SchemaVersionError,
         StoredFileError,
@@ -552,15 +588,20 @@ def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) 
     except OSError as exc:
         run.failed(f"nothing imported: {path}: {exc}")
         return config
-    return _load(config_file)
+    updated = _load(config_file)
+    found = sorted(scan_profiles(updated.paths.hardware_dir).profiles.items())
+    for note in import_notes([profile for key, profile in found if key not in before], report):
+        run.screen.note(note)
+    return updated
 
 
 def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
     scan = scan_profiles(config.paths.hardware_dir)
     bound = _bound_profile(run, scan, config_file.parent)
     picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound))
+    run.screen.answer(QUESTIONS["machines"], machines_words(picked))
     if "this-machine" in picked:
-        config = _measure_this_machine(run, config_file, config, scan)
+        config = _measure_this_machine(run, config_file, config, scan, bound is not None)
     if "import" in picked:
         config = _import_a_profile(run, config_file, config)
     return config
@@ -575,56 +616,59 @@ def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> Hard
 # --- step 2: search, choose, fetch ---------------------------------------------------------------
 
 
-def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
+def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, int]:
     """Search, then the list of **models** (`modelroom/guided_models.py`), then the choice.
 
     One line per model with the fit its size allows, and only the ones that can be picked: a
     hand test of 2026-09-24 showed 120 repository lines nobody could choose from. The
     repositories behind a chosen model are `guided_models.chosen_hits`', and they go through the
-    unchanged `apply_hits`.
+    unchanged `apply_hits`. Returns the configuration and how many models were chosen.
+
+    Two notes stay on the screen: where the search asked, and how much of what it answered is a
+    choice. Which account answered what, the request count, the budget and the reasons go into
+    `search.json` (CONTRACTS.md, "Search log"), from the same reading.
     """
     name = run.asker.text("search", QUESTIONS["search"]).strip()
     if not name:
         raise GuidedError("no model name to search for")
+    run.screen.answer(QUESTIONS["search"], name)
     filtered = run.asker.confirm("filter_owners", QUESTIONS["filter_owners"], default=True)
-    listed_packagers = config.packagers or DEFAULT_PACKAGERS
+    run.screen.answer(QUESTIONS["filter_owners"], yes_no(filtered))
     try:
+        # The owner filter is a question about the request, not only about the list: with it on,
+        # only the accounts are asked; switching it off adds the two open lists (2026-09-24).
         outcome = run_search(
             run.transport,
             name,
             catalog=run.catalog,
-            listed_packagers=listed_packagers,
+            listed_packagers=config.packagers or DEFAULT_PACKAGERS,
             budget=run.budget,
-            # The owner filter is a question about the request, not only about the list: with it
-            # on, only the accounts are asked; switching it off adds the two open lists on top
-            # (decided 2026-09-24).
             open_pages=not filtered,
         )
     except SearchError as exc:
         raise GuidedError(str(exc)) from exc
-    for line in outcome.group_lines():
-        run.out(line)
-    run.out(outcome.summary_line())
     context = list_context(config.guided.context)
     checked = machine_checked(run.pointer_path, config, config_file.parent)
     models = model_choices(outcome.hits, filtered=filtered, checked=checked, context=context)
-    run.out(count_line(models, outcome.hits, filtered))
-    for line in unusable_reasons(outcome.hits, filtered):
-        run.out(line)
+    log = outcome.search_log(filtered=filtered, run_at=run.now, unresolved=unusable_counts(outcome.hits, filtered))
+    try:
+        write_search_log(config, log)
+    except OSError as exc:
+        # The search itself went through; its log is a record beside the run. A folder that cannot
+        # hold it is said out loud and the run goes on with the choice it has to offer.
+        run.failed(f"the log of this search was not written: {exc}")
+    for note in search_notes(log, len(outcome.hits), len(models), run.screen.glyphs.dot):
+        run.screen.note(note)
     if not models:
         # A list with nothing in it is not a question: the dialog cannot show one, and there is
         # nothing an answer could add (test round of 2026-09-24, `mistral` with the filter on).
-        run.out("no repository of a publisher or a listed packager was resolved; nothing added")
-        return config
-    fit_at = fit_line(context, checked)
-    if fit_at is not None:
-        run.out(fit_at)
-    run.out(hint_line(checked))
-    picked = ask_models(run.asker, QUESTIONS["select"], models)
-    chosen = chosen_hits(models, picked, listed_packagers)
+        run.screen.note("no repository of a publisher or a listed packager was resolved; nothing added")
+        return config, 0
+    picked = ask_models(run.asker, QUESTIONS["select"], models, hint_line(checked, context))
+    run.screen.answer(QUESTIONS["select"], names_words(picked_names(models, picked)))
+    chosen = chosen_hits(models, picked, config.packagers or DEFAULT_PACKAGERS)
     if not chosen:
-        run.out("nothing chosen; the configuration stays as it is")
-        return config
+        return config, 0
     # Read again here, after the last question of this step and immediately before the change is
     # applied and written: the search and the selection list both took time (see `_record_profile`).
     config = _load(config_file)
@@ -633,25 +677,23 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> Co
     except ConfigError as exc:
         raise GuidedError(str(exc)) from exc
     _write_config(run, config_file, updated)
-    run.out(f"added {len(chosen)} repository target(s) to {config_file}")
-    return updated
+    # Base models, not answers: an answer file may name two repositories of one model, and the
+    # configuration and the card then hold one (second-model round, 2026-09-24).
+    return updated, len({str(hit.resolved_base_model) for hit in chosen})
 
 
-def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, str]:
+def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, str, bool]:
     """Step 2: search, choose, and fetch -- so that step 3 can count what really is in the folder."""
-    run.out("")
-    run.out(step_head(2))
-    before = _repository_count(config)
-    config = _search_step(run, config_file, config)
-    added = _repository_count(config) - before
+    run.screen.blank()
+    run.screen.head(2)
+    config, chosen = _search_step(run, config_file, config)
     _fetch_step(run, config)
-    fetched, _base_models = snapshot_packages(config)
-    return config, f"{added} repositories added, {len(fetched)} packages fetched"
-
-
-def _repository_count(config: Configuration) -> int:
-    """How many packaging repositories the configuration names, over every base model."""
-    return sum(len(base_model.repos) for family in config.families for base_model in family.base_models)
+    if not chosen:
+        return config, NOTHING_CHOSEN_SUMMARY, False
+    # All three numbers about one thing -- the snapshot this folder now holds. `apply_hits` keeps
+    # what was there, so a balance may not mix the two frames (second-model round, 2026-09-24).
+    facts = snapshot_facts(config)
+    return config, packages_summary(len(facts.model_names), facts.packages, facts.repositories), True
 
 
 def context_default(config: Configuration) -> int:
@@ -663,17 +705,6 @@ def context_default(config: Configuration) -> int:
     return DEFAULT_CONTEXT if config.guided.context is None else config.guided.context
 
 
-def context_label(context: int) -> str:
-    """How a chosen context is named in a line that looks back at it: `L 32k`, or the number.
-
-    One definition for the dialog and for the result view, which says the same thing in its own
-    first line (`views.context_short`).
-    """
-    from .views import context_short  # imported here: the view reads the scale, not the reverse
-
-    return context_short(context)
-
-
 # --- the fetch of step 2, and step 5: the render --------------------------------------------------
 
 
@@ -681,7 +712,7 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
     from .cli import fetch_with_config
 
     if not config.families:
-        run.out("no base model is configured yet, so there is nothing to fetch")
+        run.screen.note("no base model is configured yet, so there is nothing to fetch")
         return
     name = _machine_key(run.probes.hostname())
     code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget)
@@ -689,13 +720,28 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
 
 
-def _render_step(run: GuidedRun, config: Configuration, scenario: Scenario) -> int:
+def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scenario: Scenario) -> int:
+    """Step 5: render, then the card of the whole run and one table per machine under it.
+
+    The card is the report a reader looks at once the run is over -- the same `label value note`
+    rows the start screen has, with what this run made of them (decided 2026-09-24). The document
+    it is built from is the one the render just wrote, so no number here is computed twice.
+    """
     from .cli import render_with_config
 
-    run.out("")
-    code = render_with_config(config, now=run.now, scenario=scenario, echo=run.out)
-    if code == 0:
-        run.out(f"Written to {config.paths.markdown}   and   {config.paths.state}")
+    run.screen.blank()
+    run.screen.head(STEP_COUNT)
+    written: list = []
+
+    def seen(document) -> None:
+        # Inside the callback, which runs while the render still holds the lock: the card and the
+        # table then rest on one snapshot (second-model round, 2026-09-24).
+        written.append((document, snapshot_facts(config)))
+
+    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen)
+    if written:
+        here = _machine_key(run.probes.hostname())
+        show_result(run.screen, run.out, *written[0], config, config_file.parent, run.now, here)
     return code
 
 
@@ -732,17 +778,19 @@ def run_guided(
         catalog=catalog if catalog is not None else load_catalog(),
         daemon=daemon if daemon is not None else LocalDaemon(),
         out=out,
+        screen=Screen(out, colored=colored),
     )
     intro = collect_intro(run.daemon, run.probes, run.pointer_path, _known_config(run, config_arg))
     print_intro(intro, run.out, colored=colored)
     config_file, config = _configuration_step(run, config_arg)
-    config, packages = _packages_step(run, config_file, config)
-    run.out(done_line(2, packages))
+    config, packages, chose = _packages_step(run, config_file, config)
+    run.screen.summary(2, packages, chose)
     scenario, config = context_step(run, config_file, config)
-    run.out(done_line(3, f"context {context_label(scenario.context_requested)}"))
+    # `views.context_short` names a context the way the scale of step 3 does: `L 32k`, or the number.
+    run.screen.done(3, context_short(scenario.context_requested))
     measured = load_test_step(run, config, scenario, config_file.parent)
-    run.out(done_line(4, measured))
-    code = _render_step(run, config, scenario)
+    run.screen.summary(4, measured, measured != NOTHING_MEASURED)
+    code = _render_step(run, config_file, config, scenario)
     if code == 0 and run.problems:
         # The document was written, but a step before it did not do what it was asked. Exit `1`
         # is the documented "a step reported it": an automated caller must not read this run as

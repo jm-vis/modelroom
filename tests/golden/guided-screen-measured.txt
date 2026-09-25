@@ -1,0 +1,67 @@
+ ██ ██ ▓▓ ██   ModelRoom
+ ██ ██ ██ ░░   Which local model packages fit your machine.
+ ▓▓ ██ ░░ ░░   modelroom 0.1.0 · github.com/jm-vis/modelroom
+
+ folder    not chosen yet          the first question asks where results live
+ daemon    Ollama 0.34.2           reachable, 5 models installed
+ machine   workstation             not measured in this results folder yet
+
+ Five steps: configuration, packages, context, measurement, results.
+ Files are written as the run goes on. Esc leaves a list, Ctrl-C leaves at any point.
+
+ ── Step 1 of 5  Configuration ──────────────────────────────────────────
+ ? Where should results live?  this folder
+ ? Which machines should the result cover?  this machine
+   measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
+ ✓ Configuration   <results>, 1 machine
+
+ ── Step 2 of 5  Packages ───────────────────────────────────────────────
+ ? What are you looking for?  qwen
+ ? Show only repositories of a publisher or a listed packager?  Yes
+   searched Hugging Face at the publisher Qwen and the five listed packagers
+   4 repositories, 2 of them models you can pick from
+ ? Which of these models should the result cover?  Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B
+ ✓ Packages        2 models, 25 packages from 3 repositories
+
+ ── Step 3 of 5  Context ────────────────────────────────────────────────
+ ? How much text should a model handle at once?  S  8k  6,000 words  a long conversation
+ ✓ Context         S 8k
+
+ ── Step 4 of 5  Measurement ────────────────────────────────────────────
+ ? Measure the speed of the checked models that are already installed here?  Yes
+ ? Which of these installed models should be measured?  hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
+   the load on this machine is read once, just before the runs -- load during a run is not measurable -- and the model behind the name must not change while the runs are made
+   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: warm-up run
+   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 1 of 3
+   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 2 of 3
+   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 3 of 3
+   measured hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: <speed>, context 8k
+ ✓ Measurement     1 of 1 measured
+
+ ── Step 5 of 5  Results ────────────────────────────────────────────────
+
+ folder    <results>
+ machine   workstation             12 GB graphics, 128 GB memory, measured today
+ models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  25 packages from unsloth and Ollama
+ context   S 8k                    6,000 words, a long conversation
+ speed     1 measured              fastest DeepSeek-R1-0528-Qwen3-8B at <speed>
+ result    docs\models.md          25 packages ranked, none too tight
+
+ workstation · context S 8k
+ #    Model                     Package                 Fit                   Speed         Memory
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+ 1    DeepSeek-R1-0528-Qwen3-8  unsloth · Q4_K_M        good                  <speed>    6.8 GB
+ 2    Qwen3.5-9B                unsloth · UD-IQ2_XXS    good                  –             4.9 GB
+ 3    Qwen3.5-9B                unsloth · UD-IQ2_M      good                  –             5.4 GB
+ 4    Qwen3.5-9B                unsloth · UD-Q2_K_XL    good                  –             5.8 GB
+ 5    Qwen3.5-9B                unsloth · UD-IQ3_XXS    good                  –             5.7 GB
+ 6    Qwen3.5-9B                unsloth · Q3_K_S        good                  –             6.0 GB
+ 7    Qwen3.5-9B                unsloth · Q3_K_M        good                  –             6.4 GB
+ 8    Qwen3.5-9B                unsloth · UD-Q3_K_XL    good                  –             6.8 GB
+ 9    Qwen3.5-9B                unsloth · IQ4_XS        good                  –             6.9 GB
+ 10   Qwen3.5-9B                unsloth · IQ4_NL        good                  –             7.1 GB
+ showing 10 of 25
+ #1–10 fit into graphics memory (11.0 GB free after the reserve)
+ (from size): #2–10 computed from the package size, not its architecture
+ to install #1: ollama pull hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
+ ✓ Results         docs\models.md

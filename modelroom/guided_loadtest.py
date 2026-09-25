@@ -17,7 +17,6 @@ from .config import Configuration
 from .contracts import Package, SchemaVersionError
 from .dialog import AnswerMissingError, Choice, columns
 from .importer import scan_profiles
-from .intro import step_head
 from .loadtest import (
     CLOUD_REASON,
     Candidate,
@@ -32,6 +31,7 @@ from .loadtest import (
 from .measure import read_os_identity
 from .measurements import MeasurementExistsError, MeasurementRecord, Scenario
 from .profile import os_fingerprint
+from .screen import context_tokens_text, names_words, yes_no
 from .state import LockHeldError, UnreadableStateFileError, read_snapshot
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -40,13 +40,12 @@ if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never const
 _GIB = 1024**3
 _UNKNOWN = "unknown"
 _CANDIDATE_WIDTHS = (46, 40, 10)
-# How many of the models behind one reason are named before the rest is a number (as in `views`).
-_NAMED_PER_REASON = 3
 STEP = 4
-# The summary of a step that measured nothing. Deliberately not the wording of the fault
-# lines above ("nothing measured: <reason>"): a reader of the log must be able to tell the
-# step's own summary from a measurement that was asked for and did not happen.
-NOTHING_MEASURED = "no measurement in this run"
+# The summary of a step that measured nothing -- and then the step's balance carries a dash, not a
+# check mark: it did nothing, which is not the same as being done. Deliberately not the wording of
+# the fault lines above ("nothing measured: <reason>"): a reader of the log must be able to tell
+# the step's own summary from a measurement that was asked for and did not happen.
+NOTHING_MEASURED = "none in this run"
 
 QUESTIONS: dict[str, str] = {
     "load_test": "Measure the speed of the checked models that are already installed here?",
@@ -76,7 +75,7 @@ def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path
     """
     bound = read_pointer(run.pointer_path).binding_for(results_dir)
     if bound is None:
-        run.out("no load test: this machine is not bound to a profile in this results folder")
+        run.screen.note("no load test: this machine is not bound to a profile in this results folder")
         return None
     scan = scan_profiles(config.paths.hardware_dir)
     known = {key: KnownProfile(key, profile.os_fingerprint) for key, profile in scan.profiles.items()}
@@ -87,7 +86,7 @@ def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path
     unused = next(candidate for candidate in ("0" * 16, "1" * 16, "2" * 16) if candidate not in known)
     target = resolve_profile_target(bound, None, known, local, unused)
     if target.action != "bound":
-        run.out(f"no load test: {target.reason} ({target.profile_id})")
+        run.screen.note(f"no load test: {target.reason} ({target.profile_id})")
         return None
     return bound
 
@@ -102,10 +101,10 @@ def _snapshot_packages(run: "GuidedRun", config: Configuration) -> list[Package]
     try:
         snapshot = read_snapshot(config)
     except (SchemaVersionError, UnreadableStateFileError) as exc:
-        run.out(f"no load test: {exc}")
+        run.screen.note(f"no load test: {exc}")
         return None
     if snapshot is None:
-        run.out("no load test: nothing has been fetched into this folder yet")
+        run.screen.note("no load test: nothing has been fetched into this folder yet")
         return None
     return snapshot.packages
 
@@ -136,33 +135,48 @@ def _candidate_choices(candidates: list[Candidate]) -> list[Choice]:
     ]
 
 
-def _report_set_aside(run: "GuidedRun", inventory: Inventory) -> None:
-    """Say which installed models were left out, and why: one line per reason, never in silence.
+def _report_set_aside(run: "GuidedRun", inventory: Inventory, *, cloud: bool) -> None:
+    """Say which installed models were left out, and why: one note per reason, never in silence.
 
-    One line per model said the same reason a dozen times over and pushed the list of what can
-    be measured off the screen. The reason is what a reader can act on, so the reason is the
-    line; up to three names stand behind it as its evidence, the rest as a number.
+    One note per reason with the number of installed models it covers and **no names** (decided
+    2026-09-24): which model exactly is `ollama list`'s answer, and twelve names pushed the question
+    off the screen. `cloud` is off once there is a candidate to measure -- that a machine also holds
+    cloud models is then beside the point. An `unmatched` entry is not: it means the daemon did not
+    show the digest of a model whose name matches a configured package, which is a fault about a
+    package a reader may have wanted measured, and it stays either way (second-model round,
+    2026-09-24).
     """
-    grouped: dict[str, list[str]] = {}
+    grouped: dict[str, int] = {}
     for entry in inventory.unmatched:
-        grouped.setdefault(entry.reason, []).append(entry.name)
-    for name in inventory.cloud:
-        grouped.setdefault(CLOUD_REASON, []).append(name)
-    for reason, names in sorted(grouped.items()):
-        rest = len(names) - _NAMED_PER_REASON
-        listed = ", ".join(names[:_NAMED_PER_REASON]) + (f" and {rest} more" if rest > 0 else "")
-        count = f"{len(names)} installed model" + ("" if len(names) == 1 else "s")
-        run.out(f"not measured: {count} -- {reason} ({listed})")
+        grouped[entry.reason] = grouped.get(entry.reason, 0) + 1
+    if cloud and inventory.cloud:
+        grouped[CLOUD_REASON] = len(inventory.cloud)
+    for reason, count in sorted(grouped.items()):
+        models = f"{count} installed model" + ("" if count == 1 else "s")
+        run.screen.note(f"{models} -- {reason}")
 
 
-def _measurement_line(record: MeasurementRecord) -> str:
-    """The one line the user reads about a measurement that was just written."""
-    context = f"context {record.scenario.context_requested}"
-    comparable = "comparable" if record.comparable else f"not comparable ({record.comparable_reason})"
+def _measurement_note(record: MeasurementRecord, dash: str) -> str:
+    """The one note the user reads about a measurement that was just written.
+
+    The short form of it: the speed, its range and the context. That the record is valid and
+    comparable is what makes it a measurement at all, so it is not said -- a record that is
+    neither is a fault line instead (`_record_problem`).
+    """
+    context = f"context {context_tokens_text(record.scenario.context_requested)}"
+    speed = f"{record.tps_mean:.1f} tok/s ({record.tps_min:.1f}{dash}{record.tps_max:.1f})"
+    return f"measured {record.ollama_name}: {speed}, {context}"
+
+
+def _record_problem(record: MeasurementRecord) -> str | None:
+    """Why this measurement cannot be read as one, or `None` when it can."""
     if record.tps_mean is None:
-        return f"{record.ollama_name}: no speed, {context}, {record.validity} ({record.validity_reason})"
-    speed = f"measured {record.tps_mean:.1f} tok/s ({record.tps_min:.1f}-{record.tps_max:.1f})"
-    return f"{record.ollama_name}: {speed}, {context}, {record.validity}, {comparable}"
+        return f"no speed, {record.validity} ({record.validity_reason})"
+    if record.validity != "valid":
+        return f"{record.validity} ({record.validity_reason})"
+    if not record.comparable:
+        return f"not comparable ({record.comparable_reason})"
+    return None
 
 
 def _wants_load_test(run: "GuidedRun") -> bool:
@@ -188,8 +202,10 @@ def _no_daemon(run: "GuidedRun", reason: str) -> None:
     that cannot be honored is a step that did not finish (exit `1`).
     """
     if not _wants_load_test(run):
-        run.out(f"no load test: {reason}")
+        run.screen.answer(QUESTIONS["load_test"], yes_no(False))
+        run.screen.note(f"no load test: {reason}")
         return
+    run.screen.answer(QUESTIONS["load_test"], yes_no(True))
     run.failed(f"nothing measured: {reason}")
 
 
@@ -205,7 +221,9 @@ def _measure_candidate(
             profile_id,
             probes=run.probes,
             measured_at=run.now,
-            progress=run.out,
+            # The progress of a run that takes minutes belongs on the screen, in the same column
+            # the notes of this step stand in (decided 2026-09-24).
+            progress=run.screen.note,
         )
     except LoadTestError as exc:
         run.failed(f"nothing measured for {candidate.ollama_name}: {exc}")
@@ -215,7 +233,14 @@ def _measure_candidate(
     except (LockHeldError, MeasurementExistsError, OSError) as exc:
         run.failed(f"the measurement of {candidate.ollama_name} was not stored: {exc}")
         return False
-    run.out(_measurement_line(record))
+    problem = _record_problem(record)
+    if problem is not None:
+        # The record is written and the run stays `0`: a measurement that does not count in
+        # measured group 0 is still a measurement of this machine, and the ranking says where it
+        # stands ("Load test (stage 1)"). What it is missing is said here, once.
+        run.screen.note(f"{record.ollama_name}: {problem}")
+        return True
+    run.screen.note(_measurement_note(record, run.screen.glyphs.skip))
     return True
 
 
@@ -229,8 +254,8 @@ def load_test_step(run: "GuidedRun", config: Configuration, scenario: Scenario, 
     (`run.failed`, exit `1`), and the document is still written (CONTRACTS.md, "Load test
     (stage 1)").
     """
-    run.out("")
-    run.out(step_head(STEP))
+    run.screen.blank()
+    run.screen.head(STEP)
     profile_id = _bound_profile_id(run, config, results_dir)
     if profile_id is None:
         return NOTHING_MEASURED
@@ -242,11 +267,13 @@ def load_test_step(run: "GuidedRun", config: Configuration, scenario: Scenario, 
         _no_daemon(run, reason)
         return NOTHING_MEASURED
     inventory = installed_candidates(packages, installed, lambda name: weight_digest(run.daemon, name))
-    _report_set_aside(run, inventory)
+    _report_set_aside(run, inventory, cloud=not inventory.candidates)
     if not inventory.candidates:
-        run.out(NO_CANDIDATE_LINE)
+        run.screen.note(NO_CANDIDATE_LINE)
         return NOTHING_MEASURED
-    if not _wants_load_test(run):
+    wants = _wants_load_test(run)
+    run.screen.answer(QUESTIONS["load_test"], yes_no(wants))
+    if not wants:
         return NOTHING_MEASURED
     return _measure_picked(run, config, inventory, scenario, profile_id)
 
@@ -257,10 +284,10 @@ def _measure_picked(
     """Ask which of the candidates to measure, measure them, and say how many were measured."""
     choices = _candidate_choices(inventory.candidates)
     picked = run.asker.checkbox("load_test_packages", QUESTIONS["load_test_packages"], choices)
+    run.screen.answer(QUESTIONS["load_test_packages"], names_words(picked, "nothing"))
     if not picked:
-        run.out("nothing measured: no installed model was picked")
         return NOTHING_MEASURED
-    run.out(LOAD_NOTE_LINE)
+    run.screen.note(LOAD_NOTE_LINE)
     measured = 0
     for candidate in inventory.candidates:
         if candidate.ollama_name in picked:

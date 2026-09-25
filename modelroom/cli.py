@@ -377,6 +377,7 @@ def hardware_with_config(
     # (second-model round, 2026-09-24).
     *,
     same_machine: bool = False,
+    summary: bool = True,
 ) -> int:
     """Run `hardware` against an already-loaded `Configuration` -- the programmatic entry point.
 
@@ -390,6 +391,9 @@ def hardware_with_config(
 
     `new_identity` and `same_machine` are the two answers to the takeover rule's own question and
     are mutually exclusive: refused here with exit `2`, before anything is measured or written.
+    `summary` prints the one line with the readings of the profile; the guided mode passes `False`
+    and says in its own note what was measured (`modelroom render --config` and `modelroom
+    hardware` are unchanged).
     """
     if new_identity and same_machine:
         print(
@@ -424,7 +428,7 @@ def hardware_with_config(
     try:
         return _hardware_locked(
             config, machine, active, measured, reference, recorded_at, pointer_file, new_identity,
-            _binding_key(config, results_dir), same_machine,
+            _binding_key(config, results_dir), same_machine, summary,
         )
     finally:
         release_lock(handle)
@@ -441,6 +445,7 @@ def _hardware_locked(
     new_identity: bool,
     binding_key: Path,
     same_machine: bool = False,
+    summary: bool = True,
 ) -> int:
     """Pick this machine's profile, write it and bind it -- everything the lock has to cover.
 
@@ -503,7 +508,7 @@ def _hardware_locked(
         print(f"{profile_file}: the profile could not be written ({exc})", file=sys.stderr)
         return 1
     bound = _bind_this_machine(pointer_file, binding_key, profile.profile_id)
-    _print_hardware_summary(profile, measured, reference)
+    _print_hardware_summary(profile, measured, reference, summary)
     return 0 if bound else 1
 
 
@@ -602,15 +607,23 @@ def _fresh_profile_id(probes: Probes, taken: set[str]) -> str:
     raise ValueError(f"no unused profile_id after {_FRESH_ID_ATTEMPTS} attempts; the id source repeats itself")
 
 
-def _print_hardware_summary(profile: HardwareProfile, measured: MeasuredHardware, reference: LlmfitReference) -> None:
-    """One summary line, then every note the user has to read -- facts only, no advice."""
+def _print_hardware_summary(
+    profile: HardwareProfile, measured: MeasuredHardware, reference: LlmfitReference, summary: bool = True
+) -> None:
+    """One summary line, then every note the user has to read -- facts only, no advice.
+
+    `summary` is `False` for the guided mode, which says in a note of its own what was measured and
+    who confirmed it; the readings themselves are in the profile file (decided 2026-09-24). The
+    notes are printed either way -- they are what a reader has to act on.
+    """
     checks = profile.llmfit_crosscheck
-    print(
-        f"{profile.display_name} ({profile.profile_id}): "
-        f"ram {_gib(profile.ram_physical_gib)} ({profile.ram_physical_source}), "
-        f"vram {_gib(profile.vram_gib)} ({profile.vram_source}), gpu {profile.gpu_state}, "
-        f"llmfit ram {checks.ram_physical.status} / vram {checks.vram.status}"
-    )
+    if summary:
+        print(
+            f"{profile.display_name} ({profile.profile_id}): "
+            f"ram {_gib(profile.ram_physical_gib)} ({profile.ram_physical_source}), "
+            f"vram {_gib(profile.vram_gib)} ({profile.vram_source}), gpu {profile.gpu_state}, "
+            f"llmfit ram {checks.ram_physical.status} / vram {checks.vram.status}"
+        )
     for note in measured.notes:
         print(f"note: {note}")
     if reference.reason is not None:

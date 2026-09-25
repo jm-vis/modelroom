@@ -63,18 +63,32 @@ class AnswerInvalidError(Exception):
 
 
 class Asker(Protocol):
-    """Five kinds of question. `key` is the answer file's key for the same question."""
+    """Five kinds of question. `key` is the answer file's key for the same question.
+
+    `instruction` is what a list says about itself beyond how to move in it -- what a column
+    means, what nothing marked would do. It stands in the instruction line under the list, which
+    disappears with the question, and not as a line of the run: a sentence that explains a list
+    has nothing to say once the list is gone (decided 2026-09-24).
+    """
 
     def text(self, key: str, question: str, default: str = "") -> str: ...
 
-    def select(self, key: str, question: str, choices: Sequence[Choice]) -> str: ...
+    def select(self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None) -> str: ...
 
-    def checkbox(self, key: str, question: str, choices: Sequence[Choice]) -> list[str]: ...
+    def checkbox(
+        self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None
+    ) -> list[str]: ...
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool: ...
 
     def select_or_text(
-        self, key: str, question: str, choices: Sequence[Choice], text_value: str, text_question: str
+        self,
+        key: str,
+        question: str,
+        choices: Sequence[Choice],
+        text_value: str,
+        text_question: str,
+        instruction: str | None = None,
     ) -> str: ...
 
 
@@ -129,7 +143,7 @@ class TerminalAsker:
     def _style(self):
         import questionary
 
-        return questionary.Style(style_rules() + _QUESTION_RULES)
+        return questionary.Style(style_rules() + QUESTION_RULES)
 
     def _list_question(self, factory, question: str, choices: Sequence[Choice], instruction: str, **extra):
         """One selection list, with the pointer, the style and the instruction line of this dialog.
@@ -139,6 +153,13 @@ class TerminalAsker:
         application the way an end of input does, so `Esc` is the documented exit `2` and not a
         second way out. It is added to lists only -- a text question keeps prompt_toolkit's own
         Esc, which is the prefix of its editing keys.
+
+        The built application erases itself once it is answered (`erase_when_done`), so the
+        question and its list leave the screen and the run writes the one answer line in their
+        place (`screen.answer_line`). Without it the library writes its own idea of the answer --
+        `done (2 selections)`, `[this machine (measure now)]`, the whole marked line of the scale
+        -- under a question that is still on screen, which was the "one thing chained to the next"
+        of the test round of 2026-09-24.
         """
         import questionary
 
@@ -152,23 +173,37 @@ class TerminalAsker:
             **self._streams,
         )
         _bind_escape(built)
+        built.application.erase_when_done = True
         return self._ask(built)
 
     def text(self, key: str, question: str, default: str = "") -> str:
+        """A typed answer. It erases itself too, for the same reason a list does.
+
+        Without `erase_when_done` the library leaves `? What are you looking for? qwen` on screen
+        and the run writes its own line under it -- the same question twice (measured 2026-09-24,
+        second-model round).
+        """
         import questionary
 
-        return self._ask(questionary.text(question, default=default, style=self._style(), **self._streams))
+        built = questionary.text(
+            question, default=default, style=self._style(), erase_when_done=True, **self._streams
+        )
+        return self._ask(built)
 
-    def select(self, key: str, question: str, choices: Sequence[Choice]) -> str:
+    def select(self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None) -> str:
         import questionary
 
         pointer_at = _pointer_at(choices)
-        return self._list_question(questionary.select, question, choices, self.select_instruction(), default=pointer_at)
+        return self._list_question(
+            questionary.select, question, choices, self.select_instruction(instruction), default=pointer_at
+        )
 
-    def checkbox(self, key: str, question: str, choices: Sequence[Choice]) -> list[str]:
+    def checkbox(
+        self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None
+    ) -> list[str]:
         import questionary
 
-        return self._list_question(questionary.checkbox, question, choices, self.checkbox_instruction())
+        return self._list_question(questionary.checkbox, question, choices, self.checkbox_instruction(instruction))
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool:
         """A yes or no question as a list of two entries, the default one under the pointer."""
@@ -176,7 +211,13 @@ class TerminalAsker:
         return self.select(key, question, choices) == YES
 
     def select_or_text(
-        self, key: str, question: str, choices: Sequence[Choice], text_value: str, text_question: str
+        self,
+        key: str,
+        question: str,
+        choices: Sequence[Choice],
+        text_value: str,
+        text_question: str,
+        instruction: str | None = None,
     ) -> str:
         """A selection list with one entry that leads to a text question (the scale's own number).
 
@@ -185,22 +226,28 @@ class TerminalAsker:
         someone types `4096` in front of it -- prompt_toolkit puts the cursor behind a
         default value, never over it.
         """
-        chosen = self.select(key, question, choices)
+        chosen = self.select(key, question, choices, instruction)
         if chosen != text_value:
             return chosen
         return self.text(key, text_question)
 
-    def select_instruction(self) -> str:
-        return f"{self._glyphs.move} move   Enter select   Esc leave"
+    def select_instruction(self, extra: str | None = None) -> str:
+        return self._instruction(f"{self._glyphs.move} move   Enter select   Esc leave", extra)
 
-    def checkbox_instruction(self) -> str:
-        return f"{self._glyphs.move} move   Space marks   Enter confirms   Esc leave"
+    def checkbox_instruction(self, extra: str | None = None) -> str:
+        return self._instruction(f"{self._glyphs.move} move   Space marks   Enter confirms   Esc leave", extra)
+
+    def _instruction(self, keys: str, extra: str | None) -> str:
+        """How to move in this list, and what the list itself has to say, on one line."""
+        return keys if not extra else f"{keys} {self._glyphs.dot} {extra}"
 
 
 # The question's own classes, on top of `intro.style_rules`: questionary names them, this package
 # only says which color each one is. The pointer and the answer are green, the line the keyboard
-# is on is white and bold, a grayed-out entry and the instruction line are gray.
-_QUESTION_RULES = [
+# is on is white and bold, a grayed-out entry and the instruction line are gray. `screen.py` hands
+# the same list to `prompt_toolkit`, so the answer line the run writes is the green the question's
+# own answer was.
+QUESTION_RULES = [
     ("qmark", f"fg:{GREEN} bold"),
     ("question", "bold"),
     ("answer", f"fg:{GREEN} bold"),
@@ -260,14 +307,16 @@ class FileAsker:
             raise AnswerInvalidError(f"the answer for {key!r} is not text: {value!r}")
         return str(value)
 
-    def select(self, key: str, question: str, choices: Sequence[Choice]) -> str:
+    def select(self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None) -> str:
         value = self._answer(key, question)
         allowed = selectable(choices)
         if value not in allowed:
             raise AnswerInvalidError(f"the answer for {key!r} is {value!r}, not one of {allowed}")
         return str(value)
 
-    def checkbox(self, key: str, question: str, choices: Sequence[Choice]) -> list[str]:
+    def checkbox(
+        self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None
+    ) -> list[str]:
         value = self._answer(key, question)
         allowed = selectable(choices)
         if not isinstance(value, list) or any(entry not in allowed for entry in value):
@@ -281,7 +330,13 @@ class FileAsker:
         return value
 
     def select_or_text(
-        self, key: str, question: str, choices: Sequence[Choice], text_value: str, text_question: str
+        self,
+        key: str,
+        question: str,
+        choices: Sequence[Choice],
+        text_value: str,
+        text_question: str,
+        instruction: str | None = None,
     ) -> str:
         """The answer as text, whether it names an entry of the list or is the free text itself.
 

@@ -9,13 +9,30 @@ guided mode prints can never disagree. The JSON view is the document itself
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+from typing import Sequence
 
 from .contracts import Area, Fit, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .guided_context import LEVELS
-from .intro import STEP_COUNT, glyphs, step_head
+from .intro import STEP_COUNT, Fact, glyphs
 from .measurements import Scenario
 from .render import format_header_line
+from .screen import (
+    JOIN_WIDTH,
+    MEASURE_HINT,
+    fit_word,
+    head_line,
+    install_name,
+    install_pull_line,
+    joined,
+    machine_fact,
+    models_fact,
+    plain,
+    ranks_text,
+    result_fact,
+    speed_fact,
+)
 
 _UNKNOWN = "unknown"
 _DASH = "–"
@@ -282,9 +299,22 @@ _TERMINAL_COLUMNS = (
     ("Memory", 8),
 )
 _INDENT = " "
-_FROM_SIZE = " (from size)"
 # How many of the packages behind one reason are named before the rest is a number.
 _NAMED_PER_REASON = 3
+# What a group of ranked packages says about the memory it runs in, plural and singular. The words
+# come from the fields of `Fit` alone -- the pool, the mode and the rank -- and never from parsing
+# the note's own sentence back apart (decided 2026-09-24).
+_POOL_WORDS = {
+    "gpu": ("fit into graphics memory", "fits into graphics memory"),
+    "cpu_gpu": ("need system memory, the graphics card helps", "needs system memory, the graphics card helps"),
+    "cpu": ("need system memory, no graphics card", "needs system memory, no graphics card"),
+}
+_POOL_ORDER = ("gpu", "cpu_gpu", "cpu")
+# "no row shown", not "nothing on this machine": a measured package whose fit class puts it past the
+# tenth row is in no `RankedEntry` of this document at all, so this view cannot see it. Saying more
+# than that would be a claim the document does not carry (second-model round, 2026-09-24).
+_NO_SPEED_YET = "speed: no row shown was measured yet"
+_FROM_SIZE_NOTE = "computed from the package size, not its architecture"
 
 
 def _terminal_row(cells: list[str]) -> str:
@@ -298,41 +328,46 @@ def _terminal_rule() -> str:
     return glyphs().rule * width
 
 
-def _set_aside_lines(heading: str, entries: list[SetAsideEntry]) -> list[str]:
-    """One line per reason, with the number of packages behind it and up to three of their names.
+def _set_aside_pieces(word: str, entries: list[SetAsideEntry]) -> list[str]:
+    """One piece per reason: how many packages it covers, and up to three of their names.
 
     41 lines of `not covered`, one per package, said the same thing 41 times and pushed the
-    ranking itself off the screen (hand test, 2026-09-24). The reason is what a reader can
-    act on, so the reason is the line, and the names are its evidence.
+    ranking itself off the screen (hand test, 2026-09-24); since 2026-09-24 they stand behind the
+    `showing` count as pieces of one line. The reason is named only where the list has more than
+    one -- with a single reason the word (`too tight`, `not covered`) already says it, and the
+    reason itself is in the Markdown file, which has room for it.
     """
     grouped: dict[str, list[str]] = {}
     for entry in entries:
         grouped.setdefault(entry.reason, []).append(f"{entry.packager} {entry.quantization}")
-    lines = []
+    pieces = []
     for reason, names in sorted(grouped.items()):
-        shown = ", ".join(names[:_NAMED_PER_REASON])
-        rest = len(names) - _NAMED_PER_REASON
-        listed = f"{shown} and {rest} more" if rest > 0 else shown
         count = f"{len(names)} package" + ("" if len(names) == 1 else "s")
-        lines.append(f"{_INDENT}{heading}: {count} -- {reason} ({listed})")
-    return lines
+        label = f"{word}, {reason}" if len(grouped) > 1 else word
+        pieces.append(f"{count} {label}{_named(names, JOIN_WIDTH - len(_INDENT) - len(count) - len(label) - 1)}")
+    return pieces
+
+
+def _named(names: list[str], room: int) -> str:
+    """Up to three of `names` in brackets, and fewer where the room is not there.
+
+    The names are the evidence behind a count, so they are what gives way: three packages of an
+    account with a long name made a piece of 137 characters, and `joined` leaves an over-long piece
+    whole (measured in the second-model round of 2026-09-24). The count and the reason never give
+    way, and nothing is cut mid-name -- a name ends where the next one would have begun.
+    """
+    for shown in range(min(_NAMED_PER_REASON, len(names)), 0, -1):
+        rest = len(names) - shown
+        listed = ", ".join(names[:shown]) + (f" and {rest} more" if rest > 0 else "")
+        if len(listed) + 2 <= room:
+            return f" ({listed})"
+    return ""
 
 
 def context_short(context: int) -> str:
     """A context as the scale of the dialog names it: `L 32k`, or the number for a custom one."""
     level = next((level for level in LEVELS if level.tokens == context), None)
     return f"{level.name} {level.shown_tokens}" if level is not None else f"{context} tokens"
-
-
-def scenario_short(scenario: Scenario) -> str:
-    """The scenario in one short line, for a terminal: `context L 32k · 1 request · KV cache f16`."""
-    assumed = " (assumed)" if scenario.kv_type_assumed else ""
-    requests = "request" if scenario.requests == 1 else "requests"
-    dot = glyphs().dot
-    return (
-        f"context {context_short(scenario.context_requested)} {dot} "
-        f"{scenario.requests} {requests} {dot} KV cache {scenario.kv_type}{assumed}"
-    )
 
 
 def _model_name(entry: RankedEntry) -> str:
@@ -347,18 +382,79 @@ def _package_cell(entry: RankedEntry) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
-def _terminal_fit(fit: Fit) -> str:
-    """The fit in the terminal table: the class, and on the size basis that it is from the size."""
-    return f"{fit.fit_class}{_FROM_SIZE if fit.basis == 'size' else ''}"
+def _terminal_speed(entry: RankedEntry, dash: str) -> str:
+    """The speed of a row: the number where one was measured, a dash where none was.
+
+    A dash and not `unknown`: `unknown` in every row of the table said nothing twelve times over
+    (test round, 2026-09-24), and the line under the table says once that nothing was measured
+    here yet.
+    """
+    return dash if entry.speed_tps is None else f"{entry.speed_tps:.1f} tok/s"
 
 
-def _terminal_speed(entry: RankedEntry) -> str:
-    return _UNKNOWN if entry.speed_tps is None else f"{entry.speed_tps:.1f} tok/s"
+def _block_head(block: MachineRanking, scenario: Scenario, dot: str) -> str:
+    """The line above one machine's table: what the machine is called, and what was computed for it."""
+    if block.status == "ranked":
+        return f"{block.label} {dot} context {context_short(scenario.context_requested)}"
+    return f"{block.label} {dot} {block.status}"
 
 
-def _terminal_ranking(block: MachineRanking) -> list[str]:
-    head = f"Ranking: {block.machine} ({block.label})"
-    lines = [head if block.status == "ranked" else f"Ranking: {block.machine} ({block.label}, {block.status})"]
+def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
+    """The fit of the ranked rows, bundled by the memory they run in, with their rank ranges.
+
+    Ten rows carried ten notes of the same two sentences in the test round of 2026-09-24. A reader
+    needs each statement once, with the ranks it is about. The numbers come from the fields of
+    `Fit`; `pool_gib` of a graphics-memory fit is what is left there after the reserve.
+    """
+    by_mode: dict[str, list[RankedEntry]] = {}
+    for entry in block.ranked:
+        by_mode.setdefault(str(entry.fit.mode), []).append(entry)
+    pieces = []
+    for mode in _POOL_ORDER:
+        entries = by_mode.get(mode)
+        if not entries:
+            continue
+        plural, singular = _POOL_WORDS[mode]
+        text = f"{ranks_text([entry.rank for entry in entries], dash)} {singular if len(entries) == 1 else plural}"
+        if mode == "gpu":
+            text += f" ({entries[0].fit.pool_gib:.1f} GB free after the reserve)"
+        pieces.append(text)
+    return pieces
+
+
+def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | None) -> list[str]:
+    """Everything under one machine's table, in the order a reader reads it."""
+    showing = [f"showing {len(block.ranked)} of {block.ranked_total}"]
+    showing += _set_aside_pieces("not covered", block.not_covered)
+    showing += _set_aside_pieces("too tight", block.too_tight)
+    groups = [showing, _pool_pieces(block, dash)]
+    from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
+    if from_size:
+        groups.append([f"(from size): {ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"])
+    if block.ranked and all(entry.speed_tps is None for entry in block.ranked):
+        groups.append([_NO_SPEED_YET, MEASURE_HINT])
+    groups.append(_install_pieces(block, install_for))
+    return [line for group in groups for line in joined(group, dot=dot)]
+
+
+def _install_pieces(block: MachineRanking, install_for: str | None) -> list[str]:
+    """The one line a reader copies to get the first package of the machine this run is on.
+
+    Only for that machine: the local Ollama name of a package is about the machine that would
+    install it. Nothing is called, nothing is looked up, and a package with no such name has no
+    line (CONTRACTS.md, "Guided mode", "The screen").
+    """
+    if install_for is None or block.machine != install_for or not block.ranked:
+        return []
+    entry = block.ranked[0]
+    name = install_name(entry.package_identity, entry.quantization, entry.format)
+    # The one line of this view that may pass 100 characters: it is a command to copy, and a command
+    # that was cut is worse than a line that wraps (second-model round, 2026-09-24).
+    return [] if name is None else [install_pull_line(entry.rank, name)]
+
+
+def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot: str, install_for: str | None) -> list[str]:
+    lines = [_INDENT + _block_head(block, scenario, dot)]
     if block.reason is not None:
         lines.append(f"{_INDENT}{block.reason}")
     if not block.ranked:
@@ -374,36 +470,174 @@ def _terminal_ranking(block: MachineRanking) -> list[str]:
                         str(entry.rank),
                         _model_name(entry),
                         _package_cell(entry),
-                        _terminal_fit(entry.fit),
-                        _terminal_speed(entry),
+                        fit_word(entry.fit.fit_class, entry.fit.mode),
+                        _terminal_speed(entry, dash),
                         f"{entry.fit.need_gib:.1f} GB",
                     ]
                 )
             )
-        lines.append(f"{_INDENT}showing {len(block.ranked)} of {block.ranked_total} ranked packages")
-        lines += [f"{_INDENT}#{entry.rank} {entry.note.text}" for entry in block.ranked]
-    lines += _set_aside_lines("not covered", block.not_covered)
-    lines += _set_aside_lines("too tight", block.too_tight)
+    lines += _note_lines(block, dash, dot, install_for)
     return lines
 
 
-def document_terminal(document: RenderDocument) -> str:
-    """A compact terminal view of the same document: the ranking, the notes and both blocks.
+# --- the card of the whole run ----------------------------------------------------------------------
+
+
+def relative_path(path: Path, folder: Path) -> str:
+    """A path as the card shows it: relative to the results folder where it lies inside it.
+
+    `docs\\models.md` says what a reader needs; the whole path said it for the third time on one
+    screen (test round, 2026-09-24).
+    """
+    try:
+        return str(path.relative_to(folder))
+    except ValueError:
+        return str(path)
+
+
+def context_fact(context: int) -> Fact:
+    """The context row of the card: the level, and what that many tokens are good for."""
+    level = next((level for level in LEVELS if level.tokens == context), None)
+    if level is None:
+        return Fact("context", context_short(context), f"about {int(context * 0.75):,} words")
+    return Fact("context", context_short(context), f"{level.words}, {level.example}")
+
+
+def _card_block(document: RenderDocument, machine: str | None) -> MachineRanking | None:
+    """The machine the card counts: the one the run is on, else the first that has a ranking.
+
+    One machine, not every one: a package that fits two machines is one package and two rows, and a
+    sum over the machines would count it twice while the `models` row of the same card counts the
+    packages of the snapshot once (second-model round, 2026-09-24).
+    """
+    blocks = document.machines
+    return next(
+        (block for block in blocks if block.machine == machine),
+        next((block for block in blocks if block.status == "ranked"), blocks[0] if blocks else None),
+    )
+
+
+def _measured_speeds(block: MachineRanking | None) -> tuple[int, tuple[str, float] | None]:
+    """How many rows of this machine's ranking carry a measured speed, and which is the fastest."""
+    rows = [] if block is None else block.ranked
+    measured = [(_model_name(entry), entry.speed_tps) for entry in rows if entry.speed_tps is not None]
+    return len(measured), max(measured, key=lambda entry: entry[1]) if measured else None
+
+
+def _set_aside_counts(block: MachineRanking | None) -> list[tuple[str, int]]:
+    """How many packages this machine set aside, by the word that says why, where there are any."""
+    if block is None:
+        return []
+    counted = (("too tight", len(block.too_tight)), ("not covered", len(block.not_covered)))
+    return [pair for pair in counted if pair[1]]
+
+
+def result_card(
+    document: RenderDocument,
+    *,
+    folder: Path,
+    markdown: Path,
+    model_names: Sequence[str],
+    packages: int,
+    accounts: Sequence[str],
+    now: datetime,
+    machine: str | None = None,
+) -> list[Fact]:
+    """The whole run in six kinds of row: folder, machine, models, context, speed, result.
+
+    The rows of the start screen, with what this run made of them (decided 2026-09-24): a reader
+    who looks at the screen once the run is over sees everything in one place, and the table under
+    it says the rest. Every number comes from the document the render just wrote or from the
+    snapshot it was built from -- nothing here is computed a second time. `machine` is the machine
+    of the run, whose ranking the `speed` and `result` rows count; the tables below carry them all.
+    """
+    block = _card_block(document, machine)
+    facts = [Fact("folder", str(folder), "")]
+    facts += [
+        machine_fact(entry.label, entry.profile, now, entry.reason or entry.status) for entry in document.machines
+    ]
+    measured, fastest = _measured_speeds(block)
+    facts.append(models_fact(model_names, packages, accounts))
+    facts.append(context_fact(document.scenario.context_requested))
+    facts.append(speed_fact(measured, fastest))
+    facts.append(
+        result_fact(
+            relative_path(markdown, folder),
+            0 if block is None else block.ranked_total,
+            _set_aside_counts(block),
+            glyphs().dot,
+        )
+    )
+    return facts
+
+
+def show_result(
+    screen, out, document: RenderDocument, facts, config, folder: Path, now: datetime, install_for: str | None = None
+) -> None:
+    """Draw step 5 of the guided mode: the card of the whole run, then one table per machine.
+
+    The head of the step is already on screen when this runs, so what is left is the report: the
+    card a reader looks at once the run is over, the tables under it, and the one line that says
+    where the document went (CONTRACTS.md, "Guided mode", "The screen"). `install_for` is the
+    machine this run is on, and the only one an install line may be about.
+    """
+    screen.blank()
+    screen.card(
+        result_card(
+            document,
+            folder=folder,
+            markdown=config.paths.markdown,
+            model_names=facts.model_names,
+            packages=facts.packages,
+            accounts=facts.accounts,
+            now=now,
+            machine=install_for,
+        )
+    )
+    for line in terminal_lines(document, install_for=install_for):
+        out(line)
+    screen.done(STEP_COUNT, relative_path(config.paths.markdown, folder))
+
+
+def terminal_lines(document: RenderDocument, install_for: str | None = None) -> list[str]:
+    """One machine's block after another, each behind a blank line -- the table and its notes.
+
+    Without the head of step 5 and without the card: those two belong to the guided mode, which
+    draws them itself and then prints these lines (CONTRACTS.md, "Guided mode", "The screen").
+    """
+    marks = glyphs()
+    lines: list[str] = []
+    for block in document.machines:
+        lines += ["", *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, install_for)]
+    return lines
+
+
+def document_terminal(document: RenderDocument, install_for: str | None = None) -> str:
+    """A compact terminal view of the same document: the ranking and the notes under it.
 
     It shows fewer columns than the Markdown table on purpose (a terminal is narrow), never
-    other numbers: every value here is read from `document`, like the other two writers. Since
-    2026-09-24 it reads as the mockup does -- the model and the package by name, the fit, the
-    speed and the memory -- and the snapshot time and the ranking rule stay in the Markdown file
-    a reader can take their time over. It is step 5 of the guided mode, which is the only caller
-    that asks for it, so it carries that step's head; `modelroom render` writes the two files and
-    stays silent.
+    other numbers: every value here is read from `document`, like the other two writers. The
+    snapshot time and the ranking rule stay in the Markdown file a reader can take their time
+    over, and since 2026-09-24 so does the scenario -- the head of each machine's block says the
+    context, which is what a reader of a table needs from it. It is step 5 of the guided mode, so
+    it carries that step's head; `modelroom render` writes the two files and stays silent unless a
+    caller asks for it.
     """
-    lines = [step_head(RESULTS_STEP), "", scenario_short(document.scenario)]
+    lines = [plain(head_line(RESULTS_STEP, glyphs()))]
     if document.rating_unavailable is not None:
-        lines.append(f"Market rating unavailable: {document.rating_unavailable}")
-    for block in document.machines:
-        lines += ["", *_terminal_ranking(block)]
+        lines.append(f"{_INDENT}Market rating unavailable: {document.rating_unavailable}")
+    lines += terminal_lines(document, install_for)
     return "\n".join(lines)
 
 
-__all__ = ["context_short", "document_markdown", "document_terminal", "scenario_line", "scenario_short"]
+__all__ = [
+    "context_fact",
+    "context_short",
+    "document_markdown",
+    "document_terminal",
+    "relative_path",
+    "result_card",
+    "scenario_line",
+    "show_result",
+    "terminal_lines",
+]

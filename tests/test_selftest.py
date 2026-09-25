@@ -129,40 +129,65 @@ def test_criterion_two_names_a_cross_check_that_is_not_confirmed():
 # --- criterion 3 -------------------------------------------------------------------------------------
 
 
+GOOD_SEARCH_LOG = {
+    "schema_version": 1,
+    "word": "qwen",
+    "filter_owners": True,
+    "run_at": "2026-09-25T08:00:00+00:00",
+    "accounts": [
+        {"account": "Qwen", "class": "publisher", "hits": 1, "page_full": False},
+        {"account": "unsloth", "class": "packager", "hits": 3, "page_full": False},
+    ],
+    "requests": 2,
+    "budget": {"used": 3, "limit": 150},
+    "resolved": 3,
+    "unresolved": [{"reason": "the repository does not say it packages a base model", "count": 5}],
+}
 GOOD_SEARCH = [
-    "8 repositories, 3 resolved, 5 unresolved, budget 3/60",
-    "2 repositories cannot be picked: a fine-tune or a merge, not a quantization of one base model",
-    "3 repositories cannot be picked: the repository does not say it packages a base model",
+    " searched Hugging Face at the publisher Qwen and the five listed packagers",
+    " 8 repositories, 3 of them models you can pick from",
 ]
 
 
-def test_criterion_three_passes_on_a_real_search_output():
-    assert st.search_problems(GOOD_SEARCH) == []
+def test_criterion_three_passes_on_a_real_search_log():
+    assert st.search_problems(GOOD_SEARCH_LOG, GOOD_SEARCH) == []
 
 
-def test_criterion_three_names_a_missing_summary():
-    assert st.search_problems(["nothing here"]) == ["no search summary line was printed"]
+def test_criterion_three_names_a_log_of_another_schema():
+    problems = st.search_problems({"schema_version": 2}, GOOD_SEARCH)
+
+    assert problems == ["search.json has schema_version 2, expected 1"]
 
 
 def test_criterion_three_names_a_search_that_resolved_nothing():
-    lines = ["8 repositories, 0 resolved, 8 unresolved, budget 3/60", "8 repositories cannot be picked: derivative"]
-    assert any("resolved 0" in problem for problem in st.search_problems(lines))
+    log = GOOD_SEARCH_LOG | {"resolved": 0}
+
+    assert any("resolved 0" in problem for problem in st.search_problems(log, GOOD_SEARCH))
 
 
-def test_criterion_three_names_a_run_that_showed_no_reason_at_all():
-    assert any("no reason was shown" in problem for problem in st.search_problems([GOOD_SEARCH[0]]))
+def test_criterion_three_names_a_log_with_no_reason_at_all():
+    log = GOOD_SEARCH_LOG | {"unresolved": []}
+
+    assert any("names no reason" in problem for problem in st.search_problems(log, GOOD_SEARCH))
 
 
-def test_criterion_three_names_a_reason_that_is_a_raw_status():
-    lines = [GOOD_SEARCH[0], "5 repositories cannot be picked: None"]
-    assert any("raw status" in problem for problem in st.search_problems(lines))
+def test_criterion_three_names_a_reason_that_is_empty_or_covers_nothing():
+    log = GOOD_SEARCH_LOG | {"unresolved": [{"reason": "", "count": 0}]}
+
+    assert any("empty or covers no repository" in problem for problem in st.search_problems(log, GOOD_SEARCH))
 
 
-def test_criterion_three_names_grouped_lines_that_leave_repositories_out():
-    """One line per reason has to account for every unresolved repository of the summary."""
-    lines = [GOOD_SEARCH[0], "1 repository cannot be picked: the repository does not say it packages a base model"]
+def test_criterion_three_names_a_log_that_asked_no_publisher():
+    log = GOOD_SEARCH_LOG | {"accounts": [{"account": "unsloth", "class": "packager", "hits": 3, "page_full": False}]}
 
-    assert any("cover 1 repositories" in problem for problem in st.search_problems(lines))
+    assert any("no publisher account" in problem for problem in st.search_problems(log, GOOD_SEARCH))
+
+
+def test_criterion_three_names_a_screen_that_says_nothing_about_the_search():
+    problems = st.search_problems(GOOD_SEARCH_LOG, ["nothing here"])
+
+    assert any("does not say where the search asked" in problem for problem in problems)
+    assert any("how much of the answer is a choice" in problem for problem in problems)
 
 
 # --- criterion 4 -------------------------------------------------------------------------------------
@@ -296,7 +321,7 @@ def test_criterion_six_names_a_measurement_that_dropped_out_of_group_zero():
 
 
 def test_criterion_six_names_a_second_measurement_of_the_same_package():
-    lines = [f"{st.DEEPSEEK_OLLAMA_NAME}: measured 58.4 tok/s (57.0-60.0), context 8192, valid, comparable"]
+    lines = [f"   measured {st.DEEPSEEK_OLLAMA_NAME}: 58.4 tok/s (57.0–60.0), context 8k"]
     problems = st.second_start_problems(BEFORE, dict(BEFORE), ["a.json"], lines, [_record()], _row())
     assert any("a second time" in problem for problem in problems)
 
@@ -363,6 +388,11 @@ GOOD_SCALE = [
     "XL      64k     48,000 words    several documents at once             2 of 7 packages fit",
     "XXL     128k    96,000 words    a whole book                          none of 7 packages fits",
 ]
+def _head(number: int, name: str) -> str:
+    """One step head as the screen draws it: a rule, the step, its name, a rule to 72 characters."""
+    return " " + f"-- Step {number} of 5  {name} ".ljust(72, "-")
+
+
 GOOD_DIALOG = [
     " ## ## :: ##   ModelRoom",
     " ## ## ## ..   Which local model packages fit your machine.",
@@ -372,14 +402,35 @@ GOOD_DIALOG = [
     " daemon    Ollama 0.34.2           reachable, 19 models installed",
     " machine   workstation             one graphics card, 12 GB, 128 GB memory",
     "",
-    "Step 1 of 5  Configuration",
-    "ok Configuration //models/results/modelroom.toml, 1 machine(s)",
-    "Step 2 of 5  Packages",
-    "Step 3 of 5  Context",
-    "checking workstation   one graphics card, 12 GB, 128 GB memory",
-    "Step 4 of 5  Measurement",
-    "Step 5 of 5  Results\n #   Model                    Package                  Fit                 Speed"
-    "         Memory\n not covered: 7 packages -- a weight file has no size (a Q4, b Q4, c Q4 and 4 more)",
+    _head(1, "Configuration"),
+    " ? Where should results live?  this folder",
+    " ? Which machines should the result cover?  this machine",
+    "   measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit",
+    " ok Configuration   //models/results, 1 machine",
+    _head(2, "Packages"),
+    " ? What are you looking for?  qwen",
+    " ? Show only repositories of a publisher or a listed packager?  Yes",
+    " ok Packages        2 models, 25 packages from 3 repositories",
+    _head(3, "Context"),
+    " ? How much text should a model handle at once?  L  32k  24,000 words  a report",
+    " ok Context         L 32k",
+    _head(4, "Measurement"),
+    " - Measurement     none in this run",
+    _head(5, "Results"),
+    "",
+    " folder    //models/results",
+    " machine   workstation             12 GB graphics, 128 GB memory, measured today",
+    " models    Qwen3.5-9B              25 packages from unsloth and Ollama",
+    " context   L 32k                   24,000 words, a report or a long contract",
+    " speed     not measured            say Yes in step 4 to measure an installed package",
+    " result    docs/models.md          25 packages ranked, none too tight",
+    "",
+    " workstation - context L 32k",
+    " #    Model                     Package                 Fit                   Speed         Memory",
+    " 1    Qwen3.5-9B                unsloth - UD-IQ2_XXS    good                  -             8.3 GB",
+    " showing 1 of 25",
+    " #1 fits into graphics memory (11.0 GB free after the reserve)",
+    " ok Results         docs/models.md",
 ]
 GOOD_MODELS = [
     "Qwen3.5-9B                    good          9B       Qwen, unsloth               13.6M    qwen3.5:9b",
@@ -418,9 +469,15 @@ def test_criterion_seven_names_a_missing_start_screen():
 
 
 def test_criterion_seven_names_a_missing_step_head():
-    without = [line for line in GOOD_DIALOG if not line.startswith("Step 3")]
+    without = [line for line in GOOD_DIALOG if "Step 3" not in line]
 
     assert any("step heads" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE))
+
+
+def test_criterion_seven_names_a_step_head_that_is_not_seventy_two_wide():
+    short = [line.rstrip("-") if "Step 3" in line else line for line in GOOD_DIALOG]
+
+    assert any("characters wide, expected 72" in problem for problem in st.step_head_problems(short))
 
 
 def test_criterion_seven_names_a_scale_without_its_last_column():
@@ -429,23 +486,54 @@ def test_criterion_seven_names_a_scale_without_its_last_column():
     assert any("no count of what fits" in problem for problem in st.guided_mode_problems(GOOD_DIALOG, bare))
 
 
-def test_criterion_seven_names_a_result_view_that_lists_every_package_again():
-    one_per_package = [
-        line for line in GOOD_DIALOG if "not covered" not in line
-    ] + [
-        "Step 5 of 5  Results\n #   Model                    Package                  Fit                 Speed"
-        "         Memory\n not covered: a Q4 -- a weight file has no size"
+def test_criterion_seven_names_a_run_without_answer_lines():
+    without = [line for line in GOOD_DIALOG if not line.strip().startswith("? ")]
+
+    assert any("answer lines" in problem for problem in st.answer_line_problems(without))
+
+
+def test_criterion_seven_names_the_libraries_own_answer():
+    with_library = [*GOOD_DIALOG, "? Which of these models should the result cover? done (2 selections)"]
+
+    assert any("library wrote an answer" in problem for problem in st.answer_line_problems(with_library))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "wrote x with y as the writer of this results folder",
+        "kept context 32768 in x",
+        "checking workstation   one graphics card",
+        "Written to a   and   b",
+    ],
+)
+def test_criterion_seven_names_a_line_the_screen_no_longer_carries(line):
+    problems = st.answer_line_problems([*GOOD_DIALOG, line])
+
+    assert any("no longer carries" in problem for problem in problems)
+
+
+def test_criterion_seven_names_a_run_that_closes_without_the_card():
+    without = [line for line in GOOD_DIALOG if not line.strip().startswith(("models ", "speed ", "result "))]
+
+    assert any("card of step 5" in problem for problem in st.card_problems(without))
+
+
+def test_criterion_seven_names_a_result_view_that_repeats_one_note_per_row():
+    repeated = [*GOOD_DIALOG, " #2 fits into graphics memory", " #3 needs system memory", " #4 needs system memory"]
+
+    problems = st.result_table_problems(repeated)
+
+    assert any("notes about the memory pool" in problem for problem in problems)
+
+
+def test_criterion_seven_names_a_row_that_still_says_unknown():
+    with_unknown = [
+        *GOOD_DIALOG,
+        " 1    Qwen3.5-9B                unsloth - Q4_K_M        good                  unknown       8.3 GB",
     ]
 
-    problems = st.guided_mode_problems(one_per_package, GOOD_SCALE, GOOD_MODELS)
-
-    assert any("not grouped by reason" in problem for problem in problems)
-
-
-def test_criterion_seven_names_a_step_three_without_its_machine():
-    without = [line for line in GOOD_DIALOG if not line.startswith("checking ")]
-
-    assert any("which machine" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE))
+    assert any("says `unknown`" in problem for problem in st.result_table_problems(with_unknown))
 
 
 # --- the report ------------------------------------------------------------------------------------------

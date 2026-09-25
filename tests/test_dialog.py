@@ -6,11 +6,13 @@ would press travel through prompt_toolkit and questionary unchanged; nothing is 
 
 from __future__ import annotations
 
+import io
 from contextlib import contextmanager
 
 import pytest
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.output.plain_text import PlainTextOutput
 
 from modelroom.answers import ANSWERS_SCHEMA_VERSION, AnswerFileError, read_answers
 from modelroom.contracts import SchemaVersionError
@@ -117,6 +119,65 @@ def test_the_pointer_of_a_select_starts_on_the_checked_entry():
     with _asker(ENTER) as asker:
         choices = [Choice("here", "this folder"), Choice("path", "a path", checked=True)]
         assert asker.select("results", "Where?", choices) == "path"
+
+
+# --- the answer line is the run's, not the library's --------------------------------------------
+
+
+def _transcript(keys: str, ask) -> str:
+    """Everything the library really wrote for one question, as a terminal would receive it."""
+    sink = io.StringIO()
+    with create_pipe_input() as pipe:
+        pipe.send_text(keys)
+        ask(TerminalAsker(input=pipe, output=PlainTextOutput(sink)))
+    return sink.getvalue()
+
+
+def test_a_list_writes_no_answer_of_its_own_once_it_is_answered():
+    """`done (2 selections)` under a question that is still on screen was the "chaining" of the
+    test round of 2026-09-24. The question erases itself and the run writes the answer in words."""
+    transcript = _transcript(" " + DOWN + " " + ENTER, lambda asker: asker.checkbox("machines", "Machines?", CHOICES))
+
+    assert "Machines?" in transcript
+    assert "done (" not in transcript
+    assert "selections" not in transcript
+
+
+def test_a_text_question_erases_itself_too():
+    """`? What are you looking for? qwen` stayed on screen and the run wrote the same line under
+    it -- the same question twice (measured 2026-09-24, second-model round)."""
+    transcript = _transcript("qwen\r", lambda asker: asker.text("search", "What are you looking for?"))
+
+    assert "What are you looking for? qwen" not in transcript
+
+
+def test_a_select_writes_no_answer_of_its_own_either():
+    choices = [Choice("here", "this folder (C:/results)"), Choice("path", "another path")]
+
+    transcript = _transcript(ENTER, lambda asker: asker.select("results", "Where?", choices))
+
+    assert "Where?" in transcript
+    # The library's own answer line would repeat the whole label of the marked entry.
+    assert transcript.count("this folder (C:/results)") == 1
+
+
+def test_a_list_says_what_it_has_to_say_about_itself_in_its_instruction_line():
+    """A sentence that explains a list has nothing to say once the list is gone (2026-09-24)."""
+    extra = "nothing marked keeps the folder as it is."
+
+    transcript = _transcript(
+        ENTER, lambda asker: asker.checkbox("machines", "Machines?", CHOICES, extra)
+    )
+
+    # The line wraps at the width of the window, so the text is held against its start.
+    assert "Esc leave · nothing marked" in transcript
+    assert "Space marks" in transcript
+
+
+def test_the_instruction_line_of_a_list_without_one_is_the_keys_alone():
+    transcript = _transcript(ENTER, lambda asker: asker.checkbox("machines", "Machines?", CHOICES))
+
+    assert "Space marks   Enter confirms   Esc leave" in transcript
 
 
 # --- the size scale at the terminal (`select_or_text`) -------------------------------------------

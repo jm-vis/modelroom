@@ -27,8 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .catalog import Age
 from .contracts import Fit, validate_hf_repo
 from .dialog import Asker, Choice, FileAsker, columns
-from .fit import DEFAULT_CONTEXT, fit_from_parameters, unknown_fit
-from .guided_context import Checked
+from .fit import fit_from_parameters, unknown_fit
+from .guided_context import DEFAULT_CONTEXT, Checked
+from .screen import context_tokens_text
 from .guided_contracts import SearchHit
 from .search import NO_OLLAMA_LABEL
 from .search_pages import format_downloads
@@ -76,9 +77,9 @@ _RAM_SUFFIX = " (RAM)"
 _MODE_ORDER = ("gpu", "cpu_gpu", "cpu", None)
 _SETTLED = ("too_tight", "unknown")
 
-HINT_LINE = "Space marks a model, Enter confirms; nothing marked keeps the folder as it is."
+NOTHING_MARKED_HINT = "nothing marked keeps the folder as it is."
 FIT_FROM_SIZE_HINT = (
-    "Fit is from the size of the model, the exact fit comes after the fetch; "
+    "Fit is from the size of the model at {context} context; the exact fit comes after the fetch; "
     "(RAM) means the graphics memory is too small for it."
 )
 FIT_UNKNOWN_HINT = "Fit is unknown until this machine is measured."
@@ -178,12 +179,13 @@ def _count_text(value: float, unit: str) -> str:
 
 
 def list_context(kept: int | None) -> int:
-    """The context the fit of this list is computed for: the folder's own, else fit v1's default.
+    """The context the fit of this list is computed for: the folder's own, else the scale's default.
 
-    Step 3 asks for the context, and this list stands in step 2 -- so a folder that has kept one
-    is asked what it kept, and a folder that has not is shown the 8192 the three automation
-    commands assume. Not the level the scale's pointer starts on: that is a suggestion for a
-    question nobody has answered yet, and a fit has to stand on a number, not on a suggestion.
+    Step 3 asks for the context and this list stands in step 2, so a folder that kept one is shown
+    what it kept. A folder that kept none is shown the context of the level the scale will start on
+    (`guided_context.DEFAULT_CONTEXT`, 32768) and not fit v1's own assumption of 8192: the list
+    said `fit at 8k context` while the very next question started on `L 32k`, and two numbers for
+    one run are one too many (test round, 2026-09-24). It is one constant, not two.
     """
     return kept if kept is not None else DEFAULT_CONTEXT
 
@@ -218,15 +220,25 @@ def hit_reason(hit: SearchHit, filtered: bool) -> str | None:
     return None
 
 
-def unusable_reasons(hits: Sequence[SearchHit], filtered: bool) -> list[str]:
-    """One line per reason with the number of repositories behind it, instead of one line each."""
+def unusable_counts(hits: Sequence[SearchHit], filtered: bool) -> dict[str, int]:
+    """Why repositories of this search are no model of the list, each reason with its count.
+
+    The counts of `search.json`'s `unresolved` and of the lines below, from one reading of the
+    hits: the file and a line may not say different numbers about the same search.
+    """
     counted: dict[str, int] = {}
     for hit in hits:
         reason = hit_reason(hit, filtered)
         if reason is not None:
             counted[reason] = counted.get(reason, 0) + 1
+    return counted
+
+
+def unusable_reasons(hits: Sequence[SearchHit], filtered: bool) -> list[str]:
+    """One line per reason with the number of repositories behind it, instead of one line each."""
     return [
-        f"{count} {_repositories(count)} cannot be picked: {reason}" for reason, count in sorted(counted.items())
+        f"{count} {_repositories(count)} cannot be picked: {reason}"
+        for reason, count in sorted(unusable_counts(hits, filtered).items())
     ]
 
 
@@ -333,32 +345,19 @@ def list_choices(models: Sequence[ModelChoice]) -> list[Choice]:
     return [Choice(model.base_model, label) for model, label in zip(models, labels)]
 
 
-def count_line(models: Sequence[ModelChoice], hits: Sequence[SearchHit], filtered: bool) -> str:
-    """The one line above the list: how many models, and how many repositories are no model."""
-    unusable = sum(1 for hit in hits if hit_reason(hit, filtered) is not None)
-    models_text = f"{len(models)} model{'' if len(models) == 1 else 's'} can be picked"
-    return f"{models_text}; {unusable} {_repositories(unusable)} cannot:"
+def hint_line(checked: Checked, context: int) -> str:
+    """What this list has to say about itself: what nothing marked does, and where its fit is from.
 
-
-def fit_line(context: int, checked: Checked) -> str | None:
-    """What the fit column of this list was computed for, or `None` when there is no fit at all.
-
-    A context of whole thousands is shown as the scale shows it (`8k`, `32k`); a context of its
-    own is shown as the number it is, rather than floored into a `k` it is not.
+    It is the instruction line of the question now, not a line of the run (decided 2026-09-24): a
+    sentence that explains a list has nothing to say once the list is gone. The context it names is
+    the one the fit was really computed for, which is the one the next question starts on.
     """
-    if checked.profile is None or checked.machine_config is None:
-        return None
-    shown = f"{context // 1024}k" if context % 1024 == 0 else f"{context} tokens"
-    return f"fit at {shown} context, computed from the size of the model"
-
-
-def hint_line(checked: Checked) -> str:
-    """The line under the list: how to mark, and where the fit in it comes from."""
     measured = checked.profile is not None and checked.machine_config is not None
-    return f"{HINT_LINE} {FIT_FROM_SIZE_HINT if measured else FIT_UNKNOWN_HINT}"
+    fit = FIT_FROM_SIZE_HINT.format(context=context_tokens_text(context)) if measured else FIT_UNKNOWN_HINT
+    return f"{NOTHING_MARKED_HINT} {fit}"
 
 
-def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice]) -> list[str]:
+def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instruction: str) -> list[str]:
     """Ask the checkbox once, with what the asker can answer with.
 
     The list a person sees holds one line per model, and its values are base models. An answer
@@ -371,11 +370,22 @@ def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice]) -> li
     choices = list_choices(models)
     if isinstance(asker, FileAsker):
         choices = [*choices, *_repo_choices(models)]
-    return asker.checkbox(SELECT_KEY, question, choices)
+    return asker.checkbox(SELECT_KEY, question, choices, instruction)
 
 
 def _repo_choices(models: Sequence[ModelChoice]) -> list[Choice]:
     return [Choice(hit.repo, hit.repo) for model in models for hit in model.repos]
+
+
+def picked_names(models: Sequence[ModelChoice], picked: Sequence[str]) -> list[str]:
+    """What was marked, in the names the list showed: `Qwen3.5-9B`, not `Qwen/Qwen3.5-9B`.
+
+    A value an answer file names as a repository keeps its own spelling -- it is what the file
+    said, and an answer of the user appears in the words of the user (`AGENTS.md`, the language
+    standard).
+    """
+    by_id = {model.base_model: model.name for model in models}
+    return [by_id.get(value, value) for value in picked]
 
 
 def chosen_hits(
@@ -446,6 +456,7 @@ def _repositories(count: int) -> str:
 
 
 __all__ = [
+    "DEFAULT_CONTEXT",
     "LINE_LIMIT",
     "MACHINE_NOT_MEASURED",
     "OTHER_OWNER_REASON",
@@ -455,8 +466,6 @@ __all__ = [
     "ModelChoice",
     "ask_models",
     "chosen_hits",
-    "count_line",
-    "fit_line",
     "hint_line",
     "hit_reason",
     "list_choices",
@@ -464,5 +473,7 @@ __all__ = [
     "model_choices",
     "model_fit",
     "parameters_from_name",
+    "picked_names",
+    "unusable_counts",
     "unusable_reasons",
 ]

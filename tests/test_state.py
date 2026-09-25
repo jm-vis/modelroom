@@ -765,6 +765,37 @@ def test_write_run_status_lists_every_area_with_run_at_budget_and_candidates(tmp
     assert {area["status"] for area in data["areas"]} == {"complete", "incomplete"}
 
 
+# --- write_search_log ----------------------------------------------------------------------
+
+
+def test_the_search_log_goes_next_to_the_snapshot_and_is_replaced_by_the_next_search(tmp_path: Path):
+    """One file about the search that just ran (CONTRACTS.md, "Search log")."""
+    from modelroom.state import search_log_path, write_search_log
+
+    config = _config(tmp_path)
+
+    write_search_log(config, {"schema_version": 1, "word": "qwen"})
+    write_search_log(config, {"schema_version": 1, "word": "deepseek"})
+
+    assert search_log_path(config) == config.paths.state / "search.json"
+    assert json.loads(search_log_path(config).read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "word": "deepseek",
+    }
+
+
+def test_the_search_log_is_written_atomically(tmp_path: Path):
+    """The same convention every other state file follows: a `.tmp` file, then `os.replace`."""
+    from modelroom.state import search_log_path, write_search_log
+
+    config = _config(tmp_path)
+
+    write_search_log(config, {"schema_version": 1})
+
+    assert list(config.paths.state.glob("*.tmp")) == []
+    assert search_log_path(config).is_file()
+
+
 # --- hardware snapshot: path, load, write (AP4) --------------------------------------------
 
 

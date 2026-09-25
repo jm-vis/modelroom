@@ -353,6 +353,26 @@ def write_run_status(config: Configuration, snapshot: Snapshot, request_used: in
     atomic_write_json(config.paths.run_status_file, data)
 
 
+SEARCH_LOG_NAME = "search.json"
+
+
+def search_log_path(config: Configuration) -> Path:
+    """Where one search's own log goes: next to the snapshot, under `paths.state`."""
+    return config.paths.state / SEARCH_LOG_NAME
+
+
+def write_search_log(config: Configuration, data: dict) -> None:
+    """Write `search.json`: which account answered what, and what could not be picked, and why.
+
+    The file a reader goes to when an account answered nothing, or when a page was full: those
+    seven lines and the request count left the screen of the guided mode in the test round of
+    2026-09-24, because they say nothing about the answer a reader is looking at. Written once per
+    search, atomically, and replaced by the next one -- it is about the search that just ran
+    (CONTRACTS.md, "Search log").
+    """
+    atomic_write_json(search_log_path(config), data)
+
+
 # --- hardware profile (AP4) ----------------------------------------------------------------
 #
 # No lock guards these functions: unlike the snapshot (one shared file every writer machine's

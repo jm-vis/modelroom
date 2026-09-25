@@ -757,7 +757,19 @@ def test_render_echoes_the_terminal_view_when_a_caller_asks_for_it(tmp_path: Pat
 
     assert render_with_config(config, now=RUN2, echo=lines.append) == 0
 
-    assert "Ranking: workstation" in "\n".join(lines)
+    assert "workstation · context" in "\n".join(lines)
+
+
+def test_render_hands_the_document_itself_to_a_caller_that_asks_for_it(tmp_path: Path):
+    """The guided mode draws the card of its step 5 from the document the render just wrote."""
+    config = _rendered(tmp_path)
+    profile = place_v2_profile(config.paths.hardware_dir)
+    config = with_profile(config, "workstation", profile.profile_id)
+    seen: list = []
+
+    assert render_with_config(config, now=RUN2, on_document=seen.append) == 0
+
+    assert [block.machine for block in seen[0].machines] == ["workstation"]
 
 
 def _v1_profile(machine: str) -> dict:

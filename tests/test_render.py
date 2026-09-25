@@ -574,16 +574,17 @@ def test_the_markdown_view_names_the_rule_and_the_scenario():
     assert "f16" in text
 
 
-def test_the_terminal_view_says_the_scenario_short_and_leaves_the_rule_to_the_file():
-    """A terminal is narrow: the rule and the snapshot time stay in the Markdown view (2026-09-24)."""
+def test_the_head_of_a_machine_says_the_context_and_leaves_the_rule_to_the_file():
+    """A terminal is narrow: the rule, the snapshot time and the scenario stay in the Markdown view."""
     large = Scenario(
         context_requested=32768, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1
     )
     text = document_terminal(_document([_hf_package()], scenario=large))
 
-    assert "context L 32k · 1 request · KV cache f16 (assumed)" in text
+    assert "workstation · context L 32k" in text
     assert RANKING_RULE not in text
     assert "Snapshot run at" not in text
+    assert "KV cache" not in text
 
 
 def test_the_terminal_table_reads_as_the_mockup_does():
@@ -600,24 +601,33 @@ def test_the_terminal_table_reads_as_the_mockup_does():
     assert row.split() == ["1", "Nova-8B", "packager", "·", "Q4_K_M", entry.fit.fit_class, "41.1", "tok/s", f"{entry.fit.need_gib:.1f}", "GB"]
 
 
-def test_a_fit_from_the_size_says_so_in_the_fit_column():
-    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
-
-    text = document_terminal(_document([_hf_package()], base_models=unknown))
-
-    assert "good (from size)" in text or "marginal (from size)" in text
-
-
-def test_the_longest_fit_text_is_not_cut_off_in_its_column():
-    """`marginal (from size)` is 20 characters and was cut to `marginal (from siz`."""
+def test_a_fit_in_system_memory_says_ram_and_never_from_size():
+    """The same word the selection list of step 2 uses; where the size came from is a note."""
     unknown = [_base_model(architecture=_architecture(kind="unknown"))]
     # 90 GiB of weights: need 100.6 GiB against the system-memory pool of 111.46, ratio 0.90.
     marginal = _hf_package(weights_bytes=90 * GIB)
 
     text = document_terminal(_document([marginal], base_models=unknown))
 
-    assert "marginal (from size)" in text
-    assert "from siz " not in text
+    assert "marginal (RAM)" in text
+    assert "(from size)" in text  # as a note under the table, not in the cell
+    assert "marginal (from size)" not in text
+
+
+def test_a_fit_in_graphics_memory_carries_no_suffix():
+    text = document_terminal(_document([_hf_package()]))
+
+    assert re.search(r"\bgood\s{2,}", text)
+    assert "(RAM)" not in text
+
+
+def test_a_row_without_a_measurement_shows_a_dash_and_never_unknown():
+    """`unknown` in every row of the table said nothing twelve times over (test round, 2026-09-24)."""
+    lines = document_terminal(_document([_hf_package()])).splitlines()
+
+    row = next(line for line in lines if line.strip().startswith("1 "))
+    assert "unknown" not in row
+    assert "–" in row
 
 
 def test_no_line_of_the_terminal_table_is_wider_than_a_hundred_characters():
@@ -625,8 +635,7 @@ def test_no_line_of_the_terminal_table_is_wider_than_a_hundred_characters():
 
     lines = document_terminal(_document(packages)).splitlines()
 
-    table = lines[: next(index for index, line in enumerate(lines) if line.strip().startswith("showing "))]
-    for line in table:
+    for line in lines:
         assert len(line) <= 100, line
 
 
@@ -635,28 +644,113 @@ def test_a_machine_that_is_not_ranked_keeps_its_status_next_to_its_name():
 
     text = document_terminal(_document([_hf_package()], profiles=profiles))
 
-    assert "Ranking: workstation (workstation, no_profile)" in text
+    assert "workstation · no_profile" in text
+    assert "no profile yet" in text
 
 
 def test_a_ranked_machine_is_named_without_its_status():
     text = document_terminal(_document([_hf_package()]))
 
-    assert "Ranking: workstation (workstation)" in text
+    assert "workstation · context" in text
+    assert "ranked" not in text.splitlines()[2]
 
 
 def test_the_terminal_view_lists_the_ranking_and_the_blocks():
     huge = _hf_package(weights_bytes=400 * GIB, repo="packager/Nova-8B-XL-GGUF")
     text = document_terminal(_document([_hf_package(), huge]))
-    assert "Ranking: workstation" in text
+    assert "workstation" in text
     assert "too tight" in text.lower()
 
 
 def test_the_terminal_view_carries_the_head_of_the_last_step():
     """It is what step 5 of the guided mode shows, and the only caller that asks for it."""
-    assert document_terminal(_document([_hf_package()])).startswith("Step 5 of 5  Results")
+    head = document_terminal(_document([_hf_package()])).splitlines()[0]
+
+    assert head.strip().startswith("── Step 5 of 5  Results ")
+    assert len(head.strip()) == 72
 
 
-def test_the_terminal_view_groups_what_was_set_aside_by_reason():
+def test_the_notes_of_the_ranking_are_bundled_by_memory_pool_with_their_rank_ranges():
+    """Ten rows carried ten notes of the same two sentences (test round, 2026-09-24)."""
+    packages = [_hf_package(repo=f"packager/Nova-8B-{index}-GGUF") for index in range(3)]
+
+    lines = document_terminal(_document(packages)).splitlines()
+
+    pool = next(line for line in lines if "graphics memory" in line)
+    assert pool.strip().startswith("#1–3 fit into graphics memory (")
+    assert pool.rstrip().endswith("GB free after the reserve)")
+    assert len([line for line in lines if "graphics memory" in line]) == 1
+
+
+def test_a_single_rank_is_named_in_the_singular():
+    lines = document_terminal(_document([_hf_package()])).splitlines()
+
+    assert any(line.strip().startswith("#1 fits into graphics memory (") for line in lines)
+
+
+def test_the_speed_line_stands_only_where_nothing_was_measured():
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    nothing = document_terminal(_document([package]))
+    measured = document_terminal(_document([package], measurements={PROFILE_ID: [_measurement(package)]}))
+
+    # "no row shown", not "nothing on this machine": a measured package past the tenth row is in no
+    # entry of this document, so this view cannot see it (second-model round, 2026-09-24).
+    assert "speed: no row shown was measured yet" in nothing
+    assert "say Yes in step 4 to measure an installed package" in nothing
+    assert "speed: no row shown" not in measured
+
+
+def test_the_from_size_note_stands_only_where_a_fit_was_computed_from_the_size():
+    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+
+    from_size = document_terminal(_document([_hf_package()], base_models=unknown))
+    architecture = document_terminal(_document([_hf_package()]))
+
+    assert "(from size): #1 computed from the package size, not its architecture" in from_size
+    assert "(from size)" not in architecture
+
+
+def test_the_install_line_names_the_local_name_of_the_first_package_of_this_machine():
+    text = document_terminal(_document([_hf_package()]), install_for="workstation")
+
+    assert "to install #1: ollama pull hf.co/packager/Nova-8B-GGUF:Q4_K_M" in text
+    # Without the machine of the run there is no line: `render` cannot know which writer it is on.
+    assert "to install" not in document_terminal(_document([_hf_package()]))
+    assert "to install" not in document_terminal(_document([_hf_package()]), install_for="another")
+
+
+def test_a_set_aside_piece_names_fewer_packages_where_the_room_is_not_there():
+    """Three packages of an account with a long name made a piece of 137 characters (2026-09-24).
+
+    The count and the reason never give way; the names do, one at a time, and nothing is cut inside
+    a name -- so no `…` is printed where a console may not be able to encode it.
+    """
+    packages = [
+        _hf_package(repo=f"packager-with-a-very-long-account-name/Nova-8B-{index}-GGUF", weights_bytes=0)
+        for index in range(5)
+    ]
+
+    lines = document_terminal(_document(packages)).splitlines()
+
+    set_aside = next(line for line in lines if "not covered" in line)
+    assert len(set_aside) <= 100
+    assert "5 packages not covered (" in set_aside
+    assert set_aside.endswith("and 4 more)")  # one name fits, three do not
+    assert "…" not in set_aside
+
+
+def test_a_name_so_long_that_none_of_them_fits_leaves_the_count_and_the_reason():
+    from modelroom.views import _set_aside_pieces
+
+    class _Entry:
+        packager, quantization, reason = "a" * 120, "Q4_K_M", "a weight file has no size"
+
+    pieces = _set_aside_pieces("not covered", [_Entry()])
+
+    assert pieces == ["1 package not covered"]
+
+
+def test_the_terminal_view_groups_what_was_set_aside_behind_the_showing_count():
     """41 lines that all said `not covered` pushed the ranking off the screen (hand test, 2026-09-24)."""
     packages = [_hf_package(repo=f"packager/Nova-8B-{index}-GGUF", weights_bytes=0) for index in range(5)]
 
@@ -664,7 +758,8 @@ def test_the_terminal_view_groups_what_was_set_aside_by_reason():
 
     set_aside = [line for line in text.splitlines() if "not covered" in line]
     assert len(set_aside) == 1
-    assert "5 packages -- a weight file has no size" in set_aside[0]
+    assert "showing 0 of 0" in text
+    assert set_aside[0].strip().startswith("5 packages not covered (")
     assert set_aside[0].count("Q4_K_M") == 3
     assert set_aside[0].endswith("and 2 more)")
 
@@ -672,7 +767,25 @@ def test_the_terminal_view_groups_what_was_set_aside_by_reason():
 def test_one_package_behind_a_reason_is_named_in_the_singular():
     text = document_terminal(_document([_hf_package(weights_bytes=0)]))
 
-    assert "not covered: 1 package -- a weight file has no size (packager Q4_K_M)" in text
+    assert "showing 0 of 0 · 1 package not covered (packager Q4_K_M)" in text
+
+
+def test_two_reasons_in_one_list_are_named_with_their_reason():
+    """With one reason the word says it; with two the reason has to stand next to the count."""
+    from modelroom.views import _set_aside_pieces
+
+    document = _document([_hf_package(weights_bytes=0), _hf_package(weights_bytes=0, repo="p/Other-GGUF")])
+    entries = sorted(document.machines[0].not_covered, key=lambda entry: entry.packager)
+    other = entries[1].model_copy(update={"reason": "more than one request"})
+
+    one = _set_aside_pieces("not covered", entries)
+    two = _set_aside_pieces("not covered", [entries[0], other])
+
+    assert one == ["2 packages not covered (p Q4_K_M, packager Q4_K_M)"]
+    assert two == [
+        "1 package not covered, a weight file has no size (p Q4_K_M)",
+        "1 package not covered, more than one request (packager Q4_K_M)",
+    ]
 
 
 MARKDOWN_FIXTURE = "markdown_view_ap9_c2.md"

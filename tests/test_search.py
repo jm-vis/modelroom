@@ -259,6 +259,61 @@ def test_a_group_line_per_account_names_the_account_and_its_number():
     ]
 
 
+def test_the_search_log_carries_one_entry_per_asked_page_with_its_class():
+    """The numbers of the group lines, as data: `search.json` (CONTRACTS.md, "Search log")."""
+    from datetime import datetime, timezone
+
+    outcome = run_search(build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60))
+
+    log = outcome.search_log(
+        filtered=True, run_at=datetime(2026, 9, 25, 8, 0, 0, tzinfo=timezone.utc), unresolved={"no base model": 1}
+    )
+
+    assert log["schema_version"] == 1
+    assert (log["word"], log["filter_owners"], log["run_at"]) == ("qwen", True, "2026-09-25T08:00:00+00:00")
+    assert [entry["account"] for entry in log["accounts"]] == [group.label for group in outcome.groups]
+    assert [entry["hits"] for entry in log["accounts"]] == [group.page_size for group in outcome.groups]
+    assert {entry["account"]: entry["class"] for entry in log["accounts"]}["Qwen"] == "publisher"
+    assert {entry["account"]: entry["class"] for entry in log["accounts"]}["unsloth"] == "packager"
+    assert (log["requests"], log["resolved"]) == (outcome.requests, outcome.resolved)
+    assert log["budget"] == {"used": outcome.budget_used, "limit": 60}
+    assert log["unresolved"] == [{"reason": "no base model", "count": 1}]
+
+
+def test_the_two_open_lists_are_a_class_of_their_own_in_the_search_log():
+    from datetime import datetime, timezone
+
+    transport = build_transport(_search_mapping())
+
+    outcome = run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(60), open_pages=True)
+    log = outcome.search_log(
+        filtered=False, run_at=datetime(2026, 9, 25, tzinfo=timezone.utc), unresolved={}
+    )
+
+    assert [entry["account"] for entry in log["accounts"] if entry["class"] == "open"] == [
+        "most downloaded",
+        "newest",
+    ]
+
+
+def test_the_two_notes_of_the_screen_come_from_the_same_reading_as_the_file():
+    """One search, one set of numbers: the file and the screen may not disagree (2026-09-24)."""
+    from datetime import datetime, timezone
+
+    from modelroom.screen import search_notes
+
+    outcome = run_search(build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60))
+    log = outcome.search_log(filtered=True, run_at=datetime(2026, 9, 25, tzinfo=timezone.utc), unresolved={})
+
+    notes = search_notes(log, len(outcome.hits), 2)
+
+    # `deepseek-ai` is a publisher of the catalog and was asked; it answered with nothing, so the
+    # note does not name it.
+    assert "deepseek-ai" in outcome.publishers
+    assert notes[0] == "searched Hugging Face at the publisher Qwen and the five listed packagers"
+    assert notes[1] == f"{len(outcome.hits)} repositories, 2 of them models you can pick from"
+
+
 def test_a_full_account_page_says_that_a_more_specific_word_shortens_the_list():
     transport = build_transport(
         _search_mapping(
