@@ -457,6 +457,22 @@ def test_a_pull_error_that_stays_open_is_read_as_its_first_line(streaming):
     assert time.monotonic() - started < 1.4
 
 
+def test_a_pull_answered_with_a_2xx_other_than_200_is_one_line_too(streaming):
+    """`urllib` raises for a 4xx or 5xx only: a 201 that keeps sending must not be read as a pull."""
+    make, server = streaming
+    server.status = 201
+    server.script = _lines({"status": "pulling manifest"}) + [(1.5, b'{"status":"late"}\n')]
+    seen: list[dict] = []
+
+    started = time.monotonic()
+    answer = make(pull_timeout=5.0)("POST", PULL_PATH, {"model": "nova:7b", "stream": True}, progress=seen.append)
+
+    assert answer.status == 201
+    assert answer.json() == {"status": "pulling manifest"}
+    assert seen == []
+    assert time.monotonic() - started < 1.4
+
+
 def test_a_pull_gets_a_read_limit_of_its_own_and_no_limit_for_the_whole():
     daemon = LocalDaemon()
 

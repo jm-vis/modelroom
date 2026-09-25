@@ -205,9 +205,15 @@ class LocalDaemon:
         request = self._request(method, path, body)
         try:
             with self._opener.open(request, timeout=self.timeout_for(path)) as answer:
+                if path == PULL_PATH and answer.status != 200:
+                    # `urllib` raises for a 4xx or 5xx only; a 2xx other than 200 is no pull answer
+                    # either, and is read like an error's: one line, the rest not waited for
+                    # (third-model round, 2026-09-25).
+                    body = answer.readline(MAX_STREAM_LINE_BYTES)
+                    return Response(status=answer.status, headers=dict(answer.headers), body=body)
                 if path == PULL_PATH:
                     # Read inside the `with`: an abort in the callback (Ctrl-C) closes the connection.
-                    return read_stream(answer.readline, progress or _ignore, f"{self.base_url}{path}", answer.status)
+                    return read_stream(answer.readline, progress or _ignore, f"{self.base_url}{path}")
                 return Response(status=answer.status, headers=dict(answer.headers), body=answer.read())
         except urllib.error.HTTPError as exc:
             # Reading the error body can fail the same ways reading a 200 body can, and this

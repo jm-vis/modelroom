@@ -15,9 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 from modelroom.daemon import PULL_PATH, SHOW_PATH, TAGS_PATH, DaemonError
-from modelroom.dialog import FileAsker
+from modelroom.dialog import Asker, FileAsker, TerminalAsker
 from modelroom.document import RenderDocument
 from modelroom.guided import run_guided
 from modelroom.guided_install import (
@@ -25,6 +27,7 @@ from modelroom.guided_install import (
     FirstRow,
     LiveLine,
     first_row,
+    pull_step,
     pulled_problem,
 )
 from modelroom.guided_context import snapshot_packages
@@ -317,13 +320,13 @@ def _first_row_of(tmp_path: Path) -> FirstRow:
     return first
 
 
-def _bare_run(tmp_path: Path, daemon, answers: dict, lines: list[str]):
+def _bare_run(tmp_path: Path, daemon, answers: dict, lines: list[str], asker: Asker | None = None):
     from modelroom.catalog import load_catalog
     from modelroom.guided import GuidedRun
     from modelroom.screen import Screen
 
     return GuidedRun(
-        asker=FileAsker(answers),
+        asker=asker if asker is not None else FileAsker(answers),
         here=tmp_path / "results",
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
         transport=build_transport({}),
@@ -360,6 +363,23 @@ def test_a_first_row_without_an_ollama_name_or_of_another_machine_is_none(tmp_pa
     assert first_row(without_name, "workstation", packages) is None
     assert first_row(document, "inference-server", packages) is None
     assert first_row(document, "workstation", []) is None
+
+
+def test_enter_alone_at_the_terminal_declines_the_pull(tmp_path: Path):
+    """The pointer starts on No (`default=False`): Enter alone pulls nothing. An answer file cannot
+    show that -- a `FileAsker` reads the answer and never the default (third-model round, 2026-09-25)."""
+    _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
+    first = _first_row_of(tmp_path)
+    daemon = pull_daemon(after_pull=tags_with(FIRST_NAME))
+    lines: list[str] = []
+
+    with create_pipe_input() as pipe:
+        pipe.send_text("\r")
+        run = _bare_run(tmp_path, daemon, {}, lines, asker=TerminalAsker(input=pipe, output=DummyOutput()))
+        pull_step(run, first, True)
+
+    assert _pull_calls(daemon) == []
+    assert [line.strip() for line in lines if "Pull #1" in line] == [f"? Pull #1 into Ollama now? ({first.weights_gib:.1f} GB)  No"]
 
 
 def test_a_registry_package_counts_as_pulled_only_with_its_manifest_digest():

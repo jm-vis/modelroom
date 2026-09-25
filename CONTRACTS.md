@@ -3738,8 +3738,11 @@ no byte of the package arrives is **not** recognized by this, and nothing here c
 pull's answer is one JSON line per step of it; it is read line by line and never collected, each
 line goes to a callback, and reading stops at the first line that ends the pull -- `success`, or a
 line with an `error` -- which is the `Response`: nothing after an error can turn it into a success,
-and a daemon that keeps the answer open after `success` is not waited for. A line that is no
-UTF-8, no JSON, no JSON object or longer than 64 KiB is a `DaemonError`. A limit that is reached, a refused connection
+and a daemon that keeps the answer open after `success` is not waited for. Only a `200` is read
+that way: any other status, a `2xx` included (`urllib` raises for a `4xx` or `5xx` only), is one
+bounded line, and the rest of an answer kept open is not waited for (third review round,
+2026-09-25). A line that is no UTF-8, no JSON, no JSON object or longer than 64 KiB is a
+`DaemonError`. A limit that is reached, a refused connection
 or a body that is not JSON is a fault with a reason, never a traceback. **Documented limit:**
 whatever answers on that port is taken to be this machine's daemon -- nothing in the answer proves
 it, and nothing here pretends to check.
