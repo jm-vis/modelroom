@@ -138,7 +138,11 @@ The list of models, one row per model that can really be picked, best fit first.
 folder): `good`, `marginal`, `too tight`; `good (RAM)` means it needs system memory rather than
 the graphics card's. After the fetch the fit is computed per package from what the fetch found. **Size** is the parameter count. **Release** says `latest` when the publisher's own page
 names this model as the current one of its family, `legacy` when the publisher named a successor,
-and `–` when the catalog holds no evidence either way. **Packagers** are the accounts that offer a
+and `–` when nothing decides it. A **`*`** behind the word (`latest*`, `legacy*`) means the status
+is computed from the version numbers of the family, not stated by the publisher: where the catalog
+is silent, the highest version of a family and variant is `latest*` and every lower one `legacy*`
+(`state/search.json` names the successor). It compares only what the search and the catalog know.
+**Packagers** are the accounts that offer a
 GGUF build of it (the first one and how many more, `unsloth +3`, where they do not all fit),
 **Downl.** the downloads of all of them together, **Ollama** the name of the same model in the
 Ollama registry when the catalog or your configuration knows one; a name longer than its 14

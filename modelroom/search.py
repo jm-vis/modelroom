@@ -11,8 +11,8 @@ Four steps, all over the transport this package already has -- no SDK, no second
    build of exactly one base model, and -- with the owner filter on -- the catalog knows that base
    model's account as a publisher. Everything else is shown with its reason, gets no Ollama name,
    no age and no fit.
-3. `decide_age` states `latest`/`legacy` from positive evidence only: a valid `new_version` at
-   the publisher repo, else the catalog's own statement, else `unknown`.
+3. `decide_age` states `latest`/`legacy` from positive evidence only (`new_version`, else the
+   catalog); where both are silent, `search_release` computes one from the family's versions.
 4. `apply_hits` turns the resolved hits into families and owner-bound `repos` entries of a
    configuration (pure), and `write_configuration` writes that configuration out under the
    state lock.
@@ -52,6 +52,7 @@ from .search_pages import (
     typed_plan,
     word_plan,
 )
+from .search_release import release_log, with_release
 from .search_word import SearchWord, catalog_models, close_matches, latest_model_names, parse_search
 
 # The whole guided run -- search, resolution, successor lookups, tree pages and the fetch --
@@ -65,10 +66,10 @@ DEFAULT_GUIDED_BUDGET = 150
 # to tell a listed packager from any other account.
 DEFAULT_PACKAGERS: tuple[str, ...] = ("unsloth", "bartowski", "mradermacher", "lmstudio-community", "ggml-org")
 NO_OLLAMA_LABEL = "none known"
-# `search.json`, the file one search leaves behind ("Search log"). 2 since 2026-09-25: the file
-# names the `mode` of the search it records, so a reader can tell a word search from a typed
-# repository id and from the catalog pages of a search with no word at all.
-SEARCH_LOG_SCHEMA_VERSION = 2
+# `search.json`, the file one search leaves behind ("Search log"). 3 since 2026-09-25: besides the
+# `mode` of the search (2), the file names every resolved base model with its release and where
+# that release comes from (`models`, `search_release.release_log`).
+SEARCH_LOG_SCHEMA_VERSION = 3
 _OLLAMA_ENTRY_PREFIX = "ollama:"
 # A base id no repository can carry (a space is not allowed in a repo id), so `check_relation`
 # reports `base_model_tag` for a hit that does not declare exactly one base.
@@ -215,6 +216,7 @@ class SearchOutcome:
             "budget": {"used": self.budget_used, "limit": self.budget_limit},
             "resolved": self.resolved,
             "unresolved": [{"reason": reason, "count": count} for reason, count in sorted(unresolved.items())],
+            "models": release_log(self.hits),
         }
 
 
@@ -282,6 +284,7 @@ def run_search(
     groups = [typed_group] if typed_group is not None else []
     groups += _answer_plan(redirecting, plan, word, state, shared, notes)
     hits = _with_ollama_entries([hit for group in groups for hit in group.hits], ollama_entries or {})
+    hits = with_release(hits, catalog, state.ages)  # pure: every age lookup is done by now
     return SearchOutcome(
         query=word.text,
         hits=hits,
@@ -637,6 +640,7 @@ def _build_hit(
         resolved_base_model=base,
         age=verdict.age,
         successor=verdict.successor,
+        release_basis="stated" if verdict.age != UNKNOWN else None,
         ollama=_catalog_ollama(catalog, base),
         **common,
     )

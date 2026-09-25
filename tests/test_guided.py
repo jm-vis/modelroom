@@ -1035,7 +1035,7 @@ def test_the_search_leaves_two_notes_and_puts_the_accounts_into_search_json(tmp_
     assert not any("cannot be picked:" in line for line in lines)
     assert not any("budget " in line for line in lines)
     log = _search_log(tmp_path)
-    assert log["schema_version"] == 2
+    assert log["schema_version"] == 3
     assert log["mode"] == "word"
     # Fourteen requests for seven accounts since 2026-09-25: newest and most downloaded each.
     assert (log["word"], log["filter_owners"], log["requests"], log["resolved"]) == ("qwen", True, 14, 3)

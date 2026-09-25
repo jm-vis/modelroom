@@ -201,7 +201,7 @@ def test_criterion_two_names_a_cross_check_that_is_not_confirmed():
 
 
 GOOD_SEARCH_LOG = {
-    "schema_version": 2,
+    "schema_version": 3,
     "word": "qwen",
     "mode": "word",
     "filter_owners": True,
@@ -214,6 +214,11 @@ GOOD_SEARCH_LOG = {
     "budget": {"used": 3, "limit": 150},
     "resolved": 3,
     "unresolved": [{"reason": "the repository does not say it packages a base model", "count": 5}],
+    "models": [
+        {"base_model": "Qwen/Qwen3.5-9B", "age": "legacy", "successor": "Qwen/Qwen3.8-27B", "release_basis": "computed"},
+        {"base_model": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "age": "latest", "successor": None,
+         "release_basis": "computed"},
+    ],
 }
 GOOD_SEARCH = [
     " searched Hugging Face at the publisher Qwen and the five listed packagers",
@@ -228,7 +233,21 @@ def test_criterion_three_passes_on_a_real_search_log():
 def test_criterion_three_names_a_log_of_another_schema():
     problems = st.search_problems({"schema_version": 1}, GOOD_SEARCH)
 
-    assert problems == ["search.json has schema_version 1, expected 2"]
+    assert problems == ["search.json has schema_version 1, expected 3"]
+
+
+def test_criterion_three_names_a_log_of_the_schema_before_the_release_models():
+    """A log of schema 2 carries no `models`: a run before the computed release is no evidence."""
+    log = {key: value for key, value in GOOD_SEARCH_LOG.items() if key != "models"} | {"schema_version": 2}
+
+    assert st.search_problems(log, GOOD_SEARCH) == ["search.json has schema_version 2, expected 3"]
+
+
+@pytest.mark.parametrize("models", [None, [], "Qwen/Qwen3.5-9B"])
+def test_criterion_three_names_a_log_without_the_release_of_its_models(models):
+    log = GOOD_SEARCH_LOG | {"models": models}
+
+    assert st.search_problems(log, GOOD_SEARCH) == ["search.json names no release for the models it resolved"]
 
 
 def test_criterion_three_names_a_log_of_another_mode():

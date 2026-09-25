@@ -21,6 +21,11 @@
 # publisher carries as current is on its own no evidence that every model of the line before it
 # was replaced, and neither is a model of the same size or a benchmark table: such a model keeps
 # age `unknown`, with a comment that says what was checked.
+#
+# A stated `latest` or `successor` is never derived from a number, a line or a family; the list's
+# computed status is, and says so with `*` (`search_release`, decided 2026-09-25). This file
+# computes nothing: it holds statements only, and the rows it leaves `unknown` are the ones the list
+# computes a status for.
 
 schema_version = 1
 

@@ -28,6 +28,7 @@ from modelroom.contracts import (
     SchemaVersionError,
     Snapshot,
 )
+import modelroom.state as state_module
 from modelroom.fetch_types import AreaOutcome
 from modelroom.state import (
     LockHeldError,
@@ -392,6 +393,124 @@ def test_acquire_lock_is_exclusive_across_three_real_processes(tmp_path: Path):
     for i in range(5):
         outputs = _race_round(script_path, tmp_path / f"race-{i}.lock", tmp_path / f"go-{i}", tmp_path / f"release-{i}")
         assert sorted(outputs) == ["acquired", "held", "held"], f"round {i}: {outputs!r}"
+
+
+# --- a file that must not exist yet -------------------------------------------------------
+# `publish_new_text` is read off the module inside each test, so a module without it fails these
+# tests and no other.
+
+# The one system call that publishes the written file without replacing an existing one.
+_PUBLISH_CALL = "rename" if sys.platform == "win32" else "link"
+
+
+def test_publish_new_text_creates_the_file_with_lf_and_leaves_no_tmp_file(tmp_path: Path):
+    target = tmp_path / "new" / "modelroom.toml"
+
+    state_module.publish_new_text(target, "a = 1\nb = 2\n")
+
+    assert target.read_bytes() == b"a = 1\nb = 2\n"
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_publish_new_text_refuses_a_file_that_exists_and_leaves_it_as_it_is(tmp_path: Path):
+    target = tmp_path / "modelroom.toml"
+    target.write_bytes(b"mine\n")
+
+    with pytest.raises(FileExistsError):
+        state_module.publish_new_text(target, "theirs\n")
+
+    assert target.read_bytes() == b"mine\n"
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_publish_new_text_gives_the_file_the_mode_write_text_gives(tmp_path: Path):
+    """Not `mkstemp`'s 0600: a configuration other users of the folder read stays readable."""
+    import stat
+
+    reference = tmp_path / "reference.toml"
+    reference.write_text("x\n", encoding="utf-8")
+    target = tmp_path / "modelroom.toml"
+
+    state_module.publish_new_text(target, "x\n")
+
+    assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(reference.stat().st_mode)
+
+
+def test_a_publication_that_fails_passes_its_error_on_and_leaves_no_tmp_file(tmp_path: Path, monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise OSError("the file system refused")
+
+    monkeypatch.setattr(os, _PUBLISH_CALL, refuse)
+    target = tmp_path / "modelroom.toml"
+
+    with pytest.raises(OSError, match="refused"):
+        state_module.publish_new_text(target, "x\n")
+
+    assert not target.exists()
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_an_interruption_during_the_publication_leaves_no_tmp_file(tmp_path: Path, monkeypatch):
+    """Ctrl-C is no `Exception`, and the temporary file goes all the same."""
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, _PUBLISH_CALL, interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        state_module.publish_new_text(tmp_path / "modelroom.toml", "x\n")
+
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_an_interruption_before_the_descriptor_is_taken_over_closes_it_and_leaves_no_tmp_file(
+    tmp_path: Path, monkeypatch
+):
+    """Ctrl-C between `os.open` and `os.fdopen` (acceptance round, 2026-09-25): the descriptor is
+    open and belongs to no file object yet. Windows refuses to remove a file that is open, so
+    without closing it first the temporary file stayed and a `PermissionError` covered the Ctrl-C."""
+    real_open = os.open
+    descriptors: list[int] = []
+
+    def recording(*args, **kwargs):
+        descriptor = real_open(*args, **kwargs)
+        descriptors.append(descriptor)
+        return descriptor
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, "open", recording)
+    monkeypatch.setattr(os, "fdopen", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        state_module.publish_new_text(tmp_path / "modelroom.toml", "x\n")
+
+    assert len(descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(descriptors[0])
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_two_calls_in_one_process_never_share_a_tmp_file(tmp_path: Path, monkeypatch):
+    real = getattr(os, _PUBLISH_CALL)
+    sources: list[str] = []
+
+    def recording(source, target, *args, **kwargs):
+        sources.append(os.path.basename(source))
+        return real(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(os, _PUBLISH_CALL, recording)
+
+    state_module.publish_new_text(tmp_path / "a.toml", "a\n")
+    state_module.publish_new_text(tmp_path / "b.toml", "b\n")
+    with pytest.raises(FileExistsError):
+        state_module.publish_new_text(tmp_path / "a.toml", "again\n")
+
+    assert len(sources) == len(set(sources)) == 3
+    assert all(name.startswith(("a.toml.", "b.toml.")) and name.endswith(".tmp") for name in sources)
 
 
 # --- atomic writes ----------------------------------------------------------------------

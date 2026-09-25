@@ -1026,6 +1026,11 @@ by simply running `fetch`/`hardware` again, never by restoring from a backup. `f
 write would cost real latency on every run for a durability guarantee this tool's actual failure
 mode (re-run the command) does not need.
 
+**One exception to `os.replace`** (decided 2026-09-25): a configuration that does not exist yet is
+created by `state.publish_new_text`, which never replaces a file -- two runs creating it at once
+must not have the second one's text take the place of the first one's ("Search over the Hugging
+Face API", `write_configuration`). Atomic in the same sense, not durable either.
+
 ### Run status (`run-status.json`)
 
 Written by `modelroom/state.py::write_run_status` at the end of every `fetch` run that got past
@@ -1072,7 +1077,7 @@ the file can never say different numbers.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "word": "qwen",
   "mode": "word",
   "filter_owners": true,
@@ -1085,14 +1090,22 @@ the file can never say different numbers.
   "requests": 14,
   "budget": {"used": 16, "limit": 150},
   "resolved": 3,
-  "unresolved": [{"reason": "the repository does not say it packages a base model", "count": 1}]
+  "unresolved": [{"reason": "the repository does not say it packages a base model", "count": 1}],
+  "models": [
+    {"base_model": "Qwen/Qwen3.5-9B", "age": "legacy", "successor": "Qwen/Qwen3.8-27B", "release_basis": "computed"},
+    {"base_model": "Qwen/Qwen3.8-27B", "age": "latest", "successor": null, "release_basis": "stated"}
+  ]
 }
 ```
 
-`schema_version` is **2** since 2026-09-25, for the one new field: `mode` is `word`, `id` or
-`catalog` (`SearchOutcome.mode`), so a reader can tell a word search from a typed repository id and
-from the catalog pages of a search with no word at all. `word` is what was typed, the empty string
-included.
+`schema_version` is **3** since 2026-09-25, for `models`: one entry per resolved base model, in
+the order of the hits, with its `age`, its `successor` and its `release_basis` (`stated`,
+`computed`, or `null` for `unknown`; "Computed release") -- the list shows a star and no successor,
+so the file is where the successor of a computed `legacy` can be read. Schema 2 added `mode`: `word`,
+`id` or `catalog` (`SearchOutcome.mode`), so a reader can tell a word search from a typed repository
+id and from the catalog pages of a search with no word at all. `word` is what was typed, the empty
+string included. `scripts/selftest.py` reads the file with a schema gate and refuses any other
+version; a log of a previous schema is not migrated -- a log is about the search that just ran.
 `accounts` is one entry per asked **group**, in the order they were asked: `class` is what the search
 asked it by -- `publisher` for a publisher account of a matching catalog family, `packager` for the
 positive list, `open` for one of the two open lists, `typed` for the one page of a typed repository
@@ -2549,8 +2562,11 @@ publisher's own page `https://huggingface.co/<publisher>` or one of its collecti
 `https://huggingface.co/collections/<publisher>/...`, query and fragment ignored; a model's own
 page is no evidence), and
 `latest_checked`, the date the maintainer confirmed it. Both are set exactly when `latest` is
-true. `latest` is never derived from a number, a line or a family: a newer version number in
-the same line does not make an earlier model `legacy`, only an explicit `successor` does. `Catalog.age_of(hf_repo)` returns `latest`, `legacy` with its successor, or
+true. A **stated** `latest` or `successor` is never derived from a number, a line or a family: a
+higher version number in the same line does not make an earlier model `legacy` in the catalog, only
+an explicit `successor` does. The list's **computed** status is derived from the version numbers of
+a family, and says so with `*` ("Latest and legacy evidence", "Computed release"; decided
+2026-09-25); the catalog itself computes nothing. `Catalog.age_of(hf_repo)` returns `latest`, `legacy` with its successor, or
 `unknown`. A model with a successor is never `latest`; successors stay under the family's
 publisher and never form a cycle, within a family or across families; family names and
 `hf_repo` are unique across the catalog.
@@ -2721,7 +2737,11 @@ model is proven (relation `quantized`, publisher per catalog), so a resolved hit
 `base_model` equal to `[resolved_base_model]` and `base_model_relation` `quantized`; an
 unresolved hit carries its
 `unresolved_reason` (a relation status or `publisher_unknown`) and gets neither a fit nor an
-Ollama name. `successor` is set exactly when `age` is `legacy`. `repo_created_at` is shown as
+Ollama name. `successor` is set exactly when `age` is `legacy`. `release_basis` says where `age`
+comes from (since 2026-09-25): `stated` by the publisher's repository or the catalog
+(`decide_age`), `computed` from the version numbers of the family ("Computed release"), or `None`
+for an `unknown` age and for a hit built without the field, which reads as `stated`. The coupling
+runs one way: `computed` needs an `age` other than `unknown`. `repo_created_at` is shown as
 "repo created", never as the model's release date. `downloads` is how often the Hub says the
 repository was downloaded (`ge=0`, `None` when the answer carries no count): an indication of what
 many people take, **never a rank** -- the ranking rule alone orders the result.
@@ -2743,6 +2763,7 @@ many people take, **never a rank** -- the ranking rule alone orders the result.
   "license": "apache-2.0",
   "age": "legacy",
   "successor": "acme/Nova-7B-2512",
+  "release_basis": "stated",
   "ollama": "nova:7b"
 }
 ```
@@ -2758,7 +2779,10 @@ when none does), `parameters_b` what a repository states, else what the name say
 and `fit` is the fit from that size ("Fit from size"), or `unknown` with `machine not measured`
 or `parameter count unknown`. `name` and `publisher` are the two halves of `base_model`. `ollama`
 is the first Ollama name a repository names, else the pair the configuration holds for the base
-model (`model_choices(..., configured_ollama=...)`, since 2026-09-25), else `None`.
+model (`model_choices(..., configured_ollama=...)`, since 2026-09-25), else `None`. `age` and
+`release_basis` come from one and the same repository -- the first with an `age` other than
+`unknown` -- so a row never shows one hit's age with another hit's star; `computed` needs a known
+`age` here as well.
 
 ```json
 {
@@ -3099,10 +3123,19 @@ over but raises `ConfigChangedError` (a `ConfigError`: the file and `changed by 
 it was read`), and the caller reads again ("Guided mode", "Every write reads the file again
 first"). The lock is the one of the configuration that was read, so two runs that read the same
 text take the same lock even when one of them moves `paths.state`. A new file has nothing read and
-takes the lock of the configuration it writes: two callers creating the same file at once are kept
-apart when they name the same `paths.state` -- every guided run does (`<folder>/state`) -- and not
-when a library caller names another one. No backup is kept: the guided mode has the user confirm
-the change first.
+takes the lock of the configuration it writes, so two callers naming different state folders take
+different locks -- and the new file is therefore **created exclusively** (decided 2026-09-25):
+`state.publish_new_text` writes the text into a temporary file of its own (process id plus a random
+part, opened with `O_EXCL`, mode `0666` before the umask like any other written file, LF line
+endings) and publishes it with one system call that never replaces an existing file -- `os.rename`
+on Windows, `os.link` and then removing the temporary name elsewhere. Of two runs creating the file
+at once, the second gets `FileExistsError`, which `write_configuration` turns into the same
+`ConfigChangedError`; the temporary file goes on every early end, Ctrl-C included. The comparison
+before it stays and catches the ordinary case; for a file that was not there when the run read,
+a read Windows refuses because another run is renaming the file into place that very moment
+(`PermissionError`, measured 2026-09-25) counts as the same conflict. Outside the guarantee: a file system without hard
+links, and a network drive that does not keep `link`/`rename` atomic. No backup is kept: the guided
+mode has the user confirm the change first.
 
 ### Target set and areas
 
@@ -3161,7 +3194,58 @@ never evidence:
 `age` is a statement about the **base model**, so a packager's hit shows the age of the
 publisher model it resolved to; an unresolved hit is always `unknown`. `decide_age` is called
 once per distinct resolved base model in a search, not once per hit. `repo_created_at` is
-labeled "repo created" and is never read as a release date or as an age.
+labeled "repo created" and is never read as a release date or as an age. Every age this section
+decides is `stated` (`SearchHit.release_basis`).
+
+**Computed release** (`modelroom/search_release.py`, decided 2026-09-25). Where no statement
+decides -- `decide_age` said `unknown` **because the catalog is silent** (`AgeVerdict.evidence ==
+"catalog"`) -- the list computes a status from the names of one family instead of keeping a
+maintained list of successors. `run_search` does it once every age lookup is done, without a request
+of its own, and rebuilds each such hit through `SearchHit.model_validate`, so the coupling checks
+run. It reaches the list (`latest*`, `legacy*`) and `search.json`, never the catalog, the
+configuration or the document.
+
+- **A name as a key** (`line_key`). The name half of the repository id is lowercased and split at
+  `-` and `_`; each token takes the first class that matches, in this order: precision (`bf16`,
+  `fp8`), number of experts (`16e`) and active size of a mixture (`a3b`, `a0.6b`), all three
+  ignored; size (`27b`, `360m`, `2.4t`, `e4b`); a date as `YYMM` (`2512`, `YY` 20 to 39) or `MMDD`
+  (`0528`), or a month and a year as two tokens (`08-2025`); a version (`3.5`, `v0.6`, a plain number
+  only with one or two digits); a word with a version (`qwen3.5`, `smollm3`); a word (`coder`,
+  `r1`). A token of no class -- `735`, `2025` alone -- makes the name **not interpretable**. The
+  first token of the size, date, version or word-with-version classes is the **boundary**: the
+  family is the publisher plus the words in front of it, without `instruct`, `it` and `chat`
+  (`Mistral-Small-Instruct-2409` is a Mistral Small), and the word of a word-with-version
+  boundary (`Qwen3.5` is family `qwen`, version `(3, 5)`); the version is the boundary's number, else
+  the first version token after it; the date is the first date token. A second version or a second
+  date makes the name not interpretable. The **variant** is the set of words after the boundary
+  (a word with a version counts whole there: `qwen3` in `DeepSeek-R1-0528-Qwen3-8B`), without
+  `instruct`, `it` and `chat` -- the instruction-tuned model is the ordinary one. The size is
+  `guided_models.parameters_from_name`, the package's one size rule, else the parameter count of a
+  hit that is that very repository.
+- **The order.** A name stands over another of its group when its version is higher (no version
+  is lower than every version), or, with equal versions, when it carries a date and the other none
+  (the undated name is the first release, the dated one its revision), or a later date of the same
+  form. Dates of different forms are not comparable. The size plays no part.
+- **Population and groups.** The resolved base models of this search, every model of the catalog
+  and every successor the catalog names -- nothing else, so no request. A group is publisher, family
+  and variant. Its **maximal** members -- the ones no member stands over -- are `latest`, all of them
+  and whatever their size; every other member is `legacy`. A group of one is `latest`.
+- **Successor.** The candidates are the group's maximal members, whatever status they keep (a
+  stated `legacy` such as `Magistral-Small-2509` is one). Of them, the one of the same size, else of
+  the next larger size, else of the next smaller one; a candidate without a size drops out as soon
+  as one with a size fits. Exactly one candidate left: that is the successor. More than one, or an
+  unknown size with more than one candidate: the row stays `unknown` -- the rule picks none at random.
+- **Cycles.** Every computed edge is drawn first; then each one that lies on a cycle of the graph of
+  all edges -- the stated ones (the catalog's and this search's) and every computed one -- falls,
+  all at once, and its row stays `unknown`. A stated edge never falls. A chain is allowed: a
+  computed successor may itself be `legacy`.
+- **What stays as it is.** A stated `latest` or `legacy` keeps its status; it still counts as a
+  member and can be a candidate. An `unknown` from a fault -- an invalid or unreachable
+  `new_version`, a budget that ended -- is no silence and is not computed. A name that is not
+  interpretable stays `unknown` and takes no part. `repo_created_at` is not read.
+- **The limit.** The search sees two pages of twenty repositories per account, filtered by the
+  search word. What it does not see and the catalog does not know is not compared -- that is why the
+  status says `computed` and never stands in for a statement.
 
 ## Render (schema 2)
 
@@ -4187,7 +4271,9 @@ a label of 100 made a line of 105): the model's name (the part after the `/`, 24
 graphics memory is too small and the fit is against system memory: fit v1 caps that pool at `good`,
 and live on 2026-09-24 a 122B model stood as `good` above a 9B `marginal` that fits the graphics
 card, with nothing to tell the two apart), its size (6: `9B`, `0.6B`, `2.4T`, `unknown`), where it
-stands in its family (`Release`, 7: `latest`, `legacy`, `–`), the packager accounts that have it
+stands in its family (`Release`, 7: `latest`, `legacy`, `–`, and `latest*` or `legacy*` where the
+status is **computed** from the version numbers of the family rather than stated -- "Computed
+release"; the successor of a `legacy*` row is in `search.json`, not in the row), the packager accounts that have it
 (12: all of them where they fit, else the first one and how many more, `unsloth +3`, else cut), the
 downloads of all of them together (6; an indication, not a rank) and the Ollama name (the rest of the
 line, 14). `Release` is one constant (`guided_models.RELEASE_COLUMN`), so the head, this section and
@@ -4213,8 +4299,9 @@ cut here; the install line of step 5 carries the whole one.
 The order is the memory pool (a fit in graphics memory before one in system memory, whatever its
 class), then the fit class, then the release (`latest`, then a release nobody knows, then `legacy`),
 then the downloads, then the name, with `too tight` and `unknown` last (decided 2026-09-24,
-release 2026-09-25). A **`legacy` row is drawn gray as a whole** (`dialog.Choice(dim=True)`): the
-family has moved on, and that belongs in the reading of the row rather than in one cell of it.
+release 2026-09-25); a computed status sorts like a stated one of the same word. A **`legacy` row
+is drawn gray as a whole** (`dialog.Choice(dim=True)`), stated or computed: the family has moved on,
+and that belongs in the reading of the row rather than in one cell of it.
 
 How many models and how many repositories the search answered with is the second note above the
 list, and the reasons of the repositories that are no model of it are in `search.json` ("Search
@@ -4223,7 +4310,9 @@ packager` for an owner class of `other` -- except for the one repository the per
 that filter never hides) -- the repositories themselves are no lines of the list either. What the
 list has to say about itself is its **instruction line** (`guided_models.hint_line`), under the
 list and behind the line of the keys: `latest: the publisher's current release of its family ·
-legacy: the publisher named a successor · fit from the size at 32k context, exact after the fetch`
+legacy: a successor is named · *: computed from the version numbers of the family, not stated by
+the publisher · fit from the size at 32k context, exact after the fetch` (a line longer than the
+window wraps, it is never cut)
 -- with `fit unknown until this machine is measured` in place of the last piece when this folder
 holds no measured machine, and always the context the fit was really computed for. What nothing
 marked would do is no longer said there: `Enter` takes the row under the pointer now.
@@ -4237,8 +4326,10 @@ said `fit at 8k context` while the very next question started on `L 32k`, and tw
 are one too many (test round, 2026-09-24). A fit stands on a number either way, never on a level.
 The parameter count is what a
 repository states (`SearchHit.parameters_b`), else what the model's name says
-(`guided_models.parameters_from_name`: every `<number>B`/`<number>T` that does not stand behind a
-letter, the largest of them, `2.4T` as 2400 and shown as `2.4T` again -- so `Qwen3.5-35B-A3B-MTP` is 35, `Nova-A17B` and
+(`guided_models.parameters_from_name`: every `<number>B`/`<number>M`/`<number>T` that does not stand
+behind a letter -- with an `E` in front allowed, an effective size -- the largest of them, `2.4T` as
+2400 and shown as `2.4T` again, `360M` as 0.36, `E4B` as 4 (`M` and `E` since 2026-09-25, when the
+computed release took its sizes from this same rule) -- so `Qwen3.5-35B-A3B-MTP` is 35, `Nova-A17B` and
 `Qwen-Image-2.1` are nothing), else nothing, and then the fit is `unknown` with `parameter count
 unknown` rather than a guess. `machine not measured` is the other such reason.
 

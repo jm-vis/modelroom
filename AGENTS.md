@@ -66,7 +66,7 @@ same thing in the same way:
 
 | Write | For | Never |
 |---|---|---|
-| `latest`, `legacy` (with its `successor`), `unknown` | where a model stands in its family | `older`, `newer`, `outdated` |
+| `latest`, `legacy` (with its `successor`), `unknown`; `computed` (`*`) where the family's version numbers decided | where a model stands in its family | `older`, `newer`, `outdated` |
 | `measured`, `entered`, `computed` | where a value came from | "detected", "estimated", "real" |
 | `publisher`, `listed packager`, `other` | who owns a repository | `untrusted`, `trustworthy`, or any other verdict on a packager; only the class is stated |
 | `unknown` | a fact with no evidence behind it | an empty cell, `n/a`, or a plausible guess |
@@ -75,8 +75,10 @@ same thing in the same way:
 | `display adapter only` | a GPU that is present but cannot carry a fit | "no GPU" |
 | `none known` | no Ollama name is mapped to this package, in prose and in a log | "missing", "not available"; in a column of a list it is `–`, see above |
 
-An age statement is always positive evidence about one model (a successor named at the
-publisher's repository, or the shipped catalog), never a comparison of two version numbers.
+A **stated** age is positive evidence about one model (a successor named at the publisher's
+repository, or the shipped catalog), never a comparison of two version numbers; the list's
+computed age compares version numbers within one family and variant and is marked `*` (decided
+2026-09-25).
 
 `tests/test_language_standard.py` is this section in executable form: it reads every module
 under `modelroom/` and the prose files, and names file, line, word and replacement. Its

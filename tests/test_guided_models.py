@@ -167,6 +167,14 @@ def test_with_the_filter_on_an_other_account_is_no_target_of_a_model_that_is_off
         ("Nova-" + "9" * 400 + "B", None),
         ("Nova-8b", 8.0),
         ("Nova", None),
+        # Millions count as well, and an effective size keeps its `E` (decided 2026-09-25): one
+        # size rule for the list's fit and for the successor of a computed release.
+        ("SmolLM2-360M-Instruct", 0.36),
+        ("gemma-4-E4B-it", 4.0),
+        ("Nova-e2b", 2.0),
+        # The `E` is a prefix of a size of its own, never the end of a word in front of it.
+        ("Nova-Large4B", None),
+        ("Qwen3-30B-A3B", 30.0),
     ],
 )
 def test_the_parameter_count_is_read_from_the_name(name, expected):
@@ -319,6 +327,53 @@ def test_the_release_column_carries_the_word_of_the_age():
     legacy = _models([_hit("unsloth/Qwen3.5-9B-GGUF", age="legacy", successor="Qwen/Qwen3.8-9B")])[0]
 
     assert (latest.release_text, legacy.release_text) == ("latest", "legacy")
+
+
+@pytest.mark.parametrize("basis", ["stated", None])
+def test_a_stated_release_carries_no_star(basis):
+    """`None` is a hit built before the basis existed, and it reads as stated."""
+    model = _models([_hit("unsloth/Qwen3.5-9B-GGUF", age="latest", release_basis=basis)])[0]
+
+    assert model.release_text == "latest"
+
+
+def test_a_computed_release_carries_a_star_in_the_width_of_its_column():
+    latest = _models([_hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", age="latest", release_basis="computed")])[0]
+    legacy = _models(
+        [_hit("unsloth/Qwen3.5-9B-GGUF", age="legacy", successor="Qwen/Qwen3.8-27B", release_basis="computed")]
+    )[0]
+
+    assert (latest.release_text, legacy.release_text) == ("latest*", "legacy*")
+    assert (latest.release_basis, legacy.release_basis) == ("computed", "computed")
+    assert all(len(text) <= 7 for text in (latest.release_text, legacy.release_text))
+    assert all(len(label) <= LABEL_LIMIT for label in _labels([latest, legacy]))
+    assert "latest* " in _labels([latest])[0]
+
+
+def test_the_age_and_its_basis_come_from_the_same_repository():
+    """The first repository with a known age decides both; a second one never lends its basis."""
+    hits = [
+        _hit("Qwen/Qwen3.5-9B-GGUF", owner="publisher"),
+        _hit("unsloth/Qwen3.5-9B-GGUF", age="legacy", successor="Qwen/Qwen3.8-27B", release_basis="computed"),
+        _hit("bartowski/Qwen3.5-9B-GGUF", age="latest", release_basis="stated"),
+    ]
+
+    model = _models(hits)[0]
+
+    assert (model.age, model.release_basis, model.release_text) == ("legacy", "computed", "legacy*")
+
+
+def test_a_computed_basis_without_a_known_age_is_no_model_choice():
+    model = _models([_hit("unsloth/Qwen3.5-9B-GGUF")])[0]
+
+    with pytest.raises(ValueError, match="computed"):
+        ModelChoice.model_validate({**model.model_dump(), "release_basis": "computed"})
+
+
+def test_a_computed_legacy_row_is_drawn_gray_like_a_stated_one():
+    hits = [_hit("unsloth/Qwen3.5-9B-GGUF", age="legacy", successor="Qwen/Qwen3.8-27B", release_basis="computed")]
+
+    assert [choice.dim for choice in list_choices(_models(hits))] == [True]
 
 
 def test_a_legacy_row_is_drawn_gray_as_a_whole():
@@ -525,6 +580,21 @@ def test_the_release_stands_between_the_fit_class_and_the_downloads():
     assert [model.name for model in models] == ["Nova-7B", "Nova-9B", "Nova-8B"]
 
 
+def test_a_computed_release_sorts_like_a_stated_one():
+    """Decided 2026-09-25: the star says where the status comes from, not how much it weighs."""
+    hits = [
+        _hit("unsloth/Nova-8B-GGUF", base="acme/Nova-8B", downloads=9_000_000, age="legacy",
+             successor="acme/Nova-8B-2512", release_basis="computed"),
+        _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", downloads=1_000),
+        _hit("unsloth/Nova-7B-GGUF", base="acme/Nova-7B", downloads=10, age="latest", release_basis="computed"),
+        _hit("unsloth/Luna-7B-GGUF", base="acme/Luna-7B", downloads=5, age="latest", release_basis="stated"),
+    ]
+
+    models = _models(hits)
+
+    assert [model.name for model in models] == ["Nova-7B", "Luna-7B", "Nova-9B", "Nova-8B"]
+
+
 def test_the_values_of_the_list_are_the_base_models():
     assert [choice.value for choice in list_choices(_models([_hit("unsloth/Qwen3.5-9B-GGUF")]))] == [QWEN]
 
@@ -573,7 +643,8 @@ def test_the_hint_line_explains_the_release_words_and_names_the_context():
     line = hint_line(_measured(), 32768)
 
     assert line == (
-        "latest: the publisher's current release of its family · legacy: the publisher named a successor · "
+        "latest: the publisher's current release of its family · legacy: a successor is named · "
+        "*: computed from the version numbers of the family, not stated by the publisher · "
         "fit from the size at 32k context, exact after the fetch"
     )
     assert "nothing marked" not in line

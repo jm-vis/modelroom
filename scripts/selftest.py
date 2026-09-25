@@ -16,8 +16,9 @@ Criteria (the plan's own numbering):
    results folder in the pointer file;
 2. this machine is measured: `gpu_state: measured`, llmfit cross-check `confirmed`;
 3. the search resolves at least one publisher model, `<state>/search.json` names every page it
-   asked with its class and every reason a repository cannot be picked with its number, and the
-   screen says where it asked and how much of the answer is a choice;
+   asked with its class, every reason a repository cannot be picked with its number and every
+   resolved model with its release, and the screen says where it asked and how much of the answer
+   is a choice;
 4. the ranking carries the rule and the context in its header, and Qwen3.5 stands under
    "not covered";
 5. the prepared package is measured against the real local Ollama daemon: the measurement is
@@ -70,7 +71,7 @@ from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parent.parent
 SEARCH_NAME = "qwen"
-SEARCH_LOG_VERSION = 2  # `search.json`'s own version (CONTRACTS.md, "Search log")
+SEARCH_LOG_VERSION = 3  # `search.json`'s own version (CONTRACTS.md, "Search log")
 QWEN_BASE = "Qwen/Qwen3.5-9B"
 UNSLOTH_GGUF = "unsloth/Qwen3.5-9B-GGUF"
 # The prepared package of criterion 5: the one repository in the pinned search answer whose base
@@ -184,6 +185,9 @@ def search_problems(log: dict, lines: list[str]) -> list[str]:
         problems.append(f"a reason is empty or covers no repository: {reasons}")
     if not [entry for entry in log.get("accounts", []) if entry.get("class") == "publisher"]:
         problems.append("search.json names no publisher account among the pages that were asked")
+    # Schema 3: every resolved base model with its release, the one record of the computed ones.
+    if not isinstance(log.get("models"), list) or not log["models"]:
+        problems.append("search.json names no release for the models it resolved")
     if not any("searched Hugging Face at " in line for line in lines):
         problems.append("the screen does not say where the search asked")
     if not any("you can pick from" in line for line in lines):

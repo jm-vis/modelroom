@@ -48,6 +48,10 @@ class SearchHit(BaseModel):
     license: str = UNKNOWN
     age: Age = UNKNOWN
     successor: str | None = None
+    # Where `age` comes from: `stated` by the publisher's repository or the catalog, or `computed`
+    # from the version numbers of the family (`search_release`, decided 2026-09-25). `None` is an
+    # `unknown` age, or a hit built without it, and reads as `stated`.
+    release_basis: Literal["stated", "computed"] | None = None
     ollama: str | None = None
 
     @field_validator("repo")
@@ -73,6 +77,8 @@ class SearchHit(BaseModel):
                 raise ValueError("an unresolved hit has an unresolved_reason, no resolved_base_model, no ollama")
         if (self.age == "legacy") != (self.successor is not None):
             raise ValueError("successor is set exactly when age is 'legacy'")
+        if self.release_basis == "computed" and self.age == UNKNOWN:
+            raise ValueError("release_basis 'computed' needs a known age")
         if self.ollama is not None:
             validate_ollama_name(self.ollama)
         return self

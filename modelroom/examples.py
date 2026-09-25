@@ -451,6 +451,7 @@ EXAMPLES: dict[str, dict] = {
         "license": "apache-2.0",
         "age": "legacy",
         "successor": "acme/Nova-7B-2512",
+        "release_basis": "stated",
         "ollama": "nova:7b",
     },
     "ModelChoice": {

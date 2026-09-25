@@ -41,6 +41,7 @@ from modelroom.search_pages import (
     model_url,
     most_downloaded_url,
     newest_url,
+    search_accounts,
 )
 from modelroom.search_word import latest_model_names
 from modelroom.state import LockHeldError, acquire_lock, release_lock
@@ -49,6 +50,7 @@ from fixture_support import (
     CATALOG_PAGE_FOREIGN_REPO,
     CATALOG_PAGE_MODEL,
     CATALOG_PAGE_REPO,
+    MISTRAL_BASE_MODELS,
     SEARCH_ACCOUNT_PAGES,
     TYPED_GGUF_REPO,
     TYPED_NO_GGUF_REPO,
@@ -310,7 +312,7 @@ def test_the_search_log_carries_one_entry_per_asked_page_with_its_class():
         filtered=True, run_at=datetime(2026, 9, 25, 8, 0, 0, tzinfo=timezone.utc), unresolved={"no base model": 1}
     )
 
-    assert log["schema_version"] == 2
+    assert log["schema_version"] == 3
     assert log["mode"] == "word"
     assert (log["word"], log["filter_owners"], log["run_at"]) == ("qwen", True, "2026-09-25T08:00:00+00:00")
     assert [entry["account"] for entry in log["accounts"]] == [group.label for group in outcome.groups]
@@ -603,7 +605,9 @@ def test_a_typed_id_resolves_although_no_catalog_publisher_owns_its_base_model()
     assert (hit.resolved, hit.unresolved_reason) == (True, None)
     assert hit.resolved_base_model == "nebula-lab/Nebula-9B"
     assert hit.publisher_status == "other"
-    assert hit.age == "unknown"  # no catalog statement and no `new_version`: no evidence either way
+    # No catalog statement and no `new_version`: nothing is stated. Alone in its family, the model is
+    # the highest version of it this search knows, so the list computes `latest` (decided 2026-09-25).
+    assert (hit.age, hit.successor, hit.release_basis) == ("latest", None, "computed")
 
 
 def test_a_typed_id_without_a_gguf_file_says_so_and_searches_for_the_name():
@@ -1201,6 +1205,112 @@ def test_a_model_without_an_assignment_is_labeled_none_known():
     assert ollama_label(_hit(outcome, "unsloth/Qwen3.5-9B-GGUF")) == "qwen3.5:9b"
     assert ollama_label(_hit(outcome, "community-user/Nebula-9B-GGUF")) == NO_OLLAMA_LABEL
     assert NO_OLLAMA_LABEL == "none known"
+
+
+# --- the computed release, at the recorded answers ------------------------------------------------
+
+MISTRAL_SMALL_3 = "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
+MISTRAL_SMALL_4 = "mistralai/Mistral-Small-4-119B-2603"
+
+
+def _mistral_outcome():
+    transport = build_transport(mistral_search_mapping())
+    return transport, run_search(transport, "mistral", catalog=_catalog(), budget=RequestBudget(60))
+
+
+def _qwen_outcome():
+    return run_search(build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60))
+
+
+def test_mistral_small_3_2_is_computed_legacy_with_small_4_as_its_successor():
+    """Decided 2026-09-25: the size is no rank, so the 24B model has the 119B one as successor."""
+    _transport, outcome = _mistral_outcome()
+
+    small_3 = _hit(outcome, "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF")
+    small_4 = _hit(outcome, "unsloth/Mistral-Small-4-119B-2603-GGUF")
+    # Both are only packaged by `unsloth` here: the release is the one of the base model the hit
+    # resolved to, not of the repository it came from.
+    assert (small_3.resolved_base_model, small_4.resolved_base_model) == (MISTRAL_SMALL_3, MISTRAL_SMALL_4)
+    assert (small_3.age, small_3.successor, small_3.release_basis) == ("legacy", MISTRAL_SMALL_4, "computed")
+    assert (small_4.age, small_4.successor, small_4.release_basis) == ("latest", None, "stated")
+
+
+def test_every_release_a_statement_decided_says_stated():
+    _transport, outcome = _mistral_outcome()
+
+    ministral = _hit(outcome, "mistralai/Ministral-3-14B-Instruct-2512-GGUF")
+    magistral = _hit(outcome, "mistralai/Magistral-Small-2509-GGUF")
+    assert (ministral.age, ministral.release_basis) == ("latest", "stated")
+    assert (magistral.age, magistral.successor, magistral.release_basis) == ("legacy", MISTRAL_SMALL_4, "stated")
+
+
+def test_the_computed_release_asks_no_request_of_its_own():
+    transport, outcome = _mistral_outcome()
+
+    accounts = search_accounts(_catalog(), "mistral", DEFAULT_PACKAGERS)
+    assert len(transport.calls) == outcome.budget_used == 2 * len(accounts) + len(MISTRAL_BASE_MODELS)
+
+
+def test_qwen3_5_9b_is_computed_legacy_with_qwen3_8_27b_as_its_successor():
+    """The nearest larger size among the highest versions of the family: the catalog's `Qwen3.8-27B`."""
+    outcome = _qwen_outcome()
+
+    for repo in ("unsloth/Qwen3.5-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"):
+        hit = _hit(outcome, repo)
+        assert (hit.age, hit.successor, hit.release_basis) == ("legacy", "Qwen/Qwen3.8-27B", "computed")
+
+
+def test_the_deepseek_distill_alone_in_its_family_is_computed_latest():
+    hit = _hit(_qwen_outcome(), "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF")
+
+    assert (hit.age, hit.successor, hit.release_basis) == ("latest", None, "computed")
+
+
+def test_the_list_marks_a_computed_release_with_a_star_at_the_recorded_answers():
+    from modelroom.guided_context import Checked
+    from modelroom.guided_models import model_choices
+
+    _transport, mistral = _mistral_outcome()
+    words = {
+        model.name: model.release_text
+        for outcome in (mistral, _qwen_outcome())
+        for model in model_choices(outcome.hits, filtered=True, checked=Checked(reason="none"), context=8192)
+    }
+
+    assert words["Mistral-Small-3.2-24B-Instruct-2506"] == "legacy*"
+    assert words["Mistral-Small-4-119B-2603"] == "latest"
+    assert words["Magistral-Small-2509"] == "legacy"
+    assert words["Qwen3.5-9B"] == "legacy*"
+    assert words["DeepSeek-R1-0528-Qwen3-8B"] == "latest*"
+
+
+def test_the_search_log_names_every_resolved_base_model_with_its_release():
+    _transport, outcome = _mistral_outcome()
+
+    log = outcome.search_log(filtered=True, run_at=NOW, unresolved={})
+
+    assert log["schema_version"] == 3
+    assert log["models"] == [
+        {"base_model": "mistralai/Ministral-3-14B-Instruct-2512", "age": "latest", "successor": None,
+         "release_basis": "stated"},
+        {"base_model": "mistralai/Magistral-Small-2509", "age": "legacy", "successor": MISTRAL_SMALL_4,
+         "release_basis": "stated"},
+        {"base_model": MISTRAL_SMALL_4, "age": "latest", "successor": None, "release_basis": "stated"},
+        {"base_model": MISTRAL_SMALL_3, "age": "legacy", "successor": MISTRAL_SMALL_4, "release_basis": "computed"},
+    ]
+    json.dumps(log)  # the file is JSON: every value of it has to be one
+
+
+def test_the_search_log_names_no_model_of_a_repository_that_did_not_resolve():
+    outcome = run_search(
+        build_transport(_search_mapping()), "qwen", catalog=_catalog(), budget=RequestBudget(60), open_pages=True
+    )
+
+    log = outcome.search_log(filtered=True, run_at=NOW, unresolved={})
+
+    assert [entry["base_model"] for entry in log["models"]] == [
+        "Qwen/Qwen3.5-9B", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    ]
 
 
 # --- latest / legacy from positive evidence ---------------------------------------------------

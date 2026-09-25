@@ -267,24 +267,26 @@ def test_a_list_without_anything_to_say_about_itself_carries_the_keys_alone():
 
 def test_a_long_instruction_line_wraps_instead_of_being_cut():
     """Measured 2026-09-25 in a window of 100 columns: the library's list window does not wrap, and
-    the last piece of the 153-character hint of step 2 was simply gone."""
+    the last piece of the 153-character hint of step 2 was simply gone. The hint grew by the
+    sentence about the star since (decided 2026-09-25), so the test holds the whole of it."""
     from prompt_toolkit.data_structures import Size
+
+    from modelroom.guided_models import RELEASE_HINT
 
     class _Narrow(PlainTextOutput):
         def get_size(self) -> Size:
             return Size(rows=40, columns=100)
 
-    hint = (
-        "latest: the publisher's current release of its family · legacy: the publisher named a "
-        "successor · fit from the size at 32k context, exact after the fetch"
-    )
+    hint = f"{RELEASE_HINT} · fit from the size at 32k context, exact after the fetch"
     sink = io.StringIO()
     with create_pipe_input() as pipe:
         pipe.send_text(ENTER)
         TerminalAsker(input=pipe, output=_Narrow(sink)).checkbox("select", "Which?", PICKS, hint)
 
-    assert len(hint) > 100
-    assert "exact after the fetch" in sink.getvalue().replace("\r", "").replace("\n", "")
+    # A wrapped line may break inside a word or at a blank; with every blank gone both read the same.
+    shown = "".join(sink.getvalue().split())
+    assert len(hint) > 200
+    assert "".join(hint.split()) in shown
 
 
 def test_a_select_says_which_key_picks_behind_its_question():

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Mapping, Sequence
+from typing import Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -84,6 +84,9 @@ _OLLAMA_WIDTH = LABEL_LIMIT - _FIXED_WIDTH
 # own read as a fact about the model rather than as an empty cell (test round, 2026-09-25).
 DASH = "–"
 _RELEASE_WORDS = {"latest": "latest", "legacy": "legacy", UNKNOWN: DASH}
+# Behind a release computed from the version numbers of the family, never behind a stated one:
+# `latest*` and `legacy*` still fit the seven characters of the column (decided 2026-09-25).
+COMPUTED_MARK = "*"
 # `latest` first, then a release nobody knows, then `legacy`: a reader is choosing what to fetch,
 # and a model whose family has moved on belongs under the ones that have not (decided 2026-09-25).
 _RELEASE_ORDER = ("latest", UNKNOWN, "legacy")
@@ -98,20 +101,24 @@ _RAM_SUFFIX = " (RAM)"
 _MODE_ORDER = ("gpu", "cpu_gpu", "cpu", None)
 _SETTLED = ("too_tight", "unknown")
 
-# An age statement is positive evidence about one model, never a comparison of two version numbers
-# (AGENTS.md, the language standard): `legacy` means a successor was named, and that is what it says.
+# A stated age is positive evidence about one model; a computed one compares the version numbers of
+# one family and variant and carries the star (AGENTS.md, the language standard). `legacy` means a
+# successor is named -- by the publisher, or by that comparison -- and that is what it says.
 RELEASE_HINT = (
-    "latest: the publisher's current release of its family · legacy: the publisher named a successor"
+    "latest: the publisher's current release of its family · legacy: a successor is named · "
+    "*: computed from the version numbers of the family, not stated by the publisher"
 )
 FIT_FROM_SIZE_HINT = "fit from the size at {context} context, exact after the fetch"
 FIT_UNKNOWN_HINT = "fit unknown until this machine is measured"
 
-# A parameter count in a model name: `9B`, `0.6B`, `2.4T`, and never one that stands behind a
-# letter, a digit or a decimal point -- `A3B`, `A17B`, `8x7B` are the active parameters of a
-# mixture or a factor, not a total, and the `.` keeps the tail of such a decimal out as well
-# (`Nova-A0.6B` read as 6 in the second-model round of 2026-09-24).
-_PARAMETERS_RE = re.compile(r"(?<![0-9A-Za-z.])(\d+(?:\.\d+)?)([BbTt])(?![0-9A-Za-z])")
+# A parameter count in a model name: `9B`, `0.6B`, `2.4T`, `360M`, the effective size `E4B`, and
+# never one that stands behind a letter, a digit or a decimal point -- `A3B`, `A17B`, `8x7B` are the
+# active parameters of a mixture or a factor, not a total, and the `.` keeps the tail of such a
+# decimal out as well (`Nova-A0.6B` read as 6 in the second-model round of 2026-09-24). `M` and `E`
+# since 2026-09-25: the computed release takes its sizes from this one rule as well.
+_PARAMETERS_RE = re.compile(r"(?<![0-9A-Za-z.])[Ee]?(\d+(?:\.\d+)?)([BbMmTt])(?![0-9A-Za-z])")
 _TRILLION_FACTOR = 1000
+_MILLION_DIVISOR = 1000
 _GGUF_SUFFIX = "-GGUF"
 
 
@@ -136,6 +143,8 @@ class ModelChoice(BaseModel):
     downloads: int | None = Field(default=None, ge=0)
     ollama: str | None = None
     age: Age = UNKNOWN
+    # Where `age` comes from, taken from the same repository as `age` (`SearchHit.release_basis`).
+    release_basis: Literal["stated", "computed"] | None = None
     parameters_b: float | None = Field(default=None, gt=0)
     fit: Fit
 
@@ -144,6 +153,8 @@ class ModelChoice(BaseModel):
         validate_hf_repo(self.base_model)
         if self.base_model != f"{self.publisher}/{self.name}":
             raise ValueError(f"name and publisher are the two halves of {self.base_model!r}")
+        if self.release_basis == "computed" and self.age == UNKNOWN:
+            raise ValueError("release_basis 'computed' needs a known age")
         return self
 
     @property
@@ -171,16 +182,18 @@ class ModelChoice(BaseModel):
 
     @property
     def release_text(self) -> str:
-        """Where this model stands in its family, as the column shows it: `latest`, `legacy`, `–`.
+        """Where this model stands in its family, as the column shows it: `latest`, `legacy`, `–`,
+        and `latest*` or `legacy*` where the version numbers of the family decided it.
 
         A dash and not `unknown`: the word is a fact about a model in the data, and in a column of
         its own it read as one about this model (test round, 2026-09-25).
         """
-        return _RELEASE_WORDS.get(str(self.age), DASH)
+        word = _RELEASE_WORDS.get(str(self.age), DASH)
+        return f"{word}{COMPUTED_MARK}" if self.release_basis == "computed" else word
 
     @property
     def legacy(self) -> bool:
-        """Whether this row is drawn gray: the publisher named a successor for this model."""
+        """Whether this row is drawn gray: a successor is named for this model, stated or computed."""
         return self.age == "legacy"
 
     @property
@@ -230,10 +243,11 @@ def list_context(kept: int | None) -> int:
 def parameters_from_name(name: str) -> float | None:
     """The total parameter count a model name states, in billions, or `None` when it states none.
 
-    Every `<number>B` and `<number>T` of the name that stands on its own counts -- a count behind
-    a letter, a digit or a decimal point is the active parameters of a mixture (`A3B`, `A0.6B`) or
-    a factor (`8x7B`), never a total -- and the largest of them is the model's size. `2.4T` is
-    2400. A name is registry-controlled text, so only a real, finite, positive number is a count:
+    Every `<number>B`, `<number>M` and `<number>T` of the name that stands on its own counts, with
+    an `E` in front of it as well (`E4B`, an effective size) -- a count behind a letter, a digit or a
+    decimal point is the active parameters of a mixture (`A3B`, `A0.6B`) or a factor (`8x7B`),
+    never a total -- and the largest of them is the model's size. `2.4T` is 2400, `360M` is 0.36.
+    A name is registry-controlled text, so only a real, finite, positive number is a count:
     `Nova-0B` and a number of 400 digits both say nothing (the fit is then `unknown` with
     `parameter count unknown`, never a guess and never an exception out of the list).
     """
@@ -243,6 +257,8 @@ def parameters_from_name(name: str) -> float | None:
         value = float(number)  # digits and at most one dot: `float` raises for nothing else
         if unit in "Tt":
             value *= _TRILLION_FACTOR
+        elif unit in "Mm":
+            value /= _MILLION_DIVISOR
         if math.isfinite(value) and value > 0:
             counts.append(value)
     return max(counts) if counts else None
@@ -339,6 +355,9 @@ def _model_choice(
     if parameters_b is None:
         parameters_b = parameters_from_name(name)
     counts = [hit.downloads for hit in repos if hit.downloads is not None]
+    # Age and basis from one and the same repository, so a row never shows one hit's age with
+    # another hit's star.
+    judged = next((hit for hit in repos if hit.age != UNKNOWN), None)
     return ModelChoice(
         base_model=base_model,
         name=name,
@@ -347,7 +366,8 @@ def _model_choice(
         packagers=_accounts(repos),
         downloads=sum(counts) if counts else None,
         ollama=next((hit.ollama for hit in repos if hit.ollama is not None), configured_ollama),
-        age=next((hit.age for hit in repos if hit.age != UNKNOWN), UNKNOWN),
+        age=judged.age if judged is not None else UNKNOWN,
+        release_basis=judged.release_basis if judged is not None else None,
         parameters_b=parameters_b,
         fit=model_fit(parameters_b, checked, context),
     )
@@ -421,7 +441,7 @@ def list_choices(models: Sequence[ModelChoice]) -> list[Choice]:
 
 
 def hint_line(checked: Checked, context: int) -> str:
-    """What this list has to say about itself: the two release words, and where its fit is from.
+    """What this list has to say about itself: the release words, the star, and where its fit is from.
 
     It is an instruction line of the question, not a line of the run (decided 2026-09-24): a
     sentence that explains a list has nothing to say once the list is gone. The context it names is
@@ -538,6 +558,7 @@ def _repositories(count: int) -> str:
 
 __all__ = [
     "COLUMN_NAMES",
+    "COMPUTED_MARK",
     "DASH",
     "DEFAULT_CONTEXT",
     "LABEL_LIMIT",

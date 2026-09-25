@@ -7,6 +7,23 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **A computed release in the list of models: `latest*` and `legacy*`** (`modelroom/search_release.py`,
+  new; CONTRACTS.md, "Latest and legacy evidence", "Computed release"; decided 2026-09-25). The
+  `Release` column showed `–` for almost every row, because only a stated successor made a model
+  `legacy`. Where neither the publisher's repository nor the catalog says anything, the list now
+  reads the names of a family: per publisher, family and variant the highest version is `latest*`
+  and every lower one `legacy*`, with the highest one of the nearest size as its successor --
+  `Mistral-Small-3.2-24B-Instruct-2506` is `legacy*` to `Mistral-Small-4-119B-2603`, `Qwen3.5-9B` to
+  `Qwen3.8-27B`, and a model alone in its family, such as `DeepSeek-R1-0528-Qwen3-8B`, is `latest*`.
+  The star says **computed**, not stated by the publisher; the hint under the list says so. A
+  stated status never changes, an `unknown` from a broken `new_version` or an ended budget is not
+  computed, a name the grammar cannot read stays `–`, and a computed successor on a cycle with the
+  stated ones is dropped. No request of its own, and nothing of it reaches the catalog, the
+  configuration or the document. `SearchHit` and `ModelChoice` carry `release_basis` (`stated` or
+  `computed`), the example in CONTRACTS.md with it.
+- **`search.json` names every resolved model with its release** (schema 3, `models`: base model,
+  age, successor, basis) -- the list shows the star, the file the successor. `scripts/selftest.py`
+  reads schema 3 only and checks that `models` is there. Logs of schema 2 are not migrated.
 - **Step 5 offers to pull the first row into the local Ollama daemon** (`modelroom/guided_install.py`,
   new; `modelroom/daemon.py`; CONTRACTS.md, "Guided mode", "The pull"; decided 2026-09-25, the first
   point of "What comes next" in the README). After `✓ Results` the run asks
@@ -43,6 +60,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **A size in a model name can be in millions and can carry an `E`** (`guided_models.parameters_from_name`):
+  `SmolLM2-360M-Instruct` is 0.36B and `gemma-4-E4B-it` 4B. The list computes a fit for such names
+  now, and the computed release takes its sizes from the same rule. `A3B`, `A0.6B` and `8x7B` stay
+  no size.
+- **The hint under the list** reads `latest: the publisher's current release of its family ·
+  legacy: a successor is named · *: computed from the version numbers of the family, not stated by
+  the publisher`, then the fit as before; it wraps in a narrow window.
 - **Nothing another run writes into `modelroom.toml` is lost any more** (`modelroom/search_apply.py`,
   `modelroom/guided_write.py`, new; `modelroom/guided.py`, `modelroom/guided_context.py`;
   CONTRACTS.md, "Configuration" and "Guided mode"). The guided mode read the file, computed its
@@ -62,6 +86,18 @@ All notable changes to this project are documented in this file. The format foll
   written back is unchanged.
 - **One repository is counted without `of them`**: `1 repository, a model you can pick from`, or
   `not a model you can pick from` (`modelroom/screen.py`).
+
+### Fixed
+
+- **Two runs that create the configuration at once no longer replace each other's file**
+  (`state.publish_new_text`, new; `search_apply.write_configuration`; CONTRACTS.md, "Search over the
+  Hugging Face API"). Two library callers naming different state folders took different locks,
+  both found no file, and the second write replaced the first. A new configuration is now created
+  exclusively: written into a temporary file of its own and published by one system call that never
+  replaces a file (`os.rename` on Windows, `os.link` elsewhere); the second run gets
+  `ConfigChangedError` and reads again -- also when Windows refuses its read of the file the other
+  run is renaming into place at that moment. The file mode stays the one of any other written file,
+  and the temporary file goes on every early end, Ctrl-C included.
 
 ## [0.1.0] - 2026-09-25
 

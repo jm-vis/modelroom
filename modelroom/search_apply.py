@@ -15,7 +15,7 @@ from typing import Iterable, Sequence
 from .catalog import Catalog
 from .config import BaseModelConfig, ConfigError, Configuration, config_from_text
 from .guided_contracts import SearchHit
-from .state import acquire_lock, atomic_write_text, release_lock
+from .state import acquire_lock, atomic_write_text, publish_new_text, release_lock
 from .toml_writer import dump_toml
 
 
@@ -155,10 +155,12 @@ def write_configuration(path: Path, config: Configuration, *, now: datetime, exp
 
     The lock is the one of the configuration **that was read**, not of the one about to be written:
     two runs that read the same text take the same lock even when one of them moves `paths.state`,
-    so their comparisons cannot both pass (second-model round, 2026-09-25). Only a new file, with
-    nothing read, takes the lock of the configuration it writes -- so two callers that create the
-    same file at once are kept apart only when they name the same `paths.state`, which every guided
-    run does (`<folder>/state`); two library callers naming different state folders are not.
+    so their comparisons cannot both pass (second-model round, 2026-09-25). A new file, with
+    nothing read, takes the lock of the configuration it writes, and two callers naming different
+    state folders take different locks -- so a new file is **created exclusively**
+    (`state.publish_new_text`, decided 2026-09-25): of two runs that create it at once, the second
+    one gets `ConfigChangedError` instead of replacing the first one's file. The comparison before it
+    stays and catches the ordinary case; the exclusive creation covers the moment in between.
     """
     target = path.resolve()
     text = dump_toml(config.model_dump(mode="json"), _CONFIG_HEADER)
@@ -170,11 +172,41 @@ def write_configuration(path: Path, config: Configuration, *, now: datetime, exp
     read_paths.state.mkdir(parents=True, exist_ok=True)
     handle = acquire_lock(read_paths.lock_file, "search", now)
     try:
-        if _text_on_disk(target) != expected_text:
+        if _changed_since_read(target, expected_text):
             raise ConfigChangedError(f"{target}: changed by another run since it was read")
-        atomic_write_text(target, text)
+        if expected_text is None:
+            _create(target, text)
+        else:
+            atomic_write_text(target, text)
     finally:
         release_lock(handle)
+
+
+def _changed_since_read(target: Path, expected_text: str | None) -> bool:
+    """Whether the file is no longer the text the change was computed from.
+
+    A new file is created under the lock of its own state folder, so another run with another
+    folder can be publishing it at this very moment -- and Windows refuses a read of a file while it
+    is being renamed into place (measured 2026-09-25: `PermissionError`). For a file that was not
+    there when this run read, that refusal is the answer: something is there now. Windows refuses a
+    read of a directory the same way, and a directory where the file belongs is a fault, not another
+    run's file. A file that was read before is only ever written under the lock this run holds, so a
+    refusal there is a fault of its own as well; both go up as they are.
+    """
+    try:
+        return _text_on_disk(target) != expected_text
+    except PermissionError:
+        if expected_text is None and not target.is_dir():
+            return True
+        raise
+
+
+def _create(target: Path, text: str) -> None:
+    """A new configuration, created only if no other run created it after the comparison."""
+    try:
+        publish_new_text(target, text)
+    except FileExistsError as exc:
+        raise ConfigChangedError(f"{target}: changed by another run since it was read") from exc
 
 
 def _text_on_disk(target: Path) -> str | None:

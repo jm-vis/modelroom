@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -250,6 +251,43 @@ def atomic_write_text(path: Path, text: str) -> None:
     except Exception:
         if tmp_path.exists():
             tmp_path.unlink()
+        raise
+
+
+def publish_new_text(path: Path, text: str) -> None:
+    """Create `path` with `text` only if it does not exist yet; `FileExistsError` if it does.
+
+    The one exception to the `os.replace` convention above (decided 2026-09-25): a file two runs may
+    create at the same moment -- a new configuration -- must not have the second run's text replace
+    the first's. So the text is written, whole and with LF line endings, into a temporary file of
+    its own -- its name carries the process id and a random part, and `O_EXCL` refuses a name that
+    is taken, so two calls never share one -- and then published by **one** system call that never
+    replaces an existing file: `os.rename` on Windows, `os.link` (and removing the temporary name)
+    elsewhere. The mode is the one `write_text` gives (`0o666` before the umask), so a configuration
+    other users of the folder read stays readable. Whatever ends the call early -- an error, Ctrl-C
+    -- the temporary file goes with it.
+
+    A file system without hard links, and a network drive that does not keep `link`/`rename`
+    atomic, are outside this guarantee.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    descriptor = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+    try:
+        # The descriptor stays this function's: an early end before the file object takes it over
+        # would leave it open, and Windows removes no file that is open (acceptance round).
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n", closefd=False) as handle:
+                handle.write(text)
+        finally:
+            os.close(descriptor)
+        if sys.platform == "win32":
+            os.rename(tmp_path, path)
+        else:
+            os.link(tmp_path, path)
+            os.unlink(tmp_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
         raise
 
 
