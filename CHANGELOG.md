@@ -7,6 +7,26 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **One drawer for the screen of the guided mode** (`modelroom/screen.py`, new; CONTRACTS.md,
+  "Guided mode", "The screen"). Every line of a run is now a pattern -- a step head of 72
+  characters, an answer line, a note, a balance with a check mark or a dash, the card of step 5,
+  and `joined`, which puts short statements on one line and wraps between them at 100 characters.
+  Each pattern is a list of `(class, text)` fragments, printed **with color** through
+  `prompt_toolkit` and the one style of the dialog, or **without color** as exactly the same plain
+  text through the run's `out`, with one leading space, as the start screen has it. So
+  `modelroom --answers <file>` and a terminal run read as the same screen, and
+  `tests/golden/guided-screen*.txt` is that screen as a fixture.
+- **`<state>/search.json`**, the log of one search (`modelroom/state.py::write_search_log`,
+  `search.SearchOutcome.search_log`; CONTRACTS.md, "Search log"). It names every page the search
+  asked with the class it was asked by (`publisher`, `packager`, `open`), what it answered and
+  whether it was full, plus the request count, the budget, how much resolved and every reason a
+  repository is no model of the list. The screen keeps two sentences of it; the file answers "why
+  did this account answer nothing", which is a question about the search and not about the line a
+  reader is looking at.
+- **A line to copy for the first package of this machine**, under the result table: `to install #1:
+  ollama pull hf.co/<repo>:<quant>` (`screen.install_name`, `views.terminal_lines`). Nothing is
+  called, nothing is looked up, and a package with no local Ollama name has no line. Installing is
+  a work package of its own.
 - **`modelroom hardware --same-machine`**, and "the same machine" in the guided mode's clone
   question, now **measure** (`modelroom/binding.py`, `modelroom/cli.py`, `modelroom/guided.py`;
   CONTRACTS.md, "Profile binding"). Until now the honest answer to "is this the same machine or a
@@ -33,6 +53,44 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **The guided mode reads as a report, not as a record** (`modelroom/screen.py`,
+  `modelroom/dialog.py`, `modelroom/guided*.py`, `modelroom/views.py`; CONTRACTS.md, "Guided mode").
+  The test round of 2026-09-24 called the run "not laid out, hard to take in, one thing chained to
+  the next, repetitions like the one about the context". Each step is a block now: a head of its
+  own, one line per question with the answer **in words** (`this machine`, `Qwen3.5-9B, Qwen3-0.6B`,
+  `L  32k  24,000 words  a report or a long contract`), at most two notes about what the run made of
+  it, and one balance line -- a check mark, or a dash where the step did nothing. The dialog library
+  writes no answer of its own any more: a list erases itself once it is answered
+  (`erase_when_done`), so `done (2 selections)` and `[this machine (measure now)]` are gone. What a
+  list has to say about itself moved into its instruction line, which goes away with the list. The
+  run closes with a **card** of six rows -- folder, machine, models, context, speed, result -- over
+  the result table. Gone from the screen, and still in the files they belong to: the profile's
+  readings and its id, `wrote … as the writer`, the seven account lines with the budget, the reasons
+  per repository, `fit at 8k context`, `checking …`, `The last column is computed …`, `kept context
+  32768 in …`, the names of the cloud models, ten notes that said the same two sentences, `unknown`
+  in every row, and `Written to … and …`.
+- **Every question of the dialog erases itself**, a typed answer as well as a list
+  (`modelroom/dialog.py`). Measured in the second-model round of 2026-09-24: `? What are you looking
+  for? qwen` stayed on screen and the run wrote the same question again under it.
+- **The result table says the memory pool where it said the basis** (`modelroom/views.py`). `Fit` is
+  `good (RAM)` where the pool is system memory -- the same word the selection list of step 2 uses --
+  and `Speed` is `–` where nothing was measured, not `unknown`. Under the table the notes are
+  bundled: `showing 10 of 23 · 2 packages too tight (…)`, then one line per memory pool with its
+  rank ranges (`#1–4 fit into graphics memory (11.0 GB free after the reserve)`), then
+  `(from size): #1–10 computed from the package size, not its architecture`, then, only where no
+  shown row was measured, `speed: no row shown was measured yet`. The head of each block is
+  `<machine> · context L 32k` in place of `Ranking: <key> (<label>)` and the scenario line. The
+  Markdown and JSON views are unchanged to the byte.
+- **The fit of the selection list is computed at the context the scale starts on**
+  (`guided_models.DEFAULT_CONTEXT`, 32768, one constant with `guided_context.DEFAULT_CONTEXT`). The
+  list said `fit at 8k context` while the very next question started on `L 32k`; two numbers for one
+  run are one too many.
+- **The mark of the start screen is mark E in color** (`modelroom/intro.py`): squares of 24 pixels
+  with a gap of 8 in both directions, a row of lower half blocks over a row of full blocks, six
+  lines with the name, the description and the version on lines two to four. "Four columns, not a
+  lot of little squares like in the banner" was the verdict on the old three rows of touching
+  blocks. Without color the mark stays the three rows of `██ ▓▓ ░░` it was: a log is no place for a
+  brand surface, and a half block cannot be shaded.
 - **Step 2 of the guided mode offers models, not repositories**
   (`modelroom/guided_models.py`, new; CONTRACTS.md, "Guided mode", step 2, and "ModelChoice").
   The list of the hand test of 2026-09-24 had 120 lines of over 200 characters, repository ids,

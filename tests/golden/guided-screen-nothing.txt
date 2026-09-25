@@ -1,0 +1,35 @@
+ ██ ██ ▓▓ ██   ModelRoom
+ ██ ██ ██ ░░   Which local model packages fit your machine.
+ ▓▓ ██ ░░ ░░   modelroom 0.1.0 · github.com/jm-vis/modelroom
+
+ folder    not chosen yet          the first question asks where results live
+ daemon    Ollama                  not reachable
+ machine   workstation             not measured in this results folder yet
+
+ Five steps: configuration, packages, context, measurement, results.
+ Files are written as the run goes on. Esc leaves a list, Ctrl-C leaves at any point.
+
+ ── Step 1 of 5  Configuration ──────────────────────────────────────────
+ ? Where should results live?  this folder
+ ? Which machines should the result cover?  this machine
+   measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
+ ✓ Configuration   <results>, 1 machine
+
+ ── Step 2 of 5  Packages ───────────────────────────────────────────────
+ ? What are you looking for?  qwen
+ ? Show only repositories of a publisher or a listed packager?  Yes
+   searched Hugging Face at the publisher Qwen and the five listed packagers
+   4 repositories, 2 of them models you can pick from
+ ? Which of these models should the result cover?  nothing
+   no base model is configured yet, so there is nothing to fetch
+ – Packages        nothing chosen, the folder stays as it is
+
+ ── Step 3 of 5  Context ────────────────────────────────────────────────
+ ? How much text should a model handle at once?  L  32k  24,000 words  a report or a long contract
+ ✓ Context         L 32k
+
+ ── Step 4 of 5  Measurement ────────────────────────────────────────────
+   no load test: nothing has been fetched into this folder yet
+ – Measurement     none in this run
+
+ ── Step 5 of 5  Results ────────────────────────────────────────────────

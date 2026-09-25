@@ -15,8 +15,9 @@ Criteria (the plan's own numbering):
 1. the first start writes `modelroom.toml` with this device as the writer, and remembers the
    results folder in the pointer file;
 2. this machine is measured: `gpu_state: measured`, llmfit cross-check `confirmed`;
-3. the search resolves at least one publisher model, and every repository that cannot be picked
-   stands behind one line per reason with the number of repositories it covers;
+3. the search resolves at least one publisher model, `<state>/search.json` names every page it
+   asked with its class and every reason a repository cannot be picked with its number, and the
+   screen says where it asked and how much of the answer is a choice;
 4. the ranking carries the rule and the context in its header, and Qwen3.5 stands under
    "not covered";
 5. the prepared package is measured against the real local Ollama daemon: the measurement is
@@ -32,9 +33,11 @@ Criteria (the plan's own numbering):
    answer file stays at the level `S` (8192) so that criteria 4 and 5 keep their pinned numbers,
    and 8192 is also what a render with no stored context assumes. That case is a test of its own
    (`tests/test_guided.py`, 4096 answered, measured, and rendered on its own afterwards);
-7. the run reads as the guided dialog it promises: the start screen with its three rows, the five
-   numbered step heads, a size scale that says how many packages fit on the measured machine, and
-   a result view that says each set-aside reason once with a number instead of once per package.
+7. the run reads as the guided dialog it promises: the start screen with its three rows, five step
+   heads of 72 characters, one answer line per question with its answer in words and none of the
+   dialog library's own, a size scale that says how many packages fit on the measured machine, a
+   result table whose notes are bundled by memory pool, and the card of six rows that closes the
+   run (the screen of 2026-09-24).
 
 The live search runs as a smoke afterwards and never decides the exit code.
 
@@ -148,29 +151,32 @@ def measurement_problems(profile: dict) -> list[str]:
     return problems
 
 
-def search_problems(lines: list[str]) -> list[str]:
+def search_problems(log: dict, lines: list[str]) -> list[str]:
     """Criterion 3: at least one resolved publisher model, and every reason once with its number.
 
-    Since 2026-09-24 the step no longer prints one line per unresolved repository -- 28 of them
-    said five things over and over. Every repository is in the selection list with its reason, and
-    under the list stands one line per reason with how many repositories it covers.
+    Read from `search.json` since 2026-09-24: the seven account lines, the request count, the
+    budget and the reasons left the screen -- they answer a question about the search, not about
+    the answer a reader is looking at (CONTRACTS.md, "Search log"). The two notes that stayed say
+    where the search asked and how much of what it answered is a choice, and those are held
+    against the screen here.
     """
-    summary = next((line for line in lines if " repositories, " in line and " resolved, " in line), None)
-    if summary is None:
-        return ["no search summary line was printed"]
     problems = []
-    resolved = int(summary.split(" repositories, ")[1].split(" resolved")[0])
-    unresolved = int(summary.split(" resolved, ")[1].split(" unresolved")[0])
+    if log.get("schema_version") != 1:
+        return [f"search.json has schema_version {log.get('schema_version')!r}, expected 1"]
+    resolved = log.get("resolved", 0)
     if resolved < 1:
         problems.append(f"the search resolved {resolved} repositories, expected at least one")
-    grouped = [line for line in lines if "cannot be picked:" in line]
-    if not grouped:
-        problems.append("no reason was shown for the repositories that cannot be picked")
-    if any(line.rstrip().endswith(("cannot be picked:", "None")) for line in grouped):
-        problems.append("a reason was shown as empty or as a raw status")
-    covered = sum(int(line.split(" ", 1)[0]) for line in grouped if line.split(" ", 1)[0].isdigit())
-    if grouped and covered < unresolved:
-        problems.append(f"the grouped lines cover {covered} repositories, expected at least {unresolved}")
+    reasons = log.get("unresolved", [])
+    if not reasons:
+        problems.append("search.json names no reason for the repositories that cannot be picked")
+    if any(not entry.get("reason") or not entry.get("count") for entry in reasons):
+        problems.append(f"a reason is empty or covers no repository: {reasons}")
+    if not [entry for entry in log.get("accounts", []) if entry.get("class") == "publisher"]:
+        problems.append("search.json names no publisher account among the pages that were asked")
+    if not any("searched Hugging Face at " in line for line in lines):
+        problems.append("the screen does not say where the search asked")
+    if not any("you can pick from" in line for line in lines):
+        problems.append("the screen does not say how much of the answer is a choice")
     return problems
 
 
@@ -251,7 +257,7 @@ def second_start_problems(
         problems.append(f"{len(measurements)} measurement files after the second run, expected exactly one")
     if measurements is not None and (row is None or row["measurement_group"] != 0):
         problems.append("the first run's measurement is no longer ranked in group 0")
-    if any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}: measured ") for line in lines):
+    if any(line.strip().startswith(f"measured {DEEPSEEK_OLLAMA_NAME}: ") for line in lines):
         problems.append("the second run measured the package a second time")
     return problems
 
@@ -288,11 +294,11 @@ def stored_context_problems(
 
 
 def guided_mode_problems(lines: list[str], scale: list[str], models: list[str] | None = None) -> list[str]:
-    """Criterion 7: the run reads like the guided mode it is -- start screen, steps, scale, list.
+    """Criterion 7: the run reads like the guided mode it is -- the screen of 2026-09-24.
 
-    The things the hand tests of 2026-09-24 did not find: a start screen, a numbered step for
-    every question, a context question that says what still fits, a selection list of models
-    rather than of repositories, and a result table that names the model.
+    What the test round of 2026-09-24 called "a record, not a report": every step is a block with a
+    head of its own, every question leaves one line behind with its answer in words, the notes are
+    bundled instead of repeated, and the run closes with a card of six rows over the result table.
     """
     problems = []
     if models is not None:
@@ -302,16 +308,51 @@ def guided_mode_problems(lines: list[str], scale: list[str], models: list[str] |
     for label in ("folder", "daemon", "machine"):
         if not any(line.strip().startswith(label) for line in lines[:12]):
             problems.append(f"the start screen has no {label} row")
-    heads = [line.splitlines()[0] for line in lines if line.startswith("Step ")]
-    expected = [f"Step {number} of 5" for number in range(1, 6)]
-    if [head.split("  ")[0] for head in heads] != expected:
-        problems.append(f"the five step heads are {heads}, expected {expected}")
-    if not any(line.startswith("checking ") for line in lines):
-        problems.append("step 3 does not say which machine the scale is about")
+    problems += step_head_problems(lines)
+    problems += answer_line_problems(lines)
+    problems += card_problems(lines)
     if not all(" packages fit" in label or " packages fits" in label for label in scale):
         problems.append(f"a level of the scale carries no count of what fits: {scale}")
     problems += result_table_problems("\n".join(lines).splitlines())
     return problems
+
+
+def step_head_problems(lines: list[str]) -> list[str]:
+    """Criterion 7: five heads, each a rule of 72 characters around the step and its name."""
+    heads = [line.strip() for line in lines if line.strip().startswith(("-- Step ", "── Step "))]
+    expected = [f"Step {number} of 5" for number in range(1, 6)]
+    numbered = [head.split("  ")[0].split(" ", 1)[1] for head in heads]
+    if numbered != expected:
+        problems = [f"the five step heads are {numbered}, expected {expected}"]
+        return problems
+    wrong = [head for head in heads if len(head) != 72]
+    return [f"a step head is {len(wrong[0])} characters wide, expected 72: {wrong[0]}"] if wrong else []
+
+
+def answer_line_problems(lines: list[str]) -> list[str]:
+    """Criterion 7: the run writes one answer line per question, and the library writes none."""
+    answers = [line.strip() for line in lines if line.strip().startswith("? ")]
+    problems = []
+    if len(answers) < 4:
+        problems.append(f"{len(answers)} answer lines, expected one per question asked: {answers}")
+    if any(line.endswith("?") for line in answers):
+        problems.append("an answer line carries no answer")
+    if any("done (" in line or " selections)" in line for line in lines):
+        problems.append("the dialog library wrote an answer of its own")
+    for gone in ("as the writer of this results folder", "kept context ", "checking ", "Written to "):
+        if any(gone in line for line in lines):
+            problems.append(f"a line the screen no longer carries is still printed: {gone!r}")
+    return problems
+
+
+def card_problems(lines: list[str]) -> list[str]:
+    """Criterion 7: the run closes with the card -- six kinds of row, each with its own note."""
+    labels = ("folder", "machine", "models", "context", "speed", "result")
+    tail = [line.strip() for line in lines[-40:]]
+    missing = [label for label in labels if not any(line.startswith(f"{label} ") for line in tail)]
+    if missing:
+        return [f"the card of step 5 has no {', '.join(missing)} row"]
+    return []
 
 
 def model_list_problems(models: list[str]) -> list[str]:
@@ -333,16 +374,22 @@ def model_list_problems(models: list[str]) -> list[str]:
 
 
 def result_table_problems(lines: list[str]) -> list[str]:
-    """Criterion 7, the result table: the columns of the mockup, and a reason said once."""
+    """Criterion 7, the result table: the columns of the mockup, and every note said once."""
     problems = []
     head = next((line for line in lines if "Model" in line and "Package" in line and "Fit" in line), None)
     if head is None:
         problems.append("the result view has no table head with Model, Package and Fit")
     elif head.split() != ["#", "Model", "Package", "Fit", "Speed", "Memory"]:
         problems.append(f"the columns of the result table are {head.split()}")
-    grouped = [line for line in lines if "not covered: " in line or "too tight: " in line]
-    if grouped and not any(" packages -- " in line or " package -- " in line for line in grouped):
-        problems.append(f"the set-aside lines are not grouped by reason: {grouped}")
+    if not any(line.strip().startswith("showing ") for line in lines):
+        problems.append("the result table says not how many of its rows are shown")
+    pooled = [line for line in lines if "graphics memory" in line or "system memory" in line]
+    if pooled and not all("#" in line for line in pooled):
+        problems.append(f"a note about the memory pool names no rank: {pooled}")
+    if len(pooled) > 3:
+        problems.append(f"{len(pooled)} notes about the memory pool, expected one per pool at most")
+    if any(" unknown " in line for line in lines if line.strip().startswith(("1 ", "2 ", "3 "))):
+        problems.append("a row of the result table says `unknown` where a dash belongs")
     return problems
 
 
@@ -405,6 +452,12 @@ def _profile_files(results: Path) -> list[Path]:
     return sorted(folder.glob("*.json")) if folder.is_dir() else []
 
 
+def _search_log(results: Path) -> dict:
+    """What the search of this run left behind (`<state>/search.json`), or an empty answer."""
+    path = results / "state" / "search.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
 def _document(results: Path) -> tuple[str, dict]:
     markdown = results / "docs" / "models.md"
     return markdown.read_text(encoding="utf-8"), json.loads(markdown.with_suffix(".json").read_text(encoding="utf-8"))
@@ -444,6 +497,7 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
     pointer_data = json.loads(pointer.read_text(encoding="utf-8"))
     profiles = _profile_files(results)
     profile = json.loads(profiles[0].read_text(encoding="utf-8")) if profiles else {}
+    search_log = _search_log(results)
     text, payload = _document(results)
     block = _machine_block(payload, machine)
     steps = [
@@ -462,10 +516,12 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             f"({profile['vram_source']}), ram {profile['ram_physical_gib']} GiB ({profile['ram_physical_source']})",
         ),
         Step(
-            "(3) the search resolves a publisher model and groups the reasons of the rest",
-            not search_problems(lines),
-            "\n".join(search_problems(lines))
-            or next(line for line in lines if " repositories, " in line),
+            "(3) the search resolves a publisher model and its log groups the reasons of the rest",
+            not search_problems(search_log, lines),
+            "\n".join(search_problems(search_log, lines))
+            or f"{search_log['resolved']} resolved, {len(search_log['accounts'])} pages asked, "
+            f"budget {search_log['budget']['used']}/{search_log['budget']['limit']}: "
+            + next(line.strip() for line in lines if "you can pick from" in line),
         ),
         Step(
             "(4) the ranking carries rule and context, Qwen3.5 is judged from its size",

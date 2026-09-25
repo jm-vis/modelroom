@@ -61,6 +61,7 @@ MAX_SUCCESSOR_EDGES = 2
 # to tell a listed packager from any other account.
 DEFAULT_PACKAGERS: tuple[str, ...] = ("unsloth", "bartowski", "mradermacher", "lmstudio-community", "ggml-org")
 NO_OLLAMA_LABEL = "none known"
+SEARCH_LOG_SCHEMA_VERSION = 1  # `search.json`, the file one search leaves behind ("Search log")
 _OLLAMA_ENTRY_PREFIX = "ollama:"
 # A base id no repository can carry (a space is not allowed in a repo id), so `check_relation`
 # reports `base_model_tag` for a hit that does not declare exactly one base.
@@ -111,6 +112,9 @@ class SearchOutcome:
     budget_limit: int
     groups: list[SearchGroup] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # What class the search asked an account by: what it knew then, not what a reader can work out.
+    publishers: list[str] = field(default_factory=list)
+    listed_packagers: list[str] = field(default_factory=list)
 
     @property
     def resolved(self) -> int:
@@ -134,12 +138,35 @@ class SearchOutcome:
         return [*self.notes, *(group.line() for group in self.groups)]
 
     def summary_line(self) -> str:
-        """The one line the guided mode prints under the list."""
+        """The one line under the groups, and what `search.json` is read against."""
         return (
             f"{len(self.hits)} repositories, {self.resolved} resolved, "
             f"{self.unresolved} unresolved, {self.requests} requests, "
             f"budget {self.budget_used}/{self.budget_limit}"
         )
+
+    def search_log(self, *, filtered: bool, run_at: datetime, unresolved: dict[str, int]) -> dict:
+        """What one search did, as the data `search.json` holds (CONTRACTS.md, "Search log").
+
+        The account lines, the request count and the budget left the screen in the test round of
+        2026-09-24: they answer "why did this account answer nothing", a question about a file and
+        not about the line a reader is looking at. The file and the screen's two notes both come
+        from this one reading of the search.
+        """
+        classes = {n: "packager" for n in self.listed_packagers} | {n: "publisher" for n in self.publishers}
+        return {
+            "schema_version": SEARCH_LOG_SCHEMA_VERSION,
+            "word": self.query,
+            "filter_owners": filtered,
+            "run_at": run_at.isoformat(),
+            "accounts": [
+                {"account": g.label, "class": classes.get(g.label, "open"), "hits": g.page_size, "page_full": g.page_full}
+                for g in self.groups],
+            "requests": self.requests,
+            "budget": {"used": self.budget_used, "limit": self.budget_limit},
+            "resolved": self.resolved,
+            "unresolved": [{"reason": reason, "count": count} for reason, count in sorted(unresolved.items())],
+        }
 
 
 def run_search(
@@ -190,6 +217,7 @@ def run_search(
         budget_limit=shared.limit,
         groups=_regrouped(groups, hits),
         notes=notes,
+        publishers=list(publishers), listed_packagers=list(listed_packagers),
     )
 
 
@@ -756,6 +784,7 @@ __all__ = [
     "NO_OLLAMA_LABEL",
     "NO_PUBLISHER_NOTE",
     "NO_PUBLISHER_NOTE_OPEN",
+    "SEARCH_LOG_SCHEMA_VERSION",
     "AgeVerdict",
     "SearchError",
     "SearchGroup",

@@ -60,9 +60,12 @@ modelroom
 It opens with what it already knows and then walks five numbered steps:
 
 ```
- ██ ██ ▓▓ ██   ModelRoom
- ██ ██ ██ ░░   Which local model packages fit your machine.
- ▓▓ ██ ░░ ░░   modelroom 0.1.0 · github.com/jm-vis/modelroom
+ ▄▄▄ ▄▄▄ ▄▄▄ ▄▄▄
+ ███ ███ ███ ███   ModelRoom
+ ▄▄▄ ▄▄▄ ▄▄▄ ▄▄▄   Which local model packages fit your machine.
+ ███ ███ ███ ███   modelroom 0.1.0 · github.com/jm-vis/modelroom
+ ▄▄▄ ▄▄▄ ▄▄▄ ▄▄▄
+ ███ ███ ███ ███
 
  folder    not chosen yet          the first question asks where results live
  daemon    Ollama 0.34.2           reachable, 19 models installed
@@ -70,6 +73,31 @@ It opens with what it already knows and then walks five numbered steps:
 
  Five steps: configuration, packages, context, measurement, results.
  Files are written as the run goes on. Esc leaves a list, Ctrl-C leaves at any point.
+```
+
+Every step is a block of its own. The question disappears once it is answered and one line takes
+its place, with the answer in the words you gave it; under it stand at most two notes about what
+the run made of it, and one line with the step's balance:
+
+```
+ ── Step 2 of 5  Packages ───────────────────────────────────────────────
+ ? What are you looking for?  qwen
+ ? Show only repositories of a publisher or a listed packager?  Yes
+   searched Hugging Face at the publisher Qwen and the five listed packagers
+   120 repositories, 40 of them models you can pick from
+ ? Which of these models should the result cover?  Qwen3.5-9B, Qwen3-0.6B
+ ✓ Packages        2 models, 26 packages from 4 repositories
+```
+
+The run closes with a card of the whole run over the result table:
+
+```
+ folder    //models/modelroom
+ machine   workstation             12 GB graphics, 128 GB memory, measured today
+ models    Qwen3.5-9B, Qwen3-0.6B  26 packages from Qwen, unsloth and Ollama
+ context   L 32k                   24,000 words, a report or a long contract
+ speed     not measured            say Yes in step 4 to measure an installed package
+ result    docs\models.md          25 packages ranked, 1 too tight
 ```
 
 1 **Configuration**: where the results should live, and which machines the result covers --
@@ -83,8 +111,9 @@ the ten newest repositories for that word, whoever owns them.
 with the words that are, an example, and how many of the packages just fetched still fit this
 machine -- that last column is the fit of the ranking itself, not a second calculation.
 4 **Measurement**: the speed of the packages your local Ollama daemon already has; nothing is
-marked, and it never downloads anything. 5 **Results**: the ranking per machine, written to
-`docs/models.md` and `docs/models.json`.
+marked, and it never downloads anything. 5 **Results**: the card of the whole run and the ranking
+per machine, written to `docs/models.md` and `docs/models.json`. What the search asked, page by
+page, is in `state/search.json` next to them.
 
 Every question is a list with the arrow keys, including yes and no; `Esc` leaves a list and Ctrl-C
 leaves at any point, and each step writes as it goes. The next run is the same command:

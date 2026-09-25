@@ -12,18 +12,19 @@ from modelroom.config import MachineConfig
 from modelroom.guided_context import Checked
 from modelroom.guided_contracts import SearchHit
 from modelroom.guided_models import (
+    DEFAULT_CONTEXT,
     LINE_LIMIT,
     MACHINE_NOT_MEASURED,
     PARAMETER_COUNT_UNKNOWN,
     ModelChoice,
     chosen_hits,
-    count_line,
-    fit_line,
     hint_line,
     list_choices,
     list_context,
     model_choices,
     parameters_from_name,
+    picked_names,
+    unusable_counts,
     unusable_reasons,
 )
 from modelroom.search import DEFAULT_PACKAGERS
@@ -371,57 +372,65 @@ def test_nothing_of_the_list_is_grayed_out():
 # --- the lines around the list ---------------------------------------------------------------------
 
 
-def test_the_count_line_names_the_models_and_the_repositories_that_cannot_be_used():
-    hits = [_hit("unsloth/Qwen3.5-9B-GGUF"), _unresolved("someone/Qwen3.5-9B-GGUF")]
-
-    assert count_line(_models(hits), hits, True) == "1 model can be picked; 1 repository cannot:"
-
-
-def test_the_count_line_counts_in_the_plural_as_well():
+def test_the_reasons_of_the_repositories_that_cannot_be_used_are_counted_once_each():
+    """The counts `search.json` holds and the lines below the list are one reading of the hits."""
     hits = [
         _hit("unsloth/Qwen3.5-9B-GGUF"),
-        _hit("unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF", base=DEEPSEEK),
         _unresolved("someone/Qwen3.5-9B-GGUF"),
         _unresolved("another/Qwen3.5-9B-GGUF", "derivative"),
     ]
 
-    assert count_line(_models(hits), hits, True) == "2 models can be picked; 2 repositories cannot:"
+    counts = unusable_counts(hits, True)
+
+    assert sum(counts.values()) == 2
+    assert sorted(counts) == [
+        "a fine-tune or a merge, not a quantization of one base model",
+        "the repository does not say it packages a base model",
+    ]
+    assert [line.split(" ", 1)[0] for line in unusable_reasons(hits, True)] == ["1", "1"]
 
 
 def test_the_context_of_the_list_is_the_one_this_folder_kept():
-    """Step 3 asks for the context; step 2 stands on what the folder holds, else fit v1's 8192."""
-    assert list_context(None) == 8192
-    assert list_context(32768) == 32768
+    """Step 3 asks for the context; step 2 stands on what the folder holds, else the scale's level."""
+    assert list_context(None) == 32768
+    assert list_context(8192) == 8192
 
 
-def test_the_fit_line_names_the_context_the_fit_was_computed_for():
-    assert fit_line(8192, _measured()) == "fit at 8k context, computed from the size of the model"
-    assert fit_line(32768, _measured()).startswith("fit at 32k context")
+def test_the_default_context_of_the_list_is_the_one_the_scale_starts_on():
+    """The list said `fit at 8k` while the next question started on `L 32k` (test round 2026-09-24)."""
+    from modelroom.guided import DEFAULT_CONTEXT as GUIDED_DEFAULT
+
+    assert DEFAULT_CONTEXT == 32768
+    assert DEFAULT_CONTEXT is GUIDED_DEFAULT
 
 
-def test_a_context_of_its_own_is_not_floored_into_a_k_it_is_not():
-    assert fit_line(5000, _measured()).startswith("fit at 5000 tokens context")
+def test_the_hint_line_names_the_context_the_fit_of_the_list_was_computed_for():
+    line = hint_line(_measured(), 32768)
 
-
-def test_without_a_measured_machine_there_is_no_fit_line():
-    assert fit_line(8192, _unmeasured()) is None
-
-
-def test_the_hint_line_says_how_to_mark_and_where_the_exact_fit_comes_from():
-    line = hint_line(_measured())
-
-    assert line.startswith("Space marks a model, Enter confirms; nothing marked keeps the folder as it is.")
+    assert line.startswith("nothing marked keeps the folder as it is.")
     assert line.endswith(
-        "Fit is from the size of the model, the exact fit comes after the fetch; "
+        "Fit is from the size of the model at 32k context; the exact fit comes after the fetch; "
         "(RAM) means the graphics memory is too small for it."
     )
 
 
-def test_the_hint_line_of_an_unmeasured_machine_says_the_fit_is_unknown():
-    line = hint_line(_unmeasured())
+def test_a_context_of_its_own_is_not_floored_into_a_k_it_is_not():
+    assert "at 5000 tokens context" in hint_line(_measured(), 5000)
 
-    assert line.startswith("Space marks a model, Enter confirms; nothing marked keeps the folder as it is.")
+
+def test_the_hint_line_of_an_unmeasured_machine_says_the_fit_is_unknown():
+    line = hint_line(_unmeasured(), 32768)
+
+    assert line.startswith("nothing marked keeps the folder as it is.")
     assert line.endswith("Fit is unknown until this machine is measured.")
+
+
+def test_the_answer_of_the_list_is_read_back_in_the_names_the_list_showed():
+    hits = [_hit("unsloth/Qwen3.5-9B-GGUF")]
+    models = _models(hits)
+
+    assert picked_names(models, ["Qwen/Qwen3.5-9B"]) == ["Qwen3.5-9B"]
+    assert picked_names(models, ["unsloth/Qwen3.5-9B-GGUF"]) == ["unsloth/Qwen3.5-9B-GGUF"]
 
 
 # --- from the answer to the repositories that are fetched -------------------------------------------

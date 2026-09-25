@@ -1047,6 +1047,52 @@ packager) triple, mirroring `Snapshot.areas` after the merge (see below). `candi
 always `[]` in this work package: ranking under-covered base models or suggesting new
 packagers to configure is a later feature, not something AP3 computes.
 
+### Search log (`search.json`)
+
+Written by `modelroom/state.py::write_search_log` under `paths.state`, once per search of the guided
+mode, atomically, after the search and before the list is shown -- and replaced by the next search:
+it is about the search that just ran. Its data is one reading of that search
+(`search.SearchOutcome.search_log`), the same the two notes on the screen come from, so a line and
+the file can never say different numbers.
+
+```json
+{
+  "schema_version": 1,
+  "word": "qwen",
+  "filter_owners": true,
+  "run_at": "2026-09-25T08:00:00+00:00",
+  "accounts": [
+    {"account": "Qwen", "class": "publisher", "hits": 1, "page_full": false},
+    {"account": "unsloth", "class": "packager", "hits": 20, "page_full": true},
+    {"account": "most downloaded", "class": "open", "hits": 10, "page_full": false}
+  ],
+  "requests": 3,
+  "budget": {"used": 9, "limit": 150},
+  "resolved": 3,
+  "unresolved": [{"reason": "the repository does not say it packages a base model", "count": 1}]
+}
+```
+
+`accounts` is one entry per asked page, in the order they were asked: `class` is what the search
+asked it by -- `publisher` for a publisher account of a matching catalog family, `packager` for the
+positive list, `open` for one of the two open lists, which are asked without an account at all.
+`hits` is what that page answered with, the number its group line shows, and `page_full` is set for
+an **account** page only ("Search over the Hugging Face API"). `unresolved` is the reasons the
+repositories of this search are no model of the selection list, each with the number behind it
+(`guided_models.unusable_counts`). Why the file: those seven lines, the request count and the budget
+answer "why did this account answer nothing", which is a question about the search and not about the
+line a reader is looking at -- on a screen that has a choice to offer they said the same thing seven
+times over (test round, 2026-09-24). The three automation commands write no such file; `fetch` still
+prints `SearchOutcome.group_lines`/`summary_line` unchanged.
+
+**Written without the lock, and deliberately so.** Unlike the configuration, a profile, a
+measurement and the snapshot, this one file is not taken under `modelroom.lock`: it is a record of
+one run's own search that no other writer of the state touches and no reader of the state depends
+on, and the write is atomic, so a reader sees either the old file or the new one. Taking the lock in
+the middle of step 2 would let a lock another process holds end a run that has a choice to offer
+(second-model round, 2026-09-24). A write that fails is a `run.failed` sentence and the run goes on
+with its list -- the search itself went through.
+
 ### Area semantics
 
 An "area" (the `Area` model, already defined above) is one Hugging Face packager-owner's
@@ -1544,8 +1590,9 @@ that is not a complete `gguf` build, a weight file with no size, the GPU states 
 refuses, a llmfit deviation, and more than one request. For the list of step 2 there are two more
 of its own: `machine not measured` and `parameter count unknown`.
 
-**Where the basis is visible.** In the JSON view as `fit.basis`, in the terminal table as
-` (from size)` behind the class, and in the note of the row -- the note of a ranked package keeps
+**Where the basis is visible.** In the JSON view as `fit.basis`, in the terminal view as the
+`(from size):` line with the ranks it is about (since 2026-09-24; the `Fit` cell says the memory pool
+instead), and in the note of the row -- the note of a ranked package keeps
 the sentence of its memory pool in front (`Fits into graphics memory: …`, `Too large for graphics
 memory alone, …`; without it a row in system memory read as the equal of one in graphics memory,
 acceptance of 2026-09-24) and ends with `From the size of the package, not its architecture.`,
@@ -3039,8 +3086,11 @@ two is already new, and the next render replaces both. A consumer that needs the
 compares the Markdown header's **`rendered_at`** with the JSON view's `rendered_at`: those two are
 equal only when both files come from the same render. `snapshot_run_at` is not enough -- the same
 snapshot can be rendered twice with different contexts, and then both files agree on
-`snapshot_run_at` while their scenario and every fit differ. `echo`, when a caller passes it (the guided mode passes `print`),
-receives the terminal view; `modelroom render` passes nothing and stays silent on success.
+`snapshot_run_at` while their scenario and every fit differ. `echo`, when a caller passes it,
+receives the terminal view; `on_document` receives the document itself **while the lock is still
+held**, from which the guided mode draws the card of its step 5 -- it reads the snapshot inside that
+callback, so the card and the tables rest on one snapshot (second-model round, 2026-09-24) -- and
+then prints the blocks on its own; `modelroom render` passes neither and stays silent on success.
 
 **Sections of the Markdown view**, in this order: the header line, the summary block (title,
 snapshot run time, rendered time, base model and package counts, `Scenario:`, `Ranking rule:`,
@@ -3049,25 +3099,52 @@ and `Market rating unavailable: <message>` when the rating source failed), `## A
 `## Too tight: <machine>` -- the last two only when they have rows. Every machine section is a
 `##` heading, so a reader can cut the document at headings.
 
-**The terminal view** is what step 5 of the guided mode shows, and it carries that step's head
-(`Step 5 of 5  Results`); `modelroom render` writes the two files and stays silent unless a caller
-asks for it. It shows fewer columns than the Markdown table (a terminal is narrow) and, since
-2026-09-24, the ones a reader recognizes a package by: `#` (3), `Model` (24, the base model's name
-without its account), `Package` (22, `packager · quant`, cut with `…` where it does not fit),
-`Fit` (20, the class, and on the size basis ` (from size)` behind it -- 20 because
-`marginal (from size)` is 20 characters long), `Speed` (12, `41.1 tok/s` or `unknown`) and
+**The terminal view** is what step 5 of the guided mode shows, and `document_terminal` carries that
+step's head; `modelroom render` writes the two files and stays silent unless a caller asks for it.
+The guided mode draws the head and the card itself and then prints `views.terminal_lines`, which is
+the blocks alone. It shows fewer columns than the Markdown table (a terminal is narrow) and the ones
+a reader recognizes a package by: `#` (3), `Model` (24, the base model's name without its account),
+`Package` (22, `packager · quant`, cut with `…` where it does not fit), `Fit` (20), `Speed` (12) and
 `Memory` (8, `need_gib` as `GB` with one decimal). With the one space every line is indented by,
-that is 100 characters. Under the head stands a rule, then the rows, then one line per note. The snapshot time
-and the ranking rule are **not** in this view -- they are in the Markdown file, which is where a
-reader has room for them -- and the scenario is one short line under the step head: `context L 32k
-· 1 request · KV cache f16 (assumed)`. A machine that is `ranked` is named without its status
-(`Ranking: workstation (workstation)`), any other machine with it.
-`not covered` and `too tight` are then **grouped by reason**, one line each with
-the number of packages behind it and up to three of their names (`not covered: 12 packages --
-architecture not covered by v1 (a Q4_K_M, b Q4_K_M, c Q4_K_M and 9 more)`) -- 41 lines that all
-said the same thing pushed the ranking off the screen in the hand test of 2026-09-24. Every value
-comes from the same document, and the **Markdown view is unchanged to the byte**
-(`tests/test_render.py` compares it with a fixture written by the code before this change).
+that is 100 characters, and no line of this view is wider.
+
+Above each machine's table stands `<label> · context L 32k`, and `<label> · <status>` with its
+reason for a machine that is not `ranked` (decided 2026-09-24: `Ranking: dellpromax-jv
+(DellProMax_JV)` said the machine's key, its name and a word nobody asked about, and the scenario
+stood on a line of its own). **Fit** is the class with ` (RAM)` behind it where the pool is system
+memory -- the same word the selection list of step 2 uses -- and never ` (from size)`, which is a
+note now. **Speed** is `–` where nothing was measured, not `unknown`. Under the table, all gray and
+wrapped between pieces at 100 characters (`screen.joined`):
+
+1. `showing <n> of <m>`, and one piece per set-aside group: `<k> package(s) too tight (<up to three
+   names> and <r> more)`, `<k> package(s) not covered (…)`, with the reason named where the list has
+   more than one of them. The names are the evidence behind the count and are what gives way where
+   the line has no room for them -- two, then one, then none; the count and the reason never do, and
+   no name is cut in the middle (a piece of 137 characters was measured in the second-model round of
+   2026-09-24).
+2. the fit of the ranked rows **bundled by memory pool**, with their rank ranges: `#1–2 fit into
+   graphics memory (10.9 GB free after the reserve)`, `#3–5 need system memory, the graphics card
+   helps`, `#6 needs system memory, no graphics card`. The numbers come from the fields of `Fit`,
+   never from parsing a note's own sentence back apart.
+3. `(from size): #2–5 computed from the package size, not its architecture`, where there are such rows.
+4. `speed: no row shown was measured yet · say Yes in step 4 to measure an installed package`, only
+   where no row carries a speed. **"No row shown", not "nothing on this machine"**: a measured
+   package whose fit class puts it past the tenth row is in no `RankedEntry` of the document, so this
+   view cannot see it, and a wider claim would be one the document does not carry (second-model
+   round, 2026-09-24).
+5. `to install #1: ollama pull <local name>` for the first row of the machine **the run passes in**
+   (`views.show_result(..., install_for)`; the guided mode passes its own machine key) --
+   `hf.co/<repo>:<quant>` for a Hugging Face build, `<name>:<tag>` for one of the Ollama registry,
+   the two shapes the load test matches an installed model by. Nothing is called and nothing is
+   looked up; a package with no such name has no line. `modelroom render` draws no such line at all:
+   a configuration may name several writers, and which of them the command runs on it cannot know
+   (second-model round, 2026-09-24). It is a command to copy, so it is never cut, and it is the one
+   line of this view that may pass 100 characters. Installing is a work package of its own.
+
+Ten rows carried ten notes of the same two sentences and 41 lines of `not covered` said the same
+thing 41 times in the test rounds of 2026-09-24; a reader needs each statement once, with the ranks
+it is about. Every value comes from the same document, and the **Markdown view is unchanged to the
+byte** (`tests/test_render.py` compares it with a fixture written by the code before this change).
 
 **Exit codes**: `0` rendered (also when the rating source failed, and also when a profile file
 was skipped), `1` the lock is held, there is no snapshot, the existing document was rendered
@@ -3611,24 +3688,84 @@ other module:
   The colors are foreground colors from `docs/assets/banner.svg` -- white and a muted blue for
   the mark, green for the pointer, the chosen answer and what is done, amber for what is tight,
   cyan for a path, gray for a side note -- and the background belongs to the terminal.
-- **Glyphs** (`██ ▓▓ ░░ ✓ ❯ ↑↓ ·`) only when `sys.stdout.encoding` can encode them, else ASCII
-  (`## :: .. ok > ^v -`). A Windows console under `cp1252` encodes none of them, and printing one
-  would end a run with a `UnicodeEncodeError` instead of a dialog.
+- **Glyphs** (`██ ▓▓ ░░ ▄▄▄ ███ ✓ – ❯ ↑↓ · ─`) only when `sys.stdout.encoding` can encode them, else
+  ASCII (`## :: .. ... ### ok - > ^v - -`). A Windows console under `cp1252` encodes none of them,
+  and printing one would end a run with a `UnicodeEncodeError` instead of a dialog.
 - **Every question is a list** with the arrow keys, a green `❯` on the line the keyboard is on, the
   grayed-out entries with their reason, and one instruction line under it: `↑↓ move   Enter
   select   Esc leave`, or `↑↓ move   Space marks   Enter confirms   Esc leave` for a list that
   marks. **Yes or no is a list of `Yes` and `No`** with the default under the pointer; there is no
   `(Y/n)` anywhere. An answer file still answers it with `true`/`false`.
+- **What a list has to say about itself stands in that instruction line**, behind the keys and a
+  `·`: what a column means (`last column: how many fetched packages fit <machine>`), what nothing
+  marked would do, where the fit of a row comes from. It is the question's own line and goes away
+  with the question -- a sentence that explains a list has nothing to say once the list is gone
+  (decided 2026-09-24). `Asker.select`, `Asker.checkbox` and `Asker.select_or_text` take it as
+  `instruction`; an answer file ignores it.
+- **Every question erases itself once it is answered** (`application.erase_when_done`, a list and a
+  typed answer alike), and the run writes
+  one line in its place (`screen.answer_line`, "The screen"). Without it `questionary` writes its
+  own idea of the answer -- `done (2 selections)`, `[this machine (measure now)]`, the whole marked
+  line of the scale -- under a question that is still on screen, which is the "one thing chained to
+  the next" of the test round of 2026-09-24. A list longer than the window leaves the part that
+  scrolled out of it behind; that is the terminal's own doing and is accepted.
 - **The labels of a list are aligned in columns** (`dialog.columns`), so the scale, the search
   hits and the load test read as tables. A cell wider than its column pushes its own row and is
   never cut.
+
+**The screen** (`modelroom/screen.py`, decided 2026-09-24). One object draws the run. It knows each
+line as `(class, text)` fragments and prints it either **with color**, through
+`prompt_toolkit.print_formatted_text` and the one style of the dialog (`intro.style_rules` plus the
+question's own classes), or **without color** as exactly the same plain text through the run's
+`out` -- the same decision `intro.print_intro` makes for the start screen, with the same fallback
+where the library cannot drive the console at all. The plain text of a line is its fragments' text
+with **one leading space**, as the start screen has it, so `modelroom --answers <file>` and a
+terminal run read as the same screen. `tests/golden/guided-screen*.txt` is that screen as a
+fixture: a change to it is a change to those files, made on purpose.
+
+| Pattern | What it draws |
+|---|---|
+| `head(n)` | `── Step 1 of 5  Configuration ────…`, filled to **72** characters (`label`; ASCII `--`), behind a blank line |
+| `answer(question, words)` | `? Where should results live?  this folder` -- `?` (`qmark`), the question (`question`), two spaces, the answer (`path` for a path, else `answer`) |
+| `note(text)` | two spaces of indent, gray (`note`) -- what the run made of the answer above it |
+| `done(n, summary)` | `✓ Configuration   <folder>, 1 machine` -- the check mark (`done`), the name padded to 14 (`value`), the balance |
+| `skipped(n, summary)` | the same with `–` (`tight`; ASCII `-`) for a step that did nothing: measured nothing because nobody asked it to, chose nothing |
+| `card(facts)` | the `label value note` rows of the start screen (`intro.fact_line`), for the card of step 5 |
+| `joined(pieces)` | pieces joined with ` · `, wrapped **between** pieces at 100 characters and never inside one |
+
+**The answer line is the run's, not the library's.** Every question leaves exactly one line behind,
+with the answer in the words a reader gave it (`screen.answer_words` and the step's own):
+
+| Key | Words |
+|---|---|
+| `results` | `this folder`, or the path that was entered |
+| `machines` | `this machine`, `a profile file`, joined with `, `; nothing marked: `none` |
+| `clone` | `the same machine` / `a clone`, under the short question `The profile of this folder is gone. Is this the same machine or a clone?` (the profile id belongs to the question that was asked) |
+| `search` | the word |
+| `filter_owners`, `load_test` | `Yes` / `No` |
+| `select` | the model names joined with `, ` (`Qwen3.5-9B, Qwen3-0.6B`); nothing marked: `nothing`. A value an answer file names as a repository keeps its own spelling |
+| `context` | the line of the scale without its fit column, columns two spaces apart (`L  32k  24,000 words  a report or a long contract`); a number of its own: `40,000 tokens` |
+| `load_test_packages` | the local names joined with `, ` |
 
 **The start screen** (`modelroom/intro.py`), once per run, before the first question, with
 `--answers` as well (then without color): the mark's pictogram from `docs/assets/banner.svg` as
 three rows of four cells, next to it the name, the one-line description, and the version with the
 repository from the package metadata (`importlib.metadata`, `project.urls`; without that URL only
-the version). Then the three facts that are known before anything is asked, each as `label value
-note`:
+the version).
+
+**The mark, with color and without** (mark E, decided 2026-09-24). **With color** every cell is a
+square of 24 pixels with a gap of 8 in both directions: a row of lower half blocks (`▄▄▄`) carries
+the gap above and a row of full blocks (`███`) the square, so one row of cells is two terminal
+lines, six lines in all, and the rows do not touch. The color of the cell tells the three kinds
+apart (`mark` white, `mark-muted`, `mark-empty`) -- `▓▓` and `░░` are drawn as a coarse dot raster
+by the console this package is used at most (measured 2026-09-24, Windows Terminal), which the mark
+of a brand is not. The name stands on the second line, the description on the third, the version on
+the fourth; the first, fifth and sixth carry no text. **Without color** the mark stays the three
+rows of `██ ▓▓ ░░` it always was: a log is no place for a brand surface, and a half block cannot be
+shaded. Eight pixels is the smallest gap a terminal has in either direction -- a space sideways, a
+half line up and down -- so equal gaps exist only at eight, and a square is then a multiple of it.
+
+Then the three facts that are known before anything is asked, each as `label value note`:
 
 - `folder`: the results folder `--config` or the pointer file already names, with what is in it;
   `not chosen yet` when the first question is still to come.
@@ -3659,13 +3796,21 @@ first thing a run prints is never a traceback.
 names no file, and a remembered folder that no longer holds a `modelroom.toml`, are said out
 loud and the folder question is asked again -- neither is silently replaced by a new folder.
 
-**Five steps.** Each one begins with a head of its own, `Step <n> of 5  <name>`. Steps 1 to 4 leave
-one line behind when they are done -- a check mark, the step's name and the short form of its answer
-(`✓ Packages   2 repositories added, 7 packages fetched`). Step 5 ends the run and closes with the
-line that says where the result went (`Written to <markdown>   and   <state>`), which is its
-finishing line. The five are **1 Configuration** (the
-results folder, the configuration in it, the machines), **2 Packages** (search, choice, fetch),
-**3 Context** (the size scale), **4 Measurement** (the load test), **5 Results** (the render).
+**Five steps.** Each one is a block: a head of 72 characters (`── Step <n> of 5  <name> ───…`), one
+answer line per question, at most two notes, and one balance line -- a check mark, the step's name
+and what the step came to (`✓ Packages        2 models, 26 packages from 4 repositories`), or a dash
+where it did nothing (`– Measurement     none in this run`). Step 5 closes with the card of the
+whole run over the result table and `✓ Results         docs\models.md`, the document's path relative
+to the results folder. The five are **1 Configuration** (the results folder, the configuration in
+it, the machines), **2 Packages** (search, choice, fetch), **3 Context** (the size scale),
+**4 Measurement** (the load test), **5 Results** (the render).
+
+The balances, one per step: `<folder>, <n> machine(s)` · `<k> models, <p> packages from <r>
+repositories` (nothing chosen, and nothing to fetch: `nothing chosen, the folder stays as it is`) ·
+the context as `L 32k` · `<n> of <m> measured` or `none in this run` · the Markdown path. All three
+numbers of step 2 are about **the snapshot this folder now holds**, not about what this run marked:
+`apply_hits` keeps the models that were already there, so counting the marked models and the packages
+of the whole folder in one sentence would mix two frames (second-model round, 2026-09-24).
 
 The **fetch belongs to step 2**, before the context question and not after it: the scale of step 3
 counts how many of the packages the fetch just recorded still fit this machine, and the fetch
@@ -3708,10 +3853,20 @@ per base model would only spend the shared request budget), this device as `[mac
 with `writer = true`, `paths.state = <folder>/state`, `paths.markdown = <folder>/docs/models.md`
 and `[guided].results = <folder>`. The folder is remembered in the pointer file. A
 `modelroom.toml` of schema 1 in the folder is migrated first (`modelroom migrate`, under the
-lock, backup kept, idempotent), before anything is written, and the lines it prints have one
-sentence in front of them that says what happened in plain words: `This folder holds a
+lock, backup kept, idempotent), before anything is written, and the notes it leaves have one
+sentence in front of them that says what happened in plain words: `this folder holds a
 configuration from an earlier version; it was updated, backup kept: modelroom.toml.v1.bak`. A
 folder that already holds results but no `modelroom.toml` is a question, never an assumption.
+
+**What step 1 leaves on the screen** (decided 2026-09-24): the answers, and **one note about the
+measurement** -- `measured: <the hardware in plain words>, confirmed by llmfit`, or `measured again:
+…` where this machine was already measured in this folder (and for a `the same machine` answer). The
+sentence ends after the hardware where `llmfit` confirmed nothing. The readings themselves, the
+profile id, `wrote <toml> with <name> as the writer of this results folder`, `<name> is now a writer`
+and `<name> is measured as profile <id>` are the configuration's and the profile file's business and
+are no longer printed (`cli.hardware_with_config(..., summary=False)`; `modelroom hardware` prints
+its summary line unchanged). An import leaves `imported <display_name>: <the hardware in plain
+words>`; an import that does not go through stays a `run.failed` sentence.
 
 **Step 1, the machines.** The list is built from every profile file in the results folder
 (`scan_profiles`), grouped by hardware class (GPU, VRAM, RAM) with the count and the names,
@@ -3746,8 +3901,16 @@ binding; a file that does not import is reported and the run goes on.
 (`DEFAULT_GUIDED_BUDGET`, 150, shared with the fetch) and `open_pages=not filtered` -- so the owner
 filter is a question about the **request**, not only about the list: with it on, only the accounts
 are asked; switching it off adds the two open lists on top of the account groups (see "Search over
-the Hugging Face API"). Then one line per group (`SearchOutcome.group_lines`), then the summary line
-(`SearchOutcome.summary_line`), and then **the list of models** (`modelroom/guided_models.py`,
+the Hugging Face API"). Then **two notes** (`screen.search_notes`, decided 2026-09-24): where it
+asked (`searched Hugging Face at the publisher Qwen and the five listed packagers`, the publishers
+whose page answered with something, by name; none of them: `no publisher of this catalog that
+answered` -- a publisher whose page came back empty was asked all the same, and `search.json` names
+it; with the filter off `, and the two open lists`) and how much of the answer is a choice (`120 repositories, 40
+of them models you can pick from`; none: `none of them a model you can pick from`, and with a full
+account page ` · a more specific word shortens the list`). Everything else the search knows goes
+into `search.json` ("Search log"): the seven account lines, the request count, the budget and every
+reason a repository is no model of the list said the same thing seven times over on a screen that
+had a choice to offer. Then **the list of models** (`modelroom/guided_models.py`,
 decided 2026-09-24, in place of the list of repositories: 120 lines of over 200 characters, size
 and age `unknown` throughout and 40 grayed-out rows whose appended reason broke the columns --
 "I cannot tell what to pick, or what I am risking" was the hand test's verdict).
@@ -3765,23 +3928,25 @@ a name, an account and a download count all come from a registry -- `deepseek-r1
 of 104 characters before that (second-model round, 2026-09-24), and `1000000B` one of 101. The
 order is the memory pool (a fit in graphics memory before one in system memory, whatever its
 class), then the fit class, then the downloads, then the name, with `too tight` and `unknown`
-last (decided 2026-09-24). Above the list stands one line with the two counts
-(`2 models can be picked; 1 repository cannot:`) and under it the reasons as before, one line per
-reason with the number of repositories behind it (`3 repositories cannot be picked: the repository
-does not say it packages a base model`; `guided_models.UNRESOLVED_REASONS`, and with
-`filter_owners` on `not a publisher or a listed packager` for an owner class of `other`) -- the
-repositories themselves are no longer lines of the list. Then, where a fit was computed at all,
-the context it was computed for (`fit at 8k context, computed from the size of the model`), and
-the instruction line: `Space marks a model, Enter confirms; nothing marked keeps the folder as it
-is. Fit is from the size of the model, the exact fit comes after the fetch; (RAM) means the
-graphics memory is too small for it.` -- with `Fit is unknown until this machine is measured.` in
-place of the second sentence when this folder holds no measured machine.
+last (decided 2026-09-24). How many models and how many repositories the search answered with is the
+second note above the list, and the reasons of the repositories that are no model of it are in
+`search.json` ("Search log"; `guided_models.UNRESOLVED_REASONS`, and with `filter_owners` on `not a
+publisher or a listed packager` for an owner class of `other`) -- the repositories themselves are no
+lines of the list either. What the list has to say about itself is its **instruction line**
+(`guided_models.hint_line`): `nothing marked keeps the folder as it is. Fit is from the size of the
+model at 32k context; the exact fit comes after the fetch; (RAM) means the graphics memory is too
+small for it.` -- with `Fit is unknown until this machine is measured.` in place of the second
+sentence when this folder holds no measured machine, and always the context the fit was really
+computed for.
 
 **The fit of the list** is `fit.fit_from_parameters` ("Fit from size", basis `size`) against the
 profile this folder binds this machine to and the reserves of its `[machines.<name>]` -- the same
 machine the size scale of step 3 counts against (`guided_context.machine_checked`). Its context is
-`[guided].context` when the folder kept one, else 8192: step 3 is where the context is asked, and
-a fit stands on a number, not on the level a question starts at. The parameter count is what a
+`[guided].context` when the folder kept one, else **the context of the level the scale will start on**
+(`guided_context.DEFAULT_CONTEXT`, 32768, since 2026-09-24 -- and one constant, not two): the list
+said `fit at 8k context` while the very next question started on `L 32k`, and two numbers for one run
+are one too many (test round, 2026-09-24). A fit stands on a number either way, never on a level.
+The parameter count is what a
 repository states (`SearchHit.parameters_b`), else what the model's name says
 (`guided_models.parameters_from_name`: every `<number>B`/`<number>T` that does not stand behind a
 letter, the largest of them, `2.4T` as 2400 and shown as `2.4T` again -- so `Qwen3.5-35B-A3B-MTP` is 35, `Nova-A17B` and
@@ -3818,8 +3983,11 @@ fetch, said out loud).
 order, each a line of the list: `XS` 4096, `S` 8192, `M` 16384, `L` 32768, `XL` 65536, `XXL`
 131072, with the shown context (`4k` … `128k`), roughly how many words that is (three quarters of
 a token each, so `4k` is `3,000 words`), an example of what it is for, and the last column below.
-In front of the list stands `checking <machine>   <its hardware in plain words>`; that line is also
-where a later stage hangs the question of how many people use the machine at once.
+Which machine that column was computed against stands in the **instruction line** of the question
+(`last column: how many fetched packages fit <machine>`), and the answered question is the whole
+screen of this step: `checking <machine>`, the sentence about the last column and `kept context <n>
+in <toml>` all went (test round, 2026-09-24). A machine a fit cannot be computed for is still a note
+(`Checked.reason`).
 
 - **The pointer** starts on the level whose context this folder kept (`[guided].context`), else on
   **`L`** -- the default of a folder that has chosen nothing yet.
@@ -3869,9 +4037,30 @@ already said so would leave a context another process wrote in the file, and the
 afterwards computes the same ranking (see "Render (schema 2)", "The scenario"), instead of falling
 back to 8192 and putting the run's own measurement into group 1.
 
-**Step 5, the render.** `render_with_config` with the chosen scenario, which writes both views and
-prints the terminal one -- so a measurement the load test just wrote is in the ranking of that same
-run -- and then one line saying where the result went: `Written to <markdown>   and   <state>`.
+**Step 5, the render and the card.** `render_with_config` with the chosen scenario, which writes both
+views -- so a measurement the load test just wrote is in the ranking of that same run -- and hands
+the document itself back (`on_document`). From it the step draws **the card of the whole run**
+(`views.result_card`, the `label value note` rows of the start screen, decided 2026-09-24), then one
+table per machine (`views.terminal_lines`), then `✓ Results         docs\models.md`. The card is the
+report a reader looks at once the run is over:
+
+| Row | Value | Note |
+|---|---|---|
+| `folder` | the results folder | -- |
+| `machine` | one row per machine of the result, its `display_name` | `12 GB graphics, 127 GB memory, measured today` (else `measured <YYYY-MM-DD>` from the profile's `recorded_at`); a machine without a profile carries its own reason |
+| `models` | the base models of the snapshot, by name | `<p> packages from <up to three packager accounts, else "and n more">` |
+| `context` | `L 32k` | the words and the example of that level; a context of its own: `about 30,000 words` |
+| `speed` | `not measured` or `<n> measured` | `say Yes in step 4 to measure an installed package`, or `fastest <name> at 41.1 tok/s` |
+| `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> too tight` (else `, none too tight`), and every other set-aside reason with its count behind a `·` |
+
+The `speed` and `result` rows count **one** machine's ranking: the machine of the run, else the first
+that has one. A package that fits two machines is one package and two rows, and a sum over the
+machines would count it twice while the `models` row of the same card counts the packages of the
+snapshot once (second-model round, 2026-09-24). The tables below the card carry every machine.
+
+`Written to <markdown>   and   <state>` is gone from the screen: the card's `result` row and the
+balance of the step both say where the document is, and the run said the same path three times
+(test round, 2026-09-24). `modelroom render` still prints it.
 
 **Step 4, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
 which `guided.py` calls between the context and the render). It measures into the profile **the
@@ -3889,22 +4078,30 @@ the daemon's inventory is read and matched against the snapshot's active package
   `0`: the daemon is needed for this step and for nothing else, so a machine without one still
   finishes cleanly. A **yes** that cannot be honored is a step that did not finish -- `nothing
   measured: <reason>` and exit `1`, with the document still written.
-- **No installed package matched.** One line, `no ranked package is installed on this machine;
+- **No installed package matched.** One note, `no ranked package is installed on this machine;
   the load test measures installed packages only (stage 1: no download)`, and no question. What
-  was left out is named first, **one line per reason** with the number of installed models behind
-  it and up to three of their names (`not measured: 12 installed models -- <reason> (a, b, c and 9
-  more)`): an installed model whose name matches a configured package but whose digest the daemon
-  does not show, and every cloud model.
+  was left out is named first, **one note per reason** with the number of installed models behind
+  it and **no names** (`12 installed models -- <reason>`): which model exactly is `ollama list`'s
+  answer, and twelve names pushed the question off the screen (test round, 2026-09-24). The **cloud
+  models** are named only here -- with a candidate on the list, that a machine also holds cloud
+  models is beside the point. An installed model whose name matches a configured package but whose
+  digest the daemon did not show is named **either way**: that is a fault about a package a reader
+  may have wanted measured, and another candidate must not silence it (second-model round,
+  2026-09-24).
 - **At least one candidate.** `load_test` (default **no**), then `load_test_packages`: every
   candidate, **none of them marked**, one line each with the local name, the base model, the
   quantization and the weight size, aligned in columns. Nothing is marked because `Enter` measured
   all three in the hand test of 2026-09-24 where the user had picked one; which models are measured
   is a decision. A single candidate is a list with one entry as well -- one code path, and an
-  answer file reads the same on every machine. Before the runs the step prints that the load is
-  read once and that the model behind the name must not change. Each measurement is written as its own file and reported in one
-  line: `measured <mean> tok/s (<min>-<max>), context <n>, valid, comparable`, or the reason
-  instead. A daemon that lets a run down here is a step that did not finish as well: the line
-  names the model and the reason, the exit code is `1`, and the document is still written.
+  answer file reads the same on every machine. Before the runs the step notes that the load is
+  read once and that the model behind the name must not change, and the progress of each run is a
+  note of its own. Each measurement is written as its own file and reported in one note:
+  `measured <name>: 41.1 tok/s (39.8–42.3), context 32k`. That it is valid and comparable is what
+  makes it a measurement at all, so it is not said; a record that is neither carries **what it is
+  missing** instead (`<name>: not comparable (<reason>)`) and the run still ends `0` -- the record is
+  written and the ranking says where such a measurement stands. A daemon that lets a run down here
+  is a step that did not finish: the line names the model and the reason, the exit code is `1`, and
+  the document is still written.
 
 **The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question

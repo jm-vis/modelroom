@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -35,6 +36,7 @@ from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
     build_transport,
     guided_transport_mapping,
+    json_response,
     loadtest_daemon,
     offline_daemon,
     ps_answer,
@@ -61,11 +63,14 @@ class _WatchingAsker(FileAsker):
     def __init__(self, answers: dict, lines: list[str]) -> None:
         super().__init__(answers)
         self.choices: dict[str, list[Choice]] = {}
+        self.instructions: dict[str, str | None] = {}
         self._lines = lines
 
-    def checkbox(self, key: str, question: str, choices) -> list[str]:
+    def checkbox(self, key: str, question: str, choices, instruction=None) -> list[str]:
         self.choices[key] = list(choices)
-        return super().checkbox(key, question, choices)
+        self.instructions[key] = instruction
+        return super().checkbox(key, question, choices, instruction)
+
 
 FULL_ANSWERS = {
     "results": "here",
@@ -132,24 +137,120 @@ def _results_folder(tmp_path: Path):
 # --- the start screen and the five steps ----------------------------------------------------------
 
 
+def _heads(lines: list[str]) -> list[str]:
+    """Every step head of a run: a rule, the step, its name and a rule to 72 characters."""
+    return [line.strip() for line in lines if line.strip().startswith(("── Step ", "-- Step "))]
+
+
+def _summaries(lines: list[str]) -> list[str]:
+    """Every balance line of a run: a check mark or a dash, the step's name and its balance."""
+    marks = ("✓ ", "ok ", "– ", "- ")
+    return [line.strip() for line in lines if line.strip().startswith(marks) and not line.strip().startswith("-- ")]
+
+
 def test_the_run_begins_with_the_start_screen_and_walks_five_numbered_steps(tmp_path: Path):
     code, lines = _run(tmp_path)
 
     assert code == 0
     assert any("ModelRoom" in line for line in lines[:4])
-    # Step 5's head comes with the whole result view in one line, so only its first line is a head.
-    heads = [line.splitlines()[0] for line in lines if line.startswith("Step ")]
-    assert [head.split("  ")[-1] for head in heads] == list(STEP_NAMES)
-    assert [head.split(" of ")[0] for head in heads] == ["Step 1", "Step 2", "Step 3", "Step 4", "Step 5"]
+    heads = [re.match(r"\S+ Step (\d) of 5  (\w+) ", head) for head in _heads(lines)]
+    assert [head.group(2) for head in heads] == list(STEP_NAMES)
+    assert [head.group(1) for head in heads] == [str(number) for number in range(1, 6)]
+    assert all(len(head.string) == 72 for head in heads)
 
 
 def test_every_step_leaves_one_line_behind_with_what_it_did(tmp_path: Path):
     _code, lines = _run(tmp_path)
 
-    done = [line for line in lines if line.startswith(("ok ", "✓ "))]
-    assert [line.split()[1] for line in done] == list(STEP_NAMES[:4])
-    assert any("repositories added" in line and "packages fetched" in line for line in done)
-    assert any(line.endswith("context S 8k") for line in done)
+    done = _summaries(lines)
+    assert [line.split()[1] for line in done] == list(STEP_NAMES)
+    # One model: this answer file names two repositories of the same base model, and the
+    # configuration and the card hold one (second-model round, 2026-09-24).
+    assert any(re.search(r"1 model, \d+ packages from \d+ repositor", line) for line in done)
+    assert any(line.endswith("S 8k") for line in done)
+    assert any(line.endswith("models.md") for line in done)
+
+
+def test_a_step_that_did_nothing_carries_a_dash_instead_of_a_check_mark(tmp_path: Path):
+    """A step that measured nothing did what it was told; a check mark cannot say that."""
+    _code, lines = _run(tmp_path)
+
+    measurement = next(line for line in _summaries(lines) if "Measurement" in line)
+    assert measurement.startswith(("– ", "- "))
+    assert measurement.endswith("none in this run")
+
+
+def test_every_answer_is_written_back_in_words(tmp_path: Path):
+    """The run writes the answer line, not the library: `this machine`, not `[this machine (...)]`."""
+    _code, lines = _run(tmp_path)
+
+    answers = [line.strip() for line in lines if line.strip().startswith("? ")]
+    assert "? Where should results live?  this folder" in answers
+    assert "? Which machines should the result cover?  this machine" in answers
+    assert "? What are you looking for?  qwen" in answers
+    assert "? Show only repositories of a publisher or a listed packager?  Yes" in answers
+    # This answer file names repositories, as a file always could: an answer of the user appears
+    # in the words of the user. A marked model appears as the name the list showed.
+    assert any(answer.endswith(f"  {UNSLOTH}, {QWEN_GGUF}") for answer in answers)
+    assert any(answer.endswith("S  8k  6,000 words  a long conversation") for answer in answers)
+    assert not any("done (" in line for line in lines)
+
+
+def test_a_marked_model_is_written_back_as_the_name_the_list_showed(tmp_path: Path):
+    _code, lines = _run(tmp_path, {**FULL_ANSWERS, "select": ["Qwen/Qwen3.5-9B"]})
+
+    assert any(line.strip().endswith("  Qwen3.5-9B") for line in lines)
+
+
+def test_the_balance_of_step_two_counts_models_and_not_answers(tmp_path: Path):
+    """Two repositories of one base model are one model, and that is what the card holds too."""
+    two_models = {**FULL_ANSWERS, "select": ["Qwen/Qwen3.5-9B", DEEPSEEK_BASE]}
+
+    _code, lines = _run(tmp_path, two_models)
+
+    assert any(line.strip().startswith("✓ Packages        2 models,") for line in lines)
+
+
+def test_a_search_log_that_cannot_be_written_is_a_fault_and_no_traceback(tmp_path: Path):
+    """The search went through; a folder that cannot hold its log must not end the run (2026-09-24)."""
+    state = _results(tmp_path) / "state"
+    state.mkdir(parents=True)
+    (state / "search.json").mkdir()  # a directory where the file belongs
+
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "write_config": True})
+
+    assert code == 1  # a step reported it, and the document is still written
+    assert any("the log of this search was not written" in line for line in lines)
+    assert (_results(tmp_path) / "docs" / "models.md").is_file()
+
+
+def test_the_install_line_follows_the_machine_this_run_is_on(tmp_path: Path):
+    """Several writers are allowed; the local name of a package is about this machine only."""
+    _code, lines = _run(tmp_path)
+
+    install = next(line for line in lines if "to install #1" in line)
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    ranked = next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"]
+    assert ranked[0]["quantization"] in install
+
+
+def test_an_import_that_brought_no_profile_says_what_it_did_instead(tmp_path: Path):
+    """The stored profile was the newer one: then the import's own report is the only statement."""
+    assert _run(tmp_path)[0] == 0
+    profile = HardwareProfile.model_validate(json.loads(_profiles(tmp_path)[0].read_text(encoding="utf-8")))
+    older = profile.model_copy(update={"recorded_at": RUN1.replace(hour=1)})
+    export = tmp_path / "again.json"
+    export.write_text(
+        json.dumps({"schema_version": 1, "profile": older.model_dump(mode="json"), "measurements": []}),
+        encoding="utf-8",
+    )
+
+    answers = {key: value for key, value in FULL_ANSWERS.items() if key != "results"}
+    answers |= {"machines": ["import"], "import_file": str(export)}
+    _code, lines = _run(tmp_path, answers, now=RUN2)
+
+    assert not any(line.strip().startswith("imported ") for line in lines)
+    assert any("kept, the local profile is newer" in line for line in lines)
 
 
 def test_the_start_screen_names_the_folder_and_the_hardware_of_a_second_run(tmp_path: Path):
@@ -170,9 +271,9 @@ def test_the_fetch_runs_before_the_context_question(tmp_path: Path):
     order: list[str] = []
 
     class _Watching(FileAsker):
-        def select_or_text(self, key, question, choices, text_value, text_question):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
             order.append(f"asked {key}")
-            return super().select_or_text(key, question, choices, text_value, text_question)
+            return super().select_or_text(key, question, choices, text_value, text_question, instruction)
 
     lines: list[str] = []
     run_guided(
@@ -186,9 +287,10 @@ def test_the_fetch_runs_before_the_context_question(tmp_path: Path):
         out=lambda line: order.append(line) or lines.append(line),
     )
 
-    assert order.index("Step 2 of 5  Packages") < order.index("asked context")
-    fetched = next(index for index, line in enumerate(order) if "packages fetched" in line)
-    assert fetched < order.index("asked context")
+    head = next(index for index, line in enumerate(order) if "Step 2 of 5  Packages" in line)
+    assert head < order.index("asked context")
+    chosen = next(index for index, line in enumerate(order) if "of them models you can pick from" in line)
+    assert chosen < order.index("asked context")
 
 
 def test_the_scale_is_asked_with_the_packages_of_this_runs_own_fetch(tmp_path: Path):
@@ -196,9 +298,9 @@ def test_the_scale_is_asked_with_the_packages_of_this_runs_own_fetch(tmp_path: P
     seen: dict[str, list] = {}
 
     class _Watching(FileAsker):
-        def select_or_text(self, key, question, choices, text_value, text_question):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
             seen[key] = list(choices)
-            return super().select_or_text(key, question, choices, text_value, text_question)
+            return super().select_or_text(key, question, choices, text_value, text_question, instruction)
 
     run_guided(
         _Watching(FULL_ANSWERS),
@@ -216,12 +318,18 @@ def test_the_scale_is_asked_with_the_packages_of_this_runs_own_fetch(tmp_path: P
     assert any("24 packages" in label for label in labels)
 
 
-def test_the_last_line_says_where_the_result_was_written(tmp_path: Path):
+def test_the_run_closes_with_the_card_and_the_relative_path_of_the_document(tmp_path: Path):
+    """The card is the report a reader looks at once the run is over (decided 2026-09-24)."""
     _code, lines = _run(tmp_path)
 
-    written = next(line for line in lines if line.startswith("Written to "))
-    assert str(_results(tmp_path) / "docs" / "models.md") in written
-    assert str(_results(tmp_path) / "state") in written
+    card = {line.split()[0]: line for line in (line.strip() for line in lines) if line.split()}
+    assert str(_results(tmp_path)) in card["folder"]
+    assert "GB graphics" in card["machine"] and "GB memory" in card["machine"]
+    assert "Qwen3.5-9B" in card["models"] and "packages from" in card["models"]
+    assert card["context"].startswith("context   S 8k")
+    assert card["speed"].startswith("speed     not measured")
+    assert "models.md" in card["result"] and "packages ranked" in card["result"]
+    assert not any(line.startswith("Written to ") for line in lines)
 
 
 # --- first start: the folder question, the configuration, the pointer file ----------------------
@@ -235,7 +343,10 @@ def test_the_first_start_writes_a_configuration_with_this_device_as_the_writer(t
     assert raw["schema_version"] == 2
     assert raw["machines"]["workstation"]["writer"] is True
     assert Path(raw["guided"]["results"]) == _results(tmp_path)
-    assert any("as the writer of this results folder" in line for line in lines)
+    # The line that named the writer is gone from the screen: the configuration says it, and the
+    # balance of step 1 says the folder and how many machines the result covers.
+    assert not any("as the writer of this results folder" in line for line in lines)
+    assert any(line.strip().endswith(f"{_results(tmp_path)}, 1 machine") for line in lines)
 
 
 def test_the_first_start_remembers_the_folder_in_the_pointer_file(tmp_path: Path):
@@ -358,11 +469,12 @@ def test_a_schema_one_configuration_is_migrated_before_the_first_write(tmp_path:
     assert (_results(tmp_path) / "modelroom.toml.v1.bak").is_file()
     assert tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))["schema_version"] == 2
     assert any("modelroom.toml" in line for line in lines)
-    # The migration lines are for a maintainer; the sentence in front of them is for a user.
+    # The migration lines are for a maintainer; the sentence in front of them is for a user. Both
+    # are notes of step 1 now, indented under the question they belong to.
     assert (
-        "This folder holds a configuration from an earlier version; it was updated, "
+        "this folder holds a configuration from an earlier version; it was updated, "
         "backup kept: modelroom.toml.v1.bak"
-    ) in lines
+    ) in [line.strip() for line in lines]
 
 
 # --- the machine list ------------------------------------------------------------------------------
@@ -377,7 +489,10 @@ def test_the_measured_machine_is_written_into_the_configuration(tmp_path: Path):
     assert profile.llmfit_crosscheck.ram_physical.status == "confirmed"
     raw = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))
     assert raw["machines"]["workstation"]["profile"] == profile.profile_id
-    assert any(f"measured as profile {profile.profile_id}" in line for line in lines)
+    # One note instead of the readings and the profile id: what was measured, and who confirmed it.
+    assert not any(profile.profile_id in line for line in lines)
+    note = next(line.strip() for line in lines if line.strip().startswith("measured"))
+    assert note == "measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit"
 
 
 def test_no_machine_chosen_measures_nothing(tmp_path: Path):
@@ -392,9 +507,9 @@ def _recorded_machines(tmp_path: Path, now, answers: dict) -> list:
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices):
+        def checkbox(self, key, question, choices, instruction=None):
             asked[key] = list(choices)
-            return super().checkbox(key, question, choices)
+            return super().checkbox(key, question, choices, instruction)
 
     run_guided(
         _Recording(answers),
@@ -432,9 +547,9 @@ def test_every_profile_in_the_folder_is_listed_grouped_and_not_selectable(tmp_pa
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices):
+        def checkbox(self, key, question, choices, instruction=None):
             asked[key] = list(choices)
-            return super().checkbox(key, question, choices)
+            return super().checkbox(key, question, choices, instruction)
 
     _run(tmp_path, {**FULL_ANSWERS, "machines": []})
     hardware = _results(tmp_path) / "state" / "hardware"
@@ -467,9 +582,9 @@ def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices):
+        def checkbox(self, key, question, choices, instruction=None):
             asked[key] = list(choices)
-            return super().checkbox(key, question, choices)
+            return super().checkbox(key, question, choices, instruction)
 
     _run(tmp_path, {**FULL_ANSWERS, "machines": []})
     hardware = _results(tmp_path) / "state" / "hardware"
@@ -509,7 +624,9 @@ def test_a_clone_answer_writes_a_second_profile(tmp_path: Path):
     assert len(written) == 1
     assert written[0].stem != first.stem
     assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) == written[0].stem
-    assert not any("nothing measured" in line for line in lines)
+    assert not any("nothing measured:" in line for line in lines)
+    # A clone is another machine, so its note is the note of a first measurement.
+    assert any(line.strip().startswith("measured: ") for line in lines)
 
 
 def test_the_same_machine_answer_measures_again_under_the_bound_id(tmp_path: Path):
@@ -529,8 +646,9 @@ def test_the_same_machine_answer_measures_again_under_the_bound_id(tmp_path: Pat
     assert code == 0
     assert [path.stem for path in _profiles(tmp_path)] == [bound]
     assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) == bound
-    assert not any("nothing measured" in line for line in lines)
+    assert not any("nothing measured:" in line for line in lines)
     assert not any("did not finish" in line for line in lines)
+    assert any(line.strip().startswith("measured again:") for line in lines)
 
 
 def test_the_same_machine_answer_leads_to_a_ranking_of_this_machine(tmp_path: Path):
@@ -542,8 +660,9 @@ def test_the_same_machine_answer_leads_to_a_ranking_of_this_machine(tmp_path: Pa
     code, lines = _run(tmp_path, answers, now=RUN2)
 
     assert code == 0
-    assert any("packages fit" in line for line in lines)  # step 3 has a machine to count against
-    assert "Ranking: " in "\n".join(lines)  # step 5 has a ranking
+    # Step 3 has a machine to count against, and step 5 a ranking of it.
+    assert not any("no measured machine" in line for line in lines)
+    assert any("· context L" in line or "· context S" in line for line in lines)
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     assert payload["machines"][0]["status"] == "ranked"
 
@@ -565,7 +684,7 @@ def test_an_import_adds_the_machine_and_never_changes_the_binding(tmp_path: Path
     assert code == 0
     assert (_results(tmp_path) / "state" / "hardware" / f"{'4' * 16}.json").is_file()
     assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) == bound
-    assert any("profile server" in line for line in lines)
+    assert any(line.strip().startswith("imported server: ") for line in lines)
 
 
 def test_a_profile_already_in_the_folder_gets_a_machine_entry(tmp_path: Path):
@@ -635,15 +754,15 @@ def _adding_a_machine(tmp_path: Path, when_key: str, name: str = "other"):
                 add()
             return super().text(key, question, default)
 
-        def checkbox(self, key, question, choices):
+        def checkbox(self, key, question, choices, instruction=None):
             if key == when_key:
                 add()
-            return super().checkbox(key, question, choices)
+            return super().checkbox(key, question, choices, instruction)
 
-        def select_or_text(self, key, question, choices, text_value, text_question):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
             if key == when_key:
                 add()
-            return super().select_or_text(key, question, choices, text_value, text_question)
+            return super().select_or_text(key, question, choices, text_value, text_question, instruction)
 
     return _Meanwhile
 
@@ -778,42 +897,80 @@ def test_an_import_of_a_file_that_is_not_there_is_reported_and_the_run_goes_on(t
 # --- search, choice, context ------------------------------------------------------------------------
 
 
-def test_the_search_summary_and_the_grouped_reasons_are_printed(tmp_path: Path):
-    """One line per reason with its number, never one line per repository (decided 2026-09-24)."""
+def _search_log(tmp_path: Path) -> dict:
+    return json.loads((_results(tmp_path) / "state" / "search.json").read_text(encoding="utf-8"))
+
+
+def test_the_search_leaves_two_notes_and_puts_the_accounts_into_search_json(tmp_path: Path):
+    """Where it asked, and how much of it is a choice -- the rest is a file (decided 2026-09-24)."""
     _code, lines = _run(tmp_path)
 
-    assert any(line.startswith("4 repositories, 3 resolved, 1 unresolved, 7 requests, budget ") for line in lines)
-    grouped = [line for line in lines if "cannot be picked:" in line]
-    assert grouped
-    assert not any(line.startswith("unresolved ") for line in lines)
-    assert sum(int(line.split(" ", 1)[0]) for line in grouped) == 1
-    assert any("the repository does not say it packages a base model" in line for line in grouped)
+    notes = [line.strip() for line in lines]
+    assert "searched Hugging Face at the publisher Qwen and the five listed packagers" in notes
+    assert "4 repositories, 2 of them models you can pick from" in notes
+    # The seven account lines, the request count and the budget are in the file, not on the screen.
+    assert not any(line.strip().startswith(("Qwen 1", "unsloth 3", "bartowski 0")) for line in lines)
+    assert not any("cannot be picked:" in line for line in lines)
+    assert not any("budget " in line for line in lines)
+    log = _search_log(tmp_path)
+    assert log["schema_version"] == 1
+    assert (log["word"], log["filter_owners"], log["requests"], log["resolved"]) == ("qwen", True, 7, 3)
+    assert log["budget"]["limit"] == 150
+    assert {entry["account"]: entry["hits"] for entry in log["accounts"]}["Qwen"] == 1
+    assert {entry["account"]: entry["class"] for entry in log["accounts"]}["unsloth"] == "packager"
+    assert log["unresolved"] == [{"reason": "the repository does not say it packages a base model", "count": 1}]
 
 
-def test_with_the_filter_on_every_account_gets_its_line_and_no_open_list_is_asked(tmp_path: Path):
-    """Decided 2026-09-24: one request per account, so a reader can see that theirs was asked."""
-    _code, lines = _run(tmp_path)
+def test_the_search_log_holds_the_same_numbers_the_old_lines_said(tmp_path: Path):
+    """`group_lines`/`summary_line` are the counter-probe: one search, one set of numbers."""
+    _code, _lines = _run(tmp_path)
+    log = _search_log(tmp_path)
 
-    assert "Qwen 1" in lines
-    assert "unsloth 3" in lines
-    assert "bartowski 0" in lines
-    assert not any(line.startswith(("most downloaded", "newest")) for line in lines)
+    assert log["resolved"] + sum(entry["count"] for entry in log["unresolved"]) == 4
+    assert sum(entry["hits"] for entry in log["accounts"]) == 4
+    assert log["requests"] == len(log["accounts"])
 
 
-def test_with_the_filter_off_the_two_open_lists_are_named_as_well(tmp_path: Path):
+def test_with_the_filter_off_the_two_open_lists_are_in_the_note_and_in_the_file(tmp_path: Path):
     _code, lines = _run(tmp_path, {**FULL_ANSWERS, "filter_owners": False})
 
-    assert "Qwen 1" in lines
-    assert "most downloaded 3, 1 of them already listed" in lines
-    assert "newest 3" in lines
-    assert any(line.startswith("9 repositories, 3 resolved, 6 unresolved, 9 requests, budget ") for line in lines)
+    assert any(line.strip().endswith("listed packagers, and the two open lists") for line in lines)
+    log = _search_log(tmp_path)
+    assert [entry["account"] for entry in log["accounts"] if entry["class"] == "open"] == [
+        "most downloaded",
+        "newest",
+    ]
+    assert log["requests"] == 9
+    assert log["filter_owners"] is False
 
 
-def test_without_the_filter_a_derivative_is_visible_and_grayed_out_with_its_reason(tmp_path: Path):
-    """"That it is apparent" is the point: a fine-tune is shown, not hidden (decided 2026-09-24)."""
-    _code, lines = _run(tmp_path, {**FULL_ANSWERS, "filter_owners": False})
+def test_without_the_filter_a_derivative_is_in_the_file_with_its_reason(tmp_path: Path):
+    """"That it is apparent" is the point: a fine-tune is named, not hidden (decided 2026-09-24)."""
+    _code, _lines = _run(tmp_path, {**FULL_ANSWERS, "filter_owners": False})
 
-    assert any("a fine-tune or a merge, not a quantization of one base model" in line for line in lines)
+    reasons = [entry["reason"] for entry in _search_log(tmp_path)["unresolved"]]
+    assert "a fine-tune or a merge, not a quantization of one base model" in reasons
+
+
+def test_a_full_account_page_invites_a_more_specific_word(tmp_path: Path):
+    from modelroom.search_pages import account_search_url
+
+    page = json_response("hf_search_qwen_page_full.json")
+    mapping = {**guided_transport_mapping(), ("GET", account_search_url("qwen", "unsloth")): page}
+    lines: list[str] = []
+    run_guided(
+        FileAsker({**FULL_ANSWERS, "select": []}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(mapping),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+
+    assert any("a more specific word shortens the list" in line for line in lines)
+    assert any(entry["page_full"] for entry in _search_log(tmp_path)["accounts"])
 
 
 def test_the_answer_file_keys_of_step_2_are_unchanged(tmp_path: Path):
@@ -855,22 +1012,40 @@ def test_the_list_shows_one_line_per_model_with_its_fit_and_its_packagers(tmp_pa
 
     assert code == 0
     listed = asker.choices["select"]
-    # Two models, then the repositories an answer file of the older shape may name instead.
-    assert [choice.value for choice in listed[:2]] == ["Qwen/Qwen3.5-9B", DEEPSEEK_BASE]
-    assert [choice.value for choice in listed[2:]] == [QWEN_GGUF, UNSLOTH, DEEPSEEK]
+    # Two models, then the repositories an answer file of the older shape may name instead. The
+    # order is the memory pool first: at 32k the smaller model fits the graphics card and the 9B
+    # does not, so the 8B stands above it (the fit of the list is computed at the context the scale
+    # starts on since 2026-09-24).
+    assert sorted(choice.value for choice in listed[:2]) == sorted(["Qwen/Qwen3.5-9B", DEEPSEEK_BASE])
+    assert sorted(choice.value for choice in listed[2:]) == sorted([QWEN_GGUF, UNSLOTH, DEEPSEEK])
     assert all(choice.disabled is None for choice in listed)
-    assert listed[0].label.startswith("Qwen3.5-9B")
-    assert "good" in listed[0].label
-    assert "Qwen, unsloth" in listed[0].label
+    qwen = next(choice for choice in listed[:2] if choice.value == "Qwen/Qwen3.5-9B")
+    assert qwen.label.startswith("Qwen3.5-9B")
+    assert any(word in qwen.label for word in ("good", "marginal", "too tight", "unknown"))
+    assert "Qwen, unsloth" in qwen.label
     assert all(len(choice.label) <= 100 for choice in listed[:2])
 
 
-def test_the_count_line_and_the_hint_line_stand_around_the_list(tmp_path: Path):
-    _code, lines = _run(tmp_path)
+def test_the_hint_of_the_list_is_its_instruction_line_and_names_the_context_of_the_fit(tmp_path: Path):
+    """A sentence that explains a list has nothing to say once the list is gone (2026-09-24)."""
+    lines: list[str] = []
+    asker = _WatchingAsker(FULL_ANSWERS, lines)
+    run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
 
-    assert any(line.startswith("2 models can be picked; 1 repository cannot:") for line in lines)
-    assert any(line.startswith("fit at 8k context") for line in lines)
-    assert any(line.startswith("Space marks a model") for line in lines)
+    instruction = asker.instructions["select"]
+    assert instruction.startswith("nothing marked keeps the folder as it is.")
+    assert "at 32k context" in instruction
+    assert not any(line.strip().startswith("fit at ") for line in lines)
+    assert not any("can be picked;" in line for line in lines)
 
 
 def test_a_model_is_fetched_from_the_publisher_and_from_one_listed_packager(tmp_path: Path):
@@ -891,9 +1066,9 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
     from modelroom.search_pages import account_search_url
 
     class _Refusing(FileAsker):
-        def checkbox(self, key: str, question: str, choices) -> list[str]:
+        def checkbox(self, key: str, question: str, choices, instruction=None) -> list[str]:
             assert list(choices), f"{key}: a list with nothing in it was asked"
-            return super().checkbox(key, question, choices)
+            return super().checkbox(key, question, choices, instruction)
 
     empty = Response(status=200, headers={}, body=b"[]")
     mapping = {
@@ -913,9 +1088,9 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
     )
 
     assert code == 1  # nothing to render: no family, so no snapshot
-    assert any(line.startswith("0 models can be picked") for line in lines)
+    assert any("none of them a model you can pick from" in line for line in lines)
     assert any("nothing added" in line for line in lines)
-    assert not any(line.startswith("Space marks a model") for line in lines)
+    assert any(line.strip() == "– Packages        nothing chosen, the folder stays as it is" for line in lines)
     assert load_config(_config_file(tmp_path)).families == []
 
 
@@ -924,7 +1099,7 @@ def test_choosing_nothing_leaves_the_configuration_as_it_is(tmp_path: Path):
 
     assert code == 1  # nothing to render: no family, so no snapshot
     assert load_config(_config_file(tmp_path)).families == []
-    assert any("nothing chosen" in line for line in lines)
+    assert any("nothing chosen, the folder stays as it is" in line for line in lines)
     assert any("nothing to fetch" in line for line in lines)
 
 
@@ -940,9 +1115,11 @@ def test_an_entered_context_reaches_the_document(tmp_path: Path):
         "kv_type_assumed": True,
         "requests": 1,
     }
-    # The terminal view says the scenario short, the two files carry it in full.
+    # The head of the machine's table says the context; the request count and the KV cache are in
+    # the two files, which is where a reader has room for them (decided 2026-09-24).
     printed = "\n".join(lines)
-    assert "context XS 4k" in printed and "1 request" in printed and "KV cache f16 (assumed)" in printed
+    assert "· context XS 4k" in printed
+    assert "1 request" not in printed and "KV cache" not in printed
 
 
 def test_the_chosen_context_is_kept_in_the_configuration(tmp_path: Path):
@@ -964,9 +1141,9 @@ def test_the_second_run_offers_the_kept_context_as_the_default(tmp_path: Path):
     pointed_at: dict[str, str] = {}
 
     class _Recording(FileAsker):
-        def select_or_text(self, key, question, choices, text_value, text_question):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
             pointed_at[key] = next(choice.value for choice in choices if choice.checked)
-            return super().select_or_text(key, question, choices, text_value, text_question)
+            return super().select_or_text(key, question, choices, text_value, text_question, instruction)
 
     assert _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})[0] == 0
 
@@ -985,15 +1162,16 @@ def test_the_second_run_offers_the_kept_context_as_the_default(tmp_path: Path):
 
 
 def test_the_same_context_again_is_not_written_a_second_time(tmp_path: Path):
-    """The step says so when it writes, so a run that writes nothing is visible in its output."""
-    code, first = _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})
+    """The write is not a line of its own any more; the file's own modification time shows it."""
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})
     assert code == 0
-    assert any(line.startswith("kept context 4096 in ") for line in first)
+    assert not any("kept context" in line for line in lines)
+    written = _config_file(tmp_path).read_bytes()
 
-    code, second = _run(tmp_path, {**FULL_ANSWERS, "context": "4096"}, now=RUN2)
+    code, _second = _run(tmp_path, {**FULL_ANSWERS, "context": "4096"}, now=RUN2)
 
     assert code == 0
-    assert not any(line.startswith("kept context ") for line in second)
+    assert _config_file(tmp_path).read_bytes() == written
     assert load_config(_config_file(tmp_path)).guided.context == 4096
 
 
@@ -1015,10 +1193,10 @@ def test_the_answer_is_compared_with_the_file_not_with_this_runs_own_copy(tmp_pa
     """
 
     class _WritesInBetween(FileAsker):
-        def select_or_text(self, key, question, choices, text_value, text_question):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
             if key == "context":
                 _store_context(_config_file(tmp_path), 8192)
-            return super().select_or_text(key, question, choices, text_value, text_question)
+            return super().select_or_text(key, question, choices, text_value, text_question, instruction)
 
     assert _run(tmp_path, {**FULL_ANSWERS, "context": "4096"})[0] == 0
 
@@ -1097,13 +1275,13 @@ def test_the_run_ends_with_both_views_and_a_word_on_the_load_test(tmp_path: Path
     code, lines = _run(tmp_path)
 
     assert code == 0
-    assert any(line.startswith("no load test: ") for line in lines)
+    assert any(line.strip().startswith("no load test: ") for line in lines)
     assert (_results(tmp_path) / "docs" / "models.md").is_file()
     assert (_results(tmp_path) / "docs" / "models.json").is_file()
     printed = "\n".join(lines)
     # The rule and the snapshot time are in the Markdown file; the screen shows the table.
     assert "Ranking rule: fit class" in (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
-    assert "Ranking: workstation" in printed
+    assert "workstation · context" in printed
     assert "Model" in printed and "Package" in printed
 
 
@@ -1129,8 +1307,11 @@ def test_the_load_test_measures_the_picked_model_and_the_ranking_shows_the_speed
     assert (record["validity"], record["comparable"]) == ("valid", True)
     assert record["package"]["hf_repo"] == DEEPSEEK
     assert record["ollama_name"] == DEEPSEEK_OLLAMA_NAME
-    measured = next(line for line in lines if line.startswith(f"{DEEPSEEK_OLLAMA_NAME}: measured "))
-    assert "tok/s" in measured and measured.endswith("valid, comparable")
+    measured = next(line.strip() for line in lines if line.strip().startswith("measured hf.co/"))
+    assert measured.startswith(f"measured {DEEPSEEK_OLLAMA_NAME}: ")
+    assert "tok/s" in measured and measured.endswith("context 8k")
+    assert "valid" not in measured and "comparable" not in measured
+    assert any(line.strip().endswith("1 of 1 measured") for line in lines)
     row = _ranked_deepseek(tmp_path)
     assert row["measurement_group"] == 0
     assert row["speed_tps"] == pytest.approx(record["tps_mean"])
@@ -1144,31 +1325,41 @@ def test_a_no_to_the_load_test_measures_nothing_and_asks_for_no_package(tmp_path
 
     assert code == 0
     assert _measurement_files(tmp_path) == []
-    assert not any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}:") for line in lines)
+    assert not any(line.strip().startswith("measured hf.co/") for line in lines)
 
 
-def test_nothing_installed_that_is_ranked_is_one_line_and_no_question(tmp_path: Path):
+def test_nothing_installed_that_is_ranked_is_one_note_and_no_question(tmp_path: Path):
     """The answer file has no load-test answer at all, and the run still ends with exit 0."""
     code, lines = _run(tmp_path, FULL_ANSWERS, daemon=loadtest_daemon())
 
     assert code == 0
-    assert NO_CANDIDATE_LINE in lines
+    assert NO_CANDIDATE_LINE in [line.strip() for line in lines]
     assert _measurement_files(tmp_path) == []
 
 
-def test_a_cloud_model_is_named_as_one_and_never_measured(tmp_path: Path):
+def test_what_cannot_be_measured_is_a_count_and_a_reason_without_names(tmp_path: Path):
+    """Without a candidate the reason is the note; the names of the cloud models are not."""
+    _code, lines = _run(tmp_path, FULL_ANSWERS, daemon=loadtest_daemon())
+
+    reason = next(line.strip() for line in lines if "cloud model" in line)
+    assert reason.startswith("1 installed model -- ")
+    assert "glm-5.3-flash:cloud" not in reason
+
+
+def test_with_a_candidate_on_the_list_what_was_left_out_is_not_said_at_all(tmp_path: Path):
+    """The twelve names of the cloud models pushed the question off the screen (2026-09-24)."""
     _code, lines = _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())
 
-    assert any("glm-5.3-flash:cloud" in line and "not measured" in line for line in lines)
+    assert not any("cloud" in line for line in lines)
 
 
 def test_the_selection_list_shows_every_candidate_unchecked_with_its_four_facts(tmp_path: Path):
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices):
+        def checkbox(self, key, question, choices, instruction=None):
             asked[key] = list(choices)
-            return super().checkbox(key, question, choices)
+            return super().checkbox(key, question, choices, instruction)
 
     lines: list[str] = []
     run_guided(
@@ -1214,7 +1405,10 @@ def test_a_digest_that_changes_mid_run_is_stored_as_not_comparable_and_ranks_in_
     record = json.loads(_measurement_files(tmp_path)[0].read_text(encoding="utf-8"))
     assert record["comparable"] is False
     assert "digest" in record["comparable_reason"]
-    assert any("not comparable" in line for line in lines)
+    # The note names what is missing instead of a speed; the run still ends `0`, because the
+    # record is written and the ranking says where such a measurement stands.
+    assert any("not comparable (" in line for line in lines)
+    assert not any(line.strip().startswith("measured hf.co/") for line in lines)
     row = _ranked_deepseek(tmp_path)
     assert (row["measurement_group"], row["speed_tps"]) == (1, None)
 
@@ -1228,7 +1422,7 @@ def test_an_answer_file_that_does_not_mention_the_load_test_measures_nothing(tmp
 
     assert code == 0
     assert _measurement_files(tmp_path) == []
-    assert not any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}:") for line in lines)
+    assert not any(line.strip().startswith("measured hf.co/") for line in lines)
 
 
 def test_a_yes_that_names_no_package_is_a_missing_answer(tmp_path: Path):
@@ -1247,7 +1441,7 @@ def test_a_yes_against_a_daemon_that_is_not_there_is_a_step_that_did_not_finish(
 
     assert code == 1
     assert _measurement_files(tmp_path) == []
-    assert any(line.startswith("nothing measured: ") for line in lines)
+    assert any(line.startswith("nothing measured: ") for line in lines)  # a fault line, not a note
     assert (_results(tmp_path) / "docs" / "models.md").is_file()
 
 
@@ -1305,7 +1499,7 @@ def test_a_no_against_a_daemon_that_is_not_there_is_one_line_and_exit_zero(tmp_p
     code, lines = _run(tmp_path, {**FULL_ANSWERS, "load_test": False}, daemon=offline_daemon())
 
     assert code == 0
-    assert any(line.startswith("no load test: ") for line in lines)
+    assert any(line.strip().startswith("no load test: ") for line in lines)
 
 
 def test_a_second_run_keeps_the_measurement_and_writes_no_second_file(tmp_path: Path):

@@ -22,6 +22,7 @@ from .measurements import (
     default_scenario,
     read_measurements,
 )
+from .document import RenderDocument
 from .render import (
     MachineProfile,
     RatingSource,
@@ -68,6 +69,7 @@ def render_with_config(
     now: datetime | None = None,
     scenario: Scenario | None = None,
     echo: Callable[[str], None] | None = None,
+    on_document: Callable[[RenderDocument], None] | None = None,
 ) -> int:
     """Run `render` against an already-loaded `Configuration` -- the programmatic entry point.
 
@@ -81,9 +83,11 @@ def render_with_config(
     one context the whole document is computed for; `None` is `scenario_from_config(config)` --
     the context a guided run kept in `[guided].context`, else 8192. `modelroom render` passes
     nothing and so shows the ranking of the last guided run of that folder; the guided mode
-    itself passes the context the user just chose. `echo`, when given, receives the terminal view
-    (the guided mode passes `print`); `modelroom render` passes nothing and stays silent on
-    success.
+    itself passes the context the user just chose. `echo`, when given, receives the terminal view;
+    `modelroom render` passes nothing and stays silent on success. `on_document`, when given,
+    receives the document itself once both files are written -- the guided mode draws the card of
+    its step 5 from it and then prints the blocks on its own, which is why it passes this and no
+    `echo`.
     """
     rendered_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     json_path = config.paths.markdown.with_suffix(".json")
@@ -116,7 +120,9 @@ def render_with_config(
         return 1
 
     try:
-        return _render_locked(config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo)
+        return _render_locked(
+            config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo, on_document
+        )
     finally:
         release_lock(handle)
 
@@ -128,6 +134,7 @@ def _render_locked(
     scenario: Scenario,
     json_path: Path,
     echo: Callable[[str], None] | None,
+    on_document: Callable[[RenderDocument], None] | None = None,
 ) -> int:
     """Read, build and write both views; a broken profile file is a note, never the whole render.
 
@@ -173,7 +180,11 @@ def _render_locked(
             file=sys.stderr,
         )
         return 1
+    if on_document is not None:
+        on_document(document)
     if echo is not None:
+        # No install line here: the local name of a package is about the machine the run is on, and
+        # `render` cannot know which of several writers that is (second-model round, 2026-09-24).
         echo(document_terminal(document))
     for note in [*(f"skipped {path.name}: {reason}" for path, reason in scan.unreadable), *notes]:
         print(f"note: {note}")

@@ -30,7 +30,6 @@ from .contracts import BaseModelSpec, Package, SchemaVersionError
 from .dialog import Choice, columns
 from .fit import count_fitting
 from .importer import scan_profiles
-from .intro import hardware_words, step_head
 from .measurements import Scenario
 from .profile import HardwareProfile, fit_block_reason
 from .state import UnreadableStateFileError, read_snapshot
@@ -41,7 +40,10 @@ if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never const
 STEP = 3
 
 QUESTION = "How much text should a model handle at once?"
-EXPLANATION = "The last column is computed from the memory of the machine you are checking."
+# What the last column of the list means, in the instruction line of the question rather than as a
+# line of the run (decided 2026-09-24): it explains the list, so it belongs to the list and goes
+# away with it. `<machine>` is the machine the column was computed against.
+EXPLANATION = "last column: how many fetched packages fit {machine}"
 NUMBER_VALUE = "number"
 NUMBER_LABEL = "enter a number"
 NUMBER_QUESTION = "How many tokens?"
@@ -111,6 +113,19 @@ def context_scenario(context: int) -> Scenario:
     )
 
 
+def scale_words(context: int) -> str:
+    """One answer of the scale in the words of its own line, without the column of what fits.
+
+    What fits is about the list, and the list is gone once the question is answered; the level,
+    the tokens, the words and the example are the answer itself. A context of its own is the
+    number it is.
+    """
+    level = next((level for level in LEVELS if level.tokens == context), None)
+    if level is None:
+        return f"{context:,} tokens"
+    return f"{level.name}  {level.shown_tokens}  {level.words}  {level.example}"
+
+
 def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> tuple[Scenario, Configuration]:
     """Ask the scale, then keep the answer in `[guided].context` -- one context for the ranking.
 
@@ -119,16 +134,18 @@ def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> 
     and another process may have written the file meanwhile. A run that skipped its write
     because its own copy already said so would leave that other context in the file, and the
     next `modelroom render` would compute a ranking this run never showed.
+
+    The screen of this step is the answered question and nothing else: which machine the column
+    was computed against stands in the instruction line of the list, and that the context was kept
+    is what `[guided].context` says (test round, 2026-09-24).
     """
-    run.out("")
-    run.out(step_head(STEP))
+    run.screen.blank()
+    run.screen.head(STEP)
     checked = machine_checked(run.pointer_path, config, config_file.parent)
-    if checked.name is not None and checked.profile is not None:
-        run.out(f"checking {checked.name}   {hardware_words(checked.profile)}")
     if checked.reason is not None:
-        run.out(checked.reason)
-    run.out(EXPLANATION)
+        run.screen.note(checked.reason)
     context = _answered_context(run, config, checked)
+    run.screen.answer(QUESTION, scale_words(context))
     stored = _reload(run, config_file)
     if context == stored.guided.context:
         return context_scenario(context), stored
@@ -136,7 +153,6 @@ def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> 
     from .guided import _write_config  # imported here: the step is called by that module in turn
 
     _write_config(run, config_file, updated)
-    run.out(f"kept context {context} in {config_file}")
     return context_scenario(context), updated
 
 
@@ -236,6 +252,41 @@ def snapshot_packages(config: Configuration) -> tuple[list[Package], list[BaseMo
     return _eligible_packages(snapshot), snapshot.base_models
 
 
+@dataclass(frozen=True)
+class SnapshotFacts:
+    """What the snapshot of this folder holds, in the four numbers the run says out loud.
+
+    The balance of step 2 and the card of step 5 say the same thing about the same fetch, so they
+    read it once, here: the base models by name, how many packages came in for them, from which
+    packager accounts, and from how many repositories.
+    """
+
+    model_names: tuple[str, ...]
+    packages: int
+    accounts: tuple[str, ...]
+    repositories: int
+
+
+def snapshot_facts(config: Configuration) -> SnapshotFacts:
+    """The four numbers of this folder's snapshot, read through the render's own filter."""
+    packages, base_models = snapshot_packages(config)
+    accounts: list[str] = []
+    repositories: list[str] = []
+    for package in packages:
+        account = "Ollama" if package.source == "ollama" else (package.repo or "").partition("/")[0]
+        repository = package.repo if package.source == "huggingface" else f"ollama:{package.base_model_hf_repo}"
+        if account and account not in accounts:
+            accounts.append(account)
+        if repository and repository not in repositories:
+            repositories.append(repository)
+    return SnapshotFacts(
+        model_names=tuple(spec.hf_repo.partition("/")[2] or spec.hf_repo for spec in base_models),
+        packages=len(packages),
+        accounts=tuple(accounts),
+        repositories=len(repositories),
+    )
+
+
 def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked) -> int:
     """The context the user picked, as a number of tokens; a level is translated here."""
     packages, base_models = snapshot_packages(config)
@@ -243,7 +294,10 @@ def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked)
     contexts = [level.tokens for level in LEVELS] + [default_context]
     fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts)
     choices = scale_choices(LEVELS, default_context, fits, context_cap(base_models))
-    answered = run.asker.select_or_text("context", QUESTION, choices, NUMBER_VALUE, NUMBER_QUESTION).strip()
+    instruction = EXPLANATION.format(machine=checked.name) if fits else None
+    answered = run.asker.select_or_text(
+        "context", QUESTION, choices, NUMBER_VALUE, NUMBER_QUESTION, instruction
+    ).strip()
     return tokens_of(answered)
 
 
@@ -303,18 +357,23 @@ def _fit_text(fitting: int, total: int) -> str:
 __all__ = [
     "DEFAULT_CONTEXT",
     "DEFAULT_LEVEL",
+    "EXPLANATION",
     "LEVELS",
     "NO_MACHINE_LINE",
     "NUMBER_LABEL",
     "NUMBER_VALUE",
+    "QUESTION",
     "Checked",
     "Level",
+    "SnapshotFacts",
     "context_cap",
     "context_scenario",
     "context_step",
     "fit_texts",
     "machine_checked",
     "scale_choices",
+    "scale_words",
+    "snapshot_facts",
     "snapshot_packages",
     "tokens_of",
 ]
