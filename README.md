@@ -1,6 +1,12 @@
+<img src="docs/assets/banner.svg" width="100%" alt="ModelRoom banner">
+
 # ModelRoom
 
 Does this model have room on your machine?
+
+Built and maintained by [VISCONSULT](https://vis-consult.eu), a consultancy in Germany that
+runs AI agents for its own work and for clients under EU data-protection rules. MIT licensed,
+Python, on PyPI as `modelroom`.
 
 ModelRoom (package and command: `modelroom`) answers two questions for a list of model
 families you care about:
@@ -345,6 +351,25 @@ checks the release tag. The second installs the built wheel into a fresh environ
 `hardware`, an offline `fetch` and `render` against it. Both must end with exit `0`; the full
 procedure is in `AGENTS.md`, "Versioning and releases".
 
+## What comes next
+
+In the order we plan to build it, none of it dated:
+
+- **Install from step 5.** The run offers to pull the first row into the local Ollama daemon
+  instead of printing the command; the command stays for anyone who prefers to paste it.
+- **More than one user.** A question for the number of people who will use the model at once.
+  One person is what this release sizes for. A small team is still an Ollama daemon on a
+  workstation; beyond roughly eight concurrent requests it is a server with vLLM, and the fit
+  then counts the KV cache per concurrent request. Rule of thumb, not measured yet; the release
+  that brings it will carry the measurements.
+- **A machine entered by hand.** Size a box you do not have yet, from its data sheet, and rank
+  the same packages for it next to the machines you measured.
+- **Unified memory.** A fit rule for machines whose graphics and system memory are one pool,
+  once we have the measurements to back it.
+- **The catalog's successors.** A model shows `legacy` only when the catalog names its
+  successor with the page that says so; many families still carry no such line, and those
+  rows show `–`. The catalog is a data file in this repository and takes pull requests.
+
 ## Contributing and conventions
 
 `AGENTS.md` is the tool-neutral rule set for anyone (human or agent) working on this
@@ -353,10 +378,8 @@ requests are welcome.
 
 ## About
 
-ModelRoom is built and maintained by [VISCONSULT](https://vis-consult.eu), a consultancy in
-Germany that runs AI agents for its own work and for clients under EU data-protection rules.
-We use it to decide which models run on our own laptops and servers, and with clients to size
-on-premise deployments before anyone buys hardware.
+We use ModelRoom to decide which models run on our own laptops and servers, and with clients
+to size on-premise deployments before anyone buys hardware.
 
 ## License
 
