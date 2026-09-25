@@ -1,6 +1,6 @@
 """Tests for `modelroom migrate` and the TOML writer it uses.
 
-Every test works on a copy of the schema-1 fixtures (`fixtures/config_v1/modelroom.toml`, two
+Every test works on a copy of the schema-1 fixtures (`fixtures/config_v1/config.toml`, two
 machines, and `fixtures/profiles_v1/`) in a temporary folder.
 """
 
@@ -37,7 +37,7 @@ def _ids():
 
 
 def _deployment(tmp_path: Path, profiles=("windows-nvidia-laptop.json", "linux-cpu-server.json")) -> Path:
-    shutil.copy(FIXTURES / "config_v1" / "modelroom.toml", tmp_path / "modelroom.toml")
+    shutil.copy(FIXTURES / "config_v1" / "config.toml", tmp_path / "modelroom.toml")
     hardware = tmp_path / "state" / "hardware"
     hardware.mkdir(parents=True)
     names = {"windows-nvidia-laptop.json": "laptop.json", "linux-cpu-server.json": "server.json"}

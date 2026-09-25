@@ -582,7 +582,7 @@ def test_shipped_example_file_is_written_as_schema_2():
 
 
 def test_schema_1_fixture_with_two_machines_still_loads():
-    config = load_config(REPO / "tests" / "fixtures" / "config_v1" / "modelroom.toml")
+    config = load_config(REPO / "tests" / "fixtures" / "config_v1" / "config.toml")
     assert config.schema_version == 2
     assert set(config.machines) == {"laptop", "server"}
     assert all(machine.profile is None for machine in config.machines.values())

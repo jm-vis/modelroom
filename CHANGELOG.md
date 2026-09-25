@@ -3,7 +3,11 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
-## [Unreleased]
+## [0.1.0] - 2026-09-25
+
+The first release on the package index. The guided mode is the way in; the six subcommands
+under it are what it calls. The entries under "The first cut" at the end of this section were
+written on 2026-09-23 for the same version, which was never published.
 
 ### Added
 
@@ -477,11 +481,11 @@ All notable changes to this project are documented in this file. The format foll
   instead of a traceback; a measurement file nested beyond what the JSON parser carries is listed
   as unreadable instead of crashing the reader.
 
-## [0.1.0] - 2026-09-23
+### The first cut, 2026-09-23
 
-First release.
+The subcommands, the contracts and the release tooling, before the guided mode.
 
-### Release
+#### Release
 
 - `scripts/release-check.py`: the release gate. Checks a clean working tree, a valid PEP 440
   version without a local part with its own section in this file and, with `--tag`, an
@@ -501,13 +505,13 @@ First release.
 - README: installation from the package index and the two release commands; `AGENTS.md`: the
   release procedure. Neither script ships in the wheel or the sdist.
 
-### Documentation
+#### Documentation
 
 - README brought to the current state: status alpha, requirements, a five-command quick start
   with the real flags (the planned `check` verb is gone), state files, the meaning and limits of
   the fit class, exit codes and network access, each taken from `CONTRACTS.md`/`AGENTS.md`.
 
-### Added
+#### Added
 
 - Render (AP5): the `modelroom render --config ...` command (`modelroom/cli.py`,
   `cli.render_with_config`, same pattern as `fetch_with_config`/`hardware_with_config`) and the
@@ -581,7 +585,7 @@ First release.
   `tests/fixtures/README.md`; the runtime state files, area/merge/version semantics and the
   `parameters_b` fallback are documented in `CONTRACTS.md` under "Fetch runtime state (AP3)".
 
-### Fixed
+#### Fixed
 
 - Fix-round 1, thirteen confirmed review findings against AP3+AP4:
   - **F1** `modelroom/state.py::acquire_lock` creates the lock file with

@@ -241,9 +241,12 @@ names, paths or people. Written 2026-09-23.
   VRAM 0). The laptop's second measurement has `tps_mean` 21.0 below its `tps_range` of
   21.5..23.0 on purpose: schema 1 never checked the range against the mean, and the migration
   carries such a value over unchanged.
-- `config_v1/modelroom.toml` -- a schema-1 configuration with two machines (`laptop` writer,
+- `config_v1/config.toml` -- a schema-1 configuration with two machines (`laptop` writer,
   `server`), paths relative to its own folder; `tests/test_migrate.py` copies it next to
-  `profiles_v1/` into a temporary folder.
+  `profiles_v1/` into a temporary folder as `modelroom.toml`. The fixture is not named
+  `modelroom.toml` itself: the release gate treats a file of that name as an operator's
+  configuration, which never ships. `config_v2/config.toml` is the schema-2 counterpart for
+  `tests/test_importer.py`.
 - `catalog_excerpt.toml` -- a catalog in the shipped format with one `latest`, one `legacy`
   (with successor) and one `unknown` model.
 - `export_v1.json` -- an export object: the `HardwareProfile` example plus two measurements,

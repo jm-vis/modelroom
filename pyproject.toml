@@ -49,6 +49,8 @@ build-backend = "hatchling.build"
 packages = ["modelroom"]
 
 [tool.hatch.build.targets.sdist]
+# The README's screenshots live in the repository, not in the source distribution.
+exclude = ["docs/screenshots/"]
 include = [
     "modelroom/",
     "tests/",

@@ -45,121 +45,139 @@ uv tool install modelroom
 pipx install modelroom
 ```
 
-Both put `modelroom` on `PATH` in an environment of its own. Then copy
-`modelroom.example.toml` from this repository as your configuration and follow the quick start
-below with `modelroom` in place of `uv run --frozen modelroom`.
+Both put `modelroom` on `PATH` in an environment of its own. The guided mode needs no
+configuration file: it writes one into the folder you choose. `modelroom.example.toml` in this
+repository is the starting point for the subcommands further down.
 
 ## Quick start
 
-Type the command and answer the questions:
+Open a terminal in the folder where the results should live and type the command:
 
 ```bash
 modelroom
 ```
 
-It opens with what it already knows and then walks five numbered steps:
+It opens with what it already knows and then walks five numbered steps. Every step is a block of
+its own; a question disappears once it is answered and one line takes its place, with the answer
+in the words you gave it, and each step writes its files as it goes. `Esc` leaves a list, Ctrl-C
+leaves at any point. The next run is the same command: it remembers the folder, the machine it
+measured and the context you chose.
 
-```
- ▄▄▄ ▄▄▄ ▄▄▄ ▄▄▄
- ███ ███ ███ ███   ModelRoom
- ▄▄▄ ▄▄▄ ▄▄▄ ▄▄▄   Which local model packages fit your machine.
- ███ ███ ███ ███   modelroom 0.1.0 · github.com/jm-vis/modelroom
- ▄▄▄ ▄▄▄ ▄▄▄ ▄▄▄
- ███ ███ ███ ███
+## A guided run, step by step
 
- folder    not chosen yet          the first question asks where results live
- daemon    Ollama 0.34.2           reachable, 19 models, 7 of them local
- machine   workstation             one graphics card, 12 GB, 128 GB memory
+The pictures are one run on a laptop with one 12 GB graphics card and 127 GB of memory, in a
+folder named `C:\models` (Windows Terminal; the run looks the same on Linux and macOS). Your
+numbers, and so the fit of every package, will differ.
 
- Five steps: configuration, packages, context, measurement, results.
- Files are written as the run goes on. Esc leaves a list, Ctrl-C leaves at any point.
-```
+### Start
 
-Every step is a block of its own. The question disappears once it is answered and one line takes
-its place, with the answer in the words you gave it; under it stand at most two notes about what
-the run made of it, and one line with the step's balance:
+![The start screen: the mark, three facts about this folder, the daemon and this machine, and the first question](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/1-start.png)
 
-```
- ── Step 2 of 5  Packages ───────────────────────────────────────────────
- ? What are you looking for?  qwen
- ? Show only repositories of a publisher or a listed packager?  Yes
-   searched Hugging Face at the publisher Qwen and the five listed packagers
-   120 repositories, 40 of them models you can pick from
- ? Which of these models should the result cover?  Qwen3.5-9B, Qwen3-0.6B
- ✓ Packages        2 models, 26 packages from 4 repositories
-```
+Three facts before the first question: the **folder** (none chosen yet), the local **daemon**
+(Ollama is reachable, with 19 models, 7 of them local and the rest cloud entries) and this
+**machine** (its name, and that no measurement is stored in this folder yet). The first question
+of step 1 is where the results should live: the folder you are in, or another path.
 
-The list of step 2 is a table with a head of its own; `Enter` takes the rows you marked with the
-space bar, or the one the pointer is on when you marked none:
+### Step 1, Configuration
 
-```
- ? Which of these models should the result cover?
-     Model                     Fit           Size    Release  Packagers         Downl.  Ollama
- ❯ ○ Qwen3.5-9B                good          9B      legacy   Qwen, unsloth     13.6M   qwen3.5:9b
-   ○ Qwen3-0.6B                good          0.6B    latest   unsloth, bartow…  1.1M    qwen3:0.6b
-   ↑↓ move   Space marks   Enter takes the marked rows, or this one   Esc leave
-   latest: the publisher's current release of its family · legacy: the publisher named a
-   successor · fit from the size at 32k context, exact after the fetch
-```
+![Step 1: which machines the result covers, with this machine's measurement under the first row](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/2-machines.png)
 
-The run closes with a card of the whole run over the result table, and every line under the table
-says what it is about:
+Which machines the result covers. **this machine** is measured right here, and the gray line under
+it says what the measurement found: the graphics card, its memory and the system memory. A
+**profile file** measured on another machine can be imported instead, so one folder can rank the
+same packages for a laptop and a server. Entering a machine by hand is not in yet. The measurement
+is cross-checked with [llmfit](https://github.com/AlexsJones/llmfit) when it is installed.
 
-```
- folder    //models/modelroom
- machine   workstation             12 GB graphics, 128 GB memory, measured today
- models    Qwen3.5-9B, Qwen3-0.6B  26 packages from Qwen, unsloth and Ollama
- context   L 32k                   24,000 words, a report or a long contract
- speed     not measured            say Yes in step 4 to measure an installed package
- result    docs\models.md          25 packages ranked, 1 too tight
+### Step 2, Packages
 
- shown     10 of 25 packages · 1 too tight (unsloth IQ4_NL)
- memory    #1 fits into graphics memory, 10.9 GB free after the reserve
-           #2–10 need system memory, the graphics card helps
- basis     #1–10 computed from the package size, not its architecture
- speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
+![Step 2: the search word](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/3-search.png)
 
- install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_M
-```
-
-1 **Configuration**: where the results should live, and which machines the result covers --
-this one is measured here. 2 **Packages**: a Hugging Face search -- two requests per account, its
-newest and its most downloaded repositories, so the publisher of what you searched for and every
-packager you listed answer with their own builds however old they are -- then your selection, one
-line per model that can really be picked, with the fit its size allows on this machine and how often
-its packages were downloaded, and the fetch. What could not be picked, and why, is counted up in
-`state/search.json` rather than shown as rows nobody can choose.
-Saying no to the owner filter adds two open lists on top: the twenty most
-downloaded and the ten newest repositories for that word, whoever owns them, and it lets a model of
-an account this catalog does not list be picked as well.
-
-**You can answer that question in four ways**, and none of them has to be the exact spelling of
-anything:
+What you are looking for. You can answer in four ways, and none of them has to be the exact
+spelling of anything:
 
 | What you type | What happens |
 |---|---|
 | `qwen` | the word goes to the Hub, and every account is asked for it |
 | `qwen 3.5 9b` | blanks, hyphens, underscores and colons all separate words; one of them is asked for and the rest narrow the answer, so a missing hyphen, a blank in the wrong place or a `gguf` you wrote out of habit still find the model. The words themselves have to be right: `9x` finds no `9B` |
 | `unsloth/Qwen3.5-9B-GGUF` | a repository you already know: one request for exactly that one, and the owner filter never hides it |
-| nothing at all | press Enter and the current models of the shipped catalog are looked up one by one -- the answer to "I have no model in mind, what fits this machine?" |
+| nothing at all | press Enter and the current models of the shipped catalog are looked up one by one -- the answer to "I have no model in mind, what fits this machine?" (see the last picture) |
 
 A word close to something the catalog knows but not in it (`qwn`) ends in a short list of what you
 may have meant; picking one searches again.
-3 **Context**: how much text a model should handle at once, as a scale from XS to XXL
-with the words that are, an example, and how many of the packages just fetched still fit this
-machine -- that last column is the fit of the ranking itself, not a second calculation.
-4 **Measurement**: the speed of the packages your local Ollama daemon already has; nothing is
-marked, and it never downloads anything. 5 **Results**: the card of the whole run and the ranking
-per machine, written to `docs/models.md` and `docs/models.json`. What the search asked, page by
-page, is in `state/search.json` next to them.
 
-Every question is a list with the arrow keys, including yes and no; `Esc` leaves a list and Ctrl-C
-leaves at any point, and each step writes as it goes. The next run is the same command:
-it remembers the folder, the machine it measured and the context you chose. Without an
-interactive terminal it prints the help and stops; `modelroom --answers <file>` takes the
-answers from a TOML file instead (for a self-test or CI) -- `context` there is a level (`"L"`)
-or a number of tokens -- and `modelroom --config <file>` works on that configuration rather
-than the remembered folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
+![Step 2: the owner filter, yes or no](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/4-filter.png)
+
+The owner filter. **Yes** (the default) keeps the list to the publisher of what you searched for
+and the packagers the catalog lists (`unsloth`, `bartowski`, `mradermacher`, `lmstudio-community`,
+`ggml-org`), each asked for its newest and its most downloaded repositories. **No** adds the twenty
+most downloaded and the ten newest repositories for that word, whoever owns them, and lets a model
+of a publisher the catalog does not know be picked as well.
+
+![Step 2: the list of models, one row per model that can be picked](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/5-models.png)
+
+The list of models, one row per model that can really be picked, best fit first. The columns:
+**Fit** is what the model's size allows on this machine at 32k context (`good`, `marginal`,
+`too tight`; `good (RAM)` means it needs system memory, the graphics card helps), exact after the
+fetch. **Size** is the parameter count. **Release** says `latest` when the publisher's own page
+names this model as the current one of its family, `legacy` when the publisher named a successor,
+and `–` when the catalog holds no evidence either way. **Packagers** are the accounts that offer a
+GGUF build of it, **Downl.** the downloads of all of them together, **Ollama** the name of the same
+model in the Ollama registry when the catalog knows one. `Space` marks a row, `Enter` takes the
+marked rows or, with nothing marked, the row under the pointer. Here `Qwen3.5-4B` is marked. The
+repositories that are no model of the list, and why, are counted in `state/search.json` rather
+than shown as rows nobody can choose. After the choice the run fetches every package of the chosen
+models: their sizes, formats, quantizations and the exact revision they were seen at.
+
+### Step 3, Context
+
+![Step 3: the context scale from XS to XXL, with how many of the fetched packages fit at each level](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/6-context.png)
+
+How much text a model should handle at once, as a scale from XS to XXL with the tokens, the words
+that are and an example. The last column is the point of the question: how many of the packages
+just fetched still fit this machine at that context, because the memory a model needs grows with
+the text it holds. **L** (32k, a report or a long contract) is the default; a number of tokens can
+be typed instead.
+
+### Step 4, Measurement
+
+![Step 4: measure the speed of the chosen models the local daemon already has](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/7-measurement.png)
+
+Whether to measure the speed of the chosen models your local Ollama daemon already has. The
+measurement runs a short prompt through each installed package and records tokens per second; it
+never downloads anything. The gray line says what was found: here the daemon has a `Qwen3.5-4B`,
+but its weights are Ollama's own build and not one of the fetched packages, so there is nothing to
+measure as such. **No** skips the step; the ranking then shows `–` for speed.
+
+### Step 5, Results
+
+![Step 5: the card of the run, the ranking table and the notes under it](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/8-results.png)
+
+The card of the whole run: folder, machine, models, context, speed, and where the result went. The
+folder here already held a configuration from an earlier run naming `Qwen3.5-9B`; the run added
+`Qwen3.5-4B` to it. Under the card, the ranking for this machine at the chosen context: rank,
+model, package (packager and quantization), fit, measured speed, memory need. The notes under the
+table say what is **shown** (ten of 45, one too tight), which rows fit into graphics **memory** and
+which need system memory, on what **basis** the fit was computed (the package size, or the
+architecture once the fetch had it) and what was measured for **speed**. The **install** line is
+the command for the first row, ready to paste. The full table is written to `docs/models.md` and
+`docs/models.json`; what the search asked, page by page, is in `state/search.json` next to them.
+
+### Nothing in mind
+
+![Step 2 with an empty search word: the catalog's current models, one page each, ranked by fit](https://raw.githubusercontent.com/jm-vis/modelroom/main/docs/screenshots/9-anything.png)
+
+Press Enter on an empty search word and the run looks up the current models of the shipped
+catalog, one page each, and lists them best fit first: what fits into the graphics card, then what
+is marginal there, then what needs system memory. This is the answer to "I have no model in mind,
+show me what fits this machine".
+
+### Without a terminal
+
+Every question is a list with the arrow keys, including yes and no. Without an interactive
+terminal the command prints the help and stops; `modelroom --answers <file>` takes the answers
+from a TOML file instead (for a self-test or CI) -- `context` there is a level (`"L"`) or a number
+of tokens -- and `modelroom --config <file>` works on that configuration rather than the
+remembered folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
 
 The six subcommands never ask anything, and they are what the guided mode calls. From a
 clone of this repository, after `uv sync --frozen`:

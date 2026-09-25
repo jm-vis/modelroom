@@ -1,7 +1,7 @@
 """Tests for `modelroom export-profile` and `modelroom import-profile`.
 
 Every test builds a real deployment in a temporary folder -- a schema-2 configuration
-(`fixtures/config_v2/modelroom.toml`), profile files and measurement files -- and drives the
+(`fixtures/config_v2/config.toml`), profile files and measurement files -- and drives the
 real CLI through `main`. The export fixture `fixtures/export_v1.json` is the exchanged file.
 The two concurrency tests start real processes, like `tests/test_state.py` does.
 """
@@ -44,7 +44,7 @@ _NESTING_DEPTH = 20000
 def _deployment(root: Path) -> Path:
     """A schema-2 configuration in its own folder (the results folder); returns its path."""
     root.mkdir(parents=True, exist_ok=True)
-    shutil.copy(FIXTURES / "config_v2" / "modelroom.toml", root / "modelroom.toml")
+    shutil.copy(FIXTURES / "config_v2" / "config.toml", root / "modelroom.toml")
     return root / "modelroom.toml"
 
 
@@ -717,7 +717,7 @@ def test_an_export_whose_measurement_belongs_to_another_profile_exits_3(tmp_path
 def test_a_schema_1_configuration_exits_2_and_names_migrate(tmp_path, capsys):
     root = tmp_path / "target"
     root.mkdir()
-    shutil.copy(FIXTURES / "config_v1" / "modelroom.toml", root / "modelroom.toml")
+    shutil.copy(FIXTURES / "config_v1" / "config.toml", root / "modelroom.toml")
 
     code = main(
         ["import-profile", str(_write_json(tmp_path / "e.json", EXPORT)), "--config", str(root / "modelroom.toml")],
