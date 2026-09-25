@@ -1,7 +1,7 @@
 """Tests for `modelroom export-profile` and `modelroom import-profile`.
 
-Every test builds a real deployment in a temporary folder -- a schema-2 configuration
-(`fixtures/config_v2/config.toml`), profile files and measurement files -- and drives the
+Every test builds a real deployment in a temporary folder -- a schema-3 configuration
+(`fixtures/config_v3/config.toml`), profile files and measurement files -- and drives the
 real CLI through `main`. The export fixture `fixtures/export_v1.json` is the exchanged file.
 The two concurrency tests start real processes, like `tests/test_state.py` does.
 """
@@ -25,7 +25,7 @@ from modelroom.cli import main
 from modelroom.config import load_config
 from modelroom.importer import machine_name_for
 from modelroom.measurements import load_export, measurement_path, read_measurements
-from modelroom.profile import HardwareProfile
+from modelroom.profile import HardwareProfile, read_profile_document
 from modelroom.state import acquire_lock, release_lock
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -42,9 +42,9 @@ _NESTING_DEPTH = 20000
 
 
 def _deployment(root: Path) -> Path:
-    """A schema-2 configuration in its own folder (the results folder); returns its path."""
+    """A schema-3 configuration in its own folder (the results folder); returns its path."""
     root.mkdir(parents=True, exist_ok=True)
-    shutil.copy(FIXTURES / "config_v2" / "config.toml", root / "modelroom.toml")
+    shutil.copy(FIXTURES / "config_v3" / "config.toml", root / "modelroom.toml")
     return root / "modelroom.toml"
 
 
@@ -92,6 +92,13 @@ def _tree(root: Path) -> dict[str, bytes]:
 
 def _machines(config_path: Path) -> dict:
     return tomllib.loads(config_path.read_text(encoding="utf-8"))["machines"]
+
+
+def _read_profile(text: str) -> HardwareProfile:
+    """A stored profile as every reader reads it: the export fixture's schema 2 as schema 3."""
+    profile = read_profile_document(json.loads(text))
+    assert isinstance(profile, HardwareProfile)
+    return profile
 
 
 # --- export ----------------------------------------------------------------------------------
@@ -214,7 +221,7 @@ def test_export_exits_3_for_a_profile_of_an_unsupported_schema(tmp_path):
     config_path = _deployment(tmp_path / "source")
     _write_json(
         tmp_path / "source" / "state" / "hardware" / f"{PROFILE_ID}.json",
-        {**EXPORT["profile"], "schema_version": 3},
+        {**EXPORT["profile"], "schema_version": 4},
     )
     out = tmp_path / "out.json"
 
@@ -354,7 +361,7 @@ def test_import_writes_the_profile_its_measurements_and_a_machine_entry(tmp_path
 
     out = capsys.readouterr().out
     assert code == 0
-    stored = HardwareProfile.model_validate_json(
+    stored = _read_profile(
         (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
     assert stored.display_name == "workstation"
@@ -378,7 +385,7 @@ def test_the_first_rewrite_of_the_configuration_leaves_a_backup(tmp_path, capsys
     out = capsys.readouterr().out
     assert code == 0
     assert backup.read_bytes() == original
-    assert "# A schema-2 configuration" in backup.read_text(encoding="utf-8")
+    assert "# A schema-3 configuration" in backup.read_text(encoding="utf-8")
     assert "[machines.workstation]" in config_path.read_text(encoding="utf-8")
     assert backup.name in out
 
@@ -464,7 +471,7 @@ def test_a_newer_profile_replaces_the_stored_one(tmp_path, capsys):
     code = main(["import-profile", str(_write_json(tmp_path / "e.json", newer)), "--config", str(config_path)], now=NOW)
 
     assert code == 0
-    stored = HardwareProfile.model_validate_json(
+    stored = _read_profile(
         (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
     assert stored.gpu_name == "Nova GPU 2"
@@ -597,7 +604,7 @@ def test_a_profile_of_an_unsupported_schema_in_the_target_is_listed_and_does_not
     config_path = _deployment(tmp_path / "target")
     future = _write_json(
         tmp_path / "target" / "state" / "hardware" / f"{OTHER_ID}.json",
-        {**EXPORT["profile"], "schema_version": 3, "profile_id": OTHER_ID},
+        {**EXPORT["profile"], "schema_version": 4, "profile_id": OTHER_ID},
     )
 
     code = main(["import-profile", str(_write_json(tmp_path / "e.json", EXPORT)), "--config", str(config_path)], now=NOW)
@@ -967,7 +974,7 @@ def test_an_import_during_a_measurement_write_stops_at_the_lock_and_loses_nothin
 def _assert_state_is_consistent(root: Path, config_path: Path) -> None:
     """Every stored file reads and validates, and the configuration still loads."""
     for path in (root / "state" / "hardware").glob("*.json"):
-        HardwareProfile.model_validate_json(path.read_text(encoding="utf-8"))
+        _read_profile(path.read_text(encoding="utf-8"))
     for folder in (root / "state" / "measurements").glob("*"):
         assert not read_measurements(root / "state", folder.name).unreadable
     load_config(config_path)
@@ -988,7 +995,7 @@ def test_the_import_of_an_older_profile_still_imports_its_new_measurements(tmp_p
 
     code = main(["import-profile", str(_write_json(tmp_path / "e.json", older)), "--config", str(config_path)], now=NOW)
 
-    stored = HardwareProfile.model_validate_json(
+    stored = _read_profile(
         (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
     assert code == 0
@@ -1015,10 +1022,10 @@ def test_export_then_import_round_trips_between_two_folders(tmp_path):
     assert main(["export-profile", "--config", str(source_config), "--profile", PROFILE_ID, "--out", str(out)]) == 0
     assert main(["import-profile", str(out), "--config", str(target_config)], now=NOW) == 0
 
-    source = HardwareProfile.model_validate_json(
+    source = _read_profile(
         (tmp_path / "source" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
-    target = HardwareProfile.model_validate_json(
+    target = _read_profile(
         (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
     assert source == target
@@ -1033,7 +1040,7 @@ def test_a_newer_profile_arriving_within_the_same_second_is_compared_by_recorded
 
     main(["import-profile", str(_write_json(tmp_path / "e.json", incoming)), "--config", str(config_path)], now=NOW)
 
-    stored = HardwareProfile.model_validate_json(
+    stored = _read_profile(
         (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
     assert stored.gpu_name == "Nova GPU"
@@ -1059,7 +1066,7 @@ def test_timedelta_is_not_used_for_the_freshness_rule(tmp_path):
 
     main(["import-profile", str(_write_json(tmp_path / "e.json", incoming)), "--config", str(config_path)], now=NOW)
 
-    stored = HardwareProfile.model_validate_json(
+    stored = _read_profile(
         (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
     assert stored.gpu_name == "Nova GPU 1"

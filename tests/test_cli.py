@@ -631,7 +631,7 @@ def test_render_writes_the_json_view_next_to_the_markdown_one(tmp_path: Path):
     assert render_with_config(config, now=RUN2) == 0
 
     payload = json.loads((tmp_path / "models.json").read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert datetime.fromisoformat(payload["rendered_at"]) == RUN2
     assert [block["machine"] for block in payload["machines"]] == ["workstation"]
     assert payload["ranking_rule"] in (tmp_path / "models.md").read_text(encoding="utf-8")

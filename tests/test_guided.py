@@ -355,7 +355,7 @@ def test_the_first_start_writes_a_configuration_with_this_device_as_the_writer(t
 
     assert code == 0
     raw = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 2
+    assert raw["schema_version"] == 3
     assert raw["machines"]["workstation"]["writer"] is True
     assert Path(raw["guided"]["results"]) == _results(tmp_path)
     # The line that named the writer is gone from the screen: the configuration says it, and the
@@ -482,7 +482,7 @@ def test_a_schema_one_configuration_is_migrated_before_the_first_write(tmp_path:
 
     assert code == 0
     assert (_results(tmp_path) / "modelroom.toml.v1.bak").is_file()
-    assert tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))["schema_version"] == 2
+    assert tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))["schema_version"] == 3
     assert any("modelroom.toml" in line for line in lines)
     # The migration lines are for a maintainer; the sentence in front of them is for a user. Both
     # are notes of step 1 now, indented under the question they belong to.
@@ -2025,4 +2025,4 @@ def test_a_missing_answer_deep_in_the_dialog_leaves_the_configuration_valid(tmp_
     with pytest.raises(AnswerMissingError, match="search"):
         _run(tmp_path, {"results": "here", "machines": []})
 
-    assert load_config(_config_file(tmp_path)).schema_version == 2
+    assert load_config(_config_file(tmp_path)).schema_version == 3

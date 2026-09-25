@@ -30,7 +30,7 @@ RESULTS = Path("//models/results")
 
 def _config_text(**changes) -> str:
     raw = {
-        "schema_version": 2,
+        "schema_version": 3,
         "machines": {"workstation": {"reserve_ram_gib": 8, "reserve_vram_gib": 1, "writer": True}},
         "guided": {"results": str(RESULTS)},
     }

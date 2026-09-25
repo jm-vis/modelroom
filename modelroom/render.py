@@ -34,9 +34,9 @@ from .fit import GIB, compute_fit_v2
 from .guided_contracts import Note
 from .importer import ProfileScan
 from .measurements import MeasurementRecord, Scenario
-from .profile import CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
+from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
 from .quantization import package_identity_key
-from .ranking import RANKING_RULE, Ranking, SetAside, rank_packages
+from .ranking import RANKING_RULE, RankedPackage, Ranking, SetAside, rank_packages
 
 RatingSource = Callable[[str], Rating | None]
 
@@ -127,7 +127,7 @@ def _legacy_fit_reason() -> str:
     """
     absent = CrossCheck(status="absent")
     probe = HardwareProfile(
-        schema_version=2,
+        schema_version=PROFILE_SCHEMA_VERSION,
         profile_id="0" * 16,
         display_name="legacy",
         os_fingerprint="none",
@@ -264,6 +264,14 @@ _MODE_NOTES = {
         ["fit.mode", "fit.fit_class"],
     ),
 }
+# Unified memory computes in mode `gpu` as well, but it is no graphics memory of its own: the
+# system and the model share it, and both reserves are taken from it (decided 2026-09-25).
+_SHARED_MEMORY_NOTE = (
+    "fits_in_shared_memory",
+    "Fits into shared memory: it needs about {need:.1f} GiB of the {pool:.1f} GiB left after both "
+    "reserves.",
+    ["fit.mode", "fit.need_gib", "fit.pool_gib", "profile.gpu_state"],
+)
 
 
 # The one sentence a fit on the size basis adds to its note, whatever the pool: the number comes
@@ -273,8 +281,10 @@ _MODE_NOTES = {
 _FROM_SIZE_SENTENCE = " From the size of the package, not its architecture."
 
 
-def _computed_note(fit: Fit) -> Note:
-    code, template, facts = _MODE_NOTES[str(fit.mode)]
+def _computed_note(fit: Fit, shared_memory: bool = False) -> Note:
+    """The row note of a computed fit; `shared_memory` names a `gpu` row of unified memory so."""
+    shared = shared_memory and fit.mode == "gpu"
+    code, template, facts = _SHARED_MEMORY_NOTE if shared else _MODE_NOTES[str(fit.mode)]
     text = template.format(need=fit.need_gib, pool=fit.pool_gib)
     if fit.basis == "size":
         text += _FROM_SIZE_SENTENCE
@@ -282,7 +292,7 @@ def _computed_note(fit: Fit) -> Note:
     return Note(code=code, subject="package", origin="computed", text=_clip(text), facts=facts)
 
 
-def _set_aside_note(set_aside: SetAside, covered: bool) -> Note:
+def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = False) -> Note:
     if not covered:
         return Note(
             code="not_covered",
@@ -304,7 +314,7 @@ def _set_aside_note(set_aside: SetAside, covered: bool) -> Note:
         origin="computed",
         text=_clip(
             f"Fit contract v1 does not count this as a fit: it needs about {fit.need_gib:.1f} GiB "
-            f"of the {fit.pool_gib:.1f} GiB left after the reserve.{from_size}"
+            f"of the {fit.pool_gib:.1f} GiB left after {'both reserves' if shared_memory else 'the reserve'}.{from_size}"
         ),
         facts=["fit.need_gib", "fit.pool_gib"] + (["fit.basis"] if fit.basis == "size" else []),
     )
@@ -313,10 +323,29 @@ def _set_aside_note(set_aside: SetAside, covered: bool) -> Note:
 # --- building the document ----------------------------------------------------------------------
 
 
-def _ranked_entries(ranking: Ranking) -> list[RankedEntry]:
+def _row_note(ranked: RankedPackage, shared_memory: bool) -> Note:
+    """What one ranked row says: its measurement, why a measurement did not count, or its fit.
+
+    A measurement that counts but for `requests` alone is named in the row, so a reader does not
+    look for a speed the ranking of more requests cannot use (`RankedPackage.measurement_note`).
+    """
+    if ranked.measurement is not None:
+        return _measured_note(ranked.measurement)
+    if ranked.measurement_note is not None:
+        return Note(
+            code="measured_with_one_request",
+            subject="package",
+            origin="computed",
+            text=_clip(ranked.measurement_note),
+            facts=["scenario.requests", "measurement_group"],
+        )
+    return _computed_note(ranked.fit, shared_memory)
+
+
+def _ranked_entries(ranking: Ranking, shared_memory: bool = False) -> list[RankedEntry]:
     entries = []
     for ranked in ranking.top:
-        note = _measured_note(ranked.measurement) if ranked.measurement is not None else _computed_note(ranked.fit)
+        note = _row_note(ranked, shared_memory)
         entries.append(
             RankedEntry(
                 rank=ranked.rank,
@@ -330,9 +359,11 @@ def _ranked_entries(ranking: Ranking) -> list[RankedEntry]:
     return entries
 
 
-def _set_aside_entries(items: list[SetAside], covered: bool) -> list[SetAsideEntry]:
+def _set_aside_entries(items: list[SetAside], covered: bool, shared_memory: bool = False) -> list[SetAsideEntry]:
     return [
-        SetAsideEntry(fit=item.fit, reason=item.reason, **_package_line(item.package, _set_aside_note(item, covered)))
+        SetAsideEntry(
+            fit=item.fit, reason=item.reason, **_package_line(item.package, _set_aside_note(item, covered, shared_memory))
+        )
         for item in items
     ]
 
@@ -360,15 +391,16 @@ def _machine_block(
         for package in packages
     ]
     ranking = rank_packages(entries, measurements, scenario)
+    shared = found.profile.gpu_state == "unified_memory"  # one memory, both reserves taken from it
     return MachineRanking(
         machine=machine,
         status="ranked",
         label=found.label,
         profile=found.profile,
-        ranked=_ranked_entries(ranking),
+        ranked=_ranked_entries(ranking, shared_memory=shared),
         ranked_total=len(ranking.ranked),
         not_covered=_set_aside_entries(ranking.not_covered, covered=False),
-        too_tight=_set_aside_entries(ranking.too_tight, covered=True),
+        too_tight=_set_aside_entries(ranking.too_tight, covered=True, shared_memory=shared),
         **reserves,
     )
 

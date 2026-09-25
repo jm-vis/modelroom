@@ -158,6 +158,7 @@ def _searched(
         context=context,
         typed=outcome.typed,
         configured_ollama=configured,
+        requests=config.guided.requests,
     )
     return SearchStep(outcome=outcome, models=models, checked=checked, context=context, filtered=filtered)
 

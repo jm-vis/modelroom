@@ -133,7 +133,7 @@ def test_a_measured_run_writes_one_profile_v2_with_every_source(tmp_path: Path, 
     assert _run(config, tmp_path, machine="workstation") == 0
 
     profile = _written(config)
-    assert profile.schema_version == 2 and profile.profile_id == ID_ONE
+    assert profile.schema_version == 3 and profile.profile_id == ID_ONE
     assert profile.origin == "measured" and profile.recorded_at == RUN1
     assert profile.gpu_state == "measured" and profile.vram_source == "nvidia-smi"
     assert profile.vram_gib == pytest.approx(11.99, abs=0.01)
@@ -477,7 +477,7 @@ def test_a_schema_1_profile_beside_the_new_one_is_left_untouched(tmp_path: Path)
 def test_a_profile_file_of_a_future_schema_is_exit_3_and_writes_nothing(tmp_path: Path, capsys):
     config = _config(tmp_path)
     broken = config.paths.hardware_dir / "future.json"
-    atomic_write_json(broken, {**EXAMPLES["HardwareProfile"], "schema_version": 3})
+    atomic_write_json(broken, {**EXAMPLES["HardwareProfile"], "schema_version": 4})
 
     assert _run(config, tmp_path) == 3
 

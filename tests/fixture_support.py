@@ -18,7 +18,7 @@ from pathlib import Path
 
 from modelroom.config import Configuration
 from modelroom.http import FixtureTransport, Response
-from modelroom.profile import CrossCheck, HardwareProfile, LlmfitCrosscheck
+from modelroom.profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck
 from modelroom.state import atomic_write_json
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -60,10 +60,13 @@ def v2_profile(
     ram_gib: float = 127.46,
     recorded_at: datetime = PROFILE_RECORDED_AT,
 ) -> HardwareProfile:
-    """A schema-2 hardware profile the fit computes for (`gpu_state: measured`), built in memory."""
+    """A hardware profile of the current schema the fit computes for (`gpu_state: measured`).
+
+    Built in memory; the name keeps the profile model's family (v2 and later), not its schema.
+    """
     absent = CrossCheck(status="absent")
     return HardwareProfile(
-        schema_version=2,
+        schema_version=PROFILE_SCHEMA_VERSION,
         profile_id=profile_id,
         display_name=display_name,
         os_fingerprint="9d2f4b6a8c0e1357",

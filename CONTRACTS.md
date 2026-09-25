@@ -58,6 +58,18 @@ with exit code `3` and a message that names the file, its version and the accept
 (stated as `>= low and < high`), before the command writes anything. A version bump is a
 documented decision (`docs/adr/`), never a side effect.
 
+| Form | Writes | Reads | Earlier versions | Decision |
+|---|---|---|---|---|
+| Configuration (`modelroom.toml`) | 3 | `[1, 4)` | 1 and 2 read as 3 in memory; `migrate` and the guided mode write 1 and 2 back, `import-profile` writes 2 back (1 needs `migrate`) | ADR 0002, 2026-09-25 |
+| Hardware profile | 3 | `[1, 4)` | 1 read as `HardwareSnapshot`; 2 read as 3 everywhere, `migrate` writes it back | ADR 0001, 2026-09-25 |
+| Render document (`docs/models.json`) | 2 | not read back by this package | -- | ADR 0003, 2026-09-25 |
+| Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
+| Measurement file | 2 | 2 | -- | -- |
+
+A reader of an earlier version meets a file of a later schema with a clean refusal and exit
+`3`. **A results folder shared between machines therefore needs the same or a later version on
+every machine once one of them has written a later schema** (decided 2026-09-25).
+
 `modelroom.contracts.load_snapshot(data)` is the entry point for reading a persisted snapshot:
 it checks `schema_version` against `SNAPSHOT_SCHEMA_RANGE` with `check_schema_version` *before*
 handing the payload to `Snapshot.model_validate`, so a missing, non-integer or out-of-range
@@ -589,6 +601,7 @@ renderer must use.
 | `context_assumed` | `bool` | -- | `true` when `context` is the 8192 fallback, not the package's own `default_context` |
 | `basis` | `"architecture" \| "size"` | default `"architecture"` | what the KV cache was computed from: the base model's architecture, or the size alone ("Fit from size") |
 | `reason` | `str \| None` | non-`None` typically iff `fit_class == "unknown"` | why the fit could not be computed, when it could not |
+| `requests` | `int` | `1..1024`, default `1` | the parallel requests the KV cache was computed for, once per request (decided 2026-09-25; see "Fit contract v1", "Parallel requests") |
 
 ```json
 {
@@ -602,7 +615,8 @@ renderer must use.
   "context": 8192,
   "context_assumed": true,
   "basis": "architecture",
-  "reason": null
+  "reason": null,
+  "requests": 1
 }
 ```
 
@@ -710,6 +724,11 @@ there (`^[a-z0-9][a-z0-9-]*$`) against every key at once.
 | `writer` | `bool` | -- | whether this machine runs `fetch` and writes the shared state |
 | `profile` | `str \| None` | schema 2; 16 lowercase hex characters; default `None` | the `profile_id` of this machine's hardware profile (`<state>/hardware/<profile_id>.json`), set by `modelroom migrate` or a guided run |
 
+**The two reserves add up on unified memory** (decided 2026-09-25). On a machine of `gpu_state`
+`unified_memory` the operating system and the model share one memory, so the fit takes both
+reserves from it: pool = physical RAM - `reserve_ram_gib` - `reserve_vram_gib` (see "Fit contract
+v1", "Unified memory"). On every other machine each reserve belongs to its own memory, as before.
+
 ```json
 {
   "reserve_ram_gib": 8.0,
@@ -768,18 +787,41 @@ reads and renders unchanged. The size scale of the guided mode starts on this va
 or on a `custom` line of its own when it is no level -- and writes the answer back whenever it
 differs from what the file holds by then (see "Guided mode", step 3) -- the first time as well, and
 for 8192 as well: a kept context is what the user chose, not the value the question started with.
-The field always holds the **number of tokens**, never a level name. Both fields are optional, so the
-configuration's `schema_version` stays `2` and no migration step reads or writes them.
+The field always holds the **number of tokens**, never a level name. Both fields are optional; they
+came with schema 2 and no migration step reads or writes them.
+
+**Parallel requests (schema 3, decided 2026-09-25).** `requests` are the parallel slots the
+ranking assumes (the daemon's `OLLAMA_NUM_PARALLEL`, see "Fit contract v1", "Parallel requests"),
+never "users at once". `requests_origin` says where the number came from, `users` is the head
+count a user named:
+
+- requests named directly: `entered`; a head count may stay for the display;
+- only a head count: `from_users`, `requests = min(1024, max(1, ceil(users x ACTIVE_SHARE)))`
+  with `ACTIVE_SHARE = 0.10` -- rule of thumb, not measured (1 -> 1, 10 -> 1, 11 -> 2,
+  25 -> 3, 10240 -> 1024);
+- neither: `default`, one request and no head count.
+
+`requests` and `requests_origin` are written together or not at all; a table that breaks one of
+the rules is invalid (`ConfigError`, exit `2`). A `[guided]` table without the keys reads as one
+request of origin `default`. `render_cmd.scenario_from_config` reads `requests` whether a context
+is kept or not. The guided dialog does not ask for the number yet; the keys exist for the ranking
+and for a later step that asks.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
 | `results` | `Path \| None` | default `None` | the folder the guided mode keeps its configuration and results in |
 | `context` | `int \| None` | `> 0`, `<= 2**31 - 1`; default `None` | the context the last guided run's ranking was computed for |
+| `users` | `int \| None` | schema 3; `1..10240`; default `None` | the head count a user named (display and derivation) |
+| `requests` | `int` | schema 3; `1..1024`; default `1` | the parallel requests the ranking assumes |
+| `requests_origin` | `"default" \| "entered" \| "from_users"` | schema 3; default `"default"`; written together with `requests` | where `requests` came from |
 
 ```json
 {
   "results": "//models/modelroom",
-  "context": 4096
+  "context": 4096,
+  "users": 25,
+  "requests": 3,
+  "requests_origin": "from_users"
 }
 ```
 
@@ -847,7 +889,7 @@ writing down one exact repository, and only that repository is ever fetched unde
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `schema_version` | `int` | the model accepts only `CONFIG_SCHEMA_VERSION` (`2`); readers also accept `1`, see below | the configuration's schema version |
+| `schema_version` | `int` | the model accepts only `CONFIG_SCHEMA_VERSION` (`3`); readers also accept `1` and `2`, see below | the configuration's schema version |
 | `families` | `list[FamilyConfig]` | may be empty (schema 2), names unique, `hf_repo` unique across all | the families this configuration knows |
 | `packagers` | `list[str]` | non-empty, no `/`, unique | Hugging Face owners that publish packager (GGUF) repos |
 | `publishers` | `list[str]` | non-empty, no `/`, unique | Hugging Face owners that publish base models |
@@ -856,20 +898,29 @@ writing down one exact repository, and only that repository is ever fetched unde
 | `llmfit` | `LlmfitConfig` | default `LlmfitConfig()` | the minimum required `llmfit` version |
 | `defaults` | `DefaultsConfig` | schema 2, default `DefaultsConfig()` | reserves for an imported machine without its own table |
 | `updates` | `UpdatesConfig` | schema 2, default `UpdatesConfig()` | the release lookup switch |
-| `guided` | `GuidedConfig` | schema 2, default `GuidedConfig()` | the guided mode's results folder and the context it chose |
+| `guided` | `GuidedConfig` | schema 2, default `GuidedConfig()` | the guided mode's results folder, the context it chose and, since schema 3, the parallel requests |
 
-**Reading schema 1.** `CONFIG_SCHEMA_RANGE` is `(1, 3)`: `load_config` and
-`Configuration.from_dict` accept schema 1 and 2 and refuse 3 and above with `SchemaVersionError`
-before any field is looked at. A schema-1 dict is turned into the equivalent schema-2 dict in
-memory by `normalize_config_v1` before validation: every field keeps its value, `schema_version`
-becomes `2`, `[defaults]` and `[updates]` are added with their defaults, `[guided]` stays absent,
-no machine gets a `profile`. Schema 1's own rule "at least one family" is checked there (a
-`ConfigError`), because schema 2 drops it. No writer rule is added. The file on disk is changed
-only by `modelroom migrate` (see "Migration").
+**Reading schema 1 and 2.** `CONFIG_SCHEMA_RANGE` is `(1, 4)`: `load_config` and
+`Configuration.from_dict` accept schema 1, 2 and 3 and refuse 4 and above with
+`SchemaVersionError` before any field is looked at. `normalize_config` takes a dict of an earlier schema to the
+current schema in memory before validation, one step at a time:
+
+- **1 -> 2** (`normalize_config_v1`): every field keeps its value, `[defaults]` and `[updates]`
+  are added with their defaults, `[guided]` stays absent, no machine gets a `profile`. Schema 1's
+  own rule "at least one family" is checked there (a `ConfigError`), because schema 2 drops it.
+  No writer rule is added.
+- **2 -> 3** (`normalize_config_v2`, decided 2026-09-25, ADR 0002): every value stays; a present
+  `[guided]` table gets `requests = 1` and `requests_origin = "default"`, a missing one stays
+  missing. A file that says schema 2 but carries `users`, `requests` or `requests_origin` is
+  refused (`ConfigError`).
+
+Reading never changes the file on disk. Three paths write a file of an earlier schema back as schema 3:
+`modelroom migrate` (see "Migration"), its trigger at the start of a guided run, and
+`import-profile` (see "Export and import").
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "families": [
     {
       "name": "nova",
@@ -896,7 +947,13 @@ only by `modelroom migrate` (see "Migration").
   "llmfit": {"min_version": "1.1.16"},
   "defaults": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0},
   "updates": {"check": true},
-  "guided": {"results": "//models/modelroom", "context": 4096}
+  "guided": {
+    "results": "//models/modelroom",
+    "context": 4096,
+    "users": 25,
+    "requests": 3,
+    "requests_origin": "from_users"
+  }
 }
 ```
 
@@ -1564,6 +1621,27 @@ available_vram`, `reserve_gib = reserve_vram_gib`. Otherwise it falls back to th
 reserve_ram_gib`, `mode="cpu_gpu"` when `hardware.vram_gib > 0` (some GPU exists, just not
 enough) else `mode="cpu"`.
 
+**Parallel requests (decided 2026-09-25).** `requests` are the parallel slots the Ollama daemon
+is assumed to keep (`OLLAMA_NUM_PARALLEL`), not the number of HTTP requests waiting; the context
+holds per slot. The weights are loaded once, the KV cache once per slot, so on both bases
+`kv_gib = context x kv_per_token x requests` and `need_gib` grows with it. Every `Fit` carries
+the `requests` it was computed for (default 1: `compute_fit` of schema 1 and a fit nobody could
+compute say 1). The number assumes that the daemon really keeps that many slots and that
+`num_ctx` takes effect (the load test sets it, a model default can differ); a memory fit proves
+nothing about whether an architecture serves requests in parallel, and the scheduler limits some
+architectures to one slot. `fit.OLLAMA_REQUEST_HINT = 8` is a hint, never a limit -- rule of
+thumb, not measured; the release that measures it moves the number -- with the text
+`beyond 8 requests at once this fit says nothing about throughput: measure under load, or look at
+a serving stack (rule of thumb, not measured)` for a view to show above it.
+
+**Unified memory (decided 2026-09-25).** A profile of `gpu_state` `unified_memory` has no
+graphics memory of its own: the system and the model share one memory. Its pool is
+`ram_physical_gib - reserve_ram_gib - reserve_vram_gib`, `reserve_gib` is the sum of both
+reserves, `mode="gpu"`, no fallback onto the same RAM, and the class is not capped on the
+architecture basis (the size basis stays capped at `good`); a pool of 0 or less is `too_tight`.
+Example: 32 GiB, reserves 8 + 1 -> pool 23 GiB. Feeding the RAM in as graphics memory would let
+the GPU branch compute with 31 GiB and lose the system reserve -- hence the branch of its own.
+
 **Classification.** `ratio = need_gib / pool_gib` (a `pool_gib <= 0` is always `too_tight`,
 never a division): `ratio <= 0.60` is `perfect`, `<= 0.85` is `good`, `<= 0.98` is `marginal`,
 anything above is `too_tight`. **Off the GPU (`mode` is `cpu_gpu` or `cpu`), the class is
@@ -1598,21 +1676,25 @@ than measured. `size` is never shown as a measurement and never as a promise.
 **Two entry points**, both in `modelroom/fit.py`, both fit v1's formula and classes with one term
 replaced:
 
-- `fit_from_size(package, vram_gib, ram_gib, machine_config, context)` -- after the fetch:
-  `weights_gib` is the package's own weight files as always, and
-  `kv_gib = context x KV_PER_TOKEN_SIZE_BASIS / 1024**3` with `KV_PER_TOKEN_SIZE_BASIS = 147_456`
+- `fit_from_size(package, vram_gib, ram_gib, machine_config, context, *, requests=1,
+  shared_memory=False)` -- after the fetch: `weights_gib` is the package's own weight files as
+  always, and `kv_gib = context x KV_PER_TOKEN_SIZE_BASIS x requests / 1024**3` with
+  `KV_PER_TOKEN_SIZE_BASIS = 147_456`
   bytes (`2 x 36 layers x 8 KV heads x 128 wide x 2 bytes`, the numbers of a dense 9B model at
   16-bit precision). `compute_fit_v2` calls it for every package whose architecture is not
   `dense_classic`.
-- `fit_from_parameters(parameters_b, vram_gib, ram_gib, machine_config, context)` -- before the
-  fetch, for the selection list of the guided mode's step 2:
+- `fit_from_parameters(parameters_b, vram_gib, ram_gib, machine_config, context, *, requests=1,
+  shared_memory=False)` -- before the fetch, for the selection list of the guided mode's step 2
+  (`guided_models.model_fit` hands it `[guided].requests` and the memory the ranking would read,
+  `fit.profile_memory`: a graphics card measured or entered by hand, unified memory as its pool):
   `weights_gib = parameters_b x 1e9 x BYTES_PER_PARAMETER_Q4 / 1024**3` with
   `BYTES_PER_PARAMETER_Q4 = 0.6`, the size of a `Q4_K_M` build (about 4.85 bits per weight plus
   the tables). Measured against two real packages of the fixtures: 5,680,522,464 bytes for
   9,653,104,368 parameters (0.588) and 5,027,785,216 bytes for 8,190,735,360 parameters (0.614).
 
 `need_gib`, the pool, the mode and the thresholds are fit v1's, unchanged. **The class is capped
-at `good`**: `perfect` stays reserved for a package whose architecture was read.
+at `good`**: `perfect` stays reserved for a package whose architecture was read. Multiplying the
+KV cache by `requests` does not make this assumption any more exact.
 
 **The KV constant is one fixed assumption, not a bound in either direction** (corrected in the
 second-model round of 2026-09-24, which measured the case). A hybrid or mixture architecture keeps
@@ -1625,9 +1707,10 @@ does not make the number exact. Every view therefore says `from size` next to th
 exact computation for these architectures is a work package of its own.
 
 **What stays `unknown`**, size or no size, because there is nothing to compute with: a package
-that is not a complete `gguf` build, a weight file with no size, the GPU states the schema-2 gate
-refuses, a llmfit deviation, and more than one request. For the list of step 2 there are two more
-of its own: `machine not measured` and `parameter count unknown`.
+that is not a complete `gguf` build, a weight file with no size, the GPU states the gate refuses,
+and a llmfit deviation. More than one request is computed since 2026-09-25 (see "Parallel
+requests" above). For the list of step 2 there are two more of its own: `machine not measured`
+and `parameter count unknown`.
 
 **Where the basis is visible.** In the JSON view as `fit.basis`, in the terminal view as the
 `(from size):` line with the ranks it is about (since 2026-09-24; the `Fit` cell says the memory pool
@@ -1812,7 +1895,8 @@ must not be compared are `not comparable`.
 
 ### Hardware profile v2
 
-One machine's hardware, `<state>/hardware/<profile_id>.json`, schema 2. `profile_id` is 16
+One machine's hardware, `<state>/hardware/<profile_id>.json`, schema 2 and, since 2026-09-25,
+schema 3 (the same fields, the value `entered` added; see below and ADR 0001). `profile_id` is 16
 random lowercase hex characters (`new_profile_id`), never derived from the machine: it stays
 the same when the machine is renamed, and two machines can never collide on it. `display_name`
 is what the user reads; the machine name in the configuration points to the profile through
@@ -1824,10 +1908,11 @@ is what the user reads; the machine name in the configuration points to the prof
 machine (see "Profile binding"). `os_fingerprint_source` names where it came from; `none` (not
 readable, or an `entered` profile) and `legacy` (migrated) store the fingerprint `none`.
 
-Every memory value says where it came from. `ram_physical_gib` is physical RAM (`os` or
-`llmfit`); `ram_limit_gib` with `ram_limit_scope` is a process or container limit (cgroup, job
-object), a note only and never a fit input; `vram_gib` is `nvidia-smi`, `llmfit`, `none` (no
-GPU: `0`) or `unknown` (`None`). A graphics adapter's own reported memory is never taken as VRAM.
+Every memory value says where it came from. `ram_physical_gib` is physical RAM (`os`,
+`llmfit`, or `entered` by hand); `ram_limit_gib` with `ram_limit_scope` is a process or
+container limit (cgroup, job object), a note only and never a fit input; `vram_gib` is
+`nvidia-smi`, `llmfit`, `entered` by hand, `none` (no GPU: `0`) or `unknown` (`None`). A
+graphics adapter's own reported memory is never taken as VRAM.
 
 `gpu_state` decides whether the fit computes at all:
 
@@ -1835,23 +1920,45 @@ GPU: `0`) or `unknown` (`None`). A graphics adapter's own reported memory is nev
 |---|---|---|
 | `none` | no GPU; `vram_source` `none`, `vram_gib` `0` | computes, CPU mode |
 | `measured` | one GPU, VRAM measured (`> 0`) | computes |
+| `entered` | schema 3: one GPU whose memory was entered by hand (`> 0`) | computes, like `measured` |
 | `present_unmeasured` | an adapter is present, its memory was not measured | `unknown` |
 | `multi_gpu_not_covered` | more than one GPU | `unknown` |
-| `unified_memory` | CPU and GPU share memory | `unknown` |
+| `unified_memory` | CPU and GPU share memory | computes since schema 3: one pool, RAM minus both reserves, mode `gpu` ("Fit contract v1", "Unified memory"); a profile migrated from schema 1 stays `unknown` until measured again |
 | `unsupported_platform` | this platform is not measured yet | `unknown` |
 | `legacy_unknown` | migrated from schema 1, GPU layout not recorded | `unknown` until measured again |
+
+**A machine entered by hand (schema 3, decided 2026-09-25, ADR 0001).** A profile whose memory
+was entered (`ram_physical_source` `entered`) has `origin` `entered`, no fingerprint (source
+`none`), both cross-checks `absent`, and exactly one of three shapes:
+
+| Entered as | `gpu_state` | `vram_source` | `vram_gib` | `ram_physical_*` |
+|---|---|---|---|---|
+| its own graphics card of N GiB | `entered` | `entered` | N > 0 | `entered`, > 0 |
+| no graphics card | `none` | `none` | 0 | `entered`, > 0 |
+| unified memory | `unified_memory` | `none` | 0 | `entered`, > 0 |
+
+The coupled rules behind it: an `entered` memory or graphics memory requires `origin` `entered`;
+`gpu_state` `entered` and `vram_source` `entered` only come together, so a measured GPU never
+carries an entered size. `gpu_name` is free or `None`. A `hardware --cpu-only` profile
+(`origin` `entered`, `ram_physical_source` `os`) is no hand-entered machine and stays valid as it
+is. No fit on such a machine is ever `measured`: every number there is `computed`.
 
 **Cross-check with llmfit.** Only like with like: physical RAM against llmfit `total_ram_gb`,
 VRAM against llmfit `gpu_vram_gb`. `crosscheck(own, llmfit)` is `confirmed` when
 `|own - llmfit| / max(own, llmfit) <= 0.05` (both zero is `confirmed`), `deviation` otherwise,
 `absent` when llmfit gave no reading, `error` when llmfit failed. The own reading is the
 authority; a `deviation` blocks the fit until the user measures again or enters the value.
-`fit_block_reason(profile)` returns the reason the fit must not compute (GPU state, unknown RAM,
-a deviation), or `None`.
+`fit_block_reason(profile)` returns the reason the fit must not compute (GPU state, a profile
+migrated from schema 1, unknown RAM, a deviation), or `None`.
 
-**Reading schema 1.** `read_profile_document` validates schema 1 as `HardwareSnapshot` and
-schema 2 as `HardwareProfile`; 3 and above raise `SchemaVersionError` (exit 3) before any
-field is looked at. `normalize_profile_v1(legacy, profile_id)` converts without guessing:
+**Reading schema 1 and 2.** `read_profile_document` validates schema 1 as `HardwareSnapshot`
+and schema 2 and 3 as `HardwareProfile`; 4 and above raise `SchemaVersionError` (exit 3) before
+any field is looked at. A schema-2 dict is read as schema 3 by `normalize_profile_v2`: the same
+fields, every value kept, `schema_version` 3; a file that says schema 2 but carries a value of
+schema 3 (`entered`) is refused. The same normalization runs for the profile inside an export
+file (`measurements.load_export`) and for the probe profile `render` builds when it is imported.
+Reading never changes a file; `modelroom migrate` rewrites a schema-2 profile in place (see
+"Migration"). `normalize_profile_v1(legacy, profile_id)` converts without guessing:
 `display_name` is the old machine key, fingerprint source `legacy`, RAM and VRAM keep their
 llmfit values with source `llmfit`, `gpu_state` is `unified_memory` when the old file said so and
 `legacy_unknown` otherwise (a positive VRAM did not prove a single GPU, a zero did not prove
@@ -1861,7 +1968,8 @@ point-in-time observation the next measurement records again.
 ### Hardware measurement
 
 `modelroom hardware --config <toml> [--machine <name>] [--cpu-only] [--new-identity]` measures
-the machine it runs on and writes one schema-2 profile, `<state>/hardware/<profile_id>.json`
+the machine it runs on and writes one profile of the current schema (3),
+`<state>/hardware/<profile_id>.json`
 (`modelroom/measure.py`, `modelroom/cli.py`). modelroom measures the machine itself; `llmfit` is
 a cross-check of two quantities, never the source and never a requirement -- a machine without
 `llmfit` is measured and written all the same. `--machine` is optional and only names the
@@ -2024,7 +2132,7 @@ The two cross-checked quantities of one profile.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `schema_version` | `int` | `2` |
+| `schema_version` | `int` | `3` (a schema-2 file is read as 3) |
 | `profile_id` | `str` | 16 lowercase hex |
 | `display_name` | `str` | 1 to 128 characters |
 | `os_fingerprint` | `str` | 16 lowercase hex, or `none` exactly when the source is `none` or `legacy` |
@@ -2032,19 +2140,19 @@ The two cross-checked quantities of one profile.
 | `origin` | `measured \| entered` | -- |
 | `recorded_at` | UTC timestamp | timezone-aware |
 | `ram_physical_gib` | `float \| None` | `> 0`; `None` exactly when the source is `unknown` |
-| `ram_physical_source` | `os \| llmfit \| unknown` | -- |
+| `ram_physical_source` | `os \| llmfit \| entered \| unknown` | `entered` requires `origin` `entered` and one of the three shapes above |
 | `ram_limit_gib` | `float \| None` | `> 0`; `None` exactly when `ram_limit_scope` is `none` |
 | `ram_limit_scope` | `str` | e.g. `none`, `cgroup`, `job_object` |
 | `vram_gib` | `float \| None` | `>= 0`; `None` exactly when the source is `unknown`; `0` for source `none` |
-| `vram_source` | `nvidia-smi \| llmfit \| none \| unknown` | `gpu_state` `none` requires `none` |
-| `gpu_state` | see the table above | `measured` requires a measured VRAM above 0; `legacy_unknown` only with source `legacy` |
+| `vram_source` | `nvidia-smi \| llmfit \| entered \| none \| unknown` | `gpu_state` `none` requires `none`; `entered` exactly with `gpu_state` `entered` |
+| `gpu_state` | see the table above | `measured` requires a measured VRAM above 0; `entered` an entered VRAM above 0 and an entered memory; `legacy_unknown` only with source `legacy` |
 | `gpu_name` | `str \| None` | display only |
 | `llmfit_crosscheck` | `LlmfitCrosscheck` | -- |
 | `llmfit_version` | `str \| None` | -- |
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "profile_id": "3f9a0c21d4e6b870",
   "display_name": "workstation",
   "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -2082,8 +2190,10 @@ chose; `context_origin` `default` for 8192, `entered`, or `legacy` from a migrat
 the KV cache type and the number of concurrent requests. The daemon's KV cache type is not
 readable over its API, so `kv_type` is `f16` (Ollama's default) and `kv_type_assumed` is always
 `true`; `context_origin` `default` always means 8192.
-A measurement always runs one request; `requests` above 1 appears only in the reverse
-calculation (`Requirement`). `default_scenario()` is 8192, `f16` assumed, one request.
+A measurement always runs one request. `requests` above 1 appears in the reverse calculation
+(`Requirement`) and, since 2026-09-25, in a ranking: `render_cmd.scenario_from_config` takes it
+from `[guided].requests` (see "GuidedConfig"); `Scenario` itself did not change.
+`default_scenario()` is 8192, `f16` assumed, one request.
 
 ```json
 {
@@ -2260,13 +2370,16 @@ content is a `conflict`, listed and never imported.
 
 What one machine hands to another: its profile and all of its measurements, schema 1.
 `measurement_id` is unique within the export and every measurement belongs to the exported
-profile. `load_export` checks `schema_version` first (`SchemaVersionError`, exit 3).
+profile. `load_export` checks `schema_version` first (`SchemaVersionError`, exit 3). The export
+stays schema 1 when the profile schema moves: the profile inside it is read like a profile file,
+schema 2 as schema 3 and 4 and above refused (decided 2026-09-25), so an export file an earlier
+version wrote still imports.
 
 ```json
 {
   "schema_version": 1,
   "profile": {
-    "schema_version": 2,
+    "schema_version": 3,
     "profile_id": "3f9a0c21d4e6b870",
     "display_name": "workstation",
     "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -2397,6 +2510,17 @@ protocol and scenario. Where the rule does not ask, `same_machine` changes nothi
 switches are two answers to one question: together they are exit `2` with a sentence naming
 both, and `resolve_profile_target` raises `ValueError` for them.
 
+**A machine entered by hand is never adopted** (decided 2026-09-25, ADR 0001). The rule sees a
+stored profile as `KnownProfile(profile_id, os_fingerprint, origin, ram_physical_source)`; all
+three places that build one (`cli.py`, `guided.py`, `guided_loadtest.py`) pass all four. A bound
+or configured profile with `origin` **and** `ram_physical_source` `entered` has the fingerprint
+`none`, which agrees with every machine -- so the rule asks for it first, before the fingerprint
+and also with `same_machine`: the answer is `new` with a fresh id and the reason `configured
+profile was entered by hand; this machine is measured as its own profile` (`bound profile ...`
+for the home binding). The entered file stays as it is; a machine measured later is a profile of
+its own, never merged into the entered one. A `hardware --cpu-only` profile (`origin` `entered`,
+`ram_physical_source` `os`) keeps its identity, as before.
+
 ### GuidedPointer
 
 Keys of `bindings` and `current` are absolute folder paths; values are `profile_id`s.
@@ -2426,21 +2550,44 @@ Keys of `bindings` and `current` are absolute folder paths; values are `profile_
   validated like `load_config` would before it is written, the original bytes are kept as
   `modelroom.toml.v1.bak`. The rewritten file carries no comments; the backup keeps them.
 
+**Schema 2 to 3 (decided 2026-09-25, ADR 0001 and 0002).** The same run takes a schema-2 folder
+on to the current schemas, in place:
+
+- every schema-2 profile `<state>/hardware/<profile_id>.json` is rewritten as schema 3 under the
+  same name and id (`normalize_profile_v2`: every value kept), the original bytes kept as
+  `<profile_id>.json.v2.bak`;
+- a schema-2 `modelroom.toml` is rewritten as schema 3 (`normalize_config_v2`), the original
+  bytes kept as `modelroom.toml.v2.bak`; the machines keep their `profile`.
+
+Every backup is named after the version the file left, so a folder that went from schema 1 to 2
+with an earlier version and now to 3 keeps its `.v1.bak` files next to the new `.v2.bak` ones; a
+schema-1 folder goes to schema 3 in one run and gets `.v1.bak` only. The guided mode starts the
+same run when the configuration it finds is below schema 3 and says so in one note
+(`... backup kept: modelroom.toml.v2.bak`). Reading never writes: `render`, `hardware` and the
+guided mode read a schema-2 file as schema 3 and leave it as it is. Profiles are written back by
+`modelroom migrate` alone (directly, or through the guided mode's trigger, which looks at the
+configuration's version): a folder whose configuration `import-profile` already took to schema 3
+keeps its schema-2 profiles, readable, until `modelroom migrate` runs. A file the run cannot read
+stops it before anything is written; the guided mode then names that file and says nothing was
+changed.
+
 The whole run is planned and checked before the lock is taken, and again under the lock, before
 anything is written: every file is read and version-checked, every profile and measurement is
 converted, and every file the run would write -- the new profile, each measurement file, each
 backup -- must be absent or identical, and no existing part of its folder path may be a file. The new `profile_id`s are drawn once, before the first
 check, so both checks look at the paths the run writes. Under the lock the configuration is read
 again; if its `[paths]` changed meanwhile, the run stops (exit 3) without writing anything but
-the lock file. A file of schema 3 or later is exit 3; a conversion that
-fails, a target or backup that exists with other content or cannot be read (a folder at a backup
-path, for instance), or two schema-1 files for the same
+the lock file. A file of a schema above the current one (profile or configuration 4 or later) is
+exit 3; a conversion that fails, a target or backup that exists with other content or cannot be
+read (a folder at a backup path, for instance), or two schema-1 files for the same
 machine is exit 3 as well; in every case nothing is written and no lock file is created. A run
-that finds everything at schema 2 prints `nothing to do` and exits 0. A run that stopped halfway
-converges on the next run: a schema-2 profile with fingerprint source `legacy` and the same
-`display_name` keeps its `profile_id`, and files that are already there (identical, as checked)
-are left as they are. A schema-2 configuration is not rewritten: when it sits next to schema-1
-profiles, the profiles are migrated and `[machines.<name>].profile` is left to the guided mode.
+that finds everything at the current schema prints `nothing to do` and exits 0. A run that
+stopped halfway converges on the next run: a converted profile with fingerprint source `legacy`
+and the same `display_name` keeps its `profile_id`, and files that are already there (identical,
+as checked, or the same profile as schema 2 that an earlier version left) are left as they are
+or rewritten in place. A configuration that is already schema 2 or 3 never gets
+`[machines.<name>].profile` from this run: when it sits next to schema-1 profiles, the profiles
+are migrated and the entries are left to the guided mode.
 
 | Exit | Meaning |
 |---|---|
@@ -2477,7 +2624,13 @@ holds the same lock. A conflict anywhere in the plan leaves the run without a si
 configuration is read once before the lock (a missing, invalid or schema-1 file is refused
 without even creating a lock file) and once under it; the second read is the one the plan uses,
 because another import may have added its own `[machines.<name>]` entry in between. If `[paths]`
-changed meanwhile, the run stops with exit `1` and asks to be repeated.
+changed meanwhile, the run stops with exit `1` and asks to be repeated. A schema-2 configuration
+is written back as schema 3 by every import (decided 2026-09-25) -- also when the imported
+machine already has its entry and nothing else about the file changes. Besides the one `.bak`
+below, which is never overwritten, it keeps the schema-2 bytes as `modelroom.toml.v2.bak`, the
+name `modelroom migrate` uses, and says so in one line (`note: the configuration is written as
+schema 3; schema 2 kept as modelroom.toml.v2.bak`); a `.v2.bak` of other content is a conflict,
+exit `1`, nothing written. A schema-2 profile inside the export file is read as schema 3.
 
 The profile is keyed by `profile_id`:
 
@@ -2692,12 +2845,15 @@ A pass allows at most `metadata_ok` together with the other provenance rules; on
 ### Fit with profile v2
 
 `compute_fit_v2(profile, package, base_model, scenario, machine_config)` is fit contract v1's
-formula and classes, unchanged, behind a gate: `fit_block_reason(profile)` first (GPU state,
-unknown RAM, a llmfit deviation), then `scenario.requests == 1` (more requests are the reverse
-calculation), then the package rules (a complete `gguf` build, every weight file with a size).
-An architecture the formula cannot read is the one case that is **not** `unknown` here: the
-package is computed from its size instead, `basis: "size"` ("Fit from size" above, decided
-2026-09-24). VRAM is `0` unless `gpu_state` is `measured`; the RAM
+formula and classes behind a gate: `fit_block_reason(profile)` first (GPU state, a profile
+migrated from schema 1, unknown RAM, a llmfit deviation), then the package rules (a complete
+`gguf` build, every weight file with a size). An architecture the formula cannot read is the
+one case that is **not** `unknown` here: the package is computed from its size instead,
+`basis: "size"` ("Fit from size" above, decided 2026-09-24). Since 2026-09-25 the KV cache counts
+once per `scenario.requests` on both bases, and more than one request is no longer `unknown`
+("Fit contract v1", "Parallel requests"); every fit carries its `requests`. VRAM is `0` unless
+`gpu_state` is `measured` or `entered` (`fit.profile_memory`); `unified_memory` computes as one
+pool of its own ("Unified memory"). The RAM
 pool is `ram_physical_gib` (a limit is a note, never an input). The context is
 `scenario.context_requested` for every package, never the package's own `default_context`, so
 `context_assumed` is `false`. `base_model` (its architecture) and `machine_config` (its
@@ -2717,11 +2873,17 @@ total order that does not depend on input order:
 
 Fit comes before speed: a package that fits comfortably ranks above a faster one that fits
 only barely. A measurement counts (`group_zero_measurement`) when it is protocol `v1`, `valid`,
-comparable, for the same `context_requested` as the ranking and for exactly this package
-content (manifest digest, or repo, revision and a weight file's digest); the newest one wins.
-`unknown` fits are set aside as not covered, with their reason; `too_tight` fits are listed
-apart and never ranked; a computed fit for another context than the ranking's is a caller
-error. `Ranking.top` is the first 10. The rule states facts in order; it recommends nothing.
+comparable, for the same `context_requested` and the same `requests` as the ranking and for
+exactly this package content (manifest digest, or repo, revision and a weight file's digest); the
+newest one wins. A measurement always runs one request, so a ranking of more requests has no
+group 0; the measurement stays `comparable` and counts again in a ranking of one request.
+Where a measurement would count but for `requests` alone, `RankedPackage.measurement_note` says
+so -- `measured with 1 request, ranking assumes N` -- and the render hands it on as the note of
+that row (code `measured_with_one_request`); it is never written into the measurement file
+(decided 2026-09-25). `unknown` fits are set aside as not covered, with their reason; `too_tight`
+fits are listed apart and never ranked; a computed fit for another context or another number of
+requests than the ranking's is a caller error. `Ranking.top` is the first 10. The rule states
+facts in order; it recommends nothing.
 
 The rule reads the fit class and not its `basis`, so inside one class a package judged from its
 architecture and one judged from its size stand mixed. That is deliberate: the class is the
@@ -2827,7 +2989,8 @@ model (`model_choices(..., configured_ollama=...)`, since 2026-09-25), else `Non
     "context": 8192,
     "context_assumed": false,
     "basis": "size",
-    "reason": null
+    "reason": null,
+    "requests": 1
   }
 }
 ```
@@ -3439,7 +3602,8 @@ One row of one machine's ranking. `package_identity` is the package identity tri
     "context": 8192,
     "context_assumed": false,
     "basis": "architecture",
-    "reason": null
+    "reason": null,
+    "requests": 1
   },
   "measurement_group": 0,
   "measurement_id": "20260923T083000Z-5c1e9a07",
@@ -3487,7 +3651,8 @@ package fields as `RankedEntry`, plus the `reason` shown next to it.
     "context": 0,
     "context_assumed": false,
     "basis": "architecture",
-    "reason": "a weight file has no size"
+    "reason": "a weight file has no size",
+    "requests": 1
   },
   "reason": "a weight file has no size"
 }
@@ -3504,7 +3669,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
   "status": "ranked",
   "label": "workstation",
   "profile": {
-    "schema_version": 2,
+    "schema_version": 3,
     "profile_id": "3f9a0c21d4e6b870",
     "display_name": "workstation",
     "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -3572,7 +3737,8 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
         "context": 8192,
         "context_assumed": false,
         "basis": "architecture",
-        "reason": null
+        "reason": null,
+        "requests": 1
       },
       "measurement_group": 0,
       "measurement_id": "20260923T083000Z-5c1e9a07",
@@ -3615,7 +3781,8 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
         "context": 0,
         "context_assumed": false,
         "basis": "architecture",
-        "reason": "a weight file has no size"
+        "reason": "a weight file has no size",
+        "requests": 1
       },
       "reason": "a weight file has no size"
     }
@@ -3630,9 +3797,24 @@ Everything one render says. `ratings` holds the rating of every base model the `
 answered for; a base model that is not a key has no rating. A failed rating source sets
 `rating_unavailable` to its message and leaves `ratings` empty, and the run still ends `0`.
 
+**Schema 2 (decided 2026-09-25, ADR 0003).** Every `Fit` carries `requests`, and every ranked
+and too-tight fit of a document was computed for `scenario.requests`. `users` and
+`requests_origin` say where `scenario.requests` came from: `render_cmd` copies them from the
+configuration's `[guided]` when the rendered scenario is that configuration's -- no scenario
+passed, or one passed with the same requests (the guided mode always passes one). A scenario
+passed with other requests leaves both `None`, so the document never names a wrong origin. The
+rules of `GuidedConfig` hold between the three (`default`: one request and no head count,
+`from_users`: the head count and its derived number); `users` alone, without an origin, is
+invalid. The views do not show the two fields yet.
+
+| Field | Type | Constraint |
+|---|---|---|
+| `users` | `int \| None` | schema 2; `1..10240`; set only together with `requests_origin` |
+| `requests_origin` | `"default" \| "entered" \| "from_users" \| None` | schema 2; `None` for a scenario that is not the configuration's |
+
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "snapshot_run_at": "2026-09-22T09:00:00Z",
   "rendered_at": "2026-09-23T09:00:00Z",
   "base_model_count": 2,
@@ -3668,7 +3850,7 @@ answered for; a base model that is not a key has no rating. A failed rating sour
       "status": "ranked",
       "label": "workstation",
       "profile": {
-        "schema_version": 2,
+        "schema_version": 3,
         "profile_id": "3f9a0c21d4e6b870",
         "display_name": "workstation",
         "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -3736,7 +3918,8 @@ answered for; a base model that is not a key has no rating. A failed rating sour
             "context": 8192,
             "context_assumed": false,
             "basis": "architecture",
-            "reason": null
+            "reason": null,
+            "requests": 1
           },
           "measurement_group": 0,
           "measurement_id": "20260923T083000Z-5c1e9a07",
@@ -3779,14 +3962,17 @@ answered for; a base model that is not a key has no rating. A failed rating sour
             "context": 0,
             "context_assumed": false,
             "basis": "architecture",
-            "reason": "a weight file has no size"
+            "reason": "a weight file has no size",
+            "requests": 1
           },
           "reason": "a weight file has no size"
         }
       ],
       "too_tight": []
     }
-  ]
+  ],
+  "users": null,
+  "requests_origin": "default"
 }
 ```
 

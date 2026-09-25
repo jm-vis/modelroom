@@ -30,7 +30,7 @@ from .contracts import (
     check_schema_version,
     validate_hf_repo,
 )
-from .profile import HardwareProfile
+from .profile import HardwareProfile, normalize_profile_v2, stored_profile_version
 from .state import LockHandle, atomic_write_json
 
 MEASUREMENT_SCHEMA_VERSION = 2
@@ -486,9 +486,16 @@ class ExportObject(BaseModel):
 
 
 def load_export(data: dict) -> ExportObject:
-    """Check `schema_version` first (`SchemaVersionError`), then validate an export file."""
+    """Check `schema_version` first (`SchemaVersionError`), then validate an export file.
+
+    The export stays schema 1; the profile it carries is read like a profile file: schema 2 as
+    schema 3 (`profile.normalize_profile_v2`), 4 and above refused. `data` is left unchanged.
+    """
     version = data.get("schema_version")
     if not isinstance(version, int) or isinstance(version, bool):
         raise SchemaVersionError(f"export: schema_version is missing or not an integer: {version!r}")
     check_schema_version(version, EXPORT_SCHEMA_RANGE, "export")
+    profile = data.get("profile")
+    if isinstance(profile, dict) and stored_profile_version(profile) == 2:
+        data = {**data, "profile": normalize_profile_v2(profile)}
     return ExportObject.model_validate(data)

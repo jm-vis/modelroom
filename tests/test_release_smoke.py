@@ -108,7 +108,7 @@ def test_render_checks_name_a_machine_that_is_not_in_the_document(tmp_path):
 def test_json_checks_name_a_view_that_disagrees_with_the_markdown_one(tmp_path):
     text, payload = rendered(tmp_path, with_profile=True)
     assert rs.json_problems({**payload, "ranking_rule": "something else"}, text, "workstation")
-    assert rs.json_problems({**payload, "schema_version": 2}, text, "workstation")
+    assert rs.json_problems({**payload, "schema_version": 1}, text, "workstation")
     assert rs.json_problems({**payload, "machines": []}, text, "workstation")
 
 

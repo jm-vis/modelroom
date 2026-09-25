@@ -131,8 +131,8 @@ def first_start_problems(config_text: str, pointer: dict, results: Path, machine
     """Criterion 1: the configuration names this device as the writer, the pointer the folder."""
     problems = []
     raw = tomllib.loads(config_text)
-    if raw.get("schema_version") != 2:
-        problems.append(f"schema_version is {raw.get('schema_version')!r}, expected 2")
+    if raw.get("schema_version") != 3:
+        problems.append(f"schema_version is {raw.get('schema_version')!r}, expected 3")
     entry = raw.get("machines", {}).get(machine)
     if entry is None:
         problems.append(f"the configuration has no [machines.{machine}]")

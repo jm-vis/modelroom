@@ -762,6 +762,8 @@ class Fit(BaseModel):
     context_assumed: bool
     basis: Literal["architecture", "size"] = "architecture"
     reason: str | None
+    # The parallel requests the KV cache was computed for, once per request (decided 2026-09-25).
+    requests: int = Field(default=1, ge=1, le=1024)
 
 
 # --- render (AP5) ---------------------------------------------------------------------------

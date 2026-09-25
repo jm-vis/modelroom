@@ -79,7 +79,7 @@ def test_first_run_migrates_profiles_measurements_and_configuration(tmp_path):
     assert read_measurements(tmp_path / "state", "aaaaaaaaaaaaaaa2").records == []
 
     config = load_config(config_path)
-    assert tomllib.loads(config_path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert tomllib.loads(config_path.read_text(encoding="utf-8"))["schema_version"] == 3
     assert config.machines["laptop"].profile == "aaaaaaaaaaaaaaa1"
     assert config.machines["server"].profile == "aaaaaaaaaaaaaaa2"
     assert config.machines["laptop"].writer is True
@@ -110,9 +110,10 @@ def test_second_run_says_nothing_to_do_and_writes_nothing(tmp_path):
     assert _tree(tmp_path) == before
 
 
-def test_a_schema_2_deployment_without_profiles_is_nothing_to_do(tmp_path):
+def test_a_current_deployment_without_profiles_is_nothing_to_do(tmp_path):
+    """Schema 2 is migrated to schema 3 since 2026-09-25 (tests/test_migrate_v3.py); schema 3 is current."""
     config_path = tmp_path / "modelroom.toml"
-    config_path.write_text('schema_version = 2\n\n[paths]\nstate = "state"\nmarkdown = "docs/models.md"\n', encoding="utf-8")
+    config_path.write_text('schema_version = 3\n\n[paths]\nstate = "state"\nmarkdown = "docs/models.md"\n', encoding="utf-8")
     assert migrate(config_path, NOW) == [NOTHING_TO_DO]
 
 
@@ -137,18 +138,18 @@ def test_a_run_that_stopped_after_the_profile_converges_to_the_same_result(tmp_p
 # --- refusals: nothing is written ------------------------------------------------------------
 
 
-def test_a_schema_3_profile_stops_before_anything_is_written(tmp_path):
+def test_a_schema_4_profile_stops_before_anything_is_written(tmp_path):
     config_path = _deployment(tmp_path)
-    (tmp_path / "state" / "hardware" / "future.json").write_text(json.dumps({"schema_version": 3}), encoding="utf-8")
+    (tmp_path / "state" / "hardware" / "future.json").write_text(json.dumps({"schema_version": 4}), encoding="utf-8")
     before = _tree(tmp_path)
     with pytest.raises(SchemaVersionError):
         migrate(config_path, NOW, fresh_id=_ids())
     assert _tree(tmp_path) == before
 
 
-def test_a_schema_3_configuration_stops_before_anything_is_written(tmp_path):
+def test_a_schema_4_configuration_stops_before_anything_is_written(tmp_path):
     config_path = _deployment(tmp_path)
-    config_path.write_text(config_path.read_text(encoding="utf-8").replace("schema_version = 1", "schema_version = 3"), encoding="utf-8")
+    config_path.write_text(config_path.read_text(encoding="utf-8").replace("schema_version = 1", "schema_version = 4"), encoding="utf-8")
     before = _tree(tmp_path)
     with pytest.raises(SchemaVersionError):
         migrate(config_path, NOW, fresh_id=_ids())

@@ -25,6 +25,7 @@ from typing import Callable, Sequence
 from .binding import KnownProfile, PointerFileError, default_pointer_path, read_pointer, resolve_profile_target, write_pointer
 from .catalog import Catalog, load_catalog
 from .config import (
+    CONFIG_SCHEMA_VERSION,
     DEFAULT_RESERVE_RAM_GIB,
     DEFAULT_RESERVE_VRAM_GIB,
     ConfigError,
@@ -72,7 +73,7 @@ from .importer import (
 from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_os_identity
 from .measurements import Scenario
-from .migrate import BACKUP_SUFFIX, MigrationError, migrate
+from .migrate import MigrationError, backup_suffix, migrate
 from .profile import HardwareProfile, os_fingerprint
 from .screen import (
     CLONE_QUESTION,
@@ -316,16 +317,18 @@ def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
                 raise GuidedError("no configuration to work with; run again and name a folder")
         _new_configuration(run, config_file)
         return _configure_found_profiles(run, config_file)
-    if _stored_schema_version(config_file) == 1:
+    stored = _stored_schema_version(config_file)
+    if stored < CONFIG_SCHEMA_VERSION:
+        try:
+            lines = migrate(config_file, run.now)
+        except (ConfigError, MigrationError) as exc:
+            raise GuidedError(f"{exc}; nothing was changed -- move that file away and run again") from exc
         run.screen.note(
             "this folder holds a configuration from an earlier version; it was updated, "
-            f"backup kept: {config_file.name}{BACKUP_SUFFIX}"
+            f"backup kept: {config_file.name}{backup_suffix(stored)}"
         )
-        try:
-            for line in migrate(config_file, run.now):
-                run.screen.note(line)
-        except ConfigError as exc:
-            raise GuidedError(str(exc)) from exc
+        for line in lines:
+            run.screen.note(line)
     _load(config_file)  # a file that does not read ends the run before the folder is remembered
     _remember_folder(run, config_file.parent)
     return _configure_found_profiles(run, config_file)
@@ -460,7 +463,10 @@ def _clone_mode(run: GuidedRun, config: Configuration, name: str, scan: ProfileS
     """
     identity = read_os_identity(run.probes.platform, run.probes.runner, run.probes.read_text)
     local = os_fingerprint(identity.raw_id) if identity.raw_id else "none"
-    known = {key: KnownProfile(key, profile.os_fingerprint) for key, profile in scan.profiles.items()}
+    known = {
+        key: KnownProfile(key, profile.os_fingerprint, profile.origin, profile.ram_physical_source)
+        for key, profile in scan.profiles.items()
+    }
     pointer = read_pointer(run.pointer_path)
     target = resolve_profile_target(
         pointer.binding_for(results_dir),
