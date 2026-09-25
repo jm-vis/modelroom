@@ -27,6 +27,8 @@ from fixture_support import (
     guided_transport_mapping,
     loadtest_daemon,
     offline_daemon,
+    pull_daemon,
+    tags_with,
     windows_probes,
 )
 
@@ -94,6 +96,14 @@ def test_the_screen_of_a_run_that_chose_nothing_carries_a_dash(tmp_path: Path):
 
 def test_the_screen_of_a_run_that_measured_carries_the_speed(tmp_path: Path):
     _compare("guided-screen-measured.txt", _screen(tmp_path, MEASURED, daemon=loadtest_daemon()))
+
+
+def test_the_screen_of_a_run_that_pulls_the_first_row_ends_with_the_pull(tmp_path: Path):
+    """The daemon answers, the first row is not local: the question after the card, then the pull."""
+    first = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS"
+    daemon = pull_daemon(after_pull=tags_with(first))
+
+    _compare("guided-screen-pull.txt", _screen(tmp_path, {**CHOSEN, "pull": True}, daemon=daemon))
 
 
 def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path):

@@ -1428,11 +1428,12 @@ def test_a_render_that_was_stopped_says_nothing_about_the_folder(tmp_path: Path)
     )
     handle = acquire_lock(config.paths.lock_file, "fetch", RUN1)
     try:
-        code = _render_step(run, _config_file(tmp_path), config, context_scenario(8192))
+        code, first = _render_step(run, _config_file(tmp_path), config, context_scenario(8192))
     finally:
         release_lock(handle)
 
     assert code == 1
+    assert first is None  # no document, so no first row a pull could be about
     assert not any("nothing to rank" in line for line in lines)
     assert not any(line.strip().startswith("result ") for line in lines)
 

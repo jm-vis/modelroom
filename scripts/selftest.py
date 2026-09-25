@@ -42,7 +42,9 @@ Criteria (the plan's own numbering):
    reported case by case: what a person types and which models come back for it -- a repository
    id, a name with blanks, a typo, and nothing at all. Gate-free by decision (2026-09-25): the
    Hub's answer for a word changes by the hour, so a missing model is a `WARN`. What the tests gate
-   is the shape of that report (`tests/test_selftest.py`).
+   is the shape of that report (`tests/test_selftest.py`);
+9. and 10. the pull of step 5 (`scripts/selftest_pull.py`): the first row pulled to `success` from a
+   fixture daemon that plays a recorded pull, and the first live run's `pull = false`.
 
 The test set and the live search run as smokes afterwards and never decide the exit code.
 
@@ -89,6 +91,7 @@ ANSWERS_FIRST = {
     "context": ANSWERED_LEVEL,
     "load_test": True,
     "load_test_packages": [DEEPSEEK_OLLAMA_NAME],
+    "pull": False,  # said outright: the self-test on a real machine never pulls (criterion 10)
 }
 # The second run answers the same questions, minus the folder (the pointer file remembers it) and
 # with the load test declined: criterion 6 is that the first run's measurement is still there.
@@ -741,6 +744,9 @@ def run_steps(work: Path) -> list[Step]:
     )
     steps.append(_guided_mode_step(first_lines, scale, models))
     steps.append(_testset_step())
+    from selftest_pull import pull_steps
+
+    steps += [Step(*step) for step in pull_steps(results, pointer, machine, first_lines, started)]
     steps.append(_live_search_smoke())
     return steps
 

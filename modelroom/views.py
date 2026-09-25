@@ -487,21 +487,32 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | N
     return lines
 
 
+def install_target(block: MachineRanking, install_for: str | None) -> tuple[RankedEntry, str] | None:
+    """The first row of the machine this run is on, and its local Ollama name -- or `None`.
+
+    Only for that machine: the local Ollama name of a package is about the machine that would
+    install it. A package with no such name has none. The install line and the pull of step 5 both
+    stand on this one choice, so they cannot name two different rows.
+    """
+    if install_for is None or block.machine != install_for or not block.ranked:
+        return None
+    entry = block.ranked[0]
+    name = install_name(entry.package_identity, entry.quantization, entry.format)
+    return None if name is None else (entry, name)
+
+
 def _install_lines(block: MachineRanking, install_for: str | None) -> list[Line]:
     """The one line a reader copies to get the first package of the machine this run is on.
 
-    Only for that machine: the local Ollama name of a package is about the machine that would
-    install it. Nothing is called, nothing is looked up, and a package with no such name has no
-    line (CONTRACTS.md, "Guided mode", "The screen"). It stands behind a blank line and the command
+    Nothing is called and nothing is looked up for it, and a row without a local name has no line
+    (CONTRACTS.md, "Guided mode", "The screen"). It stands behind a blank line and the command
     itself is drawn as a command: in running text under the table it went under (test round,
-    2026-09-25).
+    2026-09-25). It stays when step 5 offers the pull, for anyone who prefers to paste it.
     """
-    if install_for is None or block.machine != install_for or not block.ranked:
+    target = install_target(block, install_for)
+    if target is None:
         return []
-    entry = block.ranked[0]
-    name = install_name(entry.package_identity, entry.quantization, entry.format)
-    if name is None:
-        return []
+    entry, name = target
     # The one line of this view that may pass 100 characters: it is a command to copy, and a command
     # that was cut is worse than a line that wraps (second-model round, 2026-09-24).
     return [[], label_line(INSTALL_LABEL, install_pull_line(entry.rank, name))]
@@ -765,6 +776,7 @@ __all__ = [
     "document_markdown",
     "document_terminal",
     "empty_card",
+    "install_target",
     "relative_path",
     "result_card",
     "scenario_line",

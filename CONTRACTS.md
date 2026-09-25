@@ -3711,7 +3711,7 @@ answered for; a base model that is not a key has no rating. A failed rating sour
 The load test measures how fast a package really runs on this machine. **Stage 1 measures
 packages the local Ollama daemon already has**: it downloads nothing, removes nothing and says
 nothing about disk space. `modelroom/loadtest.py` is the work of it, `modelroom/daemon.py` the
-transport it talks through, and `modelroom/guided_loadtest.py` the guided mode's step 5 around
+transport it talks through, and `modelroom/guided_loadtest.py` the guided mode's step 4 around
 both.
 
 **The transport** (`daemon.py`). `Daemon` is `(method, path, body) -> Response`, the second and
@@ -3724,13 +3724,25 @@ a base URL with another scheme, host, port or a path is refused in the construct
 no `ProxyHandler` (a proxy would move this machine's own daemon traffic off the machine), no
 `HTTPSHandler`, no file/ftp/data handler, and a 3xx is returned as it came instead of being
 followed. `ALLOWED_CALLS` is the whole surface -- `GET /api/version`, `GET /api/tags`,
-`GET /api/ps`, `POST /api/show`, `POST /api/generate` -- checked before a connection is opened;
-anything else is a `DaemonError`. There is no call of `/api/pull` or `/api/delete` anywhere in
-`modelroom/`, and a test reads every module to prove it. **Time limits:** 10 s for every short
-call, 600 s for one `POST /api/generate` (a CPU machine needs minutes for 128 tokens). A limit
-that is reached, a refused connection or a body that is not JSON is a fault with a reason, never
-a traceback. **Documented limit:** whatever answers on that port is taken to be this machine's
-daemon -- nothing in the answer proves it, and nothing here pretends to check.
+`GET /api/ps`, `POST /api/show`, `POST /api/generate`, and since 2026-09-25 `POST /api/pull` --
+checked before a connection is opened; anything else, a pull by any other method included, is a
+`DaemonError`. The sixth call is the pull question of guided step 5 ("The pull", under "Guided
+mode"), decided 2026-09-25 because the README promised the install from step 5; `daemon.py` is
+the one module that names its path and `guided_install.py` the one that uses it. There is no call
+of `/api/delete` anywhere in `modelroom/`, and a test reads every module to prove both. **Time
+limits:** 10 s for every short call, 600 s for one `POST /api/generate` (a CPU machine needs
+minutes for 128 tokens), and for a pull **60 s per read on the socket and no limit for the whole
+pull**: `urllib` limits each blocking read, so 60 s without a byte is a fault, and a slow pull that
+keeps sending lines may take as long as it takes. A daemon that keeps sending status lines while
+no byte of the package arrives is **not** recognized by this, and nothing here claims it is. A
+pull's answer is one JSON line per step of it; it is read line by line and never collected, each
+line goes to a callback, and reading stops at the first line that ends the pull -- `success`, or a
+line with an `error` -- which is the `Response`: nothing after an error can turn it into a success,
+and a daemon that keeps the answer open after `success` is not waited for. A line that is no
+UTF-8, no JSON, no JSON object or longer than 64 KiB is a `DaemonError`. A limit that is reached, a refused connection
+or a body that is not JSON is a fault with a reason, never a traceback. **Documented limit:**
+whatever answers on that port is taken to be this machine's daemon -- nothing in the answer proves
+it, and nothing here pretends to check.
 
 **The inventory** (`installed_models`, `installed_candidates`). The daemon's own `/api/tags` is
 read through `ollama_local.py::fetch_installed_models`, the same reader `hardware` uses, so one
@@ -3814,9 +3826,10 @@ folder (command `load-test`), writes with `write_measurement` and releases it. A
 holding the lock reaches the caller as `LockHeldError`, which is exit `1` for every command
 here. Nothing outside `<state>/measurements/` and that lock file is written.
 
-**What never happens in stage 1:** no download, no `pull`, no `delete`, no clean-up, no disk
-space statement, and no second way of computing a speed. Stage 2 (download with a consent
-screen) is a work package of its own.
+**What never happens in stage 1:** no pull, no `delete`, no clean-up, no disk space statement,
+and no second way of computing a speed. The load test measures what is there; the one pull of
+this package is a question of step 5 of its own ("The pull", under "Guided mode"), and a package
+it pulls is measured by the load test of the **next** run.
 
 ## Guided mode
 
@@ -3924,7 +3937,7 @@ with the answer in the words a reader gave it (`screen.answer_words` and the ste
 | `clone` | `the same machine` / `a clone`, under the short question `The profile of this folder is gone. Is this the same machine or a clone?` (the profile id belongs to the question that was asked) |
 | `search` | the word as it was typed; nothing typed: `anything that fits this machine` |
 | `did_you_mean` | the candidate that was picked, or `none of these` |
-| `filter_owners`, `load_test` | `Yes` / `No` |
+| `filter_owners`, `load_test`, `pull` | `Yes` / `No` |
 | `select` | the model names joined with `, ` (`Qwen3.5-9B, Qwen3-0.6B`); nothing marked: `nothing`. A value an answer file names as a repository keeps its own spelling |
 | `context` | the line of the scale without its fit column, columns two spaces apart (`L  32k  24,000 words  a report or a long contract`); a number of its own: `40,000 tokens` |
 | `load_test_packages` | the local names joined with `, ` |
@@ -4020,8 +4033,9 @@ matter, so the move is invisible to it.
 | 2 | `did_you_mean` | Nothing was found. Did you mean one of these? | one of the candidates, or `keep` (only when the search found no model and the catalog knows a word close to the one that was typed) |
 | 2 | `select` | Which of these models should the result cover? | a list of base model ids (`Qwen/Qwen3.5-9B`); an answer file may name repository ids instead, as before |
 | 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
-| 4 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **the one optional answer** -- an answer file that does not mention it does not measure |
+| 4 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **one of the two optional answers** -- an answer file that does not mention it does not measure |
 | 4 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
+| 5 | `pull` | Pull #1 into Ollama now? (the screen adds the weight of the row: `(6.1 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a first row that has an Ollama name and is not local already, and a daemon the start screen reached) |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
@@ -4350,6 +4364,55 @@ own exit code stand (second-model round, 2026-09-25). A snapshot that holds pack
 may be computed for is **not** this case either -- the render writes its document, and the table
 says `no package of the configured base models is ranked here` with `shown     0 of 0 packages`.
 
+**The pull** (`modelroom/guided_install.py`, decided 2026-09-25: the README promised the install
+from step 5, and Ollama's own word for it is `pull`). After `✓ Results` the step asks one more
+question, behind a blank line, **only** when all three hold: the render wrote a document; this
+machine's first row has an Ollama name -- the very row and name of the install line
+(`views.install_target`, one choice for both); and the start screen read a version from the daemon
+(`intro.Intro.daemon_reachable`, carried along from the same call, never read out of the words of
+the note). The question is the Yes/No list of the dialog, default `No`:
+`? Pull #1 into Ollama now? (6.1 GB)  No` -- the size is the row's `weights_gib`, not the memory
+column of the table. Its answer file key is `pull`, optional like `load_test`. **The install line
+stays in every case**, for anyone who prefers to paste it.
+
+- **Local already.** Before asking, the step reads `/api/tags` and applies the load test's own rule
+  (`loadtest.installed_candidates`): a registry package by its manifest digest, a `hf.co/…` name by
+  its name **and** its weight digest through `/api/show`. A row proven that way is no question but a
+  note: `install   #1 is local already · say Yes in step 4 to measure it`. A name the daemon lists
+  **without** that proof -- old content, several weight files -- is asked like a missing one: the
+  pull brings the registry's build of that name, which for Ollama is an **update** (a new manifest,
+  the blobs it already has reused). This package deletes nothing; that Ollama may remove layers no
+  manifest uses any more is Ollama's own clean-up, which this package does not prevent.
+- **The pull.** `POST /api/pull` with `{"model": "<name>", "stream": true}` through the daemon
+  transport ("Load test (stage 1)", 60 s per read, no limit for the whole). The screen says
+  `pulling   <name>`; at a terminal one more line is written again in place with the current
+  layer's share (`pulling   2.1 of 6.1 GB` -- Ollama's `total` and `completed` belong to one layer,
+  `completed` may be missing, and nothing is summed over the lines) and erased when the pull ends;
+  under `--answers` there are only the first line and the last. The pull ends at `{"status":
+  "success"}`, and then `/api/tags` is read once: the name has to be there, and for a registry
+  package with the manifest digest the fetch recorded (the manifest digest of a `hf.co/…` name is
+  Ollama's own, not the GGUF's, so the name is what is checked). Then:
+  `✓ Pulled    <name> · 6.1 GB · say Yes in step 4 of the next run to measure it`. Nothing is
+  measured in this run.
+- **Faults**, each one line and never a traceback, and each a step that did not finish
+  (`run.failed`, exit `1`, the document is written all the same): `the pull of <name> did not
+  finish: <reason>` for a daemon that does not answer, a read limit that was reached, a status other
+  than 200, an `error` line, an answer that ends before `success`, a line that is no UTF-8 or no
+  JSON, and a line of an unexpected shape (a status that is no text, a count that is no whole
+  number from 0 below 2^63); a daemon's own text is printed with every control character, line
+  breaks included, as a space, and the live line is cut to the terminal's width, so a fault stays
+  one line and the live line can be erased; `<name>: pulled, but the daemon does not list it` when
+  the list after it does not name it. The connection is closed however the pull ends. **Ctrl-C**
+  during a pull adds `a canceled pull resumes with the same command` and goes up to the central
+  handler, which says the run was stopped and ends with `130` -- both lines on purpose: Ollama keeps
+  what arrived, and the next pull of the same name goes on from there. A `No` is no fault.
+- **What is not checked:** the free space where the daemon keeps its models (where that is cannot
+  be read from outside the daemon), whose daemon answers on the port (the documented limit of the
+  transport), and another process pulling the same name at the same time -- Ollama shares the
+  progress of one pull between its callers, and this step reads whatever the daemon reports.
+- **What is not written:** no configuration, no state file, no document. The pull changes the
+  daemon and nothing else.
+
 **Step 4, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
 which `guided.py` calls between the context and the render). It measures into the profile **the
 pointer file binds this machine to for this results folder**, and only when the takeover rule
@@ -4395,9 +4458,11 @@ the daemon's inventory is read and matched against the snapshot's active package
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question
 with no answer ends the run with exit `2` and names the question; an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
-exit `3`. **The one exception is `load_test`:** a file that does not mention it does not measure,
-because whether that question is reached at all depends on the machine the file is run on, not on
-the file. A `load_test = true` without `load_test_packages` is a missing answer like any other.
+exit `3`. **The two exceptions are `load_test` and `pull`:** a file that does not mention
+`load_test` does not measure, and one that does not mention `pull` does not pull, because whether
+either question is reached at all depends on the machine the file is run on -- its daemon, and what
+the daemon already holds -- not on the file. An answer of the wrong shape (`pull = "yes"`) is still
+an error. A `load_test = true` without `load_test_packages` is a missing answer like any other.
 
 ```toml
 # modelroom guided answers
@@ -4412,6 +4477,7 @@ select = ["unsloth/Qwen3.5-9B-GGUF"]
 context = "L"
 load_test = true
 load_test_packages = ["hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M"]
+pull = false
 ```
 
 **A step that did not do what it was asked does not end the run.** A measurement that failed, a

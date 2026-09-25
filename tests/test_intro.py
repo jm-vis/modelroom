@@ -229,6 +229,24 @@ def test_a_daemon_whose_model_list_does_not_arrive_still_shows_its_version():
     assert "did not arrive" in daemon.note
 
 
+def test_the_start_screen_keeps_whether_the_daemon_answered_as_a_flag():
+    """Step 5 asks to pull only where the start screen knew the daemon; the flag rides along with the
+    same two calls, and nothing reads it back out of the words of the note."""
+    reachable = _daemon()
+    half = FixtureDaemon(
+        {
+            ("GET", VERSION_PATH): Response(status=200, body=b'{"version": "0.34.2"}'),
+            ("GET", TAGS_PATH): DaemonError("the daemon went away"),
+        }
+    )
+
+    assert _intro(reachable).daemon_reachable is True
+    assert reachable.calls == [("GET", VERSION_PATH, None), ("GET", TAGS_PATH, None)]
+    assert _intro(half).daemon_reachable is True
+    assert _intro(FixtureDaemon({}, unreachable="connection refused")).daemon_reachable is False
+    assert Intro(version=modelroom.__version__, source=None, facts=()).daemon_reachable is False
+
+
 def test_a_machine_with_no_profile_in_this_folder_says_so():
     machine = _intro().facts[2]
 

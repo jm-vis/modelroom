@@ -175,6 +175,9 @@ class Intro:
     version: str
     source: str | None
     facts: tuple[Fact, ...]
+    # Whether `/api/version` answered with a value, from the same call the daemon row is read from:
+    # step 5 offers a pull only to a daemon this screen knew (decided 2026-09-25).
+    daemon_reachable: bool = False
 
 
 def intro_lines(intro: Intro, stream=None, colored: bool = False) -> list[list[tuple[str, str]]]:
@@ -316,10 +319,12 @@ def collect_intro(daemon: Daemon, probes: Probes, pointer_path: Path, config_fil
     the pointer file -- or `None`, in which case the first question is still to come and the
     folder row says so.
     """
+    daemon_fact, reachable = _daemon_fact(daemon)
     return Intro(
         version=modelroom.__version__,
         source=source_url(),
-        facts=(_folder_fact(config_file), _daemon_fact(daemon), _machine_fact(probes, pointer_path, config_file)),
+        facts=(_folder_fact(config_file), daemon_fact, _machine_fact(probes, pointer_path, config_file)),
+        daemon_reachable=reachable,
     )
 
 
@@ -385,20 +390,21 @@ def models_note(models: list) -> str:
     return counted if local == len(models) else f"{counted}, {local} of them local"
 
 
-def _daemon_fact(daemon: Daemon) -> Fact:
-    """The local Ollama daemon: its version, and how many models it has.
+def _daemon_fact(daemon: Daemon) -> tuple[Fact, bool]:
+    """The local Ollama daemon: its version, how many models it has, and whether it answered.
 
     Read here and not through `loadtest.py`: the start screen must never end a run, and the load
     test's reader raises for a daemon that answers something unexpected. Two short calls, both
-    from the five this package ever makes (`daemon.ALLOWED_CALLS`).
+    from the ones this package makes (`daemon.ALLOWED_CALLS`). "Answered" is `/api/version` with
+    a value -- the same reading that names the version, never the words of the note.
     """
     version = _daemon_value(daemon, VERSION_PATH, "version")
     if version is None:
-        return Fact("daemon", "Ollama", "not reachable")
+        return Fact("daemon", "Ollama", "not reachable"), False
     models = _daemon_value(daemon, TAGS_PATH, "models")
     if not isinstance(models, list):
-        return Fact("daemon", f"Ollama {version}", "reachable, its model list did not arrive")
-    return Fact("daemon", f"Ollama {version}", models_note(models))
+        return Fact("daemon", f"Ollama {version}", "reachable, its model list did not arrive"), True
+    return Fact("daemon", f"Ollama {version}", models_note(models)), True
 
 
 def _daemon_value(daemon: Daemon, path: str, field: str) -> object | None:

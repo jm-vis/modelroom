@@ -183,7 +183,10 @@ table say what is **shown** (ten of 45, one too tight), which rows fit into grap
 which need system memory, which rows have their fit computed from the package size as its
 **basis** rather than from the architecture (the line appears only when there are such rows) and
 what was measured for **speed**. The **install** line is the command for the first row, ready to
-paste. The ranking, the top ten per machine with the totals and what was set aside, is written to
+paste. Where the local Ollama daemon answered and does not have that row yet, the run then asks
+**Pull #1 into Ollama now?** with the size of the package: **Yes** pulls it into the daemon and
+shows the progress, **No** leaves it at the line to paste; step 4 of the next run measures it. A
+row the daemon already has gets a note instead of the question. The ranking, the top ten per machine with the totals and what was set aside, is written to
 `docs/models.md` and `docs/models.json`; what the search asked, page by page, is in
 `state/search.json` next to them.
 
@@ -324,7 +327,8 @@ labeled "fit (computed, v1)" in the output for that reason.
 | `130` | the guided mode was stopped with Ctrl-C; nothing is left half written |
 
 The guided mode ends with `1` when it wrote its document but a step did not finish -- a
-measurement that failed, a `fetch` that did not complete, an import that did not go through.
+measurement that failed, a `fetch` that did not complete, an import that did not go through, a
+pull that did not finish.
 Those lines are printed as they happen; the run goes on with the machines that are there.
 
 Source: `CONTRACTS.md`, "Exit codes", and `AGENTS.md`.
@@ -363,8 +367,6 @@ procedure is in `AGENTS.md`, "Versioning and releases".
 
 In the order we plan to build it, none of it dated:
 
-- **Install from step 5.** The run offers to pull the first row into the local Ollama daemon
-  instead of printing the command; the command stays for anyone who prefers to paste it.
 - **More than one user.** A question for the number of people who will use the model at once.
   One person is what this release sizes for. A small team is still an Ollama daemon on a
   workstation; beyond roughly eight concurrent requests it is a server with vLLM, and the fit

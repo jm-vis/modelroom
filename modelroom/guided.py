@@ -37,7 +37,8 @@ from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
-from .guided_context import context_step, machine_checked, snapshot_facts
+from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
+from .guided_install import QUESTIONS as PULL_QUESTIONS, FirstRow, first_row, pull_step
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
 from .guided_loadtest import load_test_step
@@ -124,8 +125,8 @@ QUESTIONS: dict[str, str] = {
     DID_YOU_MEAN_KEY: DID_YOU_MEAN_QUESTION,
     "select": "Which of these models should the result cover?",
     "context": CONTEXT_QUESTION,
-    # Step 4's own two (`modelroom/guided_loadtest.py`): one answer file, so one table of keys.
-    **LOAD_TEST_QUESTIONS,
+    # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`).
+    **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS,
 }
 
 
@@ -666,33 +667,31 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
 
 
-def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scenario: Scenario) -> int:
-    """Step 5: render, then the card of the whole run and one table per machine under it.
+def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scenario: Scenario) -> tuple[int, FirstRow | None]:
+    """Step 5: render, then the card of the whole run (decided 2026-09-24) and one table per machine.
 
-    The card is the report a reader looks at once the run is over -- the same `label value note`
-    rows the start screen has, with what this run made of them (decided 2026-09-24). The document
-    it is built from is the one the render just wrote, so no number here is computed twice. With
-    nothing to render the step says so and draws the card all the same (`views.show_nothing`,
-    2026-09-25); the exit code is the render's either way.
+    Built from the document the render just wrote, so no number is computed twice; with nothing to
+    render the card is drawn all the same (`views.show_nothing`, 2026-09-25). Returns the render's
+    exit code, and this machine's first row for the pull that follows (`None` without one).
     """
     from .cli import render_with_config
 
     run.screen.blank()
     run.screen.head(STEP_COUNT)
     written: list = []
+    here = _machine_key(run.probes.hostname())
 
     def seen(document) -> None:
-        # Read inside the callback, which runs while the render still holds the lock: the card and
-        # the table then rest on one snapshot (second-model round, 2026-09-24).
-        written.append((document, snapshot_facts(config)))
+        # Read inside the callback, which runs while the render still holds the lock: the card, the
+        # table and the package of the first row rest on one snapshot (second-model round, 2026-09-24).
+        written.append((document, snapshot_facts(config), first_row(document, here, snapshot_packages(config)[0])))
 
     code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen)
-    if written:
-        here = _machine_key(run.probes.hostname())
-        show_result(run.screen, *written[0], config, config_file.parent, run.now, here)
-    else:
+    if not written:
         show_nothing(run.screen, config, config_file.parent, scenario, run.now)
-    return code
+        return code, None
+    show_result(run.screen, *written[0][:2], config, config_file.parent, run.now, here)
+    return code, written[0][2]
 
 
 def run_guided(
@@ -740,11 +739,12 @@ def run_guided(
     run.screen.done(3, context_short(scenario.context_requested))
     measured = load_test_step(run, config, scenario, config_file.parent)
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
-    code = _render_step(run, config_file, config, scenario)
+    code, first = _render_step(run, config_file, config, scenario)
+    pull_step(run, first, intro.daemon_reachable)
     if code == 0 and run.problems:
-        # The document was written, but a step before it did not do what it was asked. Exit `1`
-        # is the documented "a step reported it": an automated caller must not read this run as
-        # a clean one, and the lines the user already saw say which step it was.
+        # The document was written, but a step did not do what it was asked -- the pull included.
+        # Exit `1` is the documented "a step reported it": an automated caller must not read this
+        # run as a clean one, and the lines the user already saw say which step it was.
         run.out(f"{len(run.problems)} step(s) did not finish; see the lines above")
         return 1
     return code

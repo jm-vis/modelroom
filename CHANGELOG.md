@@ -7,6 +7,22 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **Step 5 offers to pull the first row into the local Ollama daemon** (`modelroom/guided_install.py`,
+  new; `modelroom/daemon.py`; CONTRACTS.md, "Guided mode", "The pull"; decided 2026-09-25, the first
+  point of "What comes next" in the README). After `✓ Results` the run asks
+  `Pull #1 into Ollama now? (6.1 GB)` -- only when a document was written, the first row of this
+  machine has an Ollama name and the start screen reached the daemon. A row the daemon provably has
+  already (the load test's digest rule) gets the note `#1 is local already` instead. **Yes** sends
+  `POST /api/pull`, shows the progress of the current layer at a terminal, checks `/api/tags` for the
+  name afterwards and ends with `✓ Pulled`; every fault is one line and exit `1`, Ctrl-C says that a
+  canceled pull resumes with the same command. The install line to paste stays in every case, and
+  the pull writes nothing into the results folder. The answer file key `pull` is optional like
+  `load_test`; `scripts/selftest.py` answers `pull = false` and checks the pull against a recorded
+  answer of a real daemon (`tests/fixtures/ollama_pull_smollm2_stream.ndjson`).
+- **A sixth daemon call, `POST /api/pull`** (AGENTS.md, "Security, definition of done"; CONTRACTS.md,
+  "Load test (stage 1)"). Only as a `POST`, named by `daemon.py` alone and used by the install step
+  alone; its answer is read one line at a time with 60 s per read on the socket and no limit for the
+  whole pull. `/api/delete` stays out of the package.
 - **`modelroom --version`** (and `-V`) prints `modelroom <version>` and ends with `0`, without a
   terminal and without reading the pointer file (`modelroom/cli.py`, argparse's own `version`
   action, the text from `modelroom.__version__`). Testers typed it after the install and got an

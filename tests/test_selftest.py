@@ -95,6 +95,74 @@ def test_every_answer_the_guided_mode_can_ask_for_has_a_key():
     assert set(st.ANSWERS_FIRST) <= set(QUESTIONS)
 
 
+def test_the_live_self_test_never_pulls_without_being_asked():
+    """Both runs say `pull = false` outright: the self-test on a real machine never pulls."""
+    assert tomllib.loads(st.answers_toml(st.ANSWERS_FIRST))["pull"] is False
+    assert tomllib.loads(st.answers_toml(st.ANSWERS_SECOND))["pull"] is False
+
+
+# --- criteria 9 and 10: the pull of step 5 -----------------------------------------------------------
+
+
+@pytest.fixture
+def sp():
+    """`scripts/selftest_pull.py`, the two pull criteria the self-test imports."""
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_pull", REPO / "scripts" / "selftest_pull.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS"
+PULLED_LINES = [
+    " ? Pull #1 into Ollama now? (2.9 GB)  Yes",
+    f" pulling   {NAME}",
+    f" ✓ Pulled    {NAME} · 2.9 GB · say Yes in step 4 of the next run to measure it",
+]
+PULL_CALLS = [("GET", "/api/tags", None), ("POST", "/api/pull", {"model": NAME, "stream": True}), ("GET", "/api/tags", None)]
+
+
+def test_criterion_nine_passes_on_a_pull_that_ended_in_success_and_was_listed(sp):
+    assert sp.pulled_problems(PULLED_LINES, PULL_CALLS, NAME) == []
+
+
+def test_criterion_nine_names_a_pull_without_its_closing_line(sp):
+    assert any("Pulled" in problem for problem in sp.pulled_problems(PULLED_LINES[:2], PULL_CALLS, NAME))
+
+
+def test_criterion_nine_names_a_pull_that_was_never_sent_or_never_checked(sp):
+    assert any("POST /api/pull" in problem for problem in sp.pulled_problems(PULLED_LINES, PULL_CALLS[:1], NAME))
+    assert any("/api/tags" in problem for problem in sp.pulled_problems(PULLED_LINES, PULL_CALLS[:2], NAME))
+
+
+INSTALL = f" install   #1  ollama pull {NAME}"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        [" ? Pull #1 into Ollama now? (2.9 GB)  No"],
+        [" install   #1 is local already · say Yes in step 4 to measure it"],
+        [],  # a daemon the start screen did not reach: no question at all
+    ],
+)
+def test_criterion_ten_passes_on_a_run_that_did_not_pull(sp, tail):
+    assert sp.declined_problems([INSTALL, " ✓ Results         docs\\models.md", *tail]) == []
+
+
+@pytest.mark.parametrize(
+    "lines, words",
+    [
+        ([INSTALL, " ? Pull #1 into Ollama now? (2.9 GB)  Yes"], "Yes"),
+        ([INSTALL, f" pulling   {NAME}"], "pulled"),
+        ([INSTALL, f" ✓ Pulled    {NAME} · 2.9 GB"], "pulled"),
+        ([" ✓ Results         docs\\models.md"], "install line"),
+    ],
+)
+def test_criterion_ten_names_a_run_that_pulled_or_lost_its_install_line(sp, lines, words):
+    assert any(words in problem for problem in sp.declined_problems(lines))
+
+
 # --- criterion 1 -------------------------------------------------------------------------------------
 
 

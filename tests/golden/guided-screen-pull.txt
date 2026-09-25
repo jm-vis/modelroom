@@ -24,49 +24,45 @@
  ✓ Packages        2 models, 24 packages from 3 repositories
 
  ── Step 3 of 5  Context ────────────────────────────────────────────────
- ? How much text should a model handle at once?  S  8k  6,000 words  a long conversation
- ✓ Context         S 8k
+ ? How much text should a model handle at once?  L  32k  24,000 words  a report or a long contract
+ ✓ Context         L 32k
 
  ── Step 4 of 5  Measurement ────────────────────────────────────────────
- ? Measure the speed of the checked models that are already installed here?  Yes
- ? Which of these installed models should be measured?  hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
-   the load on this machine is read once, just before the runs -- load during a run is not measurable -- and the model behind the name must not change while the runs are made
-   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: warm-up run
-   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 1 of 3
-   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 2 of 3
-   hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 3 of 3
-   measured hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: <speed>, context 8k
- ✓ Measurement     1 of 1 measured
+ ? Measure the speed of the checked models that are already installed here?  No
+ – Measurement     none in this run
 
  ── Step 5 of 5  Results ────────────────────────────────────────────────
 
  folder    <results>
  machine   workstation             12 GB graphics, 128 GB memory, measured today
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
- context   S 8k                    6,000 words, a long conversation
- speed     1 measured              fastest DeepSeek-R1-0528-Qwen3-8B at <speed>
- result    docs\models.md          24 packages ranked, none too tight
+ context   L 32k                   24,000 words, a report or a long contract
+ speed     not measured            say Yes in step 4 to measure an installed package
+ result    docs\models.md          22 packages ranked, 2 too tight
 
- workstation · context S 8k
+ workstation · context L 32k
  #    Model                     Package                 Fit                   Speed         Memory
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    DeepSeek-R1-0528-Qwen3-8  unsloth · Q4_K_M        good                  <speed>    6.8 GB
- 2    Qwen3.5-9B                unsloth · UD-IQ2_XXS    good                  –             4.9 GB
- 3    Qwen3.5-9B                unsloth · UD-IQ2_M      good                  –             5.4 GB
- 4    Qwen3.5-9B                unsloth · UD-Q2_K_XL    good                  –             5.8 GB
- 5    Qwen3.5-9B                unsloth · UD-IQ3_XXS    good                  –             5.7 GB
- 6    Qwen3.5-9B                unsloth · Q3_K_S        good                  –             6.0 GB
- 7    Qwen3.5-9B                unsloth · Q3_K_M        good                  –             6.4 GB
- 8    Qwen3.5-9B                unsloth · UD-Q3_K_XL    good                  –             6.8 GB
- 9    Qwen3.5-9B                unsloth · IQ4_XS        good                  –             6.9 GB
- 10   Qwen3.5-9B                unsloth · IQ4_NL        good                  –             7.1 GB
- shown     10 of 24 packages
- memory    #1–10 fit into graphics memory, 11.0 GB free after the reserve
- basis     #2–10 computed from the package size, not its architecture
- speed     #1 measured <speed>
+ 1    Qwen3.5-9B                unsloth · UD-IQ2_XXS    good                  –             8.3 GB
+ 2    Qwen3.5-9B                unsloth · UD-IQ2_M      good                  –             8.7 GB
+ 3    Qwen3.5-9B                unsloth · UD-Q2_K_XL    good                  –             9.2 GB
+ 4    Qwen3.5-9B                unsloth · UD-IQ3_XXS    good                  –             9.1 GB
+ 5    Qwen3.5-9B                ollama · Q4_K_M         good (RAM)            –             11.8 GB
+ 6    Qwen3.5-9B                unsloth · UD-Q4_K_XL    good (RAM)            –             11.1 GB
+ 7    Qwen3.5-9B                unsloth · Q5_K_S        good (RAM)            –             11.5 GB
+ 8    Qwen3.5-9B                unsloth · Q5_K_M        good (RAM)            –             11.7 GB
+ 9    Qwen3.5-9B                unsloth · UD-Q5_K_XL    good (RAM)            –             11.9 GB
+ 10   Qwen3.5-9B                unsloth · Q6_K          good (RAM)            –             12.6 GB
+ shown     10 of 22 packages · 2 too tight (unsloth Q4_1, unsloth Q4_K_M)
+ memory    #1–4 fit into graphics memory, 11.0 GB free after the reserve
+           #5–10 need system memory, the graphics card helps
+ basis     #1–10 computed from the package size, not its architecture
+ speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
 
- install   #1  ollama pull hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
+ install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS
 
  ✓ Results         docs\models.md
 
- install   #1 is local already · say Yes in step 4 to measure it
+ ? Pull #1 into Ollama now? (3.0 GB)  Yes
+ pulling   hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS
+ ✓ Pulled    hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS · 3.0 GB · say Yes in step 4 of the next run to measure it

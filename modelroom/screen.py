@@ -24,6 +24,7 @@ from typing import Callable, Iterable, Sequence
 
 from .dialog import QUESTION_RULES
 from .intro import STEP_NAMES, Fact, Glyphs, fact_line, glyphs, hardware_words, style_rules, use_color
+from .intro import GAP, LABEL_WIDTH
 from .profile import HardwareProfile
 
 Fragment = tuple[str, str]
@@ -408,7 +409,7 @@ def result_fact(path: str, ranked: int, set_aside: Sequence[tuple[str, int]], do
     return Fact("result", path, f" {dot} ".join(pieces))
 
 
-# --- the line that installs a package (the install itself is a work package of its own) ------------
+# --- the line that installs a package ----------------------------------------------------------------
 
 
 def install_name(identity: Sequence[str], quantization: str, package_format: str) -> str | None:
@@ -435,6 +436,41 @@ def install_pull_line(rank: int, name: str) -> Line:
     command is drawn as a command, and two spaces keep them apart.
     """
     return [("class:note", f"#{rank}"), ("", "  "), ("class:command", f"ollama pull {name}")]
+
+
+def install_local_note(rank: int, dot: str = "·") -> Line:
+    """What stands under the install line when the first row is on this machine already."""
+    return [("class:note", f"#{rank} is local already {dot} say Yes in step 4 to measure it")]
+
+
+# --- the pull of step 5 (decided 2026-09-25: Ollama's own word, `pull`) ------------------------------
+
+PULL_LABEL = "pulling"
+PULL_CANCELED = "a canceled pull resumes with the same command"
+_GIB = 1024**3
+
+
+def pull_question(rank: int, weights_gib: float) -> str:
+    """The question after the card: the row, and what it weighs (the weights, not the memory need)."""
+    return f"Pull #{rank} into Ollama now? ({weights_gib:.1f} GB)"
+
+
+def pull_progress_text(line: dict) -> str:
+    """One status line of a pull in words: the current layer's share, else the daemon's own status.
+
+    Ollama's `total` and `completed` belong to one layer (one digest) and `completed` may be
+    missing; a sum over the lines would count a layer many times, so it is never made.
+    """
+    total = line.get("total")
+    if isinstance(total, int):
+        return f"{line.get('completed', 0) / _GIB:.1f} of {total / _GIB:.1f} GB"
+    return str(line.get("status", ""))
+
+
+def pulled_line(name: str, weights_gib: float, marks: Glyphs) -> Line:
+    """The line a pull that ended in `success` leaves behind, and what to do with the package next."""
+    said = f"{name} {marks.dot} {weights_gib:.1f} GB {marks.dot} say Yes in step 4 of the next run to measure it"
+    return [("class:done", marks.check), ("", " "), ("class:value", "Pulled".ljust(LABEL_WIDTH)), ("", GAP), ("", said)]
 
 
 # --- rank ranges ------------------------------------------------------------------------------------
@@ -479,8 +515,14 @@ __all__ = [
     "head_line",
     "import_notes",
     "imported_note",
+    "PULL_CANCELED",
+    "PULL_LABEL",
+    "install_local_note",
     "install_name",
     "install_pull_line",
+    "pull_progress_text",
+    "pull_question",
+    "pulled_line",
     "joined",
     "machine_fact",
     "machines_summary",

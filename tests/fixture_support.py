@@ -474,17 +474,69 @@ def loadtest_daemon(generates=None, observations=None, tags: str = "ollama_tags_
     `generates` is the answer sequence of `/api/generate`, `observations` that of `/api/ps` --
     one observation after every run, so four by default.
     """
-    from modelroom.daemon import GENERATE_PATH, PS_PATH, SHOW_PATH, TAGS_PATH, VERSION_PATH, FixtureDaemon
+    from modelroom.daemon import FixtureDaemon
 
-    return FixtureDaemon(
-        {
-            ("GET", VERSION_PATH): json_response("ollama_version_local.json"),
-            ("GET", TAGS_PATH): json_response(tags),
-            ("POST", SHOW_PATH): json_response("ollama_show_hf_gguf.json"),
-            ("GET", PS_PATH): list(observations if observations is not None else [ps_answer()] * 4),
-            ("POST", GENERATE_PATH): default_generates() if generates is None else list(generates),
-        }
-    )
+    return FixtureDaemon(_loadtest_answers(generates, observations, tags))
+
+
+def _loadtest_answers(generates=None, observations=None, tags: str = "ollama_tags_local_loadtest.json") -> dict:
+    from modelroom.daemon import GENERATE_PATH, PS_PATH, SHOW_PATH, TAGS_PATH, VERSION_PATH
+
+    return {
+        ("GET", VERSION_PATH): json_response("ollama_version_local.json"),
+        ("GET", TAGS_PATH): json_response(tags),
+        ("POST", SHOW_PATH): json_response("ollama_show_hf_gguf.json"),
+        ("GET", PS_PATH): list(observations if observations is not None else [ps_answer()] * 4),
+        ("POST", GENERATE_PATH): default_generates() if generates is None else list(generates),
+    }
+
+
+# --- the pull of step 5 -------------------------------------------------------------------------
+
+# The answer of one real `POST /api/pull` for `smollm2:135m` against the local daemon, recorded byte
+# for byte on 2026-09-25: 384 lines, `pulling manifest`, one `pulling <digest>` run per layer with
+# `total` and (not always) `completed`, `verifying sha256 digest`, `writing manifest`, `success`.
+PULL_STREAM = "ollama_pull_smollm2_stream.ndjson"
+PULL_STREAM_LINES = 384
+
+
+def pull_answer() -> Response:
+    """The recorded pull, as the pinned body a `FixtureDaemon` plays back line by line."""
+    return Response(status=200, body=(FIXTURES / PULL_STREAM).read_bytes())
+
+
+def tags_with(name: str, digest: str = "d" * 64, size: int = 1_234_567_890) -> Response:
+    """The load test's `/api/tags` answer with one more local entry, as it reads after a pull."""
+    data = json.loads((FIXTURES / "ollama_tags_local_loadtest.json").read_text(encoding="utf-8"))
+    data["models"].append({"name": name, "model": name, "size": size, "digest": digest, "details": {}})
+    return Response(status=200, body=json.dumps(data).encode("utf-8"))
+
+
+def pull_daemon(pull=None, after_pull: Response | None = None, tags: Response | None = None):
+    """The load test's daemon, plus the pull: `/api/tags` answers `after_pull` once a pull was made.
+
+    `pull` is what `POST /api/pull` answers (the recorded stream by default, or a planted
+    `DaemonError`); `tags` the inventory before it (the load test's own list by default);
+    `after_pull` the inventory the daemon shows from then on, the one from before when it is
+    `None` -- a daemon that does not list what it just pulled.
+    """
+    from modelroom.daemon import PULL_PATH, TAGS_PATH, FixtureDaemon
+
+    answers = _loadtest_answers()
+    answers[("POST", PULL_PATH)] = pull if pull is not None else pull_answer()
+    if tags is not None:
+        answers[("GET", TAGS_PATH)] = tags
+    after = after_pull if after_pull is not None else answers[("GET", TAGS_PATH)]
+
+    class _Pulling(FixtureDaemon):
+        def __call__(self, method, path, body=None, progress=None):
+            pulled = any(call[1] == PULL_PATH for call in self.calls)
+            if (method, path) == ("GET", TAGS_PATH) and pulled:
+                self.calls.append((method, path, body))
+                return after
+            return super().__call__(method, path, body, progress)
+
+    return _Pulling(answers)
 
 
 def offline_daemon():

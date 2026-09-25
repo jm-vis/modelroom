@@ -15,7 +15,7 @@ The commands:
 
 | Command | What it does |
 |---|---|
-| `modelroom` | the guided mode: asks, writes `modelroom.toml`, then runs the three commands below, and between the fetch and the render offers the load test of the packages this machine already has (`CONTRACTS.md`, "Guided mode", "Load test (stage 1)") |
+| `modelroom` | the guided mode: asks, writes `modelroom.toml`, then runs the three commands below, between the fetch and the render offers the load test of the packages this machine already has, and after the render offers to pull the first row into the local Ollama daemon (`CONTRACTS.md`, "Guided mode", "Load test (stage 1)") |
 | `modelroom --answers <file>` | the same run with the dialog's answers from a TOML file, for a self-test or CI |
 | `modelroom --config <file>` | the guided mode on that configuration, rather than the folder it last used |
 | `modelroom hardware --config <file> [--machine <name>] [--cpu-only] [--new-identity \| --same-machine]` | measure this machine and write its schema-2 profile; `--new-identity` writes a new one, `--same-machine` writes the bound profile again under its own id (`CONTRACTS.md`, "Profile binding") |
@@ -148,9 +148,12 @@ genre folder carries a `README.md` index with one line per entry. `docs/README.m
 ## Security, definition of done
 
 Attack surface of this tool: outbound HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`,
-HTTP to the Ollama daemon on `127.0.0.1:11434` -- five read and generate calls, never `/api/pull`
-or `/api/delete` -- subprocess calls to `llmfit` and `nvidia-smi` with fixed argument lists, and
-file writes under the configured state directory. No user-facing web surface, no uploads, no HTML
+HTTP to the Ollama daemon on `127.0.0.1:11434` -- five read and generate calls, and one `POST
+/api/pull` that only the pull question of guided step 5 sends, for the first row of this machine
+and only on a yes (decided 2026-09-25: the README promised the install from step 5); its limit is
+60 s per read on the socket and none for the whole pull; never `/api/delete` -- subprocess calls to
+`llmfit` and `nvidia-smi` with fixed argument lists, and file writes under the configured state
+directory. No user-facing web surface, no uploads, no HTML
 rendering of whatever a registry returns. The tests therefore have to prove, with a deliberately
 broken input each:
 
@@ -164,8 +167,8 @@ broken input each:
 - the `llmfit` subprocess is called with a fixed argument list, never with user-controlled
   strings, and a missing or too old `llmfit` ends with exit `2` and an install hint;
 - the daemon transport refuses every origin but `http://127.0.0.1:11434` and every call outside
-  its five, carries no proxy handler and follows no redirect, and no module of the package names
-  `/api/pull` or `/api/delete`.
+  its six, carries no proxy handler and follows no redirect; `/api/pull` is a `POST` only, named
+  by the transport alone and used by the install step alone, and no module names `/api/delete`.
 
 ## Versioning and releases
 
