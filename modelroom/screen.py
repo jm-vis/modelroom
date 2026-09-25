@@ -421,9 +421,14 @@ def install_name(identity: Sequence[str], quantization: str, package_format: str
     return f"hf.co/{repo_or_name}:{quantization}"
 
 
-def install_pull_line(rank: int, name: str) -> str:
-    """The line a reader copies to get the first package of their own machine."""
-    return f"to install #{rank}: ollama pull {name}"
+def install_pull_line(rank: int, name: str) -> Line:
+    """The line a reader copies to get the first package of their own machine.
+
+    The rank is a side remark and the command is the thing: `to install #1: ollama pull …` read as
+    one sentence and the command went under in it (test round, 2026-09-25). So the rank is gray, the
+    command is drawn as a command, and two spaces keep them apart.
+    """
+    return [("class:note", f"#{rank}"), ("", "  "), ("class:command", f"ollama pull {name}")]
 
 
 # --- rank ranges ------------------------------------------------------------------------------------

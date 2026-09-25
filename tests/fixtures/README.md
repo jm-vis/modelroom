@@ -121,7 +121,9 @@ The manifest bodies carry the facts the tests actually need:
 - `9b` and `9b-q4_K_M` are byte-identical manifests: both list a single
   `application/vnd.ollama.image.model` weights layer with digest
   `sha256:dec52a44569a2a25341c4e4d3fee25846eed4f6f0b936278e3a3c900bb99d37c` -- the digest-sibling
-  case for `inherit_from_siblings`.
+  case for `inherit_from_siblings`, and since 2026-09-25 the case for **one package per manifest**:
+  the two tags have the same manifest digest, so they are one package named `qwen3.5:9b` with
+  `aliases = ["9b-q4_K_M"]` (CONTRACTS.md, "Package").
 - `9b-mlx-bf16` lists only `application/vnd.ollama.image.tensor` layers (no `.image.model`
   layer at all) -- the tensor-format case that `decide_provenance` resolves to
   `("unresolved", "format")` regardless of its tag.

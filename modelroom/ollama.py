@@ -14,6 +14,11 @@ request is made at all** (F5): measured 2026-09-22 against the real registry
 exactly the same digest the registry's `ollama-content-digest` `HEAD` header used to state (see
 tests/fixtures/README.md), so the extra request bought nothing and is dropped.
 
+Two tags of one manifest are **one** package (decided 2026-09-25): the registry gives the same
+digest, byte for byte, to `qwen3.5:9b` and `qwen3.5:9b-q4_K_M`, and the ranking showed that one
+build twice. The package keeps the shortest tag as its `ollama_name` and carries the others as
+`Package.aliases` (CONTRACTS.md, "Package").
+
 `Package.default_context` (Ollama's own `num_ctx`) stays `None`: reading it means fetching the
 manifest's `params` layer by digest, and that endpoint does not serve the blob itself. Measured
 2026-09-23 against the real registry: `GET registry.ollama.ai/v2/library/qwen3.5/blobs/sha256:
@@ -166,12 +171,36 @@ def _assemble_packages(
     tag_layers = {tag: _validated_layers(base_model.ollama_base, tag, manifests[tag]) for tag in kept_tags}
     tag_quants = {tag: parse_ollama_tag_quant(tag) for tag in kept_tags}
     tag_digests = {tag: _weights_digest(tag_layers[tag]) for tag in kept_tags}
+    # Over every kept tag, not only the ones that become a package: a tag whose name carries no
+    # quantization takes it from the digest sibling whose name does, and that sibling may be one
+    # of the tags this manifest is no longer listed under.
     resolved_quants = inherit_from_siblings(tag_digests, tag_quants)
 
     return [
-        _build_package(base_model, tag, tag_layers[tag], digests[tag], resolved_quants[tag], run_at, previous_by_key)
-        for tag in kept_tags
+        _build_package(
+            base_model, tag, aliases, tag_layers[tag], digests[tag], resolved_quants[tag], run_at, previous_by_key
+        )
+        for tag, aliases in _tags_per_manifest(kept_tags, digests).items()
     ]
+
+
+def _tags_per_manifest(kept_tags: list[str], digests: dict[str, str]) -> dict[str, list[str]]:
+    """One tag per manifest digest, with the other tags of that manifest behind it.
+
+    `qwen3.5:9b` and `qwen3.5:9b-q4_K_M` are two names of one manifest -- the same digest, byte
+    for byte -- and stood in the ranking as two packages of one size until 2026-09-25. The name a
+    package keeps is the **shortest** tag, which is the one the library's own page leads with and
+    the one a reader types; the rest are its `aliases`. Ties are broken alphabetically, so the
+    result never depends on the order the tags page happens to list them in.
+    """
+    grouped: dict[str, list[str]] = {}
+    for tag in kept_tags:
+        grouped.setdefault(digests[tag], []).append(tag)
+    per_manifest: dict[str, list[str]] = {}
+    for tags in grouped.values():
+        name, *aliases = sorted(tags, key=lambda tag: (len(tag), tag))
+        per_manifest[name] = aliases
+    return per_manifest
 
 
 def _fetch_manifest(transport: Transport, base: str, tag: str) -> tuple[dict, str]:
@@ -289,21 +318,46 @@ def _finalize(stub: Package, provenance: str, unresolved_reason: str | None) -> 
     return Package(**data)
 
 
+def _identity_keys(stub: Package) -> list[tuple[str, str, str]]:
+    """The identities a previous snapshot may hold this package under: its own tag, then its aliases.
+
+    One package per manifest (2026-09-25) means a tag that was a package of its own is an alias now,
+    and an approval given to it is about the very same manifest under the very same digest.
+    """
+    base = (stub.ollama_name or "").partition(":")[0]
+    return [package_identity_key(stub), *(("ollama", f"{base}:{alias}", alias) for alias in stub.aliases)]
+
+
 def _carry_forward_approval(
     stub: Package, previous_by_key: dict[tuple[str, str, str], Package]
 ) -> tuple[Package, list[Approval]]:
-    """F6/R3: the same rule as `hf._carry_forward_approval`, see its docstring."""
-    previous = previous_by_key.get(package_identity_key(stub))
-    if previous is None or previous.approval is None:
+    """F6/R3: the same rule as `hf._carry_forward_approval`, see its docstring.
+
+    Asked under every identity this package may have had (`_identity_keys`): dropping the approval of
+    an absorbed tag would silently un-approve a build whose metadata does not resolve on its own
+    (second-model round, 2026-09-25). The binding to the base model is unchanged.
+
+    An approval that matches this manifest's **current** digest wins over one that does not, whichever
+    tag each was given to: a stale approval on the tag the package is named by would otherwise shadow
+    a valid one on an absorbed tag, and `decide_provenance` would never see the valid one.
+    """
+    found = [
+        previous
+        for previous in (previous_by_key.get(key) for key in _identity_keys(stub))
+        if previous is not None
+        and previous.approval is not None
+        and previous.base_model_hf_repo == stub.base_model_hf_repo
+    ]
+    if not found:
         return stub, []
-    if previous.base_model_hf_repo != stub.base_model_hf_repo:
-        return stub, []
-    return stub.model_copy(update={"approval": previous.approval}), [previous.approval]
+    chosen = next((p for p in found if p.approval.content == stub.manifest_digest), found[0])
+    return stub.model_copy(update={"approval": chosen.approval}), [chosen.approval]
 
 
 def _build_package(
     base_model: BaseModelSpec,
     tag: str,
+    aliases: list[str],
     layers: list[dict],
     digest: str,
     quantization: str | None,
@@ -315,6 +369,7 @@ def _build_package(
         source="ollama",
         ollama_name=f"{base_model.ollama_base}:{tag}",
         manifest_digest=digest,
+        aliases=aliases,
         base_model_hf_repo=base_model.hf_repo,
         format=format_,
         files=files,

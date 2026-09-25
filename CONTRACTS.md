@@ -269,6 +269,20 @@ invariant, not just a convention `decide_provenance` happens to follow.
 derived value. It stays a field in the serialized form -- readers of a snapshot see it without
 recomputing it -- but its value is always the one `shards_complete(files)` produces.
 
+**One package per manifest, not per tag** (decided 2026-09-25). The Ollama registry gives the very
+same manifest, byte for byte and therefore under the same `manifest_digest`, to several tags:
+`qwen3.5:9b` and `qwen3.5:9b-q4_K_M` are two names of one build, and the ranking showed that build
+twice (test round, 2026-09-25). `ollama.fetch_ollama_area` therefore builds **one** package per
+manifest digest, named by the **shortest** of its tags (ties alphabetically, so the result never
+depends on the order the tags page lists them in), and carries the rest in `aliases`. The
+quantization is still inherited across every kept tag, so a name that carries none takes it from a
+digest sibling whose name does, even when that sibling is now an alias. `aliases` is optional and
+empty by default, so a snapshot written before it reads unchanged and `schema_version` stays at 1.
+An **approval carries forward from an absorbed tag as well**: the previous snapshot is asked under
+this package's own identity and under every alias it now holds, because an approval given to
+`qwen3.5:9b-q4_K_M` is about the very same manifest under the very same digest ("Approval
+carry-forward across fetch runs"; the binding to the base model is unchanged).
+
 Three more invariants tie `provenance`, `unresolved_reason`, `format` and `approval` together:
 a non-`"gguf"` `format` requires `provenance == "unresolved"` and `unresolved_reason ==
 "format"`; `provenance == "unresolved"` requires a non-empty `unresolved_reason` (never `None`,
@@ -284,6 +298,7 @@ different content does not validate, it has to be re-approved or left to the met
 | `revision` | `str \| None` | 40-hex commit sha; required iff `source == "huggingface"` | the commit this package was observed at |
 | `ollama_name` | `str \| None` | `^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$`; required iff `source == "ollama"` | the Ollama image name |
 | `manifest_digest` | `str \| None` | `sha256:` + 64 hex; required iff `source == "ollama"` | the manifest digest observed |
+| `aliases` | `list[str]` | each a tag (`^[A-Za-z0-9][A-Za-z0-9._-]*$`), each once, never this package's own tag; empty for `source == "huggingface"` | the other tags of the very same manifest |
 | `base_model_hf_repo` | `str` | must exist in the snapshot's `base_models` | which `BaseModelSpec` this package belongs to |
 | `format` | `"gguf" \| "tensor" \| "unknown"` | -- | the weights format |
 | `files` | `list[PackageFile]` | -- | the files that make up this package |
@@ -3222,26 +3237,36 @@ reason for a machine that is not `ranked` (decided 2026-09-24: `Ranking: dellpro
 (DellProMax_JV)` said the machine's key, its name and a word nobody asked about, and the scenario
 stood on a line of its own). **Fit** is the class with ` (RAM)` behind it where the pool is system
 memory -- the same word the selection list of step 2 uses -- and never ` (from size)`, which is a
-note now. **Speed** is `–` where nothing was measured, not `unknown`. Under the table, all gray and
-wrapped between pieces at 100 characters (`screen.joined`):
+note now. **Speed** is `–` where nothing was measured, not `unknown`.
 
-1. `showing <n> of <m>`, and one piece per set-aside group: `<k> package(s) too tight (<up to three
-   names> and <r> more)`, `<k> package(s) not covered (…)`, with the reason named where the list has
-   more than one of them. The names are the evidence behind the count and are what gives way where
-   the line has no room for them -- two, then one, then none; the count and the reason never do, and
-   no name is cut in the middle (a piece of 137 characters was measured in the second-model round of
-   2026-09-24).
-2. the fit of the ranked rows **bundled by memory pool**, with their rank ranges: `#1–2 fit into
-   graphics memory (10.9 GB free after the reserve)`, `#3–5 need system memory, the graphics card
-   helps`, `#6 needs system memory, no graphics card`. The numbers come from the fields of `Fit`,
-   never from parsing a note's own sentence back apart.
-3. `(from size): #2–5 computed from the package size, not its architecture`, where there are such rows.
-4. `speed: no row shown was measured yet · say Yes in step 4 to measure an installed package`, only
-   where no row carries a speed. **"No row shown", not "nothing on this machine"**: a measured
-   package whose fit class puts it past the tenth row is in no `RankedEntry` of the document, so this
-   view cannot see it, and a wider claim would be one the document does not carry (second-model
-   round, 2026-09-24).
-5. `to install #1: ollama pull <local name>` for the first row of the machine **the run passes in**
+Under the table, **every line carries the label of what it says** (decided 2026-09-25), in the
+card's own column (`intro.label_line`, `LABEL_COLUMN`) so the report of step 5 reads as one block
+from its `folder` row down to the install command. Running text buried the command a reader came for
+(test round, 2026-09-25). The label is drawn in the color of the card's labels, the text gray, and a
+line that continues the one above it carries no label of its own. The pieces of one label are joined
+with ` · ` and wrapped between pieces at what the label leaves of the 100 characters
+(`screen.joined`):
+
+1. `shown` -- `<n> of <m> packages`, and one piece per set-aside group: `<k> too tight (<up to three
+   names> and <r> more)`, `<k> not covered (…)`, with the reason named where the list has more than
+   one of them. The word `package` is the count's own and is not repeated per piece. The names are the
+   evidence behind the count and are what gives way where the line has no room for them -- two, then
+   one, then none; the count and the reason never do, and no name is cut in the middle (a piece of 137
+   characters was measured in the second-model round of 2026-09-24).
+2. `memory` -- the fit of the ranked rows **bundled by memory pool**, with their rank ranges and
+   **one pool per line**: `#1–2 fit into graphics memory, 10.9 GB free after the reserve`, `#3–5 need
+   system memory, the graphics card helps`, `#6 needs system memory, no graphics card`. Two
+   statements about two memories joined by a `·` read as one. The numbers come from the fields of
+   `Fit`, never from parsing a note's own sentence back apart.
+3. `basis` -- `#2–5 computed from the package size, not its architecture`, where there are such rows.
+4. `speed` -- `#3 measured 41.1 tok/s` per measured row, or `nothing measured in the rows shown · say
+   Yes in step 4 to measure an installed package` where no row carries a speed. **Of the rows shown,
+   not of the machine**: the ranking rule sorts by fit class first, so a measured package can stand
+   behind eleven unmeasured ones and be in no `RankedEntry` of the document at all -- the card of the
+   same screen counts that measurement, and the two may not contradict each other (second-model
+   round, 2026-09-24 and 2026-09-25).
+5. `install` -- `#1  ollama pull <local name>`, behind a blank line, with the rank gray and the
+   command drawn as a command, for the first row of the machine **the run passes in**
    (`views.show_result(..., install_for)`; the guided mode passes its own machine key) --
    `hf.co/<repo>:<quant>` for a Hugging Face build, `<name>:<tag>` for one of the Ollama registry,
    the two shapes the load test matches an installed model by. Nothing is called and nothing is
@@ -3801,16 +3826,36 @@ other module:
   ASCII (`## :: .. ... ### ok - > ^v - -`). A Windows console under `cp1252` encodes none of them,
   and printing one would end a run with a `UnicodeEncodeError` instead of a dialog.
 - **Every question is a list** with the arrow keys, a green `❯` on the line the keyboard is on, the
-  grayed-out entries with their reason, and one instruction line under it: `↑↓ move   Enter
-  select   Esc leave`, or `↑↓ move   Space marks   Enter confirms   Esc leave` for a list that
-  marks. **Yes or no is a list of `Yes` and `No`** with the default under the pointer; there is no
-  `(Y/n)` anywhere. An answer file still answers it with `true`/`false`.
-- **What a list has to say about itself stands in that instruction line**, behind the keys and a
-  `·`: what a column means (`last column: how many fetched packages fit <machine>`), what nothing
-  marked would do, where the fit of a row comes from. It is the question's own line and goes away
-  with the question -- a sentence that explains a list has nothing to say once the list is gone
-  (decided 2026-09-24). `Asker.select`, `Asker.checkbox` and `Asker.select_or_text` take it as
-  `instruction`; an answer file ignores it.
+  grayed-out entries with their reason, and the instruction lines under it: `↑↓ move   Enter
+  select   Esc leave`, or `↑↓ move   Space marks   Enter takes the marked rows, or this one   Esc
+  leave` for a list that marks. **Yes or no is a list of `Yes` and `No`** with the default under the
+  pointer; there is no `(Y/n)` anywhere. An answer file still answers it with `true`/`false`.
+- **A list that marks answers with what is marked, and with the row under the pointer where nothing
+  is marked** (`dialog.TerminalAsker.checkbox`, decided 2026-09-25). `Enter` alone used to take
+  nothing at all, and a reader read the pointer as the selection ("I thought the bar was the
+  selection", test round 2026-09-25). With something marked the pointer's row is a row a reader
+  moved past, not a choice, so it is not added. The rule is one key binding added after
+  `questionary` has built the question, like `Esc`; the library itself is unchanged, and `FileAsker`
+  is untouched -- `select = []` in an answer file still means nothing.
+- **The keys stand behind the question, what the list says about itself in a gray line under the
+  list** (decided 2026-09-25). Two places, because the two lines are not worth the same: the library
+  gives the list window the rows the terminal has left and scrolls it around the pointer, so a line
+  at the end of the list is out of sight while the pointer is at its start (measured 2026-09-25
+  against `prompt_toolkit`'s renderer, 30 models in 24 rows). The keys are what a reader needs at
+  the moment they cannot go on, so they stay next to the question, which has a window of its own and
+  wraps. The glossary of a column -- what a column means (`last column: how many fetched packages
+  fit <machine>`), what a word of a column stands for, where the fit of a row comes from -- is a
+  line a reader looks up once, and it stands under the list. Both go away with the question: a
+  sentence that explains a list has nothing to say once the list is gone (decided 2026-09-24).
+  `Asker.select`, `Asker.checkbox` and `Asker.select_or_text` take it as `instruction`; an answer
+  file ignores it. **A line of a list wraps instead of being cut** (`dialog._wrap_list_lines`): the
+  library's own window does not wrap, and a 153-character line lost its last piece in a window of
+  100 columns (measured 2026-09-25).
+- **A list may carry a column head and gray rows.** `dialog.Choice(heading=True)` is a line of the
+  list that is no entry -- the column head of a table-shaped list; the pointer never rests on it,
+  and `dialog.selectable` leaves it out, so no answer can name it. `dialog.Choice(dim=True)` draws
+  a whole row gray, for a row a reader should read as a side note rather than a recommendation (a
+  `legacy` model). Without color both are the same characters they always were.
 - **Every question erases itself once it is answered** (`application.erase_when_done`, a list and a
   typed answer alike), and the run writes
   one line in its place (`screen.answer_line`, "The screen"). Without it `questionary` writes its
@@ -3840,6 +3885,7 @@ fixture: a change to it is a change to those files, made on purpose.
 | `done(n, summary)` | `✓ Configuration   <folder>, 1 machine` -- the check mark (`done`), the name padded to 14 (`value`), the balance |
 | `skipped(n, summary)` | the same with `–` (`tight`; ASCII `-`) for a step that did nothing: measured nothing because nobody asked it to, chose nothing |
 | `card(facts)` | the `label value note` rows of the start screen (`intro.fact_line`), for the card of step 5 |
+| `intro.label_line(label, …)` | a `<label>  <text>` row, the label padded to 8 and the text at column 10 -- the one place that decides where a labeled row's text begins, so the card and the notes under its table stand in the same column |
 | `joined(pieces)` | pieces joined with ` · `, wrapped **between** pieces at 100 characters and never inside one |
 
 **The answer line is the run's, not the library's.** Every question leaves exactly one line behind,
@@ -3881,7 +3927,13 @@ Then the three facts that are known before anything is asked, each as `label val
   `not chosen yet` when the first question is still to come.
 - `daemon`: `Ollama <version>` from `GET /api/version` with the number of models from
   `GET /api/tags`; `not reachable` when it does not answer. Read in `intro.py` and not through the
-  load test: the start screen must never end a run.
+  load test: the start screen must never end a run. **The count says how many of those models are on
+  this machine** where the daemon lists cloud models of its own: `reachable, 19 models, 7 of them
+  local`, and `reachable, 7 models` where there is no cloud entry at all (decided 2026-09-25). A
+  cloud entry is one whose tag is `cloud` or ends in `-cloud` (`intro.is_cloud_name`, the rule
+  `loadtest.is_cloud` applies, asked of the name alone because nothing on the start screen may
+  raise). `19 models installed` counted twelve entries the Ollama app offers as packages of this
+  machine (test round, 2026-09-25).
 - `machine`: this machine's host name, and the hardware of the profile this folder binds it to in
   plain words (`one graphics card, 12 GB, 128 GB memory`); `not measured in this results folder
   yet` when there is none.
@@ -4050,30 +4102,51 @@ decided 2026-09-24, in place of the list of repositories: 120 lines of over 200 
 and age `unknown` throughout and 40 grayed-out rows whose appended reason broke the columns --
 "I cannot tell what to pick, or what I am risking" was the hand test's verdict).
 
-**One line per model** (`ModelChoice`), and only the ones that can be picked. Six columns, at most
-100 characters: the model's name (the part after the `/`, 26), the fit in a word (14: `good`,
-`marginal`, `too tight`, `unknown` -- and `good (RAM)` or `marginal (RAM)` where the graphics
-memory is too small and the fit is against system memory: fit v1 caps that pool at `good`, and
-live on 2026-09-24 a 122B model stood as `good` above a 9B `marginal` that fits the graphics card,
-with nothing to tell the two apart), its size (7: `9B`, `0.6B`, `2.4T`, `unknown`), the packager
-accounts that have it (22, `unsloth, bartowski +2` beyond three), the downloads of all of them
-together (7; an indication, not a rank) and the Ollama name or `none known` (the rest of the
-line, 14). **Every cell is cut to its column** with `…`: `dialog.columns` pads and never cuts, and
-a name, an account and a download count all come from a registry -- `deepseek-r1:8b` made a line
-of 104 characters before that (second-model round, 2026-09-24), and `1000000B` one of 101. The
-order is the memory pool (a fit in graphics memory before one in system memory, whatever its
-class), then the fit class, then the downloads, then the name, with `too tight` and `unknown`
-last (decided 2026-09-24). How many models and how many repositories the search answered with is the
-second note above the list, and the reasons of the repositories that are no model of it are in
-`search.json` ("Search log"; `guided_models.UNRESOLVED_REASONS`, and with `filter_owners` on `not a
-publisher or a listed packager` for an owner class of `other` -- except for the one repository the
-person typed, which that filter never hides) -- the repositories themselves are no
-lines of the list either. What the list has to say about itself is its **instruction line**
-(`guided_models.hint_line`): `nothing marked keeps the folder as it is. Fit is from the size of the
-model at 32k context; the exact fit comes after the fetch; (RAM) means the graphics memory is too
-small for it.` -- with `Fit is unknown until this machine is measured.` in place of the second
-sentence when this folder holds no measured machine, and always the context the fit was really
-computed for.
+**A column head, then one line per model** (`ModelChoice`), and only the models that can be picked.
+The head is the first line of the list and no entry of it (`guided_models.list_header`,
+`dialog.Choice(heading=True)`): `Model  Fit  Size  Release  Packagers  Downl.  Ollama`, indented by
+two so its columns stand over the cells -- a heading is drawn without the marker of a row. Without
+it a reader had to guess what a cell meant and `latest` was invisible between two columns of numbers
+(test round, 2026-09-25).
+
+Seven columns, and the **whole** line is at most 100 characters -- ` ❯ ○ ` included, which is the
+one space every line of this screen carries plus the pointer and the marker (`POINTER_WIDTH`, 5;
+a label of 100 made a line of 105): the model's name (the part after the `/`, 24), the fit in a word
+(14: `good`, `marginal`, `too tight`, `unknown` -- and `good (RAM)` or `marginal (RAM)` where the
+graphics memory is too small and the fit is against system memory: fit v1 caps that pool at `good`,
+and live on 2026-09-24 a 122B model stood as `good` above a 9B `marginal` that fits the graphics
+card, with nothing to tell the two apart), its size (6: `9B`, `0.6B`, `2.4T`, `unknown`), where it
+stands in its family (`Release`, 7: `latest`, `legacy`, `–`), the packager accounts that have it
+(16), the downloads of all of them together (6; an indication, not a rank) and the Ollama name (the
+rest of the line, 10). `Release` is one constant (`guided_models.RELEASE_COLUMN`), so the head, this
+section and the tests cannot name it differently.
+
+**A `–`, not a word, where a cell has nothing to say**: `none known` and `unknown` read as facts
+about the model in a column of their own (test round, 2026-09-25), so the Ollama column and the
+`Release` column carry `–` (AGENTS.md, the language standard, carries that rule for every column of
+a list or a table). `none known` stays the word of the search log (`search.NO_OLLAMA_LABEL`), which
+has room for it. **Every cell is cut to its column** with `…`:
+`dialog.columns` pads and never cuts, and a name, an account, a download count and an Ollama name
+all come from a registry. The `Release` column costs the Ollama column four of its characters, so a
+registry name longer than ten is cut here; the install line of step 5 carries the whole one.
+
+The order is the memory pool (a fit in graphics memory before one in system memory, whatever its
+class), then the fit class, then the release (`latest`, then a release nobody knows, then `legacy`),
+then the downloads, then the name, with `too tight` and `unknown` last (decided 2026-09-24,
+release 2026-09-25). A **`legacy` row is drawn gray as a whole** (`dialog.Choice(dim=True)`): the
+family has moved on, and that belongs in the reading of the row rather than in one cell of it.
+
+How many models and how many repositories the search answered with is the second note above the
+list, and the reasons of the repositories that are no model of it are in `search.json` ("Search
+log"; `guided_models.UNRESOLVED_REASONS`, and with `filter_owners` on `not a publisher or a listed
+packager` for an owner class of `other` -- except for the one repository the person typed, which
+that filter never hides) -- the repositories themselves are no lines of the list either. What the
+list has to say about itself is its **instruction line** (`guided_models.hint_line`), under the
+list and behind the line of the keys: `latest: the publisher's current release of its family ·
+legacy: the publisher named a successor · fit from the size at 32k context, exact after the fetch`
+-- with `fit unknown until this machine is measured` in place of the last piece when this folder
+holds no measured machine, and always the context the fit was really computed for. What nothing
+marked would do is no longer said there: `Enter` takes the row under the pointer now.
 
 **The fit of the list** is `fit.fit_from_parameters` ("Fit from size", basis `size`) against the
 profile this folder binds this machine to and the reserves of its `[machines.<name>]` -- the same
@@ -4197,6 +4270,22 @@ snapshot once (second-model round, 2026-09-24). The tables below the card carry 
 `Written to <markdown>   and   <state>` is gone from the screen: the card's `result` row and the
 balance of the step both say where the document is, and the run said the same path three times
 (test round, 2026-09-24). `modelroom render` still prints it.
+
+**A step 5 with nothing to rank** -- the folder holds **no snapshot** -- says so and draws the card
+all the same (`views.show_nothing`, decided 2026-09-25): the note `nothing to rank: no package in
+this folder yet`, the card with the rows it still knows -- the folder, the machines the configuration
+names with the profiles this folder holds (`render.machine_profile`, the same decision the document
+would have rested on), `models none`, the context that was chosen, no measurement and `result –` --
+and the balance `– Results         nothing to rank`. Before that the step was a head with nothing
+under it and the reason stood on stderr, where no reader of the run is (test round, 2026-09-25). The
+exit code is the render's, unchanged (`1`, "nothing to render").
+
+**Every other render that writes no document draws nothing here at all**: a lock another process
+holds, a snapshot of an unsupported schema, a view that could not be written. None of those is a
+folder without packages, so none of them may be reported as one; the command's own sentence and its
+own exit code stand (second-model round, 2026-09-25). A snapshot that holds packages but none a fit
+may be computed for is **not** this case either -- the render writes its document, and the table
+says `no package of the configured base models is ranked here` with `shown     0 of 0 packages`.
 
 **Step 4, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
 which `guided.py` calls between the context and the render). It measures into the profile **the

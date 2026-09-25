@@ -97,7 +97,7 @@ from .search import (
     write_configuration,
 )
 from .state import LockHeldError, write_search_log
-from .views import context_short, show_result
+from .views import context_short, show_nothing, show_result
 
 CONFIG_NAME = "modelroom.toml"
 # How this machine is measured, as `_clone_mode` answers it: the takeover rule as it stands, a new
@@ -125,8 +125,7 @@ QUESTIONS: dict[str, str] = {
     DID_YOU_MEAN_KEY: DID_YOU_MEAN_QUESTION,
     "select": "Which of these models should the result cover?",
     "context": CONTEXT_QUESTION,
-    # Step 4's two questions live with the step (`modelroom/guided_loadtest.py`); the answer file
-    # has one table of keys, so they are merged in here.
+    # Step 4's own two (`modelroom/guided_loadtest.py`): one answer file, so one table of keys.
     **LOAD_TEST_QUESTIONS,
 }
 
@@ -236,7 +235,7 @@ def _looks_like_results_folder(folder: Path) -> bool:
 
 def _machine_key(hostname: str) -> str:
     """This machine's key in `[machines.<name>]`: its host name in the shape a key has to have."""
-    slug = "".join(character if character.isalnum() else "-" for character in hostname.lower()).strip("-")
+    slug = "".join(letter if letter.isalnum() else "-" for letter in hostname.lower()).strip("-")
     if not slug:
         raise GuidedError(f"this machine's host name ({hostname!r}) cannot be a machine name; write one by hand")
     return validate_machine_name(slug)
@@ -247,9 +246,8 @@ def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
 
     `packagers` stays empty: the search writes every repository it resolved as an owner-bound
     `repos` target, so a speculative `<packager>/<name>-GGUF` probe under five accounts per base
-    model would only spend the shared request budget on repositories nobody asked about. The
-    owner classes the selection list shows come from `search.DEFAULT_PACKAGERS` while the
-    configuration lists none, and a user who wants the speculative probes writes the list by hand.
+    model would only spend the shared budget on repositories nobody asked about. The owner classes
+    the list shows come from `search.DEFAULT_PACKAGERS`; whoever wants the probes writes the list.
     """
     folder = config_file.parent
     name = _machine_key(run.probes.hostname())
@@ -286,11 +284,9 @@ def _write_config(run: GuidedRun, config_file: Path, config: Configuration) -> N
 def _remember_folder(run: GuidedRun, folder: Path) -> None:
     """Record the results folder in the pointer file, so the next run finds it without asking.
 
-    Written only when it really changes. The pointer file is one file per user for every results
-    folder and is replaced as a whole, without a lock (the same trade-off `cli._bind_this_machine`
-    documents), so a write that changes nothing could still drop a binding a concurrent
-    `hardware` run added between this read and this write. A run in the folder it already
-    remembers therefore does not write at all.
+    Written only when it really changes: the file is one per user for every results folder and is
+    replaced as a whole, without a lock (the trade-off `cli._bind_this_machine` documents), so even
+    a write that changes nothing could drop a binding a concurrent `hardware` run added in between.
     """
     pointer = read_pointer(run.pointer_path)
     if pointer.current == str(folder):
@@ -708,7 +704,9 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
 
     The card is the report a reader looks at once the run is over -- the same `label value note`
     rows the start screen has, with what this run made of them (decided 2026-09-24). The document
-    it is built from is the one the render just wrote, so no number here is computed twice.
+    it is built from is the one the render just wrote, so no number here is computed twice. With
+    nothing to render the step says so and draws the card all the same (`views.show_nothing`,
+    2026-09-25); the exit code is the render's either way.
     """
     from .cli import render_with_config
 
@@ -717,14 +715,16 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
     written: list = []
 
     def seen(document) -> None:
-        # Inside the callback, which runs while the render still holds the lock: the card and the
-        # table then rest on one snapshot (second-model round, 2026-09-24).
+        # Read inside the callback, which runs while the render still holds the lock: the card and
+        # the table then rest on one snapshot (second-model round, 2026-09-24).
         written.append((document, snapshot_facts(config)))
 
     code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen)
     if written:
         here = _machine_key(run.probes.hostname())
-        show_result(run.screen, run.out, *written[0], config, config_file.parent, run.now, here)
+        show_result(run.screen, *written[0], config, config_file.parent, run.now, here)
+    else:
+        show_nothing(run.screen, config, config_file.parent, scenario, run.now)
     return code
 
 

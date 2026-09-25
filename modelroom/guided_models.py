@@ -6,6 +6,10 @@ appended reason broke the columns. Nobody could tell from it what a choice would
 list is about **models** now: one line per resolved base model, only the ones that can be
 picked, with the fit that follows from the size of the model on this machine.
 
+Since 2026-09-25 the list carries a column head (`list_header`) and a `Release` column, and says
+`–` where it has nothing: the test round read `latest` nowhere, could not tell what a cell meant,
+and took `none known` for a statement about the model.
+
 Three things live here, all pure: `model_choices` groups the search's hits by base model and
 computes each model's fit (`fit.fit_from_parameters`, basis `size`), `list_choices` renders that
 as the checkbox the dialog shows, and `chosen_hits` turns the answer back into the repositories
@@ -31,7 +35,6 @@ from .fit import fit_from_parameters, unknown_fit
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .screen import context_tokens_text
 from .guided_contracts import SearchHit
-from .search import NO_OLLAMA_LABEL
 from .search_pages import format_downloads
 
 SELECT_KEY = "select"
@@ -53,16 +56,35 @@ UNRESOLVED_REASONS: dict[str, str] = {
 OTHER_OWNER_REASON = "not a publisher or a listed packager"
 _PICKABLE_OWNERS = ("publisher", "listed packager")
 
-# The columns of one line: name, fit, size, packagers, downloads -- and the Ollama name, which is
-# the last one. 100 characters is what a terminal window holds without wrapping, and it is a
-# promise, not a hope: every cell is cut to its column and the Ollama name to what is left of the
-# line (`deepseek-r1:8b` made a line of 104 in the second-model round of 2026-09-24; it has 14
-# characters, which is what is left).
-_COLUMN_WIDTHS = (26, 14, 7, 22, 7)
+# The word for where a model stands in its family, as the column head says it. One constant, so
+# the head, the documentation and a test can never name it differently.
+RELEASE_COLUMN = "Release"
+# The columns of one line: name, fit, size, release, packagers, downloads -- and the Ollama name,
+# which is the last one and takes what is left.
+COLUMN_NAMES = ("Model", "Fit", "Size", RELEASE_COLUMN, "Packagers", "Downl.", "Ollama")
+_COLUMN_WIDTHS = (24, 14, 6, 7, 16, 6)
+# 100 characters is what a terminal window holds without wrapping, and it is a promise, not a hope:
+# every cell is cut to its column and the Ollama name to what is left of the line. Since 2026-09-25
+# the promise covers the **whole** line: `questionary` draws ` ❯ ○ ` in front of a row -- the one
+# space every line of this screen carries, the pointer and the marker -- and a label of 100 made a
+# line of 105. The `Release` column is what that costs the Ollama name; the install line of step 5
+# carries the whole name.
 LINE_LIMIT = 100
+POINTER_WIDTH = 5
+LABEL_LIMIT = LINE_LIMIT - POINTER_WIDTH
+# A heading is drawn without the marker of a row (three spaces, not five), so the head carries the
+# two characters that are missing itself and its columns stand over the cells.
+_HEAD_INDENT = "  "
 # What the padded columns and the two spaces between them take up, so the last cell knows its room.
 _FIXED_WIDTH = sum(_COLUMN_WIDTHS) + 2 * len(_COLUMN_WIDTHS)
-_OLLAMA_WIDTH = LINE_LIMIT - _FIXED_WIDTH
+_OLLAMA_WIDTH = LABEL_LIMIT - _FIXED_WIDTH
+# What a cell says where there is nothing to say: `none known` and `unknown` in a column of their
+# own read as a fact about the model rather than as an empty cell (test round, 2026-09-25).
+DASH = "–"
+_RELEASE_WORDS = {"latest": "latest", "legacy": "legacy", UNKNOWN: DASH}
+# `latest` first, then a release nobody knows, then `legacy`: a reader is choosing what to fetch,
+# and a model whose family has moved on belongs under the ones that have not (decided 2026-09-25).
+_RELEASE_ORDER = ("latest", UNKNOWN, "legacy")
 # Up to three packager accounts are named; beyond that the first two and a count, so the column
 # stays a column (`unsloth, bartowski +2`).
 NAMED_PACKAGERS = 3
@@ -77,12 +99,13 @@ _RAM_SUFFIX = " (RAM)"
 _MODE_ORDER = ("gpu", "cpu_gpu", "cpu", None)
 _SETTLED = ("too_tight", "unknown")
 
-NOTHING_MARKED_HINT = "nothing marked keeps the folder as it is."
-FIT_FROM_SIZE_HINT = (
-    "Fit is from the size of the model at {context} context; the exact fit comes after the fetch; "
-    "(RAM) means the graphics memory is too small for it."
+# An age statement is positive evidence about one model, never a comparison of two version numbers
+# (AGENTS.md, the language standard): `legacy` means a successor was named, and that is what it says.
+RELEASE_HINT = (
+    "latest: the publisher's current release of its family · legacy: the publisher named a successor"
 )
-FIT_UNKNOWN_HINT = "Fit is unknown until this machine is measured."
+FIT_FROM_SIZE_HINT = "fit from the size at {context} context, exact after the fetch"
+FIT_UNKNOWN_HINT = "fit unknown until this machine is measured"
 
 # A parameter count in a model name: `9B`, `0.6B`, `2.4T`, and never one that stands behind a
 # letter, a digit or a decimal point -- `A3B`, `A17B`, `8x7B` are the active parameters of a
@@ -148,9 +171,23 @@ class ModelChoice(BaseModel):
         return _count_text(self.parameters_b, "B")
 
     @property
+    def release_text(self) -> str:
+        """Where this model stands in its family, as the column shows it: `latest`, `legacy`, `–`.
+
+        A dash and not `unknown`: the word is a fact about a model in the data, and in a column of
+        its own it read as one about this model (test round, 2026-09-25).
+        """
+        return _RELEASE_WORDS.get(str(self.age), DASH)
+
+    @property
+    def legacy(self) -> bool:
+        """Whether this row is drawn gray: the publisher named a successor for this model."""
+        return self.age == "legacy"
+
+    @property
     def packagers_text(self) -> str:
         """The packager accounts, shortened to the width of their column."""
-        width = _COLUMN_WIDTHS[3]
+        width = _COLUMN_WIDTHS[4]
         full = ", ".join(self.packagers)
         if len(self.packagers) <= NAMED_PACKAGERS and len(full) <= width:
             return full
@@ -162,7 +199,9 @@ class ModelChoice(BaseModel):
 
     @property
     def ollama_text(self) -> str:
-        return self.ollama if self.ollama is not None else NO_OLLAMA_LABEL
+        """The Ollama name, or a dash where the registry maps none (`search.NO_OLLAMA_LABEL` is
+        what the search log says; a column of a list has room for one character, 2026-09-25)."""
+        return self.ollama if self.ollama is not None else DASH
 
 
 def _clip(text: str, width: int) -> str:
@@ -273,7 +312,15 @@ def _list_order(model: ModelChoice) -> tuple:
     fit = model.fit
     settled = fit.fit_class in _SETTLED
     pool = _CLASS_ORDER.index(fit.fit_class) if settled else _MODE_ORDER.index(fit.mode)
-    return (settled, pool, _CLASS_ORDER.index(fit.fit_class), -(model.downloads or 0), model.name)
+    release = _RELEASE_ORDER.index(str(model.age)) if str(model.age) in _RELEASE_ORDER else len(_RELEASE_ORDER)
+    return (
+        settled,
+        pool,
+        _CLASS_ORDER.index(fit.fit_class),
+        release,
+        -(model.downloads or 0),
+        model.name,
+    )
 
 
 def _model_choice(base_model: str, repos: list[SearchHit], checked: Checked, context: int) -> ModelChoice:
@@ -329,38 +376,52 @@ def model_fit(parameters_b: float | None, checked: Checked, context: int) -> Fit
     )
 
 
+def list_header() -> Choice:
+    """The column head of the list: the first line, and no entry anybody can pick.
+
+    The list had none, so a reader had to guess what a cell meant and `latest` was invisible
+    between two columns of numbers (test round, 2026-09-25).
+    """
+    return Choice("", _HEAD_INDENT + columns([list(COLUMN_NAMES)], _COLUMN_WIDTHS)[0], heading=True)
+
+
 def list_choices(models: Sequence[ModelChoice]) -> list[Choice]:
     """The checkbox of step 2: one line per model, nothing grayed out, the base model as value.
 
     Every cell is cut to its column before the columns are laid out, so no name can push a line
-    past `LINE_LIMIT` -- `dialog.columns` pads, it never cuts, and that is right for the lists
-    whose cells this package controls the length of. Here the length comes from a registry.
+    past `LABEL_LIMIT` -- `dialog.columns` pads, it never cuts, and that is right for the lists
+    whose cells this package controls the length of. Here the length comes from a registry. A
+    `legacy` row is dimmed as a whole: it is a model whose family has moved on, and that belongs in
+    the reading of the row, not only in one cell of it.
     """
     rows = [
         [
             _clip(model.name, _COLUMN_WIDTHS[0]),
             _clip(model.fit_word, _COLUMN_WIDTHS[1]),
             _clip(model.size_text, _COLUMN_WIDTHS[2]),
+            _clip(model.release_text, _COLUMN_WIDTHS[3]),
             model.packagers_text,  # already cut to its column
-            _clip(format_downloads(model.downloads), _COLUMN_WIDTHS[4]),
+            _clip(format_downloads(model.downloads), _COLUMN_WIDTHS[5]),
             _clip(model.ollama_text, _OLLAMA_WIDTH),
         ]
         for model in models
     ]
     labels = columns(rows, _COLUMN_WIDTHS)
-    return [Choice(model.base_model, label) for model, label in zip(models, labels)]
+    return [Choice(model.base_model, label, dim=model.legacy) for model, label in zip(models, labels)]
 
 
 def hint_line(checked: Checked, context: int) -> str:
-    """What this list has to say about itself: what nothing marked does, and where its fit is from.
+    """What this list has to say about itself: the two release words, and where its fit is from.
 
-    It is the instruction line of the question now, not a line of the run (decided 2026-09-24): a
+    It is an instruction line of the question, not a line of the run (decided 2026-09-24): a
     sentence that explains a list has nothing to say once the list is gone. The context it names is
-    the one the fit was really computed for, which is the one the next question starts on.
+    the one the fit was really computed for, which is the one the next question starts on. What
+    nothing marked does is no longer said here -- `Enter` takes the row under the pointer now
+    (`dialog.TerminalAsker.checkbox`, decided 2026-09-25).
     """
     measured = checked.profile is not None and checked.machine_config is not None
     fit = FIT_FROM_SIZE_HINT.format(context=context_tokens_text(context)) if measured else FIT_UNKNOWN_HINT
-    return f"{NOTHING_MARKED_HINT} {fit}"
+    return f"{RELEASE_HINT} · {fit}"
 
 
 def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instruction: str) -> list[str]:
@@ -372,8 +433,12 @@ def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instr
     repositories are added to the values an answer may name there -- and on no screen, where they
     would be the 120 lines this list exists to replace. The question is asked once either way, so
     a file's `select` is read once.
+
+    The column head stands in front of the rows, as the first line of the list and no entry of it
+    (`list_header`); a file reads no list, so it is no part of the choices an answer is held
+    against (`dialog.selectable`) either way.
     """
-    choices = list_choices(models)
+    choices = [list_header(), *list_choices(models)]
     if isinstance(asker, FileAsker):
         choices = [*choices, *_repo_choices(models)]
     return asker.checkbox(SELECT_KEY, question, choices, instruction)
@@ -462,11 +527,16 @@ def _repositories(count: int) -> str:
 
 
 __all__ = [
+    "COLUMN_NAMES",
+    "DASH",
     "DEFAULT_CONTEXT",
+    "LABEL_LIMIT",
     "LINE_LIMIT",
     "MACHINE_NOT_MEASURED",
     "OTHER_OWNER_REASON",
     "PARAMETER_COUNT_UNKNOWN",
+    "POINTER_WIDTH",
+    "RELEASE_COLUMN",
     "SELECT_KEY",
     "UNRESOLVED_REASONS",
     "ModelChoice",
@@ -476,6 +546,7 @@ __all__ = [
     "hit_reason",
     "list_choices",
     "list_context",
+    "list_header",
     "model_choices",
     "model_fit",
     "parameters_from_name",

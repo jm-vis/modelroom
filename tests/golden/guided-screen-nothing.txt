@@ -33,3 +33,13 @@
  – Measurement     none in this run
 
  ── Step 5 of 5  Results ────────────────────────────────────────────────
+   nothing to rank: no package in this folder yet
+
+ folder    <results>
+ machine   workstation             12 GB graphics, 128 GB memory, measured today
+ models    none                    0 packages from no account
+ context   L 32k                   24,000 words, a report or a long contract
+ speed     not measured            say Yes in step 4 to measure an installed package
+ result    –
+
+ – Results         nothing to rank

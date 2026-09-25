@@ -102,7 +102,51 @@ def test_fetch_ollama_area_keeps_only_tags_matching_the_configured_size():
     assert outcome.status == "complete"
     assert outcome.error is None
     names = {pkg.ollama_name for pkg in outcome.packages}
-    assert names == {"qwen3.5:9b", "qwen3.5:9b-q4_K_M", "qwen3.5:9b-mlx-bf16"}
+    assert names == {"qwen3.5:9b", "qwen3.5:9b-mlx-bf16"}
+
+
+def test_two_tags_of_one_manifest_are_one_package_under_the_shortest_tag():
+    """`qwen3.5:9b` and `qwen3.5:9b-q4_K_M` stood twice in the ranking (test round, 2026-09-25).
+
+    They are two names of one manifest -- the same digest, byte for byte -- so they are one
+    package now, named by the shortest tag, with the other tags as `aliases`.
+    """
+    outcome = fetch_ollama_area(_happy_path_transport(), _qwen35_9b(), RUN_AT)
+
+    by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
+
+    assert len(outcome.packages) == 2
+    assert by_name["qwen3.5:9b"].aliases == ["9b-q4_K_M"]
+    assert by_name["qwen3.5:9b-mlx-bf16"].aliases == []
+
+
+def test_the_shortest_tag_wins_whatever_order_the_page_lists_them_in():
+    html = (
+        b"<html><body>"
+        b'<a href="/library/qwen3.5:9b-q4_K_M">9b-q4_K_M</a>'
+        b'<a href="/library/qwen3.5:9b">9b</a>'
+        b"</body></html>"
+    )
+    transport = build_transport(
+        {
+            ("GET", TAGS_URL): Response(status=200, headers={}, body=html),
+            ("GET", _manifest_url("9b")): json_response("ollama_qwen35_9b.json"),
+            ("GET", _manifest_url("9b-q4_K_M")): json_response("ollama_qwen35_9b-q4_K_M.json"),
+        }
+    )
+
+    outcome = fetch_ollama_area(transport, _qwen35_9b(), RUN_AT)
+
+    assert [pkg.ollama_name for pkg in outcome.packages] == ["qwen3.5:9b"]
+    assert outcome.packages[0].aliases == ["9b-q4_K_M"]
+
+
+def test_a_files_name_comes_from_the_tag_the_package_is_named_by():
+    outcome = fetch_ollama_area(_happy_path_transport(), _qwen35_9b(), RUN_AT)
+
+    by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
+
+    assert [file.name for file in by_name["qwen3.5:9b"].files] == ["9b.gguf"]
 
 
 def test_fetch_ollama_area_zero_tags_parsed_is_incomplete():
@@ -160,16 +204,16 @@ def test_fetch_ollama_area_inherits_quantization_from_a_digest_sibling():
 
     by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
     # "9b" alone carries no quantization token of its own; "9b-q4_K_M" is byte-identical
-    # (same weights-layer digest), so "9b" inherits Q4_K_M from it.
+    # (same weights-layer digest), so "9b" inherits Q4_K_M from it -- and since 2026-09-25 the
+    # two tags are one package, so the inherited label is the one that is left.
     assert by_name["qwen3.5:9b"].quantization == "Q4_K_M"
-    assert by_name["qwen3.5:9b-q4_K_M"].quantization == "Q4_K_M"
 
 
 def test_fetch_ollama_area_gguf_package_with_matching_tags_is_metadata_ok():
     outcome = fetch_ollama_area(_happy_path_transport(), _qwen35_9b(), RUN_AT)
 
     by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
-    assert by_name["qwen3.5:9b-q4_K_M"].provenance == "metadata_ok"
+    assert by_name["qwen3.5:9b"].provenance == "metadata_ok"
 
 
 # --- manifest digest: sha256 of the GET body, no HEAD request at all (F5) ------------------
@@ -396,6 +440,101 @@ def test_fetch_ollama_area_carries_forward_an_approval_bound_to_the_current_dige
     by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
     assert by_name["qwen3.5:9b"].provenance == "approved"
     assert by_name["qwen3.5:9b"].approval.content == _MANIFEST_9B_DIGEST
+
+
+def test_an_approval_given_to_a_tag_that_is_now_an_alias_is_carried_forward():
+    """One package per manifest must not drop the approval of the tag it absorbed (2026-09-25).
+
+    `qwen3.5:9b-q4_K_M` was a package of its own and could have been approved; it is now an alias
+    of `qwen3.5:9b`, the same manifest under the same digest, and the approval is about the content.
+    """
+    previous = Package(
+        source="ollama",
+        ollama_name="qwen3.5:9b-q4_K_M",
+        manifest_digest=_MANIFEST_9B_DIGEST,
+        base_model_hf_repo="Qwen/Qwen3.5-9B",
+        format="gguf",
+        files=[PackageFile(name="9b-q4_K_M.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_K_M",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=Approval(date=date(2026, 9, 1), content=_MANIFEST_9B_DIGEST, by="acme-ai-team"),
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+
+    outcome = fetch_ollama_area(
+        _happy_path_transport(), _qwen35_9b(), RUN_AT, previous_by_key={package_identity_key(previous): previous}
+    )
+
+    kept = {pkg.ollama_name: pkg for pkg in outcome.packages}["qwen3.5:9b"]
+    assert kept.aliases == ["9b-q4_K_M"]
+    assert kept.provenance == "approved"
+    assert kept.approval.content == _MANIFEST_9B_DIGEST
+
+
+def _approved_ollama_package(tag: str, content: str, manifest_digest: str) -> Package:
+    return Package(
+        source="ollama",
+        ollama_name=f"qwen3.5:{tag}",
+        manifest_digest=manifest_digest,
+        base_model_hf_repo="Qwen/Qwen3.5-9B",
+        format="gguf",
+        files=[PackageFile(name=f"{tag}.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_K_M",
+        default_context=None,
+        provenance="approved" if content == manifest_digest else "metadata_ok",
+        unresolved_reason=None,
+        approval=Approval(date=date(2026, 9, 1), content=content, by="acme-ai-team"),
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+
+
+def test_the_approval_that_matches_this_manifest_wins_over_a_stale_one():
+    """A stale approval on the tag the package is named by must not shadow a valid one on an alias
+    (second-model round, 2026-09-25): `decide_provenance` would never see the valid one."""
+    stale = _approved_ollama_package("9b", "sha256:" + "1" * 64, "sha256:" + "1" * 64)
+    valid = _approved_ollama_package("9b-q4_K_M", _MANIFEST_9B_DIGEST, _MANIFEST_9B_DIGEST)
+    previous_by_key = {package_identity_key(stale): stale, package_identity_key(valid): valid}
+
+    outcome = fetch_ollama_area(_happy_path_transport(), _qwen35_9b(), RUN_AT, previous_by_key=previous_by_key)
+
+    kept = {pkg.ollama_name: pkg for pkg in outcome.packages}["qwen3.5:9b"]
+    assert kept.approval.content == _MANIFEST_9B_DIGEST
+    assert kept.provenance == "approved"
+
+
+def test_an_approval_of_an_alias_of_another_base_model_is_not_carried_forward():
+    """The rule an alias does not widen: an approval is bound to the base model it was given for."""
+    previous = Package(
+        source="ollama",
+        ollama_name="qwen3.5:9b-q4_K_M",
+        manifest_digest=_MANIFEST_9B_DIGEST,
+        base_model_hf_repo="acme/Other-9B",
+        format="gguf",
+        files=[PackageFile(name="9b-q4_K_M.gguf", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="Q4_K_M",
+        default_context=None,
+        provenance="approved",
+        unresolved_reason=None,
+        approval=Approval(date=date(2026, 9, 1), content=_MANIFEST_9B_DIGEST, by="acme-ai-team"),
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+
+    outcome = fetch_ollama_area(
+        _happy_path_transport(), _qwen35_9b(), RUN_AT, previous_by_key={package_identity_key(previous): previous}
+    )
+
+    assert {pkg.ollama_name: pkg for pkg in outcome.packages}["qwen3.5:9b"].approval is None
 
 
 def test_fetch_ollama_area_approval_bound_to_an_older_digest_is_not_approved():

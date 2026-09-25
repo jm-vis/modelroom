@@ -389,8 +389,10 @@ def result_table_problems(lines: list[str]) -> list[str]:
         problems.append("the result view has no table head with Model, Package and Fit")
     elif head.split() != ["#", "Model", "Package", "Fit", "Speed", "Memory"]:
         problems.append(f"the columns of the result table are {head.split()}")
-    if not any(line.strip().startswith("showing ") for line in lines):
+    if not any(line.strip().startswith("shown ") for line in lines):
         problems.append("the result table says not how many of its rows are shown")
+    if not any(line.strip().startswith("install ") for line in lines):
+        problems.append("the result table carries no install line for the machine of this run")
     pooled = [line for line in lines if "graphics memory" in line or "system memory" in line]
     if pooled and not all("#" in line for line in pooled):
         problems.append(f"a note about the memory pool names no rank: {pooled}")

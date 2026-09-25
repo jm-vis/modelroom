@@ -370,7 +370,12 @@ def test_a_package_with_no_local_name_gets_no_line():
 
 
 def test_the_install_line_is_a_line_to_copy():
-    assert install_pull_line(1, "hf.co/a/b:Q8_0") == "to install #1: ollama pull hf.co/a/b:Q8_0"
+    """The rank is a side remark, the command is the thing: `to install #1: ollama pull …` read as
+    one sentence and the command went under in it (test round, 2026-09-25)."""
+    line = install_pull_line(1, "hf.co/a/b:Q8_0")
+
+    assert plain(line) == " #1  ollama pull hf.co/a/b:Q8_0"
+    assert [name for name, _text in line] == ["class:note", "", "class:command"]
 
 
 # --- the screen itself -----------------------------------------------------------------------------

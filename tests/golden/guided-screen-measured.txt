@@ -3,7 +3,7 @@
  ▓▓ ██ ░░ ░░   modelroom 0.1.0 · github.com/jm-vis/modelroom
 
  folder    not chosen yet          the first question asks where results live
- daemon    Ollama 0.34.2           reachable, 5 models installed
+ daemon    Ollama 0.34.2           reachable, 5 models, 4 of them local
  machine   workstation             not measured in this results folder yet
 
  Five steps: configuration, packages, context, measurement, results.
@@ -21,7 +21,7 @@
    searched Hugging Face at the publisher Qwen and the five listed packagers
    4 repositories, 2 of them models you can pick from
  ? Which of these models should the result cover?  Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B
- ✓ Packages        2 models, 25 packages from 3 repositories
+ ✓ Packages        2 models, 24 packages from 3 repositories
 
  ── Step 3 of 5  Context ────────────────────────────────────────────────
  ? How much text should a model handle at once?  S  8k  6,000 words  a long conversation
@@ -42,10 +42,10 @@
 
  folder    <results>
  machine   workstation             12 GB graphics, 128 GB memory, measured today
- models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  25 packages from unsloth and Ollama
+ models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
  context   S 8k                    6,000 words, a long conversation
  speed     1 measured              fastest DeepSeek-R1-0528-Qwen3-8B at <speed>
- result    docs\models.md          25 packages ranked, none too tight
+ result    docs\models.md          24 packages ranked, none too tight
 
  workstation · context S 8k
  #    Model                     Package                 Fit                   Speed         Memory
@@ -60,8 +60,11 @@
  8    Qwen3.5-9B                unsloth · UD-Q3_K_XL    good                  –             6.8 GB
  9    Qwen3.5-9B                unsloth · IQ4_XS        good                  –             6.9 GB
  10   Qwen3.5-9B                unsloth · IQ4_NL        good                  –             7.1 GB
- showing 10 of 25
- #1–10 fit into graphics memory (11.0 GB free after the reserve)
- (from size): #2–10 computed from the package size, not its architecture
- to install #1: ollama pull hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
+ shown     10 of 24 packages
+ memory    #1–10 fit into graphics memory, 11.0 GB free after the reserve
+ basis     #2–10 computed from the package size, not its architecture
+ speed     #1 measured <speed>
+
+ install   #1  ollama pull hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
+
  ✓ Results         docs\models.md

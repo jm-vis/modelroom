@@ -58,6 +58,11 @@ CHOICES = [
     Choice("import", "import a profile file"),
     Choice("enter", "enter a machine by hand", disabled="stage 2"),
 ]
+# The same list with nothing marked, for the Enter rule: `Enter` takes the row under the pointer
+# only where nothing is marked, so a list that starts marked cannot show that rule at all.
+UNMARKED = [Choice(choice.value, choice.label, disabled=choice.disabled) for choice in CHOICES]
+PICKS = [Choice("first", "the first row"), Choice("second", "the second row")]
+HEADED = [Choice("", "Model                Fit", heading=True), *PICKS]
 
 
 # --- the terminal asker, over a real prompt_toolkit input --------------------------------------
@@ -121,7 +126,74 @@ def test_the_pointer_of_a_select_starts_on_the_checked_entry():
         assert asker.select("results", "Where?", choices) == "path"
 
 
+# --- Enter takes the row under the pointer (test round, 2026-09-25) -------------------------------
+
+
+def test_enter_without_a_mark_takes_the_row_under_the_pointer():
+    """"I thought the bar was the selection": Enter alone took nothing at all (test round, 2026-09-25)."""
+    with _asker(ENTER) as asker:
+        assert asker.checkbox("select", "Which?", PICKS) == ["first"]
+
+
+def test_space_then_enter_takes_the_marked_row_alone():
+    with _asker(DOWN + " " + ENTER) as asker:
+        assert asker.checkbox("select", "Which?", PICKS) == ["second"]
+
+
+def test_a_marked_row_is_never_widened_by_the_row_under_the_pointer():
+    with _asker(" " + DOWN + ENTER) as asker:
+        assert asker.checkbox("select", "Which?", PICKS) == ["first"]
+
+
+def test_enter_takes_the_pointer_row_of_every_checkbox_of_the_dialog():
+    """The machine list of step 1 as well, not only the models of step 2."""
+    with _asker(DOWN + ENTER) as asker:
+        assert asker.checkbox("machines", "Machines?", UNMARKED) == ["import"]
+
+
+def test_enter_never_takes_a_grayed_out_entry():
+    """The pointer cannot rest on one, so the rule can never reach it either."""
+    with _asker(DOWN + DOWN + ENTER) as asker:
+        assert asker.checkbox("machines", "Machines?", UNMARKED) == ["this-machine"]
+
+
+# --- the column head of a list -------------------------------------------------------------------
+
+
+def test_a_heading_is_no_answer_of_its_own():
+    assert selectable(HEADED) == ["first", "second"]
+
+
+def test_the_pointer_starts_under_a_heading_and_enter_takes_that_row():
+    with _asker(ENTER) as asker:
+        assert asker.checkbox("select", "Which?", HEADED) == ["first"]
+
+
+def test_a_heading_stands_in_the_list_as_a_line_of_its_own():
+    transcript = _transcript(ENTER, lambda asker: asker.checkbox("select", "Which?", HEADED))
+
+    assert "Model                Fit" in transcript
+
+
+def test_a_heading_cannot_be_answered_from_a_file():
+    with pytest.raises(AnswerInvalidError):
+        FileAsker({"select": [""]}).checkbox("select", "Which?", HEADED)
+
+
+def test_a_dimmed_choice_is_handed_to_the_library_as_a_gray_title():
+    """A `legacy` row is gray as a whole; the characters are the same without color (2026-09-25)."""
+    from modelroom.dialog import _questionary_choices
+
+    built = _questionary_choices([Choice("a", "a legacy row", dim=True), Choice("b", "a plain row")])
+
+    assert built[0].title == [("class:note", "a legacy row")]
+    assert built[1].title == "a plain row"
+
+
 # --- the answer line is the run's, not the library's --------------------------------------------
+
+
+KEYS_MARKING = "↑↓ move   Space marks   Enter takes the marked rows, or this one   Esc leave"
 
 
 def _transcript(keys: str, ask) -> str:
@@ -131,6 +203,14 @@ def _transcript(keys: str, ask) -> str:
         pipe.send_text(keys)
         ask(TerminalAsker(input=pipe, output=PlainTextOutput(sink)))
     return sink.getvalue()
+
+
+def _rows(transcript: str) -> list[str]:
+    """The lines of one question's transcript, stripped and without the blanks.
+
+    The library writes `\\r` and `\\n` alike, so every row arrives with an empty one behind it.
+    """
+    return [line.strip() for line in transcript.replace("\r", "\n").splitlines() if line.strip()]
 
 
 def test_a_list_writes_no_answer_of_its_own_once_it_is_answered():
@@ -161,23 +241,56 @@ def test_a_select_writes_no_answer_of_its_own_either():
     assert transcript.count("this folder (C:/results)") == 1
 
 
-def test_a_list_says_what_it_has_to_say_about_itself_in_its_instruction_line():
-    """A sentence that explains a list has nothing to say once the list is gone (2026-09-24)."""
-    extra = "nothing marked keeps the folder as it is."
+def test_a_list_says_what_it_has_to_say_about_itself_under_the_list():
+    """Two places, because the two lines are not worth the same (measured 2026-09-25): the list
+    window scrolls around the pointer, so a line at its end is out of sight while the pointer is at
+    its start. The keys are what a reader needs then, so they stay next to the question."""
+    extra = "latest: the publisher's current release of its family"
 
     transcript = _transcript(
         ENTER, lambda asker: asker.checkbox("machines", "Machines?", CHOICES, extra)
     )
 
-    # The line wraps at the width of the window, so the text is held against its start.
-    assert "Esc leave · nothing marked" in transcript
-    assert "Space marks" in transcript
+    rows = _rows(transcript)
+    assert rows[0].startswith(f"? Machines? {KEYS_MARKING[:30]}")
+    assert rows.index(extra) > rows.index("○ import a profile file")
 
 
-def test_the_instruction_line_of_a_list_without_one_is_the_keys_alone():
+def test_a_list_without_anything_to_say_about_itself_carries_the_keys_alone():
     transcript = _transcript(ENTER, lambda asker: asker.checkbox("machines", "Machines?", CHOICES))
 
-    assert "Space marks   Enter confirms   Esc leave" in transcript
+    rows = _rows(transcript)
+    assert rows[0].startswith(f"? Machines? {KEYS_MARKING[:30]}")
+    # No line of the list beyond the three entries: nothing was said about the list itself.
+    assert rows[-1] == "- enter a machine by hand (stage 2)"
+
+
+def test_a_long_instruction_line_wraps_instead_of_being_cut():
+    """Measured 2026-09-25 in a window of 100 columns: the library's list window does not wrap, and
+    the last piece of the 153-character hint of step 2 was simply gone."""
+    from prompt_toolkit.data_structures import Size
+
+    class _Narrow(PlainTextOutput):
+        def get_size(self) -> Size:
+            return Size(rows=40, columns=100)
+
+    hint = (
+        "latest: the publisher's current release of its family · legacy: the publisher named a "
+        "successor · fit from the size at 32k context, exact after the fetch"
+    )
+    sink = io.StringIO()
+    with create_pipe_input() as pipe:
+        pipe.send_text(ENTER)
+        TerminalAsker(input=pipe, output=_Narrow(sink)).checkbox("select", "Which?", PICKS, hint)
+
+    assert len(hint) > 100
+    assert "exact after the fetch" in sink.getvalue().replace("\r", "").replace("\n", "")
+
+
+def test_a_select_says_which_key_picks_behind_its_question():
+    transcript = _transcript(ENTER, lambda asker: asker.select("results", "Where?", PICKS))
+
+    assert _rows(transcript)[0] == "? Where? ↑↓ move   Enter select   Esc leave"
 
 
 # --- the size scale at the terminal (`select_or_text`) -------------------------------------------

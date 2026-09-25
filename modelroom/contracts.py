@@ -32,6 +32,8 @@ _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 _MANIFEST_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _APPROVAL_CONTENT_RE = re.compile(r"^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")
 _OLLAMA_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
+# The tag half of an `ollama_name` on its own, for the other tags of one manifest (`Package.aliases`).
+_OLLAMA_TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MACHINE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # A hardware profile's identity (profile v2, `modelroom/profile.py`): 16 lowercase hex
 # characters, random, created once per profile file. Defined here because the configuration's
@@ -350,6 +352,10 @@ class Package(BaseModel):
 
     Exactly the fields of its `source` are set: a Hugging Face package carries `repo` and
     `revision`, never `ollama_name`/`manifest_digest`, and vice versa.
+
+    `aliases` are the other tags of the very same Ollama manifest, which is why they are no
+    packages of their own (`ollama._assemble_packages`, decided 2026-09-25); optional and empty by
+    default, so a snapshot written before it reads unchanged and `schema_version` stays where it is.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -359,6 +365,7 @@ class Package(BaseModel):
     revision: str | None = None
     ollama_name: str | None = None
     manifest_digest: str | None = None
+    aliases: list[str] = Field(default_factory=list)
     base_model_hf_repo: str
     format: Literal["gguf", "tensor", "unknown"]
     files: list[PackageFile] = Field(default_factory=list)
@@ -395,6 +402,24 @@ class Package(BaseModel):
         if value is not None and value not in QUANT_ORDER:
             raise ValueError(f"quantization must be a QUANT_ORDER member or None: {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def _check_aliases(self) -> "Package":
+        """Every alias is another tag of this package's own manifest, each named once. A Hugging
+        Face package has none: one repository holds one build under one file name."""
+        if self.source == "huggingface":
+            if self.aliases:
+                raise ValueError("a huggingface package carries no aliases")
+            return self
+        own_tag = (self.ollama_name or "").partition(":")[2]
+        for index, alias in enumerate(self.aliases):
+            if not _OLLAMA_TAG_RE.fullmatch(alias):
+                raise ValueError(f"an alias must be an Ollama tag: {alias!r}")
+            if alias == own_tag:
+                raise ValueError(f"an alias must not repeat the package's own tag: {alias!r}")
+            if alias in self.aliases[:index]:
+                raise ValueError(f"the alias {alias!r} is named twice")
+        return self
 
     @model_validator(mode="after")
     def _check_source_fields(self) -> "Package":

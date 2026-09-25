@@ -12,15 +12,20 @@ from modelroom.config import MachineConfig
 from modelroom.guided_context import Checked
 from modelroom.guided_contracts import SearchHit
 from modelroom.guided_models import (
+    COLUMN_NAMES,
     DEFAULT_CONTEXT,
+    LABEL_LIMIT,
     LINE_LIMIT,
     MACHINE_NOT_MEASURED,
     PARAMETER_COUNT_UNKNOWN,
+    POINTER_WIDTH,
+    RELEASE_COLUMN,
     ModelChoice,
     chosen_hits,
     hint_line,
     list_choices,
     list_context,
+    list_header,
     model_choices,
     parameters_from_name,
     picked_names,
@@ -258,9 +263,9 @@ def _labels(models) -> list[str]:
     return [choice.label for choice in list_choices(models)]
 
 
-def test_the_list_shows_name_fit_size_packagers_downloads_and_ollama():
+def test_the_list_shows_name_fit_size_release_packagers_downloads_and_ollama():
     hits = [
-        _hit("Qwen/Qwen3.5-9B-GGUF", owner="publisher", downloads=12_031_627, ollama="qwen3.5:9b"),
+        _hit("Qwen/Qwen3.5-9B-GGUF", owner="publisher", downloads=12_031_627, ollama="qwen3.5:9b", age="legacy", successor="Qwen/Qwen3.8-9B"),
         _hit("unsloth/Qwen3.5-9B-GGUF", downloads=1_626_475, ollama="qwen3.5:9b"),
     ]
 
@@ -269,13 +274,59 @@ def test_the_list_shows_name_fit_size_packagers_downloads_and_ollama():
     assert label.startswith("Qwen3.5-9B")
     assert "good" in label
     assert "9B" in label
+    assert "legacy" in label
     assert "Qwen, unsloth" in label
     assert "13.6M" in label
     assert label.rstrip().endswith("qwen3.5:9b")
 
 
-def test_a_model_without_an_ollama_name_says_none_known():
-    assert _labels(_models([_hit("unsloth/Qwen3.5-9B-GGUF")]))[0].rstrip().endswith("none known")
+def test_the_head_of_the_list_names_every_column_and_cannot_be_picked():
+    """The list had no column head at all, so nobody could tell what a cell meant (2026-09-25)."""
+    head = list_header()
+
+    assert head.heading is True
+    assert head.label.split() == list(COLUMN_NAMES)
+    assert RELEASE_COLUMN in COLUMN_NAMES
+
+
+def test_the_head_is_indented_so_its_columns_stand_over_the_cells():
+    """A heading is drawn without the marker of a row, so its own line carries that width."""
+    head = list_header()
+    row = _labels(_models([_hit("unsloth/Qwen3.5-9B-GGUF")]))[0]
+
+    assert head.label.index("Model") == 2
+    assert head.label.index("Fit") - 2 == row.index("good")
+
+
+def test_a_model_without_an_ollama_name_says_a_dash():
+    """`none known` in a column of its own irritated the test round of 2026-09-25."""
+    label = _labels(_models([_hit("unsloth/Qwen3.5-9B-GGUF")]))[0]
+
+    assert label.rstrip().endswith("–")
+    assert "none known" not in label
+
+
+def test_an_unknown_release_is_a_dash_and_never_the_word():
+    model = _models([_hit("unsloth/Qwen3.5-9B-GGUF")])[0]
+
+    assert model.release_text == "–"
+    assert _labels([model])[0].count("unknown") == 0
+
+
+def test_the_release_column_carries_the_word_of_the_age():
+    latest = _models([_hit("unsloth/Qwen3.5-9B-GGUF", age="latest")])[0]
+    legacy = _models([_hit("unsloth/Qwen3.5-9B-GGUF", age="legacy", successor="Qwen/Qwen3.8-9B")])[0]
+
+    assert (latest.release_text, legacy.release_text) == ("latest", "legacy")
+
+
+def test_a_legacy_row_is_drawn_gray_as_a_whole():
+    hits = [_hit("unsloth/Qwen3.5-9B-GGUF", age="legacy", successor="Qwen/Qwen3.8-9B"), _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", age="latest")]
+
+    dimmed = {choice.label.split()[0]: choice.dim for choice in list_choices(_models(hits))}
+
+    assert dimmed["Qwen3.5-9B"] is True
+    assert dimmed["Nova-9B"] is False
 
 
 def test_an_account_with_two_builds_of_one_model_stands_once():
@@ -288,23 +339,27 @@ def test_an_account_with_two_builds_of_one_model_stands_once():
     assert len(model.repos) == 3
 
 
-def test_more_than_three_packagers_are_shortened_with_a_count():
+def test_more_than_three_packagers_are_cut_to_their_column():
+    """`+3` no longer fits the 16 characters this column has, so the names are cut with `…`."""
     hits = [_hit(f"{owner}/Qwen3.5-9B-GGUF") for owner in ("unsloth", "bartowski", "mradermacher", "ggml-org", "lmstudio-community")]
 
     label = _labels(_models(hits))[0]
 
-    assert "unsloth, bartowski +3" in label
+    assert "unsloth, bartow…" in label
 
 
 def test_no_line_of_the_list_is_wider_than_a_hundred_characters():
+    """The whole line, pointer and marker included: `❯ ○ ` costs four characters of the hundred,
+    and the one space every line of the screen carries costs the fifth (decided 2026-09-25)."""
     hits = [
         _hit("Qwen/Qwen3.5-9B-GGUF", owner="publisher", downloads=12_031_627, ollama="qwen3.5:9b"),
         _hit("unsloth/Qwen3.5-9B-GGUF", downloads=1_626_475, ollama="qwen3.5:9b"),
         _hit("unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF", base=DEEPSEEK, downloads=68_445),
     ]
 
-    for label in _labels(_models(hits)):
-        assert len(label) <= LINE_LIMIT, label
+    assert LABEL_LIMIT == LINE_LIMIT - POINTER_WIDTH
+    for label in [list_header().label, *_labels(_models(hits))]:
+        assert len(label) <= LABEL_LIMIT, label
 
 
 def test_the_hundred_characters_hold_for_the_longest_names_there_are():
@@ -328,13 +383,19 @@ def test_the_hundred_characters_hold_for_the_longest_names_there_are():
 
     assert len(labels) == 2
     for label in labels:
-        assert len(label) <= LINE_LIMIT, f"{len(label)}: {label}"
+        assert len(label) <= LABEL_LIMIT, f"{len(label)}: {label}"
     omni = next(label for label in labels if label.startswith("Qwen3-Omni"))
     nova = next(label for label in labels if label.startswith("Nova-9B"))
     assert "…" in omni, "a cell that does not fit its column says so"
-    # The 14 characters left of the line are exactly `deepseek-r1:8b` (acceptance of 2026-09-24),
-    # so an Ollama name of an ordinary length is shown whole.
-    assert nova.rstrip().endswith("deepseek-r1:8b")
+    # The `Release` column costs the Ollama name four of its characters, so a registry name longer
+    # than ten is cut here as well; the install line of step 5 carries the whole one.
+    assert nova.rstrip().endswith("…")
+
+
+def test_an_ollama_name_of_ten_characters_is_shown_whole():
+    hits = [_hit("unsloth/Qwen3.5-9B-GGUF", ollama="qwen3.5:9b")]
+
+    assert _labels(_models(hits))[0].rstrip().endswith("qwen3.5:9b")
 
 
 def test_a_size_and_a_download_count_of_any_length_keep_their_columns():
@@ -345,7 +406,7 @@ def test_a_size_and_a_download_count_of_any_length_keep_their_columns():
 
     label = _labels(_models(hits))[0]
 
-    assert len(label) <= LINE_LIMIT, f"{len(label)}: {label}"
+    assert len(label) <= LABEL_LIMIT, f"{len(label)}: {label}"
 
 
 def test_the_order_is_the_fit_class_then_the_downloads_then_the_name():
@@ -359,6 +420,19 @@ def test_the_order_is_the_fit_class_then_the_downloads_then_the_name():
     models = _models(hits, checked=_measured(ram_gib=31.7))
 
     assert [model.name for model in models] == ["Nova-8B", "Nova-9B", "Nova-400B", "Nova-One"]
+
+
+def test_the_release_stands_between_the_fit_class_and_the_downloads():
+    """`latest` first, then a release nobody knows, then `legacy` (decided 2026-09-25)."""
+    hits = [
+        _hit("unsloth/Nova-8B-GGUF", base="acme/Nova-8B", downloads=9_000_000, age="legacy", successor="acme/Nova-8B-2512"),
+        _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", downloads=1_000),
+        _hit("unsloth/Nova-7B-GGUF", base="acme/Nova-7B", downloads=10, age="latest"),
+    ]
+
+    models = _models(hits)
+
+    assert [model.name for model in models] == ["Nova-7B", "Nova-9B", "Nova-8B"]
 
 
 def test_the_values_of_the_list_are_the_base_models():
@@ -404,14 +478,15 @@ def test_the_default_context_of_the_list_is_the_one_the_scale_starts_on():
     assert DEFAULT_CONTEXT is GUIDED_DEFAULT
 
 
-def test_the_hint_line_names_the_context_the_fit_of_the_list_was_computed_for():
+def test_the_hint_line_explains_the_release_words_and_names_the_context():
+    """`nothing marked keeps the folder as it is` went with the Enter rule (decided 2026-09-25)."""
     line = hint_line(_measured(), 32768)
 
-    assert line.startswith("nothing marked keeps the folder as it is.")
-    assert line.endswith(
-        "Fit is from the size of the model at 32k context; the exact fit comes after the fetch; "
-        "(RAM) means the graphics memory is too small for it."
+    assert line == (
+        "latest: the publisher's current release of its family · legacy: the publisher named a successor · "
+        "fit from the size at 32k context, exact after the fetch"
     )
+    assert "nothing marked" not in line
 
 
 def test_a_context_of_its_own_is_not_floored_into_a_k_it_is_not():
@@ -421,8 +496,8 @@ def test_a_context_of_its_own_is_not_floored_into_a_k_it_is_not():
 def test_the_hint_line_of_an_unmeasured_machine_says_the_fit_is_unknown():
     line = hint_line(_unmeasured(), 32768)
 
-    assert line.startswith("nothing marked keeps the folder as it is.")
-    assert line.endswith("Fit is unknown until this machine is measured.")
+    assert line.startswith("latest: the publisher's current release of its family")
+    assert line.endswith("fit unknown until this machine is measured")
 
 
 def test_the_answer_of_the_list_is_read_back_in_the_names_the_list_showed():

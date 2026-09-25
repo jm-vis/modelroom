@@ -46,8 +46,9 @@ def _stream(encoding: str, *, tty: bool = False):
     return wrapper
 
 
-def _daemon(version: str = "0.34.2", models: int = 19) -> FixtureDaemon:
-    tags = {"models": [{"name": f"model-{number}", "digest": "0" * 64, "size": 1} for number in range(models)]}
+def _daemon(version: str = "0.34.2", models: int = 19, names: list[str] | None = None) -> FixtureDaemon:
+    listed = names if names is not None else [f"model-{number}:9b" for number in range(models)]
+    tags = {"models": [{"name": name, "digest": "0" * 64, "size": 1} for name in listed]}
     return FixtureDaemon(
         {
             ("GET", VERSION_PATH): Response(status=200, body=json.dumps({"version": version}).encode("utf-8")),
@@ -176,7 +177,33 @@ def test_a_reachable_daemon_is_named_with_its_version_and_its_number_of_models()
     daemon = _intro().facts[1]
 
     assert daemon.value == "Ollama 0.34.2"
-    assert daemon.note == "reachable, 19 models installed"
+    assert daemon.note == "reachable, 19 models"
+
+
+def test_a_daemon_with_cloud_entries_says_how_many_of_them_are_local():
+    """`19 models installed` counted twelve cloud entries of the Ollama app as installed packages
+    (test round, 2026-09-25). A cloud entry is the daemon's, not this machine's."""
+    names = ["granite4.2:8b", "qwen3.5:9b", "gpt-oss:120b-cloud", "glm-5.3-flash:cloud"]
+
+    daemon = _intro(_daemon(names=names)).facts[1]
+
+    assert daemon.note == "reachable, 4 models, 2 of them local"
+
+
+def test_a_daemon_without_a_cloud_entry_names_one_number_only():
+    daemon = _intro(_daemon(names=["granite4.2:8b", "qwen3.5:9b"])).facts[1]
+
+    assert daemon.note == "reachable, 2 models"
+
+
+def test_a_cloud_entry_is_recognized_by_its_tag_alone():
+    from modelroom.intro import is_cloud_name
+
+    assert is_cloud_name("glm-5.3-flash:cloud") is True
+    assert is_cloud_name("gpt-oss:120b-cloud") is True
+    assert is_cloud_name("granite4.2:8b") is False
+    assert is_cloud_name("hf.co/unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL") is False
+    assert is_cloud_name("cloud") is False
 
 
 def test_a_daemon_that_does_not_answer_is_not_reachable():

@@ -68,7 +68,7 @@ It opens with what it already knows and then walks five numbered steps:
  ███ ███ ███ ███
 
  folder    not chosen yet          the first question asks where results live
- daemon    Ollama 0.34.2           reachable, 19 models installed
+ daemon    Ollama 0.34.2           reachable, 19 models, 7 of them local
  machine   workstation             one graphics card, 12 GB, 128 GB memory
 
  Five steps: configuration, packages, context, measurement, results.
@@ -89,7 +89,21 @@ the run made of it, and one line with the step's balance:
  ✓ Packages        2 models, 26 packages from 4 repositories
 ```
 
-The run closes with a card of the whole run over the result table:
+The list of step 2 is a table with a head of its own; `Enter` takes the rows you marked with the
+space bar, or the one the pointer is on when you marked none:
+
+```
+ ? Which of these models should the result cover?
+     Model                     Fit           Size    Release  Packagers         Downl.  Ollama
+ ❯ ○ Qwen3.5-9B                good          9B      legacy   Qwen, unsloth     13.6M   qwen3.5:9b
+   ○ Qwen3-0.6B                good          0.6B    latest   unsloth, bartow…  1.1M    qwen3:0.6b
+   ↑↓ move   Space marks   Enter takes the marked rows, or this one   Esc leave
+   latest: the publisher's current release of its family · legacy: the publisher named a
+   successor · fit from the size at 32k context, exact after the fetch
+```
+
+The run closes with a card of the whole run over the result table, and every line under the table
+says what it is about:
 
 ```
  folder    //models/modelroom
@@ -98,6 +112,14 @@ The run closes with a card of the whole run over the result table:
  context   L 32k                   24,000 words, a report or a long contract
  speed     not measured            say Yes in step 4 to measure an installed package
  result    docs\models.md          25 packages ranked, 1 too tight
+
+ shown     10 of 25 packages · 1 too tight (unsloth IQ4_NL)
+ memory    #1 fits into graphics memory, 10.9 GB free after the reserve
+           #2–10 need system memory, the graphics card helps
+ basis     #1–10 computed from the package size, not its architecture
+ speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
+
+ install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_M
 ```
 
 1 **Configuration**: where the results should live, and which machines the result covers --
