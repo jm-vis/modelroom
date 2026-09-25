@@ -610,7 +610,7 @@ def test_a_fit_in_system_memory_says_ram_and_never_from_size():
     text = document_terminal(_document([marginal], base_models=unknown))
 
     assert "marginal (RAM)" in text
-    assert "(from size)" in text  # as a note under the table, not in the cell
+    assert "basis     #1 computed from the package size" in text  # a note under the table, not the cell
     assert "marginal (from size)" not in text
 
 
@@ -670,6 +670,25 @@ def test_the_terminal_view_carries_the_head_of_the_last_step():
     assert len(head.strip()) == 72
 
 
+def test_every_line_under_the_table_carries_the_label_of_what_it_says():
+    """Running text under the table buried the install command (test round, 2026-09-25).
+
+    The labels are the card's own column, so `shown`, `memory`, `basis`, `speed` and `install`
+    stand in the same place as `folder` and `result` above them.
+    """
+    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+    packages = [_hf_package(repo=f"packager/Nova-8B-{index}-GGUF") for index in range(3)]
+
+    lines = document_terminal(_document(packages, base_models=unknown), install_for="workstation").splitlines()
+
+    labels = [line.split()[0] for line in lines if line.startswith(" ") and not line.startswith("  ")]
+    for label in ("shown", "memory", "basis", "speed", "install"):
+        assert label in labels, label
+    for label in ("shown", "memory", "basis", "speed", "install"):
+        line = next(line for line in lines if line.startswith(f" {label}"))
+        assert line.index(line.split()[1]) == 11, line
+
+
 def test_the_notes_of_the_ranking_are_bundled_by_memory_pool_with_their_rank_ranges():
     """Ten rows carried ten notes of the same two sentences (test round, 2026-09-24)."""
     packages = [_hf_package(repo=f"packager/Nova-8B-{index}-GGUF") for index in range(3)]
@@ -677,46 +696,62 @@ def test_the_notes_of_the_ranking_are_bundled_by_memory_pool_with_their_rank_ran
     lines = document_terminal(_document(packages)).splitlines()
 
     pool = next(line for line in lines if "graphics memory" in line)
-    assert pool.strip().startswith("#1–3 fit into graphics memory (")
-    assert pool.rstrip().endswith("GB free after the reserve)")
+    assert pool.split(maxsplit=1)[0] == "memory"
+    assert "#1–3 fit into graphics memory, " in pool
+    assert pool.rstrip().endswith("GB free after the reserve")
     assert len([line for line in lines if "graphics memory" in line]) == 1
+
+
+def test_a_second_memory_pool_is_a_line_of_its_own_under_the_first():
+    """Two statements about two pools are two lines; only the first carries the label."""
+    unknown = [_base_model(architecture=_architecture(kind="unknown"))]
+    # 90 GiB of weights do not fit the graphics card; the small one does.
+    packages = [_hf_package(), _hf_package(repo="packager/Nova-8B-XL-GGUF", weights_bytes=90 * GIB)]
+
+    lines = [line for line in document_terminal(_document(packages, base_models=unknown)).splitlines() if "memory" in line]
+
+    assert lines[0].split(maxsplit=1)[0] == "memory"
+    assert lines[1].startswith(" " * 11)
+    assert lines[1].strip() == "#2 needs system memory, the graphics card helps"
 
 
 def test_a_single_rank_is_named_in_the_singular():
     lines = document_terminal(_document([_hf_package()])).splitlines()
 
-    assert any(line.strip().startswith("#1 fits into graphics memory (") for line in lines)
+    assert any("#1 fits into graphics memory, " in line for line in lines)
 
 
-def test_the_speed_line_stands_only_where_nothing_was_measured():
+def test_the_speed_line_says_what_was_measured_or_that_nothing_was():
     package = _hf_package(file_digest="sha256:" + "c" * 64)
     nothing = document_terminal(_document([package]))
-    measured = document_terminal(_document([package], measurements={PROFILE_ID: [_measurement(package)]}))
+    measured = document_terminal(_document([package], measurements={PROFILE_ID: [_measurement(package, tps=41.1)]}))
 
-    # "no row shown", not "nothing on this machine": a measured package past the tenth row is in no
-    # entry of this document, so this view cannot see it (second-model round, 2026-09-24).
-    assert "speed: no row shown was measured yet" in nothing
-    assert "say Yes in step 4 to measure an installed package" in nothing
-    assert "speed: no row shown" not in measured
+    assert "speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package" in nothing
+    assert "speed     #1 measured 41.1 tok/s" in measured
+    assert "nothing measured yet" not in measured
 
 
-def test_the_from_size_note_stands_only_where_a_fit_was_computed_from_the_size():
+def test_the_basis_line_stands_only_where_a_fit_was_computed_from_the_size():
     unknown = [_base_model(architecture=_architecture(kind="unknown"))]
 
     from_size = document_terminal(_document([_hf_package()], base_models=unknown))
     architecture = document_terminal(_document([_hf_package()]))
 
-    assert "(from size): #1 computed from the package size, not its architecture" in from_size
-    assert "(from size)" not in architecture
+    assert "basis     #1 computed from the package size, not its architecture" in from_size
+    assert "basis " not in architecture
+    assert "(from size)" not in from_size
 
 
-def test_the_install_line_names_the_local_name_of_the_first_package_of_this_machine():
+def test_the_install_line_stands_apart_with_the_command_to_copy():
     text = document_terminal(_document([_hf_package()]), install_for="workstation")
 
-    assert "to install #1: ollama pull hf.co/packager/Nova-8B-GGUF:Q4_K_M" in text
+    assert "install   #1  ollama pull hf.co/packager/Nova-8B-GGUF:Q4_K_M" in text
+    # A blank line in front of it: the command went under in running text (test round, 2026-09-25).
+    lines = text.splitlines()
+    assert lines[lines.index(next(line for line in lines if "ollama pull" in line)) - 1] == ""
     # Without the machine of the run there is no line: `render` cannot know which writer it is on.
-    assert "to install" not in document_terminal(_document([_hf_package()]))
-    assert "to install" not in document_terminal(_document([_hf_package()]), install_for="another")
+    assert "ollama pull" not in document_terminal(_document([_hf_package()]))
+    assert "ollama pull" not in document_terminal(_document([_hf_package()]), install_for="another")
 
 
 def test_a_set_aside_piece_names_fewer_packages_where_the_room_is_not_there():
@@ -734,9 +769,20 @@ def test_a_set_aside_piece_names_fewer_packages_where_the_room_is_not_there():
 
     set_aside = next(line for line in lines if "not covered" in line)
     assert len(set_aside) <= 100
-    assert "5 packages not covered (" in set_aside
+    assert "5 not covered (" in set_aside
     assert set_aside.endswith("and 4 more)")  # one name fits, three do not
     assert "…" not in set_aside
+
+
+@pytest.mark.parametrize("length", list(range(60, 80)))
+def test_no_labeled_line_reaches_a_hundred_and_one_characters(length):
+    """`_named` counted two characters of the three it adds -- the space, and both brackets -- so a
+    name list of just the right length made a line of 101 (second-model round, 2026-09-25)."""
+    from modelroom.views import _named
+
+    piece = f"5 not covered{_named(['a' * length], 89 - len('5') - len('not covered') - 1)}"
+
+    assert len(" " + "shown".ljust(8) + "  " + piece) <= 100
 
 
 def test_a_name_so_long_that_none_of_them_fits_leaves_the_count_and_the_reason():
@@ -747,7 +793,7 @@ def test_a_name_so_long_that_none_of_them_fits_leaves_the_count_and_the_reason()
 
     pieces = _set_aside_pieces("not covered", [_Entry()])
 
-    assert pieces == ["1 package not covered"]
+    assert pieces == ["1 not covered"]
 
 
 def test_the_terminal_view_groups_what_was_set_aside_behind_the_showing_count():
@@ -758,8 +804,8 @@ def test_the_terminal_view_groups_what_was_set_aside_behind_the_showing_count():
 
     set_aside = [line for line in text.splitlines() if "not covered" in line]
     assert len(set_aside) == 1
-    assert "showing 0 of 0" in text
-    assert set_aside[0].strip().startswith("5 packages not covered (")
+    assert "0 of 0 packages" in text
+    assert "5 not covered (" in set_aside[0]
     assert set_aside[0].count("Q4_K_M") == 3
     assert set_aside[0].endswith("and 2 more)")
 
@@ -767,7 +813,7 @@ def test_the_terminal_view_groups_what_was_set_aside_behind_the_showing_count():
 def test_one_package_behind_a_reason_is_named_in_the_singular():
     text = document_terminal(_document([_hf_package(weights_bytes=0)]))
 
-    assert "showing 0 of 0 · 1 package not covered (packager Q4_K_M)" in text
+    assert "shown     0 of 0 packages · 1 not covered (packager Q4_K_M)" in text
 
 
 def test_two_reasons_in_one_list_are_named_with_their_reason():
@@ -781,10 +827,10 @@ def test_two_reasons_in_one_list_are_named_with_their_reason():
     one = _set_aside_pieces("not covered", entries)
     two = _set_aside_pieces("not covered", [entries[0], other])
 
-    assert one == ["2 packages not covered (p Q4_K_M, packager Q4_K_M)"]
+    assert one == ["2 not covered (p Q4_K_M, packager Q4_K_M)"]
     assert two == [
-        "1 package not covered, a weight file has no size (p Q4_K_M)",
-        "1 package not covered, more than one request (packager Q4_K_M)",
+        "1 not covered, a weight file has no size (p Q4_K_M)",
+        "1 not covered, more than one request (packager Q4_K_M)",
     ]
 
 

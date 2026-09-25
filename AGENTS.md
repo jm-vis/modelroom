@@ -70,9 +70,10 @@ same thing in the same way:
 | `measured`, `entered`, `computed` | where a value came from | "detected", "estimated", "real" |
 | `publisher`, `listed packager`, `other` | who owns a repository | `untrusted`, `trustworthy`, or any other verdict on a packager; only the class is stated |
 | `unknown` | a fact with no evidence behind it | an empty cell, `n/a`, or a plausible guess |
+| `–` | the same fact in a **column of a list or a table**, where the word would read as a statement about the row (decided 2026-09-25) | an empty cell, `n/a`, `-` where the console can encode `–` |
 | `not comparable` | two measurements from different scenarios | "slower", "worse" |
 | `display adapter only` | a GPU that is present but cannot carry a fit | "no GPU" |
-| `none known` | no Ollama name is mapped to this package | "missing", "not available" |
+| `none known` | no Ollama name is mapped to this package, in prose and in a log | "missing", "not available"; in a column of a list it is `–`, see above |
 
 An age statement is always positive evidence about one model (a successor named at the
 publisher's repository, or the shipped catalog), never a comparison of two version numbers.

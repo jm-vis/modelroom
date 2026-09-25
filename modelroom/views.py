@@ -12,15 +12,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
-from .contracts import Area, Fit, Rating
+from .contracts import Area, Fit, Rating, SchemaVersionError
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .guided_context import LEVELS
-from .intro import STEP_COUNT, Fact, glyphs
+from .intro import LABEL_COLUMN, STEP_COUNT, Fact, glyphs, label_line
 from .measurements import Scenario
 from .render import format_header_line
 from .screen import (
     JOIN_WIDTH,
     MEASURE_HINT,
+    Line,
     fit_word,
     head_line,
     install_name,
@@ -299,6 +300,18 @@ _TERMINAL_COLUMNS = (
     ("Memory", 8),
 )
 _INDENT = " "
+# The labels of the lines under the table, in the order a reader reads them. They stand in the
+# card's own column (`intro.label_line`), so the report of step 5 reads as one block from the
+# `folder` row down to the install command: running text buried the command a reader came for
+# (test round, 2026-09-25).
+SHOWN_LABEL = "shown"
+MEMORY_LABEL = "memory"
+BASIS_LABEL = "basis"
+SPEED_LABEL = "speed"
+INSTALL_LABEL = "install"
+# What is left of the 100 characters for the text of a labeled line: the label's own column, and
+# the one space every line of this screen carries.
+_NOTE_WIDTH = JOIN_WIDTH - LABEL_COLUMN - len(_INDENT)
 # How many of the packages behind one reason are named before the rest is a number.
 _NAMED_PER_REASON = 3
 # What a group of ranked packages says about the memory it runs in, plural and singular. The words
@@ -310,11 +323,17 @@ _POOL_WORDS = {
     "cpu": ("need system memory, no graphics card", "needs system memory, no graphics card"),
 }
 _POOL_ORDER = ("gpu", "cpu_gpu", "cpu")
-# "no row shown", not "nothing on this machine": a measured package whose fit class puts it past the
-# tenth row is in no `RankedEntry` of this document at all, so this view cannot see it. Saying more
-# than that would be a claim the document does not carry (second-model round, 2026-09-24).
-_NO_SPEED_YET = "speed: no row shown was measured yet"
+# Under the `speed` label, so the word "speed" is not said twice -- but still "the rows shown", not
+# "this machine": the ranking rule sorts by fit class first, so a measured package can stand behind
+# eleven unmeasured ones and be in no `RankedEntry` of this document at all. The card of the same
+# screen counts that measurement, and the two may not contradict each other (second-model round,
+# 2026-09-24 and 2026-09-25).
+_NO_SPEED_YET = "nothing measured in the rows shown"
 _FROM_SIZE_NOTE = "computed from the package size, not its architecture"
+# What the ranking has nothing to say about at all: no snapshot, or nothing in it that a fit may be
+# computed for. Step 5 says it where it happens; `render` says its own sentence on stderr.
+NOTHING_TO_RANK = "nothing to rank: no package in this folder yet"
+NOTHING_RANKED_SUMMARY = "nothing to rank"
 
 
 def _terminal_row(cells: list[str]) -> str:
@@ -333,18 +352,19 @@ def _set_aside_pieces(word: str, entries: list[SetAsideEntry]) -> list[str]:
 
     41 lines of `not covered`, one per package, said the same thing 41 times and pushed the
     ranking itself off the screen (hand test, 2026-09-24); since 2026-09-24 they stand behind the
-    `showing` count as pieces of one line. The reason is named only where the list has more than
+    `shown` count as pieces of one line. The reason is named only where the list has more than
     one -- with a single reason the word (`too tight`, `not covered`) already says it, and the
-    reason itself is in the Markdown file, which has room for it.
+    reason itself is in the Markdown file, which has room for it. The word `package` is the
+    `shown` piece's own (`10 of 23 packages`), so a piece behind it is the count and the reason.
     """
     grouped: dict[str, list[str]] = {}
     for entry in entries:
         grouped.setdefault(entry.reason, []).append(f"{entry.packager} {entry.quantization}")
     pieces = []
     for reason, names in sorted(grouped.items()):
-        count = f"{len(names)} package" + ("" if len(names) == 1 else "s")
+        count = str(len(names))
         label = f"{word}, {reason}" if len(grouped) > 1 else word
-        pieces.append(f"{count} {label}{_named(names, JOIN_WIDTH - len(_INDENT) - len(count) - len(label) - 1)}")
+        pieces.append(f"{count} {label}{_named(names, _NOTE_WIDTH - len(count) - len(label) - 1)}")
     return pieces
 
 
@@ -355,11 +375,14 @@ def _named(names: list[str], room: int) -> str:
     account with a long name made a piece of 137 characters, and `joined` leaves an over-long piece
     whole (measured in the second-model round of 2026-09-24). The count and the reason never give
     way, and nothing is cut mid-name -- a name ends where the next one would have begun.
+
+    `room` is measured against everything this adds: the space in front, both brackets -- three
+    characters, not two. With two the line came to 101 (second-model round, 2026-09-25).
     """
     for shown in range(min(_NAMED_PER_REASON, len(names)), 0, -1):
         rest = len(names) - shown
         listed = ", ".join(names[:shown]) + (f" and {rest} more" if rest > 0 else "")
-        if len(listed) + 2 <= room:
+        if len(listed) + 3 <= room:
             return f" ({listed})"
     return ""
 
@@ -403,8 +426,10 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
     """The fit of the ranked rows, bundled by the memory they run in, with their rank ranges.
 
     Ten rows carried ten notes of the same two sentences in the test round of 2026-09-24. A reader
-    needs each statement once, with the ranks it is about. The numbers come from the fields of
-    `Fit`; `pool_gib` of a graphics-memory fit is what is left there after the reserve.
+    needs each statement once, with the ranks it is about, and since 2026-09-25 each on a line of
+    its own under the `memory` label -- two statements joined by a `·` read as one. The numbers come
+    from the fields of `Fit`; `pool_gib` of a graphics-memory fit is what is left there after the
+    reserve.
     """
     by_mode: dict[str, list[RankedEntry]] = {}
     for entry in block.ranked:
@@ -417,64 +442,97 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
         plural, singular = _POOL_WORDS[mode]
         text = f"{ranks_text([entry.rank for entry in entries], dash)} {singular if len(entries) == 1 else plural}"
         if mode == "gpu":
-            text += f" ({entries[0].fit.pool_gib:.1f} GB free after the reserve)"
+            text += f", {entries[0].fit.pool_gib:.1f} GB free after the reserve"
         pieces.append(text)
     return pieces
 
 
-def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | None) -> list[str]:
-    """Everything under one machine's table, in the order a reader reads it."""
-    showing = [f"showing {len(block.ranked)} of {block.ranked_total}"]
-    showing += _set_aside_pieces("not covered", block.not_covered)
-    showing += _set_aside_pieces("too tight", block.too_tight)
-    groups = [showing, _pool_pieces(block, dash)]
+def _speed_pieces(block: MachineRanking, dash: str) -> list[str]:
+    """What was measured on the rows this view can see, or that nothing was.
+
+    One piece per measured row (`#3 measured 41.1 tok/s`), in the ranking's own order; where no row
+    carries a speed, the reason and what to do about it.
+    """
+    if not block.ranked:
+        return []
+    measured = [entry for entry in block.ranked if entry.speed_tps is not None]
+    if not measured:
+        return [_NO_SPEED_YET, MEASURE_HINT]
+    return [f"#{entry.rank} measured {entry.speed_tps:.1f} tok/s" for entry in measured]
+
+
+def _labeled_rows(label: str, texts: list[str]) -> list[Line]:
+    """One row per text, the label on the first only -- a row that continues it carries none."""
+    return [label_line(label if index == 0 else "", [("class:note", text)]) for index, text in enumerate(texts)]
+
+
+def _labeled(label: str, pieces: list[str], dot: str) -> list[Line]:
+    """One labeled statement out of its pieces, joined with ` <dot> ` and wrapped between them."""
+    return _labeled_rows(label, joined(pieces, dot=dot, width=_NOTE_WIDTH, indent=0))
+
+
+def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | None) -> list[Line]:
+    """Everything under one machine's table, in the order a reader reads it, each line labeled."""
+    shown = [f"{len(block.ranked)} of {block.ranked_total} packages"]
+    shown += _set_aside_pieces("not covered", block.not_covered)
+    shown += _set_aside_pieces("too tight", block.too_tight)
+    lines = _labeled(SHOWN_LABEL, shown, dot)
+    # One pool, one line: two statements about two memories joined by a `·` read as one.
+    lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash))
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
     if from_size:
-        groups.append([f"(from size): {ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"])
-    if block.ranked and all(entry.speed_tps is None for entry in block.ranked):
-        groups.append([_NO_SPEED_YET, MEASURE_HINT])
-    groups.append(_install_pieces(block, install_for))
-    return [line for group in groups for line in joined(group, dot=dot)]
+        lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
+    lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
+    lines += _install_lines(block, install_for)
+    return lines
 
 
-def _install_pieces(block: MachineRanking, install_for: str | None) -> list[str]:
+def _install_lines(block: MachineRanking, install_for: str | None) -> list[Line]:
     """The one line a reader copies to get the first package of the machine this run is on.
 
     Only for that machine: the local Ollama name of a package is about the machine that would
     install it. Nothing is called, nothing is looked up, and a package with no such name has no
-    line (CONTRACTS.md, "Guided mode", "The screen").
+    line (CONTRACTS.md, "Guided mode", "The screen"). It stands behind a blank line and the command
+    itself is drawn as a command: in running text under the table it went under (test round,
+    2026-09-25).
     """
     if install_for is None or block.machine != install_for or not block.ranked:
         return []
     entry = block.ranked[0]
     name = install_name(entry.package_identity, entry.quantization, entry.format)
+    if name is None:
+        return []
     # The one line of this view that may pass 100 characters: it is a command to copy, and a command
     # that was cut is worse than a line that wraps (second-model round, 2026-09-24).
-    return [] if name is None else [install_pull_line(entry.rank, name)]
+    return [[], label_line(INSTALL_LABEL, install_pull_line(entry.rank, name))]
 
 
-def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot: str, install_for: str | None) -> list[str]:
-    lines = [_INDENT + _block_head(block, scenario, dot)]
+def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot: str, install_for: str | None) -> list[Line]:
+    lines: list[Line] = [[("", _block_head(block, scenario, dot))]]
     if block.reason is not None:
-        lines.append(f"{_INDENT}{block.reason}")
+        lines.append([("", block.reason)])
     if not block.ranked:
-        lines.append(f"{_INDENT}no package of the configured base models is ranked here")
+        lines.append([("", "no package of the configured base models is ranked here")])
     else:
-        lines.append(_INDENT + _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))
-        lines.append(_INDENT + _terminal_rule())
+        lines.append([("", _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))])
+        lines.append([("", _terminal_rule())])
         for entry in block.ranked:
             lines.append(
-                _INDENT
-                + _terminal_row(
-                    [
-                        str(entry.rank),
-                        _model_name(entry),
-                        _package_cell(entry),
-                        fit_word(entry.fit.fit_class, entry.fit.mode),
-                        _terminal_speed(entry, dash),
-                        f"{entry.fit.need_gib:.1f} GB",
-                    ]
-                )
+                [
+                    (
+                        "",
+                        _terminal_row(
+                            [
+                                str(entry.rank),
+                                _model_name(entry),
+                                _package_cell(entry),
+                                fit_word(entry.fit.fit_class, entry.fit.mode),
+                                _terminal_speed(entry, dash),
+                                f"{entry.fit.need_gib:.1f} GB",
+                            ]
+                        ),
+                    )
+                ]
             )
     lines += _note_lines(block, dash, dot, install_for)
     return lines
@@ -532,6 +590,45 @@ def _set_aside_counts(block: MachineRanking | None) -> list[tuple[str, int]]:
     return [pair for pair in counted if pair[1]]
 
 
+def _folder_is_empty(config) -> bool:
+    """Whether this results folder holds no snapshot at all -- the one case `show_nothing` is about.
+
+    A snapshot that does not read is no answer to that question: the command that tried to render it
+    said so and kept its own exit code, and a second sentence about the folder would be a guess.
+    """
+    from .state import UnreadableStateFileError, read_snapshot
+
+    try:
+        return read_snapshot(config) is None
+    except (SchemaVersionError, UnreadableStateFileError):
+        return False
+
+
+def empty_card(config, *, folder: Path, scenario: Scenario, now: datetime) -> list[Fact]:
+    """The card of a step 5 that had nothing to rank: the same rows, and a dash for the result.
+
+    Everything a run without a snapshot still knows: the folder, the machines the configuration
+    names with the profiles this folder holds (`render.machine_profile`, the same decision the
+    document would have rested on), the models of the snapshot (none), the context that was chosen,
+    and no measurement. The `result` row is a dash, because no document was written.
+    """
+    from .guided_context import snapshot_facts
+    from .importer import scan_profiles
+    from .render import machine_profile
+
+    scan = scan_profiles(config.paths.hardware_dir)
+    facts = [Fact("folder", str(folder), "")]
+    for name, machine in config.machines.items():
+        found = machine_profile(name, machine, scan)
+        facts.append(machine_fact(found.label, found.profile, now, found.reason or found.status))
+    snapshot = snapshot_facts(config)
+    facts.append(models_fact(snapshot.model_names, snapshot.packages, snapshot.accounts))
+    facts.append(context_fact(scenario.context_requested))
+    facts.append(speed_fact(0, None))
+    facts.append(Fact("result", _DASH, ""))
+    return facts
+
+
 def result_card(
     document: RenderDocument,
     *,
@@ -572,14 +669,16 @@ def result_card(
 
 
 def show_result(
-    screen, out, document: RenderDocument, facts, config, folder: Path, now: datetime, install_for: str | None = None
+    screen, document: RenderDocument, facts, config, folder: Path, now: datetime, install_for: str | None = None
 ) -> None:
     """Draw step 5 of the guided mode: the card of the whole run, then one table per machine.
 
     The head of the step is already on screen when this runs, so what is left is the report: the
     card a reader looks at once the run is over, the tables under it, and the one line that says
     where the document went (CONTRACTS.md, "Guided mode", "The screen"). `install_for` is the
-    machine this run is on, and the only one an install line may be about.
+    machine this run is on, and the only one an install line may be about. Every line goes through
+    the screen, so the labels, the notes and the install command carry the colors of the card
+    (decided 2026-09-25).
     """
     screen.blank()
     screen.card(
@@ -594,22 +693,50 @@ def show_result(
             machine=install_for,
         )
     )
-    for line in terminal_lines(document, install_for=install_for):
-        out(line)
+    for line in terminal_blocks(document, install_for=install_for):
+        screen.write(line)
+    screen.blank()
     screen.done(STEP_COUNT, relative_path(config.paths.markdown, folder))
 
 
-def terminal_lines(document: RenderDocument, install_for: str | None = None) -> list[str]:
+def show_nothing(screen, config, folder: Path, scenario: Scenario, now: datetime) -> None:
+    """Draw step 5 where there is nothing to rank: the reason, the card, and a dash for a balance.
+
+    A head with nothing under it was the whole last step of a run that chose nothing (test round,
+    2026-09-25): the reason stood on stderr, where no reader of the run is, and the card that says
+    what the run did do was not drawn at all.
+
+    Only where the folder really holds no snapshot. Every render that writes no document leaves
+    step 5 without one -- a lock another process holds, a snapshot of an unsupported schema, a view
+    that could not be written -- and none of those is a folder without packages. Then this draws
+    nothing at all and the sentence the command already printed stands on its own (second-model
+    round, 2026-09-25).
+    """
+    if not _folder_is_empty(config):
+        return
+    screen.note(NOTHING_TO_RANK)
+    screen.blank()
+    screen.card(empty_card(config, folder=folder, scenario=scenario, now=now))
+    screen.blank()
+    screen.skipped(STEP_COUNT, NOTHING_RANKED_SUMMARY)
+
+
+def terminal_blocks(document: RenderDocument, install_for: str | None = None) -> list[Line]:
     """One machine's block after another, each behind a blank line -- the table and its notes.
 
     Without the head of step 5 and without the card: those two belong to the guided mode, which
     draws them itself and then prints these lines (CONTRACTS.md, "Guided mode", "The screen").
     """
     marks = glyphs()
-    lines: list[str] = []
+    lines: list[Line] = []
     for block in document.machines:
-        lines += ["", *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, install_for)]
+        lines += [[], *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, install_for)]
     return lines
+
+
+def terminal_lines(document: RenderDocument, install_for: str | None = None) -> list[str]:
+    """The same blocks as plain text, for `modelroom render` and for a log of a run."""
+    return [plain(line) for line in terminal_blocks(document, install_for)]
 
 
 def document_terminal(document: RenderDocument, install_for: str | None = None) -> str:
@@ -631,13 +758,18 @@ def document_terminal(document: RenderDocument, install_for: str | None = None) 
 
 
 __all__ = [
+    "NOTHING_RANKED_SUMMARY",
+    "NOTHING_TO_RANK",
     "context_fact",
     "context_short",
     "document_markdown",
     "document_terminal",
+    "empty_card",
     "relative_path",
     "result_card",
     "scenario_line",
+    "show_nothing",
     "show_result",
+    "terminal_blocks",
     "terminal_lines",
 ]

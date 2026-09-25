@@ -428,13 +428,17 @@ GOOD_DIALOG = [
     " workstation - context L 32k",
     " #    Model                     Package                 Fit                   Speed         Memory",
     " 1    Qwen3.5-9B                unsloth - UD-IQ2_XXS    good                  -             8.3 GB",
-    " showing 1 of 25",
-    " #1 fits into graphics memory (11.0 GB free after the reserve)",
+    " shown     1 of 25 packages",
+    " memory    #1 fits into graphics memory, 11.0 GB free after the reserve",
+    " speed     nothing measured in the rows shown - say Yes in step 4 to measure an installed package",
+    "",
+    " install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS",
+    "",
     " ok Results         docs/models.md",
 ]
 GOOD_MODELS = [
-    "Qwen3.5-9B                    good          9B       Qwen, unsloth               13.6M    qwen3.5:9b",
-    "DeepSeek-R1-0528-Qwen3-8B     good          8B       unsloth                     68k      none known",
+    "Qwen3.5-9B              good          9B     legacy   Qwen, unsloth   13.6M   qwen3.5:9b",
+    "DeepSeek-R1-0528-Qwen3-  good          8B     –        unsloth         68k     –",
 ]
 
 

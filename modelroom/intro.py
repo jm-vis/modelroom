@@ -66,13 +66,16 @@ CLOSING_LINES = (
 # empty one. Same arrangement as the twelve rectangles of `docs/assets/banner.svg`.
 PICTOGRAM = (("f", "f", "m", "f"), ("f", "f", "f", "x"), ("m", "f", "x", "x"))
 
-_LABEL_WIDTH = 8
+LABEL_WIDTH = 8
 _VALUE_WIDTH = 22
 # Which rows of a `label value note` block carry a file-system path, and are cyan for it.
 _PATH_LABELS = ("folder", "result")
 # Two spaces stand between the columns of a fact row, so a value wider than its column pushes the
 # note along instead of growing into it. A results folder of 120 characters is an ordinary value.
-_GAP = "  "
+GAP = "  "
+# Where the text of a labeled row begins, so the notes under the result table can stand in the same
+# column as the rows of the card above them (`views._note_lines`, decided 2026-09-25).
+LABEL_COLUMN = LABEL_WIDTH + len(GAP)
 
 
 @dataclass(frozen=True)
@@ -151,6 +154,8 @@ def style_rules() -> list[tuple[str, str]]:
         ("path", f"fg:{CYAN}"),
         ("done", f"fg:{GREEN}"),
         ("tight", f"fg:{AMBER}"),
+        # A line a reader copies into a shell: the one thing on the screen that is not prose.
+        ("command", f"fg:{WHITE} bold"),
     ]
 
 
@@ -276,6 +281,16 @@ def _mark_lines(marks: Glyphs, colored: bool, right: list[list[tuple[str, str]]]
     return lines
 
 
+def label_line(label: str, fragments: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """A `<label>  <text>` row: the label in the card's own column, the text behind it.
+
+    The one place that decides where a labeled row's text begins, so the card of step 5 and the
+    notes under its table stand in the same column (decided 2026-09-25). An empty label indents a
+    row that continues the one above it.
+    """
+    return [("class:label", label.ljust(LABEL_WIDTH)), ("", GAP), *fragments]
+
+
 def fact_line(fact: Fact) -> list[tuple[str, str]]:
     """One `label value note` row, as the start screen and the card of step 5 both draw it.
 
@@ -284,10 +299,11 @@ def fact_line(fact: Fact) -> list[tuple[str, str]]:
     """
     # The folder row and the result row carry a path, and a path is cyan wherever this dialog prints one.
     style = "class:path" if fact.label in _PATH_LABELS else "class:value"
-    label: list[tuple[str, str]] = [("class:label", fact.label.ljust(_LABEL_WIDTH)), ("", _GAP)]
     if not fact.note:
-        return [*label, (style, fact.value)]
-    return [*label, (style, fact.value.ljust(_VALUE_WIDTH)), ("", _GAP), ("class:note", fact.note)]
+        return label_line(fact.label, [(style, fact.value)])
+    return label_line(
+        fact.label, [(style, fact.value.ljust(_VALUE_WIDTH)), ("", GAP), ("class:note", fact.note)]
+    )
 
 
 # --- reading the three facts ---------------------------------------------------------------------
@@ -341,6 +357,34 @@ def _folder_fact(config_file: Path | None) -> Fact:
     return Fact("folder", str(folder), note)
 
 
+def is_cloud_name(name: str) -> bool:
+    """Whether an entry of `/api/tags` is a model the daemon runs elsewhere, by its name alone.
+
+    The Ollama app lists the cloud models it offers next to the packages this machine really
+    holds, with a tag of `cloud` or one ending in `-cloud` (`glm-5.3-flash:cloud`,
+    `gpt-oss:120b-cloud`, read from a real daemon on 2026-09-24). The same rule
+    `loadtest.is_cloud` applies, asked of the name instead of a validated `InstalledModel`: the
+    start screen must never end a run, so nothing here validates and nothing raises.
+    """
+    if ":" not in name:
+        return False
+    tag = name.rpartition(":")[2]
+    return tag == "cloud" or tag.endswith("-cloud")
+
+
+def models_note(models: list) -> str:
+    """How many models the daemon lists, and how many of them are on this machine.
+
+    `19 models installed` counted twelve cloud entries of the Ollama app as packages of this
+    machine (test round, 2026-09-25). Where there is no cloud entry there is one number and no
+    second half to read.
+    """
+    names = [entry.get("name") for entry in models if isinstance(entry, dict)]
+    local = sum(1 for name in names if isinstance(name, str) and not is_cloud_name(name))
+    counted = f"reachable, {len(models)} models"
+    return counted if local == len(models) else f"{counted}, {local} of them local"
+
+
 def _daemon_fact(daemon: Daemon) -> Fact:
     """The local Ollama daemon: its version, and how many models it has.
 
@@ -354,7 +398,7 @@ def _daemon_fact(daemon: Daemon) -> Fact:
     models = _daemon_value(daemon, TAGS_PATH, "models")
     if not isinstance(models, list):
         return Fact("daemon", f"Ollama {version}", "reachable, its model list did not arrive")
-    return Fact("daemon", f"Ollama {version}", f"reachable, {len(models)} models installed")
+    return Fact("daemon", f"Ollama {version}", models_note(models))
 
 
 def _daemon_value(daemon: Daemon, path: str, field: str) -> object | None:
@@ -389,6 +433,9 @@ def _bound_profile(pointer_path: Path, config_file: Path | None) -> HardwareProf
 
 __all__ = [
     "ASCII_GLYPHS",
+    "GAP",
+    "LABEL_COLUMN",
+    "LABEL_WIDTH",
     "STEP_COUNT",
     "STEP_NAMES",
     "UNICODE_GLYPHS",
@@ -400,6 +447,9 @@ __all__ = [
     "glyphs",
     "hardware_words",
     "intro_lines",
+    "is_cloud_name",
+    "label_line",
+    "models_note",
     "print_intro",
     "style_rules",
     "use_color",

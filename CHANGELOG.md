@@ -7,6 +7,38 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **`Enter` takes the row under the pointer** in every list of the guided mode that marks
+  (`modelroom/dialog.py`; CONTRACTS.md, "Guided mode"). `Enter` without the space bar took nothing
+  at all, and a reader read the green bar as the selection ("I thought the bar was the selection",
+  test round 2026-09-25). With something marked the answer is exactly what is marked. The
+  instruction line says both cases -- `↑↓ move   Space marks   Enter takes the marked rows, or this
+  one   Esc leave` -- and the rule is one key binding added after `questionary` has built the
+  question, like `Esc`: the library is unchanged, and an answer file's `select = []` still means
+  nothing.
+- **The list of step 2 has a column head, a `Release` column and gray `legacy` rows**
+  (`modelroom/guided_models.py`; CONTRACTS.md, "Guided mode", step 2). It had no head, so a reader
+  had to guess what a cell meant, `latest` was invisible between two columns of numbers and `none
+  known` read as a statement about the model (test round, 2026-09-25). The head is the first line of
+  the list and no entry of it, the `Release` column carries `latest`, `legacy` or `–`, a `legacy` row
+  is drawn gray as a whole, and the order puts `latest` above a release nobody knows and that above
+  `legacy`. The 100 characters now cover the **whole** line, pointer and marker included.
+- **A line of a list wraps instead of being cut** (`modelroom/dialog.py`). Measured 2026-09-25 in a
+  window of 100 columns: the library's own list window does not wrap, and the last piece of the
+  153-character instruction line of step 2 was simply gone.
+- **`aliases`: the other tags of one Ollama manifest** (`modelroom/contracts.py`,
+  `modelroom/ollama.py`; CONTRACTS.md, "Package"). `qwen3.5:9b` and `qwen3.5:9b-q4_K_M` are two
+  names of one manifest -- the same digest, byte for byte -- and stood in the ranking as two
+  packages of one size. There is one package per manifest digest now, named by the shortest of its
+  tags, with the rest as `aliases`. The field is optional and empty by default, so a snapshot
+  written before it reads unchanged and `schema_version` stays at 1. An approval given to a tag that
+  is an alias now carries forward: it is about the same manifest under the same digest.
+- **A step 5 with nothing to rank says so and draws its card** (`modelroom/views.py::show_nothing`;
+  CONTRACTS.md, "Step 5, the render and the card"). The last step of a run that chose nothing was a
+  head with nothing under it, and the reason stood on stderr where no reader of the run is (test
+  round, 2026-09-25). It now notes `nothing to rank: no package in this folder yet`, draws the card
+  with `result –`, and closes with `– Results         nothing to rank`; the exit code is unchanged.
+  Only where the folder really holds no snapshot -- a render another process's lock stopped is no
+  folder without packages, and step 5 then says nothing of its own.
 - **The catalog names the publishers people actually search for** (`modelroom/catalog.toml`,
   README, "Publishers the search resolves"). It knew three accounts (`Qwen`, `deepseek-ai`,
   `utter-project`) and is at the same time the positive list of publishers, so a search for
@@ -37,10 +69,10 @@ All notable changes to this project are documented in this file. The format foll
   repository is no model of the list. The screen keeps two sentences of it; the file answers "why
   did this account answer nothing", which is a question about the search and not about the line a
   reader is looking at.
-- **A line to copy for the first package of this machine**, under the result table: `to install #1:
-  ollama pull hf.co/<repo>:<quant>` (`screen.install_name`, `views.terminal_lines`). Nothing is
-  called, nothing is looked up, and a package with no local Ollama name has no line. Installing is
-  a work package of its own.
+- **A line to copy for the first package of this machine**, under the result table and behind a
+  blank one: `install   #1  ollama pull hf.co/<repo>:<quant>` (`screen.install_name`,
+  `views.terminal_blocks`). Nothing is called, nothing is looked up, and a package with no local
+  Ollama name has no line. Installing is a work package of its own.
 - **`modelroom hardware --same-machine`**, and "the same machine" in the guided mode's clone
   question, now **measure** (`modelroom/binding.py`, `modelroom/cli.py`, `modelroom/guided.py`;
   CONTRACTS.md, "Profile binding"). Until now the honest answer to "is this the same machine or a
@@ -65,6 +97,12 @@ All notable changes to this project are documented in this file. The format foll
   `fit_from_parameters` answers the same question before anything is fetched, from a parameter
   count and `BYTES_PER_PARAMETER_Q4` (0.6, measured against two real packages of the fixtures).
 
+### Fixed
+
+- **A set-aside piece no longer makes a line of 101 characters** (`views._named`): it counted two of
+  the three characters it adds -- the space in front and both brackets -- so a name list of just the
+  right length passed the room check and the line came to 101 (second-model round, 2026-09-25).
+
 ### Changed
 
 - **The guided mode reads as a report, not as a record** (`modelroom/screen.py`,
@@ -76,7 +114,9 @@ All notable changes to this project are documented in this file. The format foll
   it, and one balance line -- a check mark, or a dash where the step did nothing. The dialog library
   writes no answer of its own any more: a list erases itself once it is answered
   (`erase_when_done`), so `done (2 selections)` and `[this machine (measure now)]` are gone. What a
-  list has to say about itself moved into its instruction line, which goes away with the list. The
+  list has to say about itself moved into its instruction line: the keys behind the question, the
+  glossary of a column as a gray line under the list, both gone with it (2026-09-25 -- the list
+  window scrolls around the pointer, so the keys may not stand at its end). The
   run closes with a **card** of six rows -- folder, machine, models, context, speed, result -- over
   the result table. Gone from the screen, and still in the files they belong to: the profile's
   readings and its id, `wrote … as the writer`, the seven account lines with the budget, the reasons
@@ -89,12 +129,14 @@ All notable changes to this project are documented in this file. The format foll
 - **The result table says the memory pool where it said the basis** (`modelroom/views.py`). `Fit` is
   `good (RAM)` where the pool is system memory -- the same word the selection list of step 2 uses --
   and `Speed` is `–` where nothing was measured, not `unknown`. Under the table the notes are
-  bundled: `showing 10 of 23 · 2 packages too tight (…)`, then one line per memory pool with its
-  rank ranges (`#1–4 fit into graphics memory (11.0 GB free after the reserve)`), then
-  `(from size): #1–10 computed from the package size, not its architecture`, then, only where no
-  shown row was measured, `speed: no row shown was measured yet`. The head of each block is
-  `<machine> · context L 32k` in place of `Ranking: <key> (<label>)` and the scenario line. The
-  Markdown and JSON views are unchanged to the byte.
+  bundled, and since 2026-09-25 **every line carries the label of what it says**, in the card's own
+  column: `shown     10 of 22 packages · 2 too tight (…)`, `memory    #1–4 fit into graphics memory,
+  11.0 GB free after the reserve` with one line per pool, `basis     #1–10 computed from the package
+  size, not its architecture`, and `speed     #1 measured 41.1 tok/s` or `nothing measured in the rows shown · say
+  Yes in step 4 to measure an installed package`. Running text buried the install command a reader
+  came for (test round, 2026-09-25). The head of each block is `<machine> · context L 32k` in place
+  of `Ranking: <key> (<label>)` and the scenario line. The Markdown and JSON views are unchanged to
+  the byte.
 - **The fit of the selection list is computed at the context the scale starts on**
   (`guided_models.DEFAULT_CONTEXT`, 32768, one constant with `guided_context.DEFAULT_CONTEXT`). The
   list said `fit at 8k context` while the very next question started on `L 32k`; two numbers for one

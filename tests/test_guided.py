@@ -9,6 +9,7 @@ read or written.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -228,7 +229,7 @@ def test_the_install_line_follows_the_machine_this_run_is_on(tmp_path: Path):
     """Several writers are allowed; the local name of a package is about this machine only."""
     _code, lines = _run(tmp_path)
 
-    install = next(line for line in lines if "to install #1" in line)
+    install = next(line for line in lines if line.strip().startswith("install   #1"))
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     ranked = next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"]
     assert ranked[0]["quantization"] in install
@@ -315,14 +316,27 @@ def test_the_scale_is_asked_with_the_packages_of_this_runs_own_fetch(tmp_path: P
 
     labels = [choice.label for choice in seen["context"]]
     assert all("packages" in label for label in labels[:6])
-    assert any("24 packages" in label for label in labels)
+    assert any("23 packages" in label for label in labels)
+
+
+def _card(lines: list[str]) -> dict[str, str]:
+    """The rows of the card of step 5, by their label: the block between the head and the table.
+
+    Read as a block and not by label alone -- the start screen has a `folder` row of its own, and
+    the notes under the result table carry the card's own labels (`speed`, `shown`, `memory`).
+    """
+    head = max(index for index, line in enumerate(lines) if "Step 5 of 5" in line)
+    tail = lines[head + 1 :]
+    start = next(index for index, line in enumerate(tail) if line.strip().startswith("folder "))
+    rows = itertools.takewhile(lambda line: line.strip(), tail[start:])
+    return {line.split()[0]: line for line in (row.strip() for row in rows)}
 
 
 def test_the_run_closes_with_the_card_and_the_relative_path_of_the_document(tmp_path: Path):
     """The card is the report a reader looks at once the run is over (decided 2026-09-24)."""
     _code, lines = _run(tmp_path)
 
-    card = {line.split()[0]: line for line in (line.strip() for line in lines) if line.split()}
+    card = _card(lines)
     assert str(_results(tmp_path)) in card["folder"]
     assert "GB graphics" in card["machine"] and "GB memory" in card["machine"]
     assert "Qwen3.5-9B" in card["models"] and "packages from" in card["models"]
@@ -1012,18 +1026,20 @@ def test_the_list_shows_one_line_per_model_with_its_fit_and_its_packagers(tmp_pa
 
     assert code == 0
     listed = asker.choices["select"]
-    # Two models, then the repositories an answer file of the older shape may name instead. The
-    # order is the memory pool first: at 32k the smaller model fits the graphics card and the 9B
-    # does not, so the 8B stands above it (the fit of the list is computed at the context the scale
-    # starts on since 2026-09-24).
-    assert sorted(choice.value for choice in listed[:2]) == sorted(["Qwen/Qwen3.5-9B", DEEPSEEK_BASE])
-    assert sorted(choice.value for choice in listed[2:]) == sorted([QWEN_GGUF, UNSLOTH, DEEPSEEK])
+    # The column head, then two models, then the repositories an answer file of the older shape may
+    # name instead. The order is the memory pool first: at 32k the smaller model fits the graphics
+    # card and the 9B does not, so the 8B stands above it (the fit of the list is computed at the
+    # context the scale starts on since 2026-09-24).
+    assert listed[0].heading is True
+    assert listed[0].label.split() == ["Model", "Fit", "Size", "Release", "Packagers", "Downl.", "Ollama"]
+    assert sorted(choice.value for choice in listed[1:3]) == sorted(["Qwen/Qwen3.5-9B", DEEPSEEK_BASE])
+    assert sorted(choice.value for choice in listed[3:]) == sorted([QWEN_GGUF, UNSLOTH, DEEPSEEK])
     assert all(choice.disabled is None for choice in listed)
-    qwen = next(choice for choice in listed[:2] if choice.value == "Qwen/Qwen3.5-9B")
+    qwen = next(choice for choice in listed[1:3] if choice.value == "Qwen/Qwen3.5-9B")
     assert qwen.label.startswith("Qwen3.5-9B")
     assert any(word in qwen.label for word in ("good", "marginal", "too tight", "unknown"))
     assert "Qwen, unsloth" in qwen.label
-    assert all(len(choice.label) <= 100 for choice in listed[:2])
+    assert all(len(choice.label) <= 95 for choice in listed[:3])
 
 
 def test_the_hint_of_the_list_is_its_instruction_line_and_names_the_context_of_the_fit(tmp_path: Path):
@@ -1042,7 +1058,7 @@ def test_the_hint_of_the_list_is_its_instruction_line_and_names_the_context_of_t
     )
 
     instruction = asker.instructions["select"]
-    assert instruction.startswith("nothing marked keeps the folder as it is.")
+    assert instruction.startswith("latest: the publisher's current release of its family")
     assert "at 32k context" in instruction
     assert not any(line.strip().startswith("fit at ") for line in lines)
     assert not any("can be picked;" in line for line in lines)
@@ -1106,6 +1122,60 @@ def test_choosing_nothing_leaves_the_configuration_as_it_is(tmp_path: Path):
     assert load_config(_config_file(tmp_path)).families == []
     assert any("nothing chosen, the folder stays as it is" in line for line in lines)
     assert any("nothing to fetch" in line for line in lines)
+
+
+def test_a_step_five_without_a_snapshot_says_so_and_still_draws_its_card(tmp_path: Path):
+    """The last step was a head and nothing under it (test round, 2026-09-25): a run that chose
+    nothing ended on an empty screen, with the reason on stderr where no reader of the run is."""
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "select": []})
+    stripped = [line.strip() for line in lines]
+
+    assert code == 1
+    assert "nothing to rank: no package in this folder yet" in stripped
+    card = _card(lines)
+    assert str(_results(tmp_path)) in card["folder"]
+    assert "GB graphics" in card["machine"]
+    assert card["models"].startswith("models    none")
+    assert card["context"].startswith("context   S 8k")
+    assert card["speed"].startswith("speed     not measured")  # the card, not the note under the table
+    assert card["result"].split() == ["result", "–"]
+    assert stripped[-1] == "– Results         nothing to rank"
+
+
+def test_a_render_that_was_stopped_says_nothing_about_the_folder(tmp_path: Path):
+    """`nothing to rank` is a statement about the folder, and a held lock is one about this run.
+
+    Every render that writes no document leaves step 5 without a card; only one of them means the
+    folder holds no package (second-model round, 2026-09-25).
+    """
+    from modelroom.catalog import load_catalog
+    from modelroom.guided import GuidedRun, _render_step
+    from modelroom.guided_context import context_scenario
+    from modelroom.screen import Screen
+
+    assert _run(tmp_path)[0] == 0
+    config = load_config(_config_file(tmp_path))
+    lines: list[str] = []
+    run = GuidedRun(
+        asker=FileAsker({}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport({}),
+        probes=windows_probes(),
+        now=RUN1,
+        catalog=load_catalog(),
+        out=lines.append,
+        screen=Screen(lines.append, colored=False),
+    )
+    handle = acquire_lock(config.paths.lock_file, "fetch", RUN1)
+    try:
+        code = _render_step(run, _config_file(tmp_path), config, context_scenario(8192))
+    finally:
+        release_lock(handle)
+
+    assert code == 1
+    assert not any("nothing to rank" in line for line in lines)
+    assert not any(line.strip().startswith("result ") for line in lines)
 
 
 def test_an_entered_context_reaches_the_document(tmp_path: Path):

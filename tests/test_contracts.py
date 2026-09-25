@@ -194,6 +194,50 @@ def test_valid_ollama_package_is_accepted():
     Package.model_validate(payload)
 
 
+def _ollama_payload(**overrides) -> dict:
+    """The example package as an Ollama one, for the fields only that source has."""
+    payload = dict(EXAMPLES["Package"])
+    payload["source"] = "ollama"
+    del payload["repo"]
+    del payload["revision"]
+    payload["ollama_name"] = "nova:7b"
+    payload["manifest_digest"] = "sha256:" + "a" * 64
+    payload.update(overrides)
+    return payload
+
+
+def test_a_package_carries_no_alias_unless_the_registry_gave_it_one():
+    assert Package.model_validate(_ollama_payload()).aliases == []
+
+
+def test_the_other_tags_of_one_manifest_are_the_aliases_of_its_package():
+    package = Package.model_validate(_ollama_payload(aliases=["7b-q4_K_M", "7b-instruct-q4_K_M"]))
+
+    assert package.aliases == ["7b-q4_K_M", "7b-instruct-q4_K_M"]
+
+
+def test_a_huggingface_package_carries_no_aliases():
+    payload = dict(EXAMPLES["Package"])
+    payload["aliases"] = ["something"]
+    with pytest.raises(ValidationError):
+        Package.model_validate(payload)
+
+
+def test_an_alias_that_is_no_tag_is_rejected():
+    with pytest.raises(ValidationError):
+        Package.model_validate(_ollama_payload(aliases=["not a tag"]))
+
+
+def test_an_alias_that_repeats_the_packages_own_tag_is_rejected():
+    with pytest.raises(ValidationError):
+        Package.model_validate(_ollama_payload(aliases=["7b"]))
+
+
+def test_the_same_alias_twice_is_rejected():
+    with pytest.raises(ValidationError):
+        Package.model_validate(_ollama_payload(aliases=["7b-q4_K_M", "7b-q4_K_M"]))
+
+
 def test_provenance_approved_requires_an_approval():
     payload = dict(EXAMPLES["Package"])
     payload["provenance"] = "approved"
