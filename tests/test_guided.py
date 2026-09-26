@@ -26,6 +26,7 @@ from modelroom.binding import GuidedPointer, read_pointer, write_pointer
 from modelroom.cli import main
 from modelroom.config import load_config
 from modelroom.dialog import AnswerMissingError, Canceled, Choice, FileAsker
+from modelroom.fit import OLLAMA_REQUEST_HINT_TEXT
 from modelroom.examples import EXAMPLES
 from modelroom.guided import GuidedError, run_guided
 from modelroom.guided_loadtest import NO_CANDIDATE_LINE
@@ -80,6 +81,7 @@ FULL_ANSWERS = {
     "search": "qwen",
     "filter_owners": True,
     "select": [UNSLOTH, QWEN_GGUF],
+    "users": 1,
     "context": "8192",
 }
 # The same run, plus the repository the load test measures and its two answers.
@@ -341,7 +343,7 @@ def test_the_run_closes_with_the_card_and_the_relative_path_of_the_document(tmp_
     assert str(_results(tmp_path)) in card["folder"]
     assert "GB graphics" in card["machine"] and "GB memory" in card["machine"]
     assert "Qwen3.5-9B" in card["models"] and "packages from" in card["models"]
-    assert card["context"].startswith("context   S 8k")
+    assert card["context"] == "context   8192 (entered), KV cache f16 (assumed), 1 request (from 1 user)"
     assert card["speed"].startswith("speed     not measured")
     assert "models.md" in card["result"] and "packages ranked" in card["result"]
     assert not any(line.startswith("Written to ") for line in lines)
@@ -1450,11 +1452,12 @@ def test_an_entered_context_reaches_the_document(tmp_path: Path):
         "kv_type_assumed": True,
         "requests": 1,
     }
-    # The head of the machine's table says the context; the request count and the KV cache are in
-    # the two files, which is where a reader has room for them (decided 2026-09-24).
+    # The head of the machine's table says the context; the whole scenario sentence -- the KV cache
+    # and the requests with their origin -- stands once on the screen, in the card's `context` row
+    # (decided 2026-09-26; until then only the two files carried it, decided 2026-09-24).
     printed = "\n".join(lines)
     assert "· context XS 4k" in printed
-    assert "1 request" not in printed and "KV cache" not in printed
+    assert [line.split()[0] for line in lines if "KV cache" in line] == ["context"]
 
 
 def test_the_chosen_context_is_kept_in_the_configuration(tmp_path: Path):
@@ -1602,6 +1605,309 @@ def test_a_context_the_scenario_cannot_take_ends_the_run_without_a_traceback(tmp
     with pytest.raises(GuidedError):
         _run(tmp_path, {**FULL_ANSWERS, "context": answer})
 
+
+
+# --- step 3, the head count: the requests the ranking assumes -----------------------------------------
+
+USERS_QUESTION_LINE = "? How many people use it on a typical day?"
+ONE_REQUEST_LINE = "measurements run one request; this ranking assumes {requests}"
+
+
+def _document(tmp_path: Path) -> dict:
+    return json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+
+
+def _markdown(tmp_path: Path) -> str:
+    return (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+
+
+def _kept_requests(tmp_path: Path) -> tuple:
+    guided = load_config(_config_file(tmp_path)).guided
+    return guided.users, guided.requests, guided.requests_origin
+
+
+def _answer_line(lines: list[str], question: str) -> str:
+    return next(line.strip() for line in lines if line.strip().startswith(question))
+
+
+def _pointed_at_in_a_second_run(tmp_path: Path, answers: dict) -> dict[str, str]:
+    """The entry each list of a second run in the same folder starts on."""
+    pointed_at: dict[str, str] = {}
+
+    class _Recording(FileAsker):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
+            pointed_at[key] = next(choice.value for choice in choices if choice.checked)
+            return super().select_or_text(key, question, choices, text_value, text_question, instruction)
+
+    run_guided(
+        _Recording(answers),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN2,
+        out=lambda _line: None,
+    )
+    return pointed_at
+
+
+def test_the_head_count_is_asked_before_the_scale(tmp_path: Path):
+    """The last column of the scale counts with the requests, so they have to be known first."""
+    asker = FileAsker({**FULL_ANSWERS, "users": 25})
+    run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lambda _line: None,
+    )
+
+    assert asker.asked.index("users") + 1 == asker.asked.index("context")
+
+
+def test_a_head_count_is_kept_with_its_requests_and_reaches_the_document(tmp_path: Path):
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "users": 25})
+
+    assert code == 0
+    assert _kept_requests(tmp_path) == (25, 3, "from_users")
+    raw = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))["guided"]
+    assert (raw["users"], raw["requests"], raw["requests_origin"]) == (25, 3, "from_users")
+    payload = _document(tmp_path)
+    assert (payload["users"], payload["requests_origin"], payload["scenario"]["requests"]) == (25, "from_users", 3)
+    fits = [row["fit"] for row in payload["machines"][0]["ranked"] + payload["machines"][0]["too_tight"]]
+    assert fits and {fit["requests"] for fit in fits} == {3}
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  25 (3 requests)"
+    sentence = "context 8192 (entered), KV cache f16 (assumed), 3 requests (from 25 users)"
+    assert f"Scenario: {sentence}" in _markdown(tmp_path)
+    assert _card(lines)["context"] == "context   " + sentence.removeprefix("context ")
+
+
+def test_one_person_is_a_head_count_too_and_says_so_in_the_singular(tmp_path: Path):
+    code, lines = _run(tmp_path)
+
+    assert code == 0
+    assert _kept_requests(tmp_path) == (1, 1, "from_users")
+    assert (_document(tmp_path)["users"], _document(tmp_path)["requests_origin"]) == (1, "from_users")
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  1 (1 request)"
+    assert "Scenario: context 8192 (entered), KV cache f16 (assumed), 1 request (from 1 user)" in _markdown(tmp_path)
+    # One request: no hint, no sentence in step 4.
+    printed = "\n".join(lines)
+    assert "throughput" not in printed and "measurements run one request" not in printed
+    assert "throughput" not in _markdown(tmp_path)
+
+
+def test_requests_named_outright_are_entered_and_carry_the_hint_beyond_eight(tmp_path: Path):
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "users": "12 requests"})
+
+    assert code == 0
+    assert _kept_requests(tmp_path) == (None, 12, "entered")
+    assert "users" not in tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))["guided"]
+    payload = _document(tmp_path)
+    assert (payload["users"], payload["requests_origin"], payload["scenario"]["requests"]) == (None, "entered", 12)
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  12 requests"
+    markdown = _markdown(tmp_path)
+    assert "Scenario: context 8192 (entered), KV cache f16 (assumed), 12 requests (entered)" in markdown
+    assert f"Load: {OLLAMA_REQUEST_HINT_TEXT}" in markdown
+    card = _card(lines)
+    assert card["load"].startswith("load      beyond 8 requests at once")
+    assert " ".join(" ".join(line.split()) for line in lines).count(OLLAMA_REQUEST_HINT_TEXT.split(": ")[1]) == 1
+    assert all(len(line) <= 100 for line in lines if "throughput" in line or "serving stack" in line)
+
+
+def test_the_second_run_offers_the_kept_head_count(tmp_path: Path):
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25})[0] == 0
+
+    assert _pointed_at_in_a_second_run(tmp_path, {**FULL_ANSWERS, "users": 25})["users"] == "25"
+
+
+def test_requests_without_a_head_count_leave_the_list_on_one(tmp_path: Path):
+    """Twelve slots say nothing about how many people there are; no head count is made up."""
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": "12 requests"})[0] == 0
+
+    assert _pointed_at_in_a_second_run(tmp_path, {**FULL_ANSWERS, "users": "12 requests"})["users"] == "1"
+
+
+def test_requests_named_outright_keep_the_head_count_the_folder_holds(tmp_path: Path):
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25})[0] == 0
+
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": "12 requests"}, now=RUN2)[0] == 0
+
+    assert _kept_requests(tmp_path) == (25, 12, "entered")
+    assert "12 requests (entered)" in _markdown(tmp_path)
+
+
+def test_the_same_head_count_again_writes_nothing(tmp_path: Path):
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25})[0] == 0
+    written = _config_file(tmp_path).read_bytes()
+
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25}, now=RUN2)[0] == 0
+
+    assert _config_file(tmp_path).read_bytes() == written
+
+
+def test_a_change_another_process_writes_while_the_head_count_is_asked_is_kept(tmp_path: Path):
+    """The head count is written on top of the file as it is then, not over it."""
+
+    class _WritesInBetween(FileAsker):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
+            if key == "users":
+                config_file = _config_file(tmp_path)
+                text = config_file.read_text(encoding="utf-8")
+                config_file.write_text(text.replace("reserve_ram_gib = 8.0", "reserve_ram_gib = 12.0", 1), encoding="utf-8")
+            return super().select_or_text(key, question, choices, text_value, text_question, instruction)
+
+    assert _run(tmp_path)[0] == 0
+    run_guided(
+        _WritesInBetween({**FULL_ANSWERS, "users": 25}),
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN2,
+        out=lambda _line: None,
+    )
+
+    stored = load_config(_config_file(tmp_path))
+    assert 12.0 in [stored.defaults.reserve_ram_gib, *(machine.reserve_ram_gib for machine in stored.machines.values())]
+    assert (stored.guided.users, stored.guided.requests, stored.guided.requests_origin) == (25, 3, "from_users")
+
+
+@pytest.mark.parametrize("answer", ["3 people", "0", "10241", "0 requests"])
+def test_a_head_count_the_ranking_cannot_take_ends_the_run_naming_both_forms(tmp_path: Path, answer):
+    with pytest.raises(GuidedError, match="N requests"):
+        _run(tmp_path, {**FULL_ANSWERS, "users": answer})
+
+
+def test_an_answer_file_without_the_head_count_is_exit_2_and_names_it(tmp_path: Path, capsys):
+    """An answer file of 0.1.0 has no `users`; like every other missing answer it stops the run."""
+    answers = tmp_path / "answers.toml"
+    body = [f"{key} = {json.dumps(value)}" for key, value in FULL_ANSWERS.items() if key != "users"]
+    answers.write_text("schema_version = 1\n" + "\n".join(body) + "\n", encoding="utf-8")
+
+    code = main(
+        ["--answers", str(answers)],
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        pointer_path=_pointer(tmp_path),
+        daemon=offline_daemon(),
+        now=RUN1,
+        here=_results(tmp_path),
+        out=[].append,
+    )
+
+    assert code == 2
+    assert "no answer for 'users'" in capsys.readouterr().err
+
+
+class _EditsWhileAsked(FileAsker):
+    """A `FileAsker` that lets another process rewrite the configuration while `key` is asked."""
+
+    def __init__(self, answers: dict, config_file: Path, key: str, edits: dict[str, str]) -> None:
+        super().__init__(answers)
+        self._config_file, self._key, self._edits = config_file, key, edits
+        self.labels: dict[str, list[str]] = {}
+
+    def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
+        self.labels[key] = [choice.label for choice in choices]
+        if key == self._key:
+            text = self._config_file.read_text(encoding="utf-8")
+            for old, new in self._edits.items():
+                assert old in text, old
+                text = text.replace(old, new)
+            self._config_file.write_text(text, encoding="utf-8")
+        return super().select_or_text(key, question, choices, text_value, text_question, instruction)
+
+
+def _run_with(tmp_path: Path, asker: FileAsker, now=RUN2) -> int:
+    return run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=now,
+        out=lambda _line: None,
+    )
+
+
+def test_a_head_count_written_by_another_run_during_the_scale_does_not_split_the_run(tmp_path: Path):
+    """The run answered 25 people; another run writes 100 while the scale is asked. The ranking of
+    this run, its document and the configuration it leaves all say 25 -- the last write of step 3
+    applies the whole answer again, so the document never names an origin its number did not
+    come from (second-model round, 2026-09-26)."""
+    assert _run(tmp_path)[0] == 0
+    other = {"users = 25\nrequests = 3\n": "users = 100\nrequests = 10\n"}
+    asker = _EditsWhileAsked({**FULL_ANSWERS, "users": 25}, _config_file(tmp_path), "context", other)
+
+    assert _run_with(tmp_path, asker) == 0
+
+    assert _kept_requests(tmp_path) == (25, 3, "from_users")
+    payload = _document(tmp_path)
+    assert (payload["users"], payload["requests_origin"], payload["scenario"]["requests"]) == (25, "from_users", 3)
+
+
+def test_requests_named_outright_keep_a_head_count_another_run_wrote_meanwhile(tmp_path: Path):
+    """`12 requests` answers no head count, so the head count is the file's -- as it is when the
+    answer is written, not as it was when the question was asked."""
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25})[0] == 0
+    other = {"users = 25\nrequests = 3\n": "users = 50\nrequests = 5\n"}
+    asker = _EditsWhileAsked({**FULL_ANSWERS, "users": "12 requests"}, _config_file(tmp_path), "users", other)
+
+    assert _run_with(tmp_path, asker) == 0
+
+    assert _kept_requests(tmp_path) == (50, 12, "entered")
+
+
+def test_the_scale_counts_with_the_reserves_the_file_holds_after_the_head_count(tmp_path: Path):
+    """Reserves another run wrote while the head count was asked are the ones the ranking uses, so
+    the last column of the scale uses them too."""
+    assert _run(tmp_path)[0] == 0
+    tight = {"reserve_ram_gib = 8.0": "reserve_ram_gib = 127.0", "reserve_vram_gib = 1.0": "reserve_vram_gib = 11.5"}
+    asker = _EditsWhileAsked(dict(FULL_ANSWERS), _config_file(tmp_path), "users", tight)
+
+    assert _run_with(tmp_path, asker) == 0
+
+    levels = asker.labels["context"][:6]
+    assert all("none of" in label for label in levels), levels
+
+def test_the_load_test_measures_one_request_and_the_ranking_says_why_it_does_not_count(tmp_path: Path):
+    """Step 4 measures with a copy of the scenario at one request and the same context; the render
+    computes for three. The measurement stays, the row names the reason, and neither the table nor
+    the card tells the user to measure what was just measured."""
+    answers = {**LOAD_TEST_ANSWERS, "select": [DEEPSEEK], "users": 25}
+
+    code, lines = _run(tmp_path, answers, daemon=loadtest_daemon())
+
+    assert code == 0
+    measured = json.loads(_measurement_files(tmp_path)[0].read_text(encoding="utf-8"))
+    payload = _document(tmp_path)
+    assert measured["scenario"]["requests"] == 1
+    assert measured["scenario"]["context_requested"] == payload["scenario"]["context_requested"] == 8192
+    assert payload["scenario"]["requests"] == 3
+    row = _ranked_deepseek(tmp_path)
+    assert (row["measurement_group"], row["speed_tps"]) == (1, None)
+    assert row["note"]["text"].startswith("measured with 1 request, ranking assumes 3")
+    step_4 = lines[next(index for index, line in enumerate(lines) if "Step 4 of 5" in line) :]
+    sentence = next(index for index, line in enumerate(step_4) if ONE_REQUEST_LINE.format(requests=3) in line)
+    assert sentence < next(index for index, line in enumerate(step_4) if "Measure the speed" in line)
+    speed = [line for line in lines if line.strip().startswith("speed ")]
+    assert any(f"#{row['rank']} measured with 1 request, ranking assumes 3" in line for line in speed)
+    assert not any("say Yes in step 4" in line for line in speed)
+    assert _card(lines)["speed"].endswith(f"#{row['rank']} measured with 1 request, ranking assumes 3")
+
+
+def test_a_run_of_one_request_says_nothing_about_one_request_in_step_4(tmp_path: Path):
+    code, lines = _run(tmp_path, LOAD_TEST_ANSWERS, daemon=loadtest_daemon())
+
+    assert code == 0
+    assert not any("measurements run one request" in line for line in lines)
+    assert _ranked_deepseek(tmp_path)["measurement_group"] == 0
 
 # --- the last steps: fetch, the load test, render -----------------------------------------------------
 

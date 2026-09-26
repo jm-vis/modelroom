@@ -18,19 +18,26 @@ from modelroom.config import Configuration, MachineConfig
 from modelroom.contracts import BaseModelSpec, Package
 from modelroom.examples import EXAMPLES
 from modelroom.fit import compute_fit_v2, count_fitting
+from modelroom.guided import GuidedError
 from modelroom.guided_context import (
     DEFAULT_CONTEXT,
     LEVELS,
     NO_MACHINE_LINE,
     NO_PACKAGES,
     NUMBER_VALUE,
+    USERS_EXPLANATION,
+    USERS_QUESTION,
     Checked,
+    RequestsAnswer,
+    answer_words,
     context_cap,
     context_scenario,
     fit_texts,
     machine_checked,
+    requests_answer,
     scale_choices,
     tokens_of,
+    users_choices,
 )
 from modelroom.profile import HardwareProfile
 from modelroom.ranking import rank_packages
@@ -307,3 +314,99 @@ def test_the_last_column_stands_in_every_line_of_the_list():
     for level in LEVELS:
         label = next(choice.label for choice in choices if choice.value == level.name)
         assert label.endswith(fits[level.tokens])
+
+
+# --- the head count: how many people, and the requests the ranking assumes for them ----------------
+
+
+def test_the_question_and_the_derivation_under_it_say_what_the_number_is():
+    """A head count is not a number of requests; the rule between them is said where it is asked."""
+    assert USERS_QUESTION == "How many people use it on a typical day?"
+    assert USERS_EXPLANATION == "assumes 1 in 10 of them at once (rule of thumb, not measured)"
+
+
+@pytest.mark.parametrize(
+    "answered, kept, expected",
+    [
+        ("25", None, RequestsAnswer(25, 3, "from_users")),
+        # One person is a head count too: `from_users`, never `default` -- the user named it.
+        ("1", None, RequestsAnswer(1, 1, "from_users")),
+        ("10", None, RequestsAnswer(10, 1, "from_users")),
+        ("11", None, RequestsAnswer(11, 2, "from_users")),
+        ("10240", None, RequestsAnswer(10240, 1024, "from_users")),
+        ("12 requests", None, RequestsAnswer(None, 12, "entered")),
+        # Requests named outright keep the head count the folder holds, for the display.
+        ("12 requests", 25, RequestsAnswer(25, 12, "entered")),
+        ("1 request", None, RequestsAnswer(None, 1, "entered")),
+        ("1024 requests", None, RequestsAnswer(None, 1024, "entered")),
+    ],
+)
+def test_an_answer_is_a_head_count_or_the_requests_named_outright(answered, kept, expected):
+    assert requests_answer(answered, kept) == expected
+
+
+@pytest.mark.parametrize(
+    "answered",
+    ["0", "-1", "abc", "3 people", "10241", "0 requests", "1025 requests", "", "2.5", "requests", "+5", "1_000", "9" * 400],
+)
+def test_anything_else_ends_the_run_and_names_both_forms_with_their_bounds(answered):
+    with pytest.raises(GuidedError) as raised:
+        requests_answer(answered, None)
+
+    message = str(raised.value)
+    assert repr(answered) in message
+    assert "a whole number of people (1 to 10240)" in message
+    assert "`N requests` (1 to 1024)" in message
+
+
+@pytest.mark.parametrize(
+    "answer, words",
+    [
+        (RequestsAnswer(25, 3, "from_users"), "25 (3 requests)"),
+        (RequestsAnswer(1, 1, "from_users"), "1 (1 request)"),
+        (RequestsAnswer(None, 12, "entered"), "12 requests"),
+        (RequestsAnswer(25, 1, "entered"), "1 request"),
+    ],
+)
+def test_the_answer_line_names_the_requests_behind_the_head_count(answer, words):
+    assert answer_words(answer) == words
+
+
+def test_the_list_offers_five_head_counts_and_a_number_of_your_own_starting_on_one():
+    choices = users_choices(1)
+
+    assert [choice.value for choice in choices] == ["1", "5", "10", "25", "100", NUMBER_VALUE]
+    assert [choice.value for choice in choices if choice.checked] == ["1"]
+    assert "3 requests" in next(choice.label for choice in choices if choice.value == "25")
+
+
+def test_a_kept_head_count_puts_the_pointer_on_its_line():
+    assert [choice.value for choice in users_choices(25) if choice.checked] == ["25"]
+
+
+def test_a_kept_head_count_that_is_no_line_of_the_list_gets_a_line_of_its_own():
+    choices = users_choices(42)
+
+    kept = next(choice for choice in choices if choice.value == "42")
+    assert kept.checked is True
+    assert "kept in this folder" in kept.label and "5 requests" in kept.label
+    assert [choice.value for choice in choices if choice.checked] == ["42"]
+    assert choices[-1].value == NUMBER_VALUE
+
+
+def test_the_scenario_of_the_run_carries_the_requests_of_the_answer():
+    scenario = context_scenario(32768, 3)
+
+    assert (scenario.context_requested, scenario.requests, scenario.context_origin) == (32768, 3, "entered")
+    assert context_scenario(32768).requests == 1
+
+
+def test_the_last_column_counts_with_the_requests_of_the_run():
+    """Three requests hold three KV caches: at 128k the example machine keeps two packages for one
+    request and none for three -- and the scale says so, as the ranking of the run will."""
+    one = fit_texts(PACKAGES, BY_REPO, _checked(_profile()), [131072])
+    three = fit_texts(PACKAGES, BY_REPO, _checked(_profile()), [131072], requests=3)
+
+    assert count_fitting(_profile(), MACHINE, PACKAGES, BY_REPO, 131072, 3) == 0
+    assert one[131072] == "2 of 3 packages fit"
+    assert three[131072] == "none of 3 packages fits"

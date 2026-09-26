@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -47,7 +48,9 @@ from modelroom.render import (
     machine_profile,
     parse_header_line,
 )
-from modelroom.views import _cell, document_markdown, document_terminal
+from modelroom.fit import OLLAMA_REQUEST_HINT_TEXT
+from modelroom.screen import MEASURE_HINT
+from modelroom.views import _cell, document_markdown, document_terminal, result_card, scenario_line
 
 NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
 RENDERED_AT = datetime(2026, 9, 22, 10, 0, 0, tzinfo=timezone.utc)
@@ -889,3 +892,115 @@ def test_an_area_error_with_a_pipe_stays_one_row():
     area_rows = [line for line in text.splitlines() if line.startswith("| huggingface |")]
     assert len(area_rows) == 1
     assert len(re.findall(r"(?<!\\)\|", area_rows[0])) == 7
+
+
+# --- the scenario of the requests: where the number came from, the hint, the reason under speed -----
+
+
+def _for_requests(requests: int, users: int | None = None, origin: str | None = None, packages=None, measurements=None):
+    """A document computed for `requests`, with the origin `render_cmd` copies from `[guided]`."""
+    document = _document(
+        packages or [_hf_package()],
+        measurements=measurements,
+        scenario=default_scenario().model_copy(update={"requests": requests}),
+    )
+    return RenderDocument.model_validate({**document.model_dump(), "users": users, "requests_origin": origin})
+
+
+def _card_facts(document: RenderDocument) -> list:
+    return result_card(
+        document,
+        folder=Path("results"),
+        markdown=Path("results") / "docs" / "models.md",
+        model_names=["Nova-8B"],
+        packages=1,
+        accounts=["packager"],
+        now=RENDERED_AT,
+        machine="workstation",
+    )
+
+
+@pytest.mark.parametrize(
+    "requests, users, origin, said",
+    [
+        (3, 25, "from_users", "3 requests (from 25 users)"),
+        (1, 1, "from_users", "1 request (from 1 user)"),
+        (12, None, "entered", "12 requests (entered)"),
+        (1, 25, "entered", "1 request (entered)"),
+        (1, None, "default", "1 request"),
+        # A scenario passed in by a caller: the configuration says nothing about its number.
+        (2, None, None, "2 requests"),
+    ],
+)
+def test_the_scenario_line_names_where_the_requests_came_from(requests, users, origin, said):
+    scenario = default_scenario().model_copy(update={"requests": requests})
+
+    assert scenario_line(scenario, users, origin) == f"context 8192 (default), KV cache f16 (assumed), {said}"
+
+
+def test_the_markdown_head_and_the_card_say_the_same_sentence():
+    document = _for_requests(3, 25, "from_users")
+    sentence = "context 8192 (default), KV cache f16 (assumed), 3 requests (from 25 users)"
+
+    assert f"Scenario: {sentence}\n" in document_markdown(document)
+    context = next(fact for fact in _card_facts(document) if fact.label == "context")
+    assert f"{context.label} {context.value}" == sentence and context.note == ""
+
+
+def test_beyond_eight_requests_the_markdown_head_and_the_card_carry_the_hint():
+    document = _for_requests(9, None, "entered")
+
+    assert f"\nLoad: {OLLAMA_REQUEST_HINT_TEXT}\n" in document_markdown(document)
+    facts = _card_facts(document)
+    labels = [fact.label for fact in facts]
+    hint = facts[labels.index("load") : labels.index("load") + 2]
+    assert " ".join(fact.value for fact in hint) == OLLAMA_REQUEST_HINT_TEXT
+    assert hint[1].label == ""
+    assert labels.index("context") < labels.index("load") < labels.index("speed")
+
+
+def test_eight_requests_carry_no_hint():
+    document = _for_requests(8, None, "entered")
+
+    assert "throughput" not in document_markdown(document)
+    assert "load" not in [fact.label for fact in _card_facts(document)]
+
+
+def test_a_measurement_that_counts_but_for_its_requests_is_named_under_speed_not_asked_for_again():
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    document = _for_requests(3, 25, "from_users", [package], {PROFILE_ID: [_measurement(package)]})
+
+    terminal = document_terminal(document)
+    speed = [line for line in terminal.splitlines() if line.strip().startswith("speed ")]
+    assert speed == [" speed     #1 measured with 1 request, ranking assumes 3"]
+    assert MEASURE_HINT not in terminal
+    assert "| measured with 1 request, ranking assumes 3 |" in document_markdown(document)
+    card = next(fact for fact in _card_facts(document) if fact.label == "speed")
+    assert (card.value, card.note) == ("not measured", "#1 measured with 1 request, ranking assumes 3")
+
+
+def test_rows_without_any_measurement_still_say_so_and_what_to_do():
+    terminal = document_terminal(_for_requests(3, 25, "from_users"))
+
+    assert "nothing measured in the rows shown" in terminal and MEASURE_HINT in terminal
+    card = next(fact for fact in _card_facts(_for_requests(3, 25, "from_users")) if fact.label == "speed")
+    assert card.note == MEASURE_HINT
+
+
+def test_a_long_list_of_unused_measurements_keeps_the_card_row_within_a_hundred_columns():
+    """Six scattered ranks at 1024 requests would make the card's speed note 101 columns wide; the
+    card then counts the rows instead of naming them -- the table notes below still name them."""
+    from modelroom.intro import fact_line
+
+    package = _hf_package(file_digest="sha256:" + "c" * 64)
+    document = _for_requests(3, 25, "from_users", [package], {PROFILE_ID: [_measurement(package)]})
+    entry = document.machines[0].ranked[0]
+    note = entry.note.model_copy(update={"text": "measured with 1 request, ranking assumes 1024"})
+    rows = [entry.model_copy(update={"rank": rank, "note": note}) for rank in (1, 2, 4, 6, 8, 10)]
+    block = document.machines[0].model_copy(update={"ranked": rows})
+    scattered = document.model_copy(update={"machines": [block]})
+
+    speed = next(fact for fact in _card_facts(scattered) if fact.label == "speed")
+    assert len("".join(text for _style, text in fact_line(speed))) <= 100
+    assert speed.note == "6 rows measured with 1 request, ranking assumes 1024"
+    assert "#1–2, #4, #6, #8, #10 measured with 1 request, ranking assumes 1024" in document_terminal(scattered)

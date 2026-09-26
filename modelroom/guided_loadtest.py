@@ -56,6 +56,9 @@ NO_CANDIDATE_LINE = (
     "no ranked package is installed on this machine; the load test measures installed "
     "packages only (stage 1: no download)"
 )
+# Said before anything else in step 4 when the ranking assumes more than one request: it explains
+# the note a measured row then carries in step 5 (`measured with 1 request, ranking assumes N`).
+ONE_REQUEST_LINE = "measurements run one request; this ranking assumes {requests}"
 LOAD_NOTE_LINE = (
     "the load on this machine is read once, just before the runs -- load during a run is not "
     "measurable -- and the model behind the name must not change while the runs are made"
@@ -247,8 +250,13 @@ def _measure_candidate(
     return True
 
 
-def load_test_step(run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path) -> str:
+def load_test_step(
+    run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path, ranking_requests: int = 1
+) -> str:
     """Step 4: measure installed packages, with the context this ranking is computed for.
+
+    `scenario` is the one a measurement runs, always one request; `ranking_requests` is what the
+    ranking of this run assumes, and when that is more than one the step says so first.
 
     Returns the one line the finished step leaves behind. Stage 1 measures what the daemon
     already has. A folder this machine is not bound to a profile in, and one that holds no
@@ -259,6 +267,8 @@ def load_test_step(run: "GuidedRun", config: Configuration, scenario: Scenario, 
     """
     run.screen.blank()
     run.screen.head(STEP)
+    if ranking_requests > 1:
+        run.screen.note(ONE_REQUEST_LINE.format(requests=ranking_requests))
     profile_id = _bound_profile_id(run, config, results_dir)
     if profile_id is None:
         return NOTHING_MEASURED

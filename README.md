@@ -157,10 +157,16 @@ formats, quantizations and the exact revision they were seen at.
 
 ![Step 3: the context scale from XS to XXL, with how many of the fetched packages fit at each level](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/6-context.png)
 
-How much text a model should handle at once, as a scale from XS to XXL with the tokens, the words
+First, how many people use it on a typical day: 1, 5, 10, 25, 100 or a number of your own. The
+ranking assumes that 1 in 10 of them send a request at the same moment -- a rule of thumb, not
+measured, and the gray line under the list says so -- so 25 people are 3 parallel requests, and
+every request holds its own KV cache in memory. Whoever knows the number of parallel requests
+types it as `12 requests`. A folder keeps the head count it was given and offers it next time.
+
+Then how much text a model should handle at once, as a scale from XS to XXL with the tokens, the words
 that are and an example. The last column is the point of the question: how many of the packages
-just fetched still fit this machine at that context, because the memory a model needs grows with
-the text it holds. **L** (32k, a report or a long contract) is the default for a new folder; a
+just fetched still fit this machine at that context and for those requests, because the memory a
+model needs grows with the text it holds. **L** (32k, a report or a long contract) is the default for a new folder; a
 folder keeps the level it chose last time, and a number of tokens can be typed instead.
 
 ### Step 4, Measurement
@@ -173,13 +179,18 @@ measurement runs a short prompt through the package and records tokens per secon
 downloads anything. The gray line says what was found: here the daemon has a `Qwen3.5-4B`, but
 its weights are Ollama's own build and not one of the fetched packages, so there is nothing to
 measure as such. **No** skips new measurements; a measurement stored earlier for the same package
-content at the same context stays in the ranking, and a row without one shows `–` for speed.
+content at the same context stays in the ranking, and a row without one shows `–` for speed. A
+measurement always runs one request; when the ranking assumes more, the step says so first, and a
+measured row then names why its speed does not count there.
 
 ### Step 5, Results
 
 ![Step 5: the card of the run, the ranking table and the notes under it](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/8-results.png)
 
-The card of the whole run: folder, machine, models, context, speed, and where the result went. The
+The card of the whole run: folder, machine, models, context, speed, and where the result went.
+The context row carries the whole scenario: the context, the KV cache and the requests with where
+they came from (`3 requests (from 25 users)`); beyond eight requests a `load` row adds that the fit
+says nothing about throughput. The
 folder here already held a configuration from an earlier run naming `Qwen3.5-9B`; the run added
 `Qwen3.5-4B` to it. Under the card, the ranking for this machine at the chosen context: rank,
 model, package (packager and quantization), fit, measured speed, memory need. The notes under the
@@ -207,8 +218,9 @@ show me what fits this machine".
 
 Every choice is a list with the arrow keys, including yes and no; the search word and a path are
 typed. Without an interactive terminal the command prints the help and stops; `modelroom --answers <file>` takes the answers
-from a TOML file instead (for a self-test or CI) -- `context` there is a level (`"L"`) or a number
-of tokens -- and `modelroom --config <file>` works on that configuration rather than the
+from a TOML file instead (for a self-test or CI) -- `users` there is a number of people or
+`"12 requests"`, `context` a level (`"L"`) or a number of tokens; an answer file written for 0.1.0
+needs `users` added (`users = 1` sizes for one person, as 0.1.0 did) -- and `modelroom --config <file>` works on that configuration rather than the
 remembered folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
 
 The six subcommands never ask anything; the guided mode is built on the same measurement, fetch
@@ -371,11 +383,11 @@ procedure is in `AGENTS.md`, "Versioning and releases".
 
 In the order we plan to build it, none of it dated:
 
-- **More than one user.** A question for the number of people who will use the model at once.
-  One person is what this release sizes for. A small team is still an Ollama daemon on a
-  workstation; beyond roughly eight concurrent requests it is a server with vLLM, and the fit
-  then counts the KV cache per concurrent request. Rule of thumb, not measured yet; the release
-  that brings it will carry the measurements.
+- **Throughput for many people.** Step 3 sizes the memory for the parallel requests a head count
+  stands for; how fast those requests are served is not measured. Beyond roughly eight at once it
+  is a job for a serving stack such as vLLM, which uses another package format and needs a fetch, a
+  catalog part and a measurement of its own. Rule of thumb, not measured yet; the release that
+  brings it will carry the measurements.
 - **A machine entered by hand.** Size a box you do not have yet, from its data sheet, and rank
   the same packages for it next to the machines you measured.
 - **Unified memory.** A fit rule for machines whose graphics and system memory are one pool,

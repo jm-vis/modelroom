@@ -19,12 +19,14 @@ from modelroom.config import Configuration, load_config
 from modelroom.guided_contracts import SearchHit
 from modelroom.guided_write import (
     Said,
+    combined,
     create_config,
     read_stored,
     update_config,
     with_context,
     with_found_profiles,
     with_profile,
+    with_requests,
     with_writer,
 )
 from modelroom.search_apply import ConfigChangedError, apply_hits, write_configuration
@@ -217,6 +219,78 @@ def test_the_context_is_kept_on_top_of_the_other_runs_change(tmp_path: Path):
     assert (written.guided.context, "other" in written.machines) == (16384, True)
 
 
+
+# --- the head count and the requests: written together, compared with the file ---------------------
+
+
+def _guided(path: Path) -> tuple:
+    guided = load_config(path).guided
+    return guided.users, guided.requests, guided.requests_origin
+
+
+def test_the_head_count_and_its_requests_are_written_together(tmp_path: Path):
+    path = _config_file(tmp_path)
+
+    written = update_config(path, with_requests(25, 3, "from_users"), now=NOW)
+
+    assert _guided(path) == (25, 3, "from_users")
+    assert (written.guided.users, written.guided.requests, written.guided.requests_origin) == (25, 3, "from_users")
+
+
+def test_requests_named_outright_are_written_without_a_head_count(tmp_path: Path):
+    path = _config_file(tmp_path)
+
+    update_config(path, with_requests(None, 12, "entered"), now=NOW)
+
+    assert _guided(path) == (None, 12, "entered")
+    assert "users" not in path.read_text(encoding="utf-8")
+
+
+def test_requests_named_outright_keep_the_head_count_the_file_holds_when_they_are_written(tmp_path: Path):
+    """The head count of `entered` is the file's own, read in the change -- also on a retry."""
+    path = _config_file(tmp_path)
+    update_config(path, with_requests(25, 3, "from_users"), now=NOW)
+    edit = lambda data: data["guided"].update(users=50, requests=5, requests_origin="from_users")  # noqa: E731
+    change, calls = _meanwhile(path, with_requests(25, 12, "entered"), edit)
+
+    update_config(path, change, now=NOW)
+
+    assert _guided(path) == (50, 12, "entered")
+    assert calls["count"] == 2
+
+def test_requests_the_file_already_holds_write_nothing(tmp_path: Path):
+    path = _config_file(tmp_path)
+    update_config(path, with_requests(25, 3, "from_users"), now=NOW)
+    _mark_untouched(path)
+
+    written = update_config(path, with_requests(25, 3, "from_users"), now=NOW)
+
+    assert path.read_text(encoding="utf-8").endswith(UNTOUCHED)
+    assert written.guided.users == 25
+
+
+def test_the_requests_are_compared_with_the_file_and_not_with_the_runs_own_copy(tmp_path: Path):
+    """The run read 25; another run wrote 5 since. The answer is 25, so 25 is written again."""
+    path = _config_file(tmp_path)
+    update_config(path, with_requests(25, 3, "from_users"), now=NOW)
+    _second_writer(path, lambda data: data["guided"].update(users=5, requests=1, requests_origin="from_users"))
+
+    update_config(path, with_requests(25, 3, "from_users"), now=NOW)
+
+    assert _guided(path) == (25, 3, "from_users")
+
+
+def test_the_requests_are_kept_on_top_of_the_other_runs_change(tmp_path: Path):
+    path = _config_file(tmp_path)
+    change, calls = _meanwhile(path, with_requests(25, 3, "from_users"), _add_machine("other"))
+
+    written = update_config(path, change, now=NOW)
+
+    assert "other" in load_config(path).machines, "the other run's change was written over"
+    assert _guided(path) == (25, 3, "from_users")
+    assert calls["count"] == 2
+    assert written.model_dump(mode="json") == load_config(path).model_dump(mode="json")
+
 def _place(tmp_path: Path, profile_id: str, display_name: str) -> None:
     hardware = tmp_path / "state" / "hardware"
     hardware.mkdir(parents=True, exist_ok=True)
@@ -344,3 +418,15 @@ def test_hits_without_an_ollama_name_leave_the_configured_pair_after_the_reload(
     entry = written.families[0].base_models[0]
     assert (entry.ollama_base, entry.ollama_tag) == ("my-qwen", "9b")
     assert "unsloth/Qwen3.5-9B-GGUF" in entry.repos
+
+
+def test_changes_combined_are_one_write_and_nothing_when_none_has_anything_to_do(tmp_path: Path):
+    path = _config_file(tmp_path)
+
+    written = update_config(path, combined(with_requests(25, 3, "from_users"), with_context(4096)), now=NOW)
+
+    assert (_guided(path), load_config(path).guided.context) == ((25, 3, "from_users"), 4096)
+    assert written.guided.context == 4096
+    _mark_untouched(path)
+    update_config(path, combined(with_requests(25, 3, "from_users"), with_context(4096)), now=NOW)
+    assert path.read_text(encoding="utf-8").endswith(UNTOUCHED)

@@ -18,6 +18,7 @@ from .guided_context import LEVELS
 from .intro import LABEL_COLUMN, STEP_COUNT, Fact, glyphs, label_line
 from .measurements import Scenario
 from .render import format_header_line
+from .scenario_text import document_scenario, load_hint, scenario_line, scenario_words, unused_measurements
 from .screen import (
     JOIN_WIDTH,
     MEASURE_HINT,
@@ -58,16 +59,6 @@ def _cell(value: str) -> str:
     """
     normalized = value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ")
     return normalized.replace("|", "\\|").strip()
-
-
-def scenario_line(scenario: Scenario) -> str:
-    """The one sentence every output prints about what was computed."""
-    assumed = " (assumed)" if scenario.kv_type_assumed else ""
-    requests = "request" if scenario.requests == 1 else "requests"
-    return (
-        f"context {scenario.context_requested} ({scenario.context_origin}), "
-        f"KV cache {scenario.kv_type}{assumed}, {scenario.requests} {requests}"
-    )
 
 
 def _fit_text(fit: Fit) -> str:
@@ -227,7 +218,8 @@ def _summary_lines(document: RenderDocument) -> list[str]:
         f"Snapshot run at: {document.snapshot_run_at.isoformat()}",
         f"Rendered at: {document.rendered_at.isoformat()}",
         f"Base models / packages: {document.base_model_count} / {document.package_count}",
-        f"Scenario: {scenario_line(document.scenario)}",
+        f"Scenario: {document_scenario(document)}",
+        *(f"Load: {hint}" for hint in load_hint(document)),
         f"Ranking rule: {document.ranking_rule}",
     ]
     if document.rating_unavailable is not None:
@@ -454,15 +446,16 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
 def _speed_pieces(block: MachineRanking, dash: str) -> list[str]:
     """What was measured on the rows this view can see, or that nothing was.
 
-    One piece per measured row (`#3 measured 41.1 tok/s`), in the ranking's own order; where no row
-    carries a speed, the reason and what to do about it.
+    One piece per measured row (`#3 measured 41.1 tok/s`), in the ranking's own order, then the rows
+    whose measurement did not count for its requests alone (`#3 measured with 1 request, ranking
+    assumes 3`). Only where neither is there does it say nothing was measured and what to do: a
+    row that names its reason was measured, and to be told to measure it would be wrong.
     """
     if not block.ranked:
         return []
-    measured = [entry for entry in block.ranked if entry.speed_tps is not None]
-    if not measured:
-        return [_NO_SPEED_YET, MEASURE_HINT]
-    return [f"#{entry.rank} measured {entry.speed_tps:.1f} tok/s" for entry in measured]
+    pieces = [f"#{entry.rank} measured {entry.speed_tps:.1f} tok/s" for entry in block.ranked if entry.speed_tps is not None]
+    unused = unused_measurements(block, dash)
+    return pieces + ([unused] if unused else []) or [_NO_SPEED_YET, MEASURE_HINT]
 
 
 def _labeled_rows(label: str, texts: list[str]) -> list[Line]:
@@ -670,8 +663,12 @@ def result_card(
     ]
     measured, fastest = _measured_speeds(block)
     facts.append(models_fact(model_names, packages, accounts))
-    facts.append(context_fact(document.scenario.context_requested))
-    facts.append(speed_fact(measured, fastest))
+    # The scenario sentence of the Markdown head, its first word being the row's own label; the hint
+    # beyond 8 requests wrapped under it, so no line of the run is wider than 100 columns.
+    facts.append(Fact("context", scenario_words(document.scenario, document.users, document.requests_origin), ""))
+    facts += [Fact("" if index else "load", row, "") for index, row in enumerate(load_hint(document, 86))]
+    # 66: what is left of 100 columns behind the card's label and value columns.
+    facts.append(speed_fact(measured, fastest, unused_measurements(block, glyphs().skip, 66)))
     facts.append(
         result_fact(
             relative_path(markdown, folder),
