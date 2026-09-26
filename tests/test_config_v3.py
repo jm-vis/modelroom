@@ -86,6 +86,19 @@ def test_requests_from_users_follow_the_rule_of_thumb():
     assert guided.requests == 3
 
 
+def test_a_head_count_alone_derives_the_requests_by_the_rule_of_thumb(tmp_path):
+    """Only `users` in the table: `from_users` and the rule's number, on every reader (acceptance round, 2026-09-26)."""
+    guided = GuidedConfig.model_validate({"users": 25})
+    assert (guided.users, guided.requests, guided.requests_origin) == (25, 3, "from_users")
+    config = Configuration.from_dict(_v3_dict(tmp_path, users=25))
+    assert (config.guided.users, config.guided.requests, config.guided.requests_origin) == (25, 3, "from_users")
+    path = _v3_file(tmp_path, "users = 25")
+    before = path.read_bytes()
+    loaded = load_config(path)
+    assert (loaded.guided.users, loaded.guided.requests, loaded.guided.requests_origin) == (25, 3, "from_users")
+    assert path.read_bytes() == before
+
+
 def test_the_active_share_is_one_in_ten():
     assert config_module.ACTIVE_SHARE == 0.10
 
@@ -106,6 +119,9 @@ def test_requests_from_users_is_ceil_of_a_tenth_between_1_and_1024(users, reques
         {"requests_origin": "entered"},  # an origin without requests
         {"users": 0, "requests": 1, "requests_origin": "entered"},
         {"users": 10241, "requests": 1, "requests_origin": "entered"},
+        {"users": 0},  # a head count alone still has to be a head count
+        {"users": 10241},
+        {"users": "25"},
         {"requests": 0, "requests_origin": "entered"},
         {"requests": 1025, "requests_origin": "entered"},
         {"requests": 2, "requests_origin": "guessed"},

@@ -73,3 +73,16 @@ def test_the_render_hands_the_reason_on_as_the_row_note():
     assert entry.note.code == "measured_with_one_request"
     assert entry.note.subject == "package"
     assert entry.measurement_group == 1 and entry.speed_tps is None
+
+
+def test_a_row_on_the_size_basis_keeps_its_from_size_sentence_next_to_the_reason():
+    """The sentence every size-basis note carries (decided 2026-09-24) does not fall away when the
+    row carries the reason for an unused measurement (acceptance round, 2026-09-26)."""
+    fit = _fit_for(3).model_copy(update={"basis": "size"})
+    ranking = rank_packages([(Q4, fit)], [_measurement(Q4, 40.0)], _scenario(3))
+
+    entry = _ranked_entries(ranking, shared_memory=False)[0]
+
+    assert entry.note.code == "measured_with_one_request"
+    assert entry.note.text == "measured with 1 request, ranking assumes 3. From the size of the package, not its architecture."
+    assert "fit.basis" in entry.note.facts

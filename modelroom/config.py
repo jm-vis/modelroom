@@ -210,6 +210,20 @@ class GuidedConfig(BaseModel):
             raise ValueError(f"guided.results must be an absolute path (load_config resolves relative ones): {value}")
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_from_users(cls, data: object) -> object:
+        """Only a head count in the table: the requests follow the rule of thumb (`from_users`).
+
+        A head count outside its bounds is left to the field validator, so the error names it.
+        """
+        if not isinstance(data, dict) or "users" not in data or "requests" in data or "requests_origin" in data:
+            return data
+        users = data["users"]
+        if isinstance(users, bool) or not isinstance(users, int) or not 1 <= users <= MAX_USERS:
+            return data
+        return {**data, "requests": requests_from_users(users), "requests_origin": "from_users"}
+
     @model_validator(mode="after")
     def _check_requests(self) -> "GuidedConfig":
         if ("requests" in self.model_fields_set) != ("requests_origin" in self.model_fields_set):

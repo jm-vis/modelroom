@@ -104,6 +104,20 @@ def test_the_cli_migrates_schema_2_with_exit_0_and_then_has_nothing_to_do(tmp_pa
     assert NOTHING_TO_DO in capsys.readouterr().out
 
 
+def test_a_schema_2_value_the_toml_writer_refuses_ends_migrate_with_exit_2_and_nothing_written(tmp_path, capsys):
+    """`inf` is valid TOML and passes the reader (`ge=0`); the writer refuses it, so the run names the
+    file instead of ending in a traceback (acceptance round, 2026-09-26)."""
+    config = _v2_folder(tmp_path)
+    text = config.read_text(encoding="utf-8").replace("reserve_ram_gib = 6.0", "reserve_ram_gib = inf")
+    config.write_text(text, encoding="utf-8", newline="\n")
+    before = _tree(tmp_path)
+
+    assert main(["migrate", "--config", str(config)], now=NOW) == 2
+
+    assert "modelroom.toml" in capsys.readouterr().err
+    assert _tree(tmp_path) == before
+
+
 def test_v1_to_v2_to_v3_in_the_same_folder_keeps_both_backups(tmp_path):
     """A folder 0.1.0 migrated from schema 1 carries `.v1.bak` files; the next step adds `.v2.bak`."""
     config = _v2_folder(tmp_path)

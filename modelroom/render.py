@@ -332,13 +332,11 @@ def _row_note(ranked: RankedPackage, shared_memory: bool) -> Note:
     if ranked.measurement is not None:
         return _measured_note(ranked.measurement)
     if ranked.measurement_note is not None:
-        return Note(
-            code="measured_with_one_request",
-            subject="package",
-            origin="computed",
-            text=_clip(ranked.measurement_note),
-            facts=["scenario.requests", "measurement_group"],
-        )
+        text, facts = ranked.measurement_note, ["scenario.requests", "measurement_group"]
+        # The size-basis sentence stays whatever else the row says (see `_FROM_SIZE_SENTENCE`).
+        if ranked.fit.basis == "size":
+            text, facts = f"{text}.{_FROM_SIZE_SENTENCE}", [*facts, "fit.basis"]
+        return Note(code="measured_with_one_request", subject="package", origin="computed", text=_clip(text), facts=facts)
     return _computed_note(ranked.fit, shared_memory)
 
 

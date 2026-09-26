@@ -254,7 +254,12 @@ def _plan_config(config_path: Path, raw: dict, ids_by_name: dict[str, str], vers
     for name, machine in normalized.get("machines", {}).items():
         if name in ids_by_name:
             machine["profile"] = ids_by_name[name]
-    text = dump_toml(normalized, header=_CONFIG_HEADER)
+    try:
+        text = dump_toml(normalized, header=_CONFIG_HEADER)
+    except TypeError as exc:
+        # `inf` is valid TOML and passes `ge=0`, but the writer refuses a non-finite float: name
+        # the file instead of ending in a traceback (exit 2, nothing written), as the import does.
+        raise ConfigError(f"{config_path}: holds a value the TOML writer cannot write back: {exc}") from exc
     config_from_text(text, config_path)
     _require_backup_absent_or_same(_backup_path(config_path, version), config_path)
     return text
