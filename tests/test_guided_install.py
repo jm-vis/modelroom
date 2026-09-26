@@ -63,6 +63,7 @@ ANSWERS = {
     "search": "qwen",
     "filter_owners": True,
     "select": [UNSLOTH, QWEN_GGUF],
+    "users": 1,
     "context": "8192",
 }
 PULL = {**ANSWERS, "pull": True}

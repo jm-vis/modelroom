@@ -804,8 +804,8 @@ count a user named:
 `requests` and `requests_origin` are written together or not at all; a table that breaks one of
 the rules is invalid (`ConfigError`, exit `2`). A `[guided]` table without the keys reads as one
 request of origin `default`. `render_cmd.scenario_from_config` reads `requests` whether a context
-is kept or not. The guided dialog does not ask for the number yet; the keys exist for the ranking
-and for a later step that asks.
+is kept or not. Step 3 of the guided mode asks for the head count and writes the three keys
+together (see "Guided mode", step 3; decided 2026-09-26).
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
@@ -3490,8 +3490,9 @@ callback, so the card and the tables rest on one snapshot (second-model round, 2
 then prints the blocks on its own; `modelroom render` passes neither and stays silent on success.
 
 **Sections of the Markdown view**, in this order: the header line, the summary block (title,
-snapshot run time, rendered time, base model and package counts, `Scenario:`, `Ranking rule:`,
-and `Market rating unavailable: <message>` when the rating source failed), `## Areas`,
+snapshot run time, rendered time, base model and package counts, `Scenario:`, `Load:` beyond
+`OLLAMA_REQUEST_HINT` requests, `Ranking rule:`, and `Market rating unavailable: <message>` when the
+rating source failed), `## Areas`,
 `## Machines`, and then per machine `## Ranking: <machine>`, `## Not covered: <machine>` and
 `## Too tight: <machine>` -- the last two only when they have rows. Every machine section is a
 `##` heading, so a reader can cut the document at headings.
@@ -3532,8 +3533,12 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    statements about two memories joined by a `·` read as one. The numbers come from the fields of
    `Fit`, never from parsing a note's own sentence back apart.
 3. `basis` -- `#2–5 computed from the package size, not its architecture`, where there are such rows.
-4. `speed` -- `#3 measured 41.1 tok/s` per measured row, or `nothing measured in the rows shown · say
-   Yes in step 4 to measure an installed package` where no row carries a speed. **Of the rows shown,
+4. `speed` -- `#3 measured 41.1 tok/s` per measured row, then the rows whose measurement counts but
+   for its requests alone, with the reason their note carries: `#3 measured with 1 request, ranking
+   assumes 3` (the row note `measured_with_one_request`, "Ranking rule"). Only where **neither** is
+   there does it say `nothing measured in the rows shown · say Yes in step 4 to measure an installed
+   package`: a row that names why its measurement does not count was measured, and to be told to
+   measure it would be wrong (decided 2026-09-26). **Of the rows shown,
    not of the machine**: the ranking rule sorts by fit class first, so a measured package can stand
    behind eleven unmeasured ones and be in no `RankedEntry` of the document at all -- the card of the
    same screen counts that measurement, and the two may not contradict each other (second-model
@@ -3805,7 +3810,14 @@ passed, or one passed with the same requests (the guided mode always passes one)
 passed with other requests leaves both `None`, so the document never names a wrong origin. The
 rules of `GuidedConfig` hold between the three (`default`: one request and no head count,
 `from_users`: the head count and its derived number); `users` alone, without an origin, is
-invalid. The views do not show the two fields yet.
+invalid. The views say them in the scenario sentence (`scenario_text.scenario_line`, which `views` uses; decided 2026-09-26):
+`context 32768 (entered), KV cache f16 (assumed), 3 requests (from 25 users)`, `12 requests
+(entered)`, and `1 request` with no bracket for `default` or a scenario that is not the
+configuration's -- the Markdown head's `Scenario:` line and the `context` row of the guided mode's
+card say the same sentence. Beyond `OLLAMA_REQUEST_HINT` (8) requests both carry the hint
+`beyond 8 requests at once this fit says nothing about throughput: measure under load, or look at a
+serving stack (rule of thumb, not measured)` -- `Load:` in the Markdown head, a `load` row in the
+card; a hint, never a limit.
 
 | Field | Type | Constraint |
 |---|---|---|
@@ -4276,7 +4288,8 @@ and what the step came to (`✓ Packages        2 models, 26 packages from 4 rep
 where it did nothing (`– Measurement     none in this run`). Step 5 closes with the card of the
 whole run over the result table and `✓ Results         docs\models.md`, the document's path relative
 to the results folder. The five are **1 Configuration** (the results folder, the configuration in
-it, the machines), **2 Packages** (search, choice, fetch), **3 Context** (the size scale),
+it, the machines), **2 Packages** (search, choice, fetch), **3 Context** (the head count, then the
+size scale),
 **4 Measurement** (the load test), **5 Results** (the render).
 
 The balances, one per step: `<folder>, <n> machine(s)` · `<k> models, <p> packages from <r>
@@ -4305,6 +4318,7 @@ matter, so the move is invisible to it.
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
 | 2 | `did_you_mean` | Nothing was found. Did you mean one of these? | one of the candidates, or `keep` (only when the search found no model and the catalog knows a word close to the one that was typed) |
 | 2 | `select` | Which of these models should the result cover? | a list of base model ids (`Qwen/Qwen3.5-9B`); an answer file may name repository ids instead, as before |
+| 3 | `users` | How many people use it on a typical day? | a whole number of people (`1..10240`), or the requests named outright as text, `"12 requests"` (`1..1024`); asked before `context`; the pointer starts on `[guided].users` when this folder kept one, else on `1` |
 | 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
 | 4 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **one of the two optional answers** -- an answer file that does not mention it does not measure |
 | 4 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
@@ -4545,6 +4559,36 @@ whose base model the shipped catalog has no family for gets the family name
 Then `fetch_with_config` runs with the same budget object (nothing configured yet means nothing to
 fetch, said out loud).
 
+**Step 3, the head count** (`modelroom/guided_context.py`, decided 2026-09-26), asked **before**
+the scale: the last column of the scale and the fit of the ranking compute with the same requests,
+or the scale would show a number the run contradicts a moment later. `How many people use it on a
+typical day?` is a list of `1`, `5`, `10`, `25`, `100`, each with the requests it stands for, and
+`enter a number`; the derivation stands in the instruction line under the list: `assumes 1 in 10 of
+them at once (rule of thumb, not measured)` (`config.ACTIVE_SHARE`, `requests_from_users`). The
+pointer starts on the head count this folder kept (`[guided].users`), on a line of its own `<n>
+<k> requests kept in this folder` when that is no line of the list, and on `1` when the folder kept
+none -- also when it kept requests named outright without a head count, since a number of slots
+says nothing about how many people there are.
+
+- **A whole number** is a head count: `requests = requests_from_users(users)`, origin `from_users`
+  -- `1` included, which is a head count the user named, not the `default`.
+- **`N requests`** (also `1 request`) names the parallel requests outright: origin `entered`, and
+  `users` stays what the file holds **when the answer is written** (read in the change, on every
+  attempt), or none; only the display uses it.
+- **Anything else** -- `0`, `-1`, `abc`, `3 people`, a head count above 10240, requests above 1024
+  -- ends the run with exit `2`, naming what was answered and both forms with their bounds
+  (`GuidedConfig` checks them).
+- **The answer line**: `? How many people use it on a typical day?  25 (3 requests)`, `1 (1
+  request)`, or `12 requests`.
+- **The write**: `[guided].users`, `requests` and `requests_origin` together
+  (`guided_write.with_requests`), right after the answer, compared with the file as it is then and
+  not with this run's copy -- the rule of the context below. The configuration that comes back is
+  the one the run goes on with: the scale is computed for the machine and the reserves **it** holds,
+  not the ones read before the question. After the scale the head count is applied once more,
+  together with the context (`guided_write.combined`), so a head count another run wrote while the
+  scale was asked cannot leave this run's scenario, its document and the file apart (second-model
+  round, 2026-09-26). A second run in the same folder offers the kept head count.
+
 **Step 3, the context as a size scale** (`modelroom/guided_context.py`). Six levels, in this
 order, each a line of the list: `XS` 4096, `S` 8192, `M` 16384, `L` 32768, `XL` 65536, `XXL`
 131072, with the shown context (`4k` … `128k`), roughly how many words that is (three quarters of
@@ -4562,7 +4606,8 @@ in <toml>` all went (test round, 2026-09-24). A machine a fit cannot be computed
   question for a number of tokens; it starts empty, because what this folder kept is already the
   line under the pointer.
 - **The last column, "how many fit"**: for every level, fit contract v1's own formula
-  (`fit.count_fitting` over `compute_fit_v2`, one request, 16-bit KV cache) over the packages of
+  (`fit.count_fitting` over `compute_fit_v2`, the requests of the head count, 16-bit KV cache per
+  request) over the packages of
   this folder's snapshot that a fit may be computed for (`render._eligible_packages`), against the
   profile **the pointer file binds this machine to for this folder** (the same source step 4
   measures into, and never `[machines.<name>].profile`), with the reserves of that machine's
@@ -4615,8 +4660,9 @@ report a reader looks at once the run is over:
 | `folder` | the results folder | -- |
 | `machine` | one row per machine of the result, its `display_name` | `12 GB graphics, 127 GB memory, measured today` (else `measured <YYYY-MM-DD>` from the profile's `recorded_at`); a machine without a profile carries its own reason |
 | `models` | the base models of the snapshot, by name | `<p> packages from <up to three packager accounts, else "and n more">` |
-| `context` | `L 32k` | the words and the example of that level; a context of its own: `about 30,000 words` |
-| `speed` | `not measured` or `<n> measured` | `say Yes in step 4 to measure an installed package`, or `fastest <name> at 41.1 tok/s` |
+| `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32768 (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
+| `load` | only beyond `OLLAMA_REQUEST_HINT` (8) requests: the hint of the Markdown head's `Load:` line, wrapped on rows of its own so no line is wider than 100 columns | -- |
+| `speed` | `not measured` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts but for its requests alone (`#3 measured with 1 request, ranking assumes 3`; by count, `6 rows measured with ...`, where the ranks would make the row wider than 100 columns), and only without such a row `say Yes in step 4 to measure an installed package` -- the rule of the `speed` note under the table |
 | `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> too tight` (else `, none too tight`), and every other set-aside reason with its count behind a `·` |
 
 The `speed` and `result` rows count **one** machine's ranking: the machine of the run, else the first
@@ -4694,7 +4740,12 @@ stays in every case**, for anyone who prefers to paste it.
   daemon and nothing else.
 
 **Step 4, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
-which `guided.py` calls between the context and the render). It measures into the profile **the
+which `guided.py` calls between the context and the render). A measurement runs one request
+(protocol v1): the step gets a copy of the run's scenario with `requests = 1` and the same context,
+the render of step 5 the whole scenario. When the ranking assumes more than one request, the step's
+first line says so, before anything else and whether anything is measured or not: `measurements run
+one request; this ranking assumes 3` -- it explains the reason a measured row then carries in step 5
+(decided 2026-09-26). It measures into the profile **the
 pointer file binds this machine to for this results folder**, and only when the takeover rule
 (`resolve_profile_target`, "Profile binding") says `bound` for it -- the profile file is in the
 folder and its `os_fingerprint` agrees with this machine's. Never into `[machines.<host>].profile`:
@@ -4736,7 +4787,8 @@ the daemon's inventory is read and matched against the snapshot's active package
 
 **The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question
-with no answer ends the run with exit `2` and names the question; an answer that is not one of
+with no answer ends the run with exit `2` and names the question -- an answer file written for 0.1.0
+has no `users` and stops at step 3 until the key is added (`users = 1` keeps its old ranking); an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
 exit `3`. **The two exceptions are `load_test` and `pull`:** a file that does not mention
 `load_test` does not measure, and one that does not mention `pull` does not pull, because whether

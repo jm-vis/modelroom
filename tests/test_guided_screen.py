@@ -43,6 +43,7 @@ CHOSEN = {
     "search": "qwen",
     "filter_owners": True,
     "select": [QWEN, DEEPSEEK],
+    "users": 1,
     "context": "L",
 }
 NOTHING_CHOSEN = {**CHOSEN, "select": []}

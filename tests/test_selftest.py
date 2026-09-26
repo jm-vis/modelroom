@@ -725,6 +725,63 @@ def test_the_criterion_watches_the_report_and_not_the_hub():
     assert any("carries no verdict" in problem for problem in searchset.testset_problems(cases, ["qwen: nothing"]))
 
 
+# --- criterion 11: the head count of the first run ---------------------------------------------------
+
+KEPT_HEAD = {"users": 1, "requests": 1, "requests_origin": "from_users"}
+DOCUMENT_HEAD = {"users": 1, "requests_origin": "from_users", "scenario": {"requests": 1}}
+
+
+def test_both_runs_answer_the_head_count_with_one_person():
+    """One person keeps every criterion that wants measured group 0: one request is what a
+    measurement runs, so the first run's measurement still counts in the ranking of both runs."""
+    assert tomllib.loads(st.answers_toml(st.ANSWERS_FIRST))["users"] == 1
+    assert tomllib.loads(st.answers_toml(st.ANSWERS_SECOND))["users"] == 1
+
+
+@pytest.fixture
+def sh():
+    """`scripts/selftest_head.py`, the head count criterion the self-test imports."""
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_head", REPO / "scripts" / "selftest_head.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_head_count_criterion_is_met_by_one_person_in_both_files(sh):
+    assert sh.head_count_problems(KEPT_HEAD, DOCUMENT_HEAD) == []
+
+
+def test_the_head_count_step_reads_the_two_files_the_first_run_left(sh, tmp_path: Path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "modelroom.toml").write_text(
+        'schema_version = 3\n[guided]\nusers = 1\nrequests = 1\nrequests_origin = "from_users"\n', encoding="utf-8"
+    )
+    (tmp_path / "docs" / "models.json").write_text(json.dumps({**DOCUMENT_HEAD, "users": 25}), encoding="utf-8")
+
+    name, ok, detail = sh.head_count_step(tmp_path)
+
+    assert name.startswith("(11) ") and ok is False
+    assert detail == "the document's users is 25, expected 1"
+
+
+@pytest.mark.parametrize(
+    "guided, document, word",
+    [
+        ({**KEPT_HEAD, "users": 25}, DOCUMENT_HEAD, "[guided].users"),
+        ({**KEPT_HEAD, "requests_origin": "default"}, DOCUMENT_HEAD, "[guided].requests_origin"),
+        ({**KEPT_HEAD, "requests": 3}, DOCUMENT_HEAD, "[guided].requests"),
+        ({}, DOCUMENT_HEAD, "[guided].users"),
+        (KEPT_HEAD, {**DOCUMENT_HEAD, "users": None}, "the document's users"),
+        (KEPT_HEAD, {**DOCUMENT_HEAD, "requests_origin": "default"}, "the document's requests_origin"),
+        (KEPT_HEAD, {**DOCUMENT_HEAD, "scenario": {"requests": 3}}, "the document's scenario.requests"),
+        (KEPT_HEAD, {}, "the document's users"),
+    ],
+)
+def test_the_head_count_criterion_goes_red_on_every_deviation(sh, guided, document, word):
+    problems = sh.head_count_problems(guided, document)
+
+    assert problems and any(problem.startswith(word) for problem in problems)
+
 # --- the report ------------------------------------------------------------------------------------------
 
 

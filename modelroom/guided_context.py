@@ -1,7 +1,10 @@
-"""Step 3 of the guided mode: how much text a model should handle at once, as a size scale.
+"""Step 3 of the guided mode: how many people use the model, then how much text it should handle.
 
-Six levels from XS to XXL, each with its number of tokens, roughly how many words that is, an
-example of what it is good for, and how many of the packages of this results folder still fit
+First the head count: how many people use it on a typical day, turned into the parallel requests
+the ranking assumes by a rule of thumb that is said under the list (`config.requests_from_users`),
+or the requests named outright as `N requests`. Then the size scale: six levels from XS to XXL,
+each with its number of tokens, roughly how many words that is, an example of what it is good
+for, and how many of the packages of this results folder still fit
 the machine being checked. The last column is the whole point of the scale: it is the fit of
 fit contract v1, computed by `fit.count_fitting` over the packages the fetch of this same run
 recorded, against the profile the pointer file binds this machine to for this folder. A level
@@ -12,12 +15,16 @@ Everything the scale knows comes from somewhere else: the formula from `modelroo
 from `[machines.<name>]`. It is read when the question is asked, like every other list of this
 dialog; the write that follows reads the configuration again on its own.
 
-This module asks the question and writes the answer; the order of the steps stays in
+The head count comes first because the last column of the scale counts with its requests: a
+column computed for one request would show a number the ranking of the same run then contradicts.
+
+This module asks both questions and writes the answers; the order of the steps stays in
 `modelroom/guided.py` (CONTRACTS.md, "Guided mode", step 3).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,11 +32,20 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from .binding import read_pointer
-from .config import Configuration, MachineConfig
+from .config import (
+    ACTIVE_SHARE,
+    MAX_REQUESTS,
+    MAX_USERS,
+    Configuration,
+    GuidedConfig,
+    MachineConfig,
+    RequestsOrigin,
+    requests_from_users,
+)
 from .contracts import BaseModelSpec, Package, SchemaVersionError
 from .dialog import Choice, columns
 from .fit import count_fitting
-from .guided_write import with_context
+from .guided_write import combined, with_context, with_requests
 from .importer import scan_profiles
 from .measurements import Scenario
 from .profile import HardwareProfile, fit_block_reason
@@ -58,6 +74,19 @@ NO_ENTRY_LINE = (
 NO_PACKAGES = "no packages yet"
 
 _COLUMN_WIDTHS = (6, 6, 14, 36)
+
+# The head count (decided 2026-09-26): asked in people, because that is the number a user knows;
+# the ranking computes with parallel requests, and the rule between the two stands under the list.
+USERS_KEY = "users"
+USERS_QUESTION = "How many people use it on a typical day?"
+USERS_EXPLANATION = f"assumes 1 in {round(1 / ACTIVE_SHARE)} of them at once (rule of thumb, not measured)"
+USERS_NUMBER_QUESTION = "How many people? (or: N requests)"
+USERS_LEVELS = (1, 5, 10, 25, 100)
+USERS_FORMS = f"a whole number of people (1 to {MAX_USERS}) or `N requests` (1 to {MAX_REQUESTS})"
+# Digits 0-9 only: `int()` would also take `+25`, `1_000` and digits of other scripts.
+_USERS_ANSWER = re.compile(r"[0-9]+")
+_REQUESTS_ANSWER = re.compile(r"([0-9]+) requests?")
+_USERS_WIDTHS = (6, 14)
 
 
 @dataclass(frozen=True)
@@ -101,16 +130,80 @@ class Checked:
     reason: str | None = None
 
 
-def context_scenario(context: int) -> Scenario:
-    """The scenario of one chosen context. Everything the dialog writes is `entered`.
+@dataclass(frozen=True)
+class RequestsAnswer:
+    """The answer to the head count: the people, the requests the ranking assumes, and why."""
+
+    users: int | None
+    requests: int
+    origin: RequestsOrigin
+
+
+def requests_words(requests: int) -> str:
+    """`1 request`, `3 requests`."""
+    return f"{requests} request" if requests == 1 else f"{requests} requests"
+
+
+def answer_words(answer: RequestsAnswer) -> str:
+    """The answer line: `25 (3 requests)` for a head count, `12 requests` for requests named outright."""
+    if answer.origin == "from_users":
+        return f"{answer.users} ({requests_words(answer.requests)})"
+    return requests_words(answer.requests)
+
+
+def users_choices(default_users: int) -> list[Choice]:
+    """The list of the head count: five head counts with their requests, the kept one, a number.
+
+    The pointer starts on the head count this folder kept, else on 1; a kept one that is no line
+    of the list gets a line of its own, like a kept context that is no level of the scale.
+    """
+    rows = [[str(users), requests_words(requests_from_users(users))] for users in USERS_LEVELS]
+    choices = [
+        Choice(str(users), label, checked=users == default_users)
+        for users, label in zip(USERS_LEVELS, columns(rows, _USERS_WIDTHS))
+    ]
+    if default_users not in USERS_LEVELS:
+        kept = [[str(default_users), requests_words(requests_from_users(default_users)), "kept in this folder"]]
+        choices.append(Choice(str(default_users), columns(kept, _USERS_WIDTHS)[0], checked=True))
+    choices.append(Choice(NUMBER_VALUE, NUMBER_LABEL))
+    return choices
+
+
+def requests_answer(answered: str, kept_users: int | None) -> RequestsAnswer:
+    """A head count or `N requests` as the answer; anything else ends the run (exit `2`).
+
+    A head count is `from_users`, one person included: the user named it. Requests named outright
+    are `entered` and keep the head count this folder holds, which only the display uses. The
+    bounds are the configuration's own, checked by its model.
+    """
+    from .guided import GuidedError  # imported here: that module calls this step in turn
+
+    named = _REQUESTS_ANSWER.fullmatch(answered)
+    try:
+        if named is not None:
+            answer = RequestsAnswer(kept_users, int(named.group(1)), "entered")
+        elif _USERS_ANSWER.fullmatch(answered) is not None and 1 <= int(answered) <= MAX_USERS:
+            users = int(answered)
+            answer = RequestsAnswer(users, requests_from_users(users), "from_users")
+        else:
+            raise ValueError("neither a whole number of people nor N requests")
+        GuidedConfig(users=answer.users, requests=answer.requests, requests_origin=answer.origin)
+    except (ValueError, ValidationError) as exc:
+        raise GuidedError(f"{answered!r} is no head count this ranking can be computed for: answer {USERS_FORMS}") from exc
+    return answer
+
+
+def context_scenario(context: int, requests: int = 1) -> Scenario:
+    """The scenario of one chosen context and the requests of the head count; all `entered`.
 
     Not `measurements.default_scenario`: that one is 8192 as `default`, the context the three
     automation commands assume when nobody chose one. A user who picks `S` in the scale has
     chosen it, so it is `entered` like every other level, and `render_cmd.scenario_from_config`
-    reads a kept context back the same way (CONTRACTS.md, "Guided mode", step 3).
+    reads a kept context back the same way (CONTRACTS.md, "Guided mode", step 3). The requests
+    are the ones the head count stands for; the load test gets a copy of one request.
     """
     return Scenario(
-        context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1
+        context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=requests
     )
 
 
@@ -128,7 +221,11 @@ def scale_words(context: int) -> str:
 
 
 def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> tuple[Scenario, Configuration]:
-    """Ask the scale, then keep the answer in `[guided].context` -- one context for the ranking.
+    """Ask the head count, then the scale; keep both in `[guided]` -- one scenario for the ranking.
+
+    The head count is written as `[guided].users`, `requests` and `requests_origin` together
+    (`guided_write.with_requests`), right after it is answered, and the scale is then asked with
+    its requests.
 
     The answer is written whenever it differs from what the file holds **when the answer comes
     in**, read again immediately before the write: the dialog takes as long as the user takes,
@@ -145,12 +242,28 @@ def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> 
     checked = machine_checked(run.pointer_path, config, config_file.parent)
     if checked.reason is not None:
         run.screen.note(checked.reason)
-    context = _answered_context(run, config, checked)
-    run.screen.answer(QUESTION, scale_words(context))
     from .guided import _write_config  # imported here: the step is called by that module in turn
 
+    answer = _answered_requests(run, config)
+    run.screen.answer(USERS_QUESTION, answer_words(answer))
     # Read, compare, write -- and once more on the new state when another run wrote in between.
-    return context_scenario(context), _write_config(run, config_file, with_context(context))
+    requests = with_requests(answer.users, answer.requests, answer.origin)
+    config = _write_config(run, config_file, requests)
+    # The machine again, from the file as it is now: the ranking computes with these reserves.
+    checked = _checked_again(run, config, config_file, checked)
+    context = _answered_context(run, config, checked, answer.requests)
+    run.screen.answer(QUESTION, scale_words(context))
+    # The whole answer once more, so a head count another run wrote meanwhile cannot split the run.
+    config = _write_config(run, config_file, combined(requests, with_context(context)))
+    return context_scenario(context, config.guided.requests), config
+
+
+def _checked_again(run: "GuidedRun", config: Configuration, config_file: Path, checked: Checked) -> Checked:
+    """The machine of the scale from the configuration just written; its reason was said already."""
+    again = machine_checked(run.pointer_path, config, config_file.parent)
+    if again.reason is not None and again.reason != checked.reason:
+        run.screen.note(again.reason)
+    return again
 
 
 def machine_checked(pointer_path: Path, config: Configuration, results_dir: Path) -> Checked:
@@ -200,8 +313,13 @@ def scale_choices(levels: tuple[Level, ...], default_context: int, fits: dict[in
     return choices
 
 
-def fit_texts(packages: list[Package], base_models: dict[str, BaseModelSpec], checked: Checked, contexts: list[int]) -> dict[int, str]:
-    """The last column, one text per context: `all N packages fit`, `k of N`, `none of N`."""
+def fit_texts(
+    packages: list[Package], base_models: dict[str, BaseModelSpec], checked: Checked, contexts: list[int], requests: int = 1
+) -> dict[int, str]:
+    """The last column, one text per context: `all N packages fit`, `k of N`, `none of N`.
+
+    Computed for the requests of the head count, so the scale and the ranking of the run agree.
+    """
     if checked.profile is None or checked.machine_config is None:
         return {}
     total = len(packages)
@@ -209,7 +327,7 @@ def fit_texts(packages: list[Package], base_models: dict[str, BaseModelSpec], ch
         return {context: NO_PACKAGES for context in contexts}
     texts = {}
     for context in contexts:
-        fitting = count_fitting(checked.profile, checked.machine_config, packages, base_models, context)
+        fitting = count_fitting(checked.profile, checked.machine_config, packages, base_models, context, requests)
         texts[context] = _fit_text(fitting, total)
     return texts
 
@@ -284,12 +402,30 @@ def snapshot_facts(config: Configuration) -> SnapshotFacts:
     )
 
 
-def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked) -> int:
+def _answered_requests(run: "GuidedRun", config: Configuration) -> RequestsAnswer:
+    """The head count the user gave, or the requests named outright; the list starts on the kept one.
+
+    Only a kept head count moves the pointer: requests named outright say nothing about how many
+    people there are, so a folder that kept `12 requests` and no head count starts on 1.
+    """
+    kept = config.guided.users
+    answered = run.asker.select_or_text(
+        USERS_KEY,
+        USERS_QUESTION,
+        users_choices(kept if kept is not None else 1),
+        NUMBER_VALUE,
+        USERS_NUMBER_QUESTION,
+        USERS_EXPLANATION,
+    ).strip()
+    return requests_answer(answered, kept)
+
+
+def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked, requests: int = 1) -> int:
     """The context the user picked, as a number of tokens; a level is translated here."""
     packages, base_models = snapshot_packages(config)
     default_context = config.guided.context if config.guided.context is not None else DEFAULT_CONTEXT
     contexts = [level.tokens for level in LEVELS] + [default_context]
-    fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts)
+    fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts, requests)
     choices = scale_choices(LEVELS, default_context, fits, context_cap(base_models))
     instruction = EXPLANATION.format(machine=checked.name) if fits else None
     answered = run.asker.select_or_text(
@@ -354,17 +490,25 @@ __all__ = [
     "NUMBER_LABEL",
     "NUMBER_VALUE",
     "QUESTION",
+    "USERS_EXPLANATION",
+    "USERS_KEY",
+    "USERS_QUESTION",
     "Checked",
     "Level",
+    "RequestsAnswer",
     "SnapshotFacts",
+    "answer_words",
     "context_cap",
     "context_scenario",
     "context_step",
     "fit_texts",
     "machine_checked",
+    "requests_answer",
+    "requests_words",
     "scale_choices",
     "scale_words",
     "snapshot_facts",
     "snapshot_packages",
     "tokens_of",
+    "users_choices",
 ]

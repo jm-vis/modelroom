@@ -45,7 +45,8 @@ Criteria (the plan's own numbering):
    Hub's answer for a word changes by the hour, so a missing model is a `WARN`. What the tests gate
    is the shape of that report (`tests/test_selftest.py`);
 9. and 10. the pull of step 5 (`scripts/selftest_pull.py`): the first row pulled to `success` from a
-   fixture daemon that plays a recorded pull, and the first live run's `pull = false`.
+   fixture daemon that plays a recorded pull, and the first live run's `pull = false`;
+11. the head count of step 3, one person and one request, kept (`scripts/selftest_head.py`).
 
 The test set and the live search run as smokes afterwards and never decide the exit code.
 
@@ -89,6 +90,7 @@ ANSWERS_FIRST = {
     "search": SEARCH_NAME,
     "filter_owners": True,
     "select": [UNSLOTH_GGUF, DEEPSEEK_GGUF],
+    "users": 1,  # one person, one request: criterion 5's measurement stays in group 0 (criterion 11)
     "context": ANSWERED_LEVEL,
     "load_test": True,
     "load_test_packages": [DEEPSEEK_OLLAMA_NAME],
@@ -739,6 +741,9 @@ def run_steps(work: Path) -> list[Step]:
     transport = build_transport(guided_transport_mapping())
     started = datetime.now(timezone.utc).replace(microsecond=0)
     steps, first_lines = _first_run(results, pointer, transport, started)
+    from selftest_head import head_count_step
+
+    steps.append(Step(*head_count_step(results)))
     machine = _machine_name((results / "modelroom.toml").read_text(encoding="utf-8"))
     steps.append(_load_test_step(results, machine))
     scale = _scale_labels(results, pointer)

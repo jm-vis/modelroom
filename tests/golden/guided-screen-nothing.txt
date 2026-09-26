@@ -25,6 +25,7 @@
  – Packages        nothing chosen, the folder stays as it is
 
  ── Step 3 of 5  Context ────────────────────────────────────────────────
+ ? How many people use it on a typical day?  1 (1 request)
  ? How much text should a model handle at once?  L  32k  24,000 words  a report or a long contract
  ✓ Context         L 32k
 

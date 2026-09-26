@@ -24,8 +24,8 @@ meanwhile, that file is taken over as it is and nothing is written. Its values s
 own entry is added by the writer step, as in any folder someone else set up.
 
 The changes of the individual steps live here as well (`with_writer`, `with_profile`,
-`with_context`, `with_found_profiles`), so each can be tested on its own. CONTRACTS.md,
-"Configuration" and "Guided mode".
+`with_context`, `with_requests`, `with_found_profiles`), so each can be tested on its own.
+CONTRACTS.md, "Configuration" and "Guided mode".
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-from .config import ConfigError, Configuration, PathsConfig, config_from_text
+from .config import ConfigError, Configuration, GuidedConfig, PathsConfig, RequestsOrigin, config_from_text
 from .importer import ImportConflictError, machine_name_for, scan_profiles
 from .search_apply import ConfigChangedError, write_configuration
 
@@ -157,6 +157,45 @@ def with_context(context: int) -> Change:
     return change
 
 
+def with_requests(users: int | None, requests: int, origin: RequestsOrigin) -> Change:
+    """`[guided].users`, `requests` and `requests_origin` hold the head count this run answered.
+
+    The three together or not at all, compared with the file and not with a copy -- the rule of
+    `with_context`. Requests named outright (`entered`) answer no head count: theirs is the one the
+    file holds when the change is applied, read here on every attempt, and `users` is not used.
+    Built through `GuidedConfig` itself, so the rule between the three is checked before anything
+    is written.
+    """
+
+    def change(current: Configuration) -> Configuration | None:
+        guided = current.guided
+        head = guided.users if origin == "entered" else users
+        if (guided.users, guided.requests, guided.requests_origin) == (head, requests, origin):
+            return None
+        data = {**guided.model_dump(), "users": head, "requests": requests, "requests_origin": origin}
+        return current.model_copy(update={"guided": GuidedConfig.model_validate(data)})
+
+    return change
+
+
+def combined(*changes: Change) -> Change:
+    """The changes one after another, as one change: `None` only when none of them has anything to do.
+
+    Step 3 writes its whole answer this way at the end, so a head count another run wrote while the
+    scale was asked cannot leave this run's scenario and the file it writes apart.
+    """
+
+    def change(current: Configuration) -> Configuration | None:
+        result = current
+        for step in changes:
+            updated = step(result)
+            if updated is not None:
+                result = updated
+        return None if result is current else result
+
+    return change
+
+
 def with_found_profiles(said: Said) -> Change:
     """Every profile of the folder without a `[machines.<name>]` entry gets one.
 
@@ -195,11 +234,13 @@ __all__ = [
     "Change",
     "Said",
     "Stored",
+    "combined",
     "create_config",
     "read_stored",
     "update_config",
     "with_context",
     "with_found_profiles",
     "with_profile",
+    "with_requests",
     "with_writer",
 ]

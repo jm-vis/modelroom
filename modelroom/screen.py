@@ -391,10 +391,14 @@ def models_fact(names: Sequence[str], packages: int, accounts: Sequence[str]) ->
     return Fact("models", names_words(names, "none"), f"{counted} from {named_accounts(accounts)}")
 
 
-def speed_fact(measured: int, fastest: tuple[str, float] | None) -> Fact:
-    """The speed row of the card: how many packages were measured here, and which was fastest."""
+def speed_fact(measured: int, fastest: tuple[str, float] | None, reason: str | None = None) -> Fact:
+    """The speed row of the card: how many packages were measured here, and which was fastest.
+
+    Where no row carries a speed, `reason` is why a measurement a row has did not count
+    (`#3 measured with 1 request, ranking assumes 3`); only without one does the row say to measure.
+    """
     if not measured or fastest is None:
-        return Fact("speed", SPEED_NOT_MEASURED, MEASURE_HINT)
+        return Fact("speed", SPEED_NOT_MEASURED, reason or MEASURE_HINT)
     name, speed = fastest
     return Fact("speed", f"{measured} measured", f"fastest {name} at {speed:.1f} tok/s")
 

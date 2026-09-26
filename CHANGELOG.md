@@ -63,13 +63,31 @@ All notable changes to this project are documented in this file. The format foll
   once per request, on the architecture and the size basis alike. A ranking of more than one
   request is computed instead of `unknown`, and every `Fit` carries its `requests`.
   `OLLAMA_REQUEST_HINT = 8` is the rule of thumb, not measured, above which a fit says nothing
-  about throughput -- a hint for a later view, never a limit. A measurement runs one request, so
+  about throughput -- a hint in the card and the Markdown head, never a limit. A measurement runs one request, so
   it counts in measured group 0 only for a ranking of one request; where it fails on `requests`
   alone, the row's note says `measured with 1 request, ranking assumes N`.
 - **Configuration schema 3: `[guided]` keeps the requests and where they came from** (ADR 0002).
   `users` (a head count), `requests` and `requests_origin` (`default`, `entered`, `from_users` --
   one in ten of the head count, a rule of thumb, not measured). A later `modelroom render` of the
-  folder computes for them. The guided dialog does not ask yet: a run assumes one request.
+  folder computes for them. Step 3 of the guided dialog asks for them (see the next point).
+- **Step 3 asks how many people use the model** (`modelroom/guided_context.py`,
+  `guided_write.with_requests`, `modelroom/scenario_text.py` new, `scripts/selftest_head.py` new; CONTRACTS.md, "Guided mode", steps 3 to 5; decided 2026-09-26).
+  `How many people use it on a typical day?` comes before the size scale, as a list of 1, 5, 10, 25
+  and 100 or a number of your own; the line under the list says what the ranking makes of it:
+  `assumes 1 in 10 of them at once (rule of thumb, not measured)`, so 25 people are 3 parallel
+  requests (`from_users`). `12 requests` names the requests outright (`entered`). The three keys of
+  `[guided]` are written together, and the next run starts the list on the kept head count. The
+  last column of the scale and the ranking compute with the same requests; the load test measures a
+  copy of the scenario at one request and the same context, and step 4 says so first when the
+  ranking assumes more (`measurements run one request; this ranking assumes 3`). The Markdown head
+  and the `context` row of the card say where the requests came from (`3 requests (from 25
+  users)`, `12 requests (entered)`); beyond 8 requests both carry the hint that the fit says nothing
+  about throughput (`Load:`, `load`). A row whose measurement counts but for its requests alone
+  names that reason under `speed`, in the table notes and on the card, instead of the advice to
+  measure. **Answer files need `users`:** a question without an answer stops the run with exit `2`
+  as before, so an answer file written for 0.1.0 stops at step 3 until `users = 1` (one person, the
+  sizing of 0.1.0) or another head count is added; `scripts/selftest.py` answers `users = 1` in
+  both runs and checks that the configuration and the document kept it (criterion 11).
 - **Hardware profile schema 3: a machine entered by hand, and unified memory** (ADR 0001). The
   value `entered` for memory, graphics memory and GPU state, in exactly three shapes (a graphics
   card of N GiB, none, unified memory). Unified memory is computed now: one pool, the memory minus

@@ -38,6 +38,7 @@ from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
+from .guided_context import USERS_KEY, USERS_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
 from .guided_install import QUESTIONS as PULL_QUESTIONS, FirstRow, first_row, pull_step
 from .guided_loadtest import NOTHING_MEASURED
@@ -126,6 +127,8 @@ QUESTIONS: dict[str, str] = {
     DID_YOU_MEAN_KEY: DID_YOU_MEAN_QUESTION,
     "select": "Which of these models should the result cover?",
     "context": CONTEXT_QUESTION,
+    # Step 3 asks it before the scale: `N` people, or `N requests` named outright.
+    USERS_KEY: USERS_QUESTION,
     # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`).
     **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS,
 }
@@ -743,7 +746,10 @@ def run_guided(
     scenario, config = context_step(run, config_file, config)
     # `views.context_short` names a context the way the scale of step 3 does: `L 32k`, or the number.
     run.screen.done(3, context_short(scenario.context_requested))
-    measured = load_test_step(run, config, scenario, config_file.parent)
+    # A measurement runs one request (protocol v1): the load test gets a copy of the scenario at one
+    # request and the same context, the render the whole scenario (decided 2026-09-26).
+    one_request = scenario.model_copy(update={"requests": 1})
+    measured = load_test_step(run, config, one_request, config_file.parent, ranking_requests=scenario.requests)
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
     code, first = _render_step(run, config_file, config, scenario)
     pull_step(run, first, intro.daemon_reachable)
