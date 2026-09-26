@@ -591,8 +591,7 @@ def test_every_profile_in_the_folder_is_listed_grouped_and_not_selectable(tmp_pa
     assert len(groups) == 1
     assert "2 machines: alpha, beta" in groups[0].label
     assert groups[0].disabled == "already in this results folder"
-    assert [choice.value for choice in machines if choice.disabled is None] == ["this-machine", "import"]
-    assert any(choice.value == "enter" and choice.disabled == "stage 2" for choice in machines)
+    assert [choice.value for choice in machines if choice.disabled is None] == ["this-machine", "import", "enter"]
 
 
 def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_path: Path):
@@ -2332,3 +2331,408 @@ def test_a_missing_answer_deep_in_the_dialog_leaves_the_configuration_valid(tmp_
         _run(tmp_path, {"results": "here", "machines": []})
 
     assert load_config(_config_file(tmp_path)).schema_version == 3
+
+
+# --- a machine entered by hand (step 1, `modelroom/guided_entered.py`) ------------------------------
+
+ENTERED_UNIFIED = {
+    **FULL_ANSWERS,
+    "machines": ["enter"],
+    "entered_name": "studio",
+    "entered_ram": 32,
+    "entered_gpu": "unified",
+}
+ENTERED_CARD = {**ENTERED_UNIFIED, "entered_name": "tower", "entered_ram": 64, "entered_gpu": "card", "entered_vram": 24}
+ENTERED_NONE = {**ENTERED_UNIFIED, "entered_name": "box", "entered_ram": 64, "entered_gpu": "none"}
+
+
+def _entered_files(tmp_path: Path) -> list[HardwareProfile]:
+    """Every profile of the results folder whose memory was entered by hand."""
+    profiles = [HardwareProfile.model_validate_json(path.read_text(encoding="utf-8")) for path in _profiles(tmp_path)]
+    return [profile for profile in profiles if profile.ram_physical_source == "entered"]
+
+
+def _answers_without_folder(answers: dict) -> dict:
+    return {key: value for key, value in answers.items() if key != "results"}
+
+
+def _measured_stem(tmp_path: Path) -> str:
+    """The one other profile next to the entered one (`c...c`): the measurement of this machine."""
+    stems = [path.stem for path in _profiles(tmp_path)]
+    assert len(stems) == 2 and "c" * 16 in stems, stems
+    return next(stem for stem in stems if stem != "c" * 16)
+
+
+def _watched(tmp_path: Path, answers: dict) -> _WatchingAsker:
+    """One run with an asker that keeps the choices of every list; returns the asker."""
+    lines: list[str] = []
+    asker = _WatchingAsker(answers, lines)
+    run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=lines.append,
+    )
+    return asker
+
+
+def test_the_machine_list_offers_entering_a_machine_by_hand_after_measuring_and_importing(tmp_path: Path):
+    machines = _watched(tmp_path, {**FULL_ANSWERS, "machines": []}).choices["machines"]
+
+    assert [choice.value for choice in machines if choice.disabled is None] == ["this-machine", "import", "enter"]
+    assert next(choice.label for choice in machines if choice.value == "enter") == "enter a machine by hand"
+
+
+@pytest.mark.parametrize(
+    ("answers", "asked"),
+    [
+        (ENTERED_CARD, ["entered_name", "entered_ram", "entered_gpu", "entered_vram"]),
+        (ENTERED_NONE, ["entered_name", "entered_ram", "entered_gpu"]),
+        (ENTERED_UNIFIED, ["entered_name", "entered_ram", "entered_gpu"]),
+    ],
+)
+def test_entering_asks_its_questions_in_order_and_graphics_memory_only_for_a_card(tmp_path: Path, answers, asked):
+    asker = _watched(tmp_path, answers)
+
+    assert [key for key in asker.asked if key.startswith("entered_")] == asked
+    assert _entered_files(tmp_path), "the run did not get as far as the profile"
+
+
+def test_every_answer_of_the_machine_entered_by_hand_is_written_back_in_words(tmp_path: Path):
+    code, lines = _run(tmp_path, ENTERED_CARD)
+
+    assert code == 0
+    answers = [line.strip() for line in lines if line.strip().startswith("? ")]
+    assert "? Which machines should the result cover?  a machine entered by hand" in answers
+    assert "? What is the machine called?  tower" in answers
+    assert "? How much memory does it have, in GiB?  64 GiB" in answers
+    assert "? What runs the model?  a graphics card with its own memory" in answers
+    assert "? How much graphics memory, in GiB?  24 GiB" in answers
+
+
+@pytest.mark.parametrize(
+    ("key", "answer", "said"),
+    [
+        ("entered_name", "", "1 to 128 characters"),
+        ("entered_name", "   ", "1 to 128 characters"),
+        ("entered_name", "x" * 129, "1 to 128 characters"),
+        ("entered_ram", "", "not a number of GiB above 0"),
+        ("entered_ram", "a lot", "not a number of GiB above 0"),
+        ("entered_ram", 0, "not a number of GiB above 0"),
+        ("entered_ram", -16, "not a number of GiB above 0"),
+        ("entered_ram", "-1.5", "not a number of GiB above 0"),
+        ("entered_ram", "nan", "not a number of GiB above 0"),
+        ("entered_ram", "inf", "not a number of GiB above 0"),
+        ("entered_vram", "", "not a number of GiB above 0"),
+        ("entered_vram", "big", "not a number of GiB above 0"),
+        ("entered_vram", 0, "not a number of GiB above 0"),
+        ("entered_vram", -8, "not a number of GiB above 0"),
+    ],
+)
+def test_an_answer_a_machine_entered_by_hand_cannot_take_ends_the_run_and_writes_no_profile(
+    tmp_path: Path, key, answer, said
+):
+    with pytest.raises(GuidedError, match=said) as raised:
+        _run(tmp_path, {**ENTERED_CARD, key: answer})
+
+    assert key in str(raised.value)
+    assert _profiles(tmp_path) == []
+
+
+@pytest.mark.parametrize("answer", ["31.5", "31.999999"])
+def test_a_memory_size_may_be_a_decimal_number_given_as_text_and_is_said_as_given(tmp_path: Path, answer):
+    code, lines = _run(tmp_path, {**ENTERED_UNIFIED, "entered_ram": answer})
+
+    assert code == 0
+    assert [profile.ram_physical_gib for profile in _entered_files(tmp_path)] == [float(answer)]
+    assert f"? How much memory does it have, in GiB?  {answer} GiB" in [line.strip() for line in lines]
+
+
+def test_the_answer_file_names_the_question_of_the_machine_entered_by_hand_it_has_no_answer_for(tmp_path: Path, capsys):
+    answers = tmp_path / "answers.toml"
+    answers.write_text(
+        'schema_version = 1\nresults = "here"\nmachines = ["enter"]\nentered_name = "studio"\n', encoding="utf-8"
+    )
+
+    code = main(
+        ["--answers", str(answers)],
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        pointer_path=_pointer(tmp_path),
+        now=RUN1,
+        here=_results(tmp_path),
+        out=[].append,
+        daemon=offline_daemon(),
+    )
+
+    assert code == 2
+    assert "no answer for 'entered_ram'" in capsys.readouterr().err
+
+
+def test_an_answer_file_from_before_the_machine_entered_by_hand_runs_unchanged(tmp_path: Path):
+    asker = FileAsker(FULL_ANSWERS)
+    code = run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN1,
+        out=[].append,
+    )
+
+    assert code == 0
+    assert not any(key.startswith("entered_") for key in asker.asked)
+
+
+@pytest.mark.parametrize(
+    ("shape", "vram", "state", "source", "stored_vram"),
+    [
+        ("card", 24.0, "entered", "entered", 24.0),
+        ("none", 0.0, "none", "none", 0.0),
+        ("unified", 0.0, "unified_memory", "none", 0.0),
+    ],
+)
+def test_the_profile_of_a_machine_entered_by_hand_is_one_the_fit_computes_for(shape, vram, state, source, stored_vram):
+    from modelroom.guided_entered import entered_profile
+    from modelroom.profile import fit_block_reason
+
+    profile = entered_profile("studio", 64.0, shape, vram, "a" * 16, RUN1)
+
+    assert HardwareProfile.model_validate(profile.model_dump(mode="json")) == profile
+    assert fit_block_reason(profile) is None
+    assert (profile.gpu_state, profile.vram_source, profile.vram_gib) == (state, source, stored_vram)
+    assert (profile.origin, profile.ram_physical_source, profile.ram_physical_gib) == ("entered", "entered", 64.0)
+    assert (profile.os_fingerprint, profile.os_fingerprint_source) == ("none", "none")
+    assert (profile.ram_limit_gib, profile.ram_limit_scope) == (None, "none")
+    assert (profile.gpu_name, profile.llmfit_version, profile.recorded_at) == (None, None, RUN1)
+    checks = profile.llmfit_crosscheck
+    assert (checks.ram_physical.status, checks.vram.status) == ("absent", "absent")
+
+
+def test_a_machine_entered_by_hand_is_a_profile_file_and_an_entry_of_its_own_and_no_binding(tmp_path: Path):
+    from modelroom.profile import read_profile_document
+
+    code, lines = _run(tmp_path, ENTERED_CARD, probes=windows_probes(ids=["c" * 16]))
+
+    assert code == 0
+    path = _results(tmp_path) / "state" / "hardware" / f"{'c' * 16}.json"
+    stored = read_profile_document(json.loads(path.read_text(encoding="utf-8")))
+    assert (stored.display_name, stored.gpu_state, stored.vram_gib) == ("tower", "entered", 24.0)
+    assert read_pointer(_pointer(tmp_path)).bindings == {}
+    config = load_config(_config_file(tmp_path))
+    entry = config.machines["tower"]
+    assert (entry.writer, entry.profile) == (False, "c" * 16)
+    assert (entry.reserve_ram_gib, entry.reserve_vram_gib) == (
+        config.defaults.reserve_ram_gib,
+        config.defaults.reserve_vram_gib,
+    )
+    assert "entered tower: 64 GiB memory, graphics card 24 GiB" in [line.strip() for line in lines]
+    # Step 1's balance counts it: this machine's own entry and the one entered by hand.
+    assert any(line.endswith(", 2 machines") for line in _summaries(lines))
+
+
+@pytest.mark.parametrize(
+    ("answers", "note"),
+    [
+        (ENTERED_NONE, "entered box: 64 GiB memory, no graphics card"),
+        (ENTERED_UNIFIED, "entered studio: 32 GiB memory, shared memory"),
+    ],
+)
+def test_the_note_of_a_machine_entered_by_hand_says_what_it_is(tmp_path: Path, answers, note):
+    _code, lines = _run(tmp_path, answers)
+
+    assert note in [line.strip() for line in lines]
+
+
+def test_a_name_another_machine_has_gets_the_short_id(tmp_path: Path):
+    """`workstation` is this machine's own entry; the one entered by hand steps aside."""
+    answers = {**ENTERED_UNIFIED, "entered_name": "workstation"}
+    code, _lines = _run(tmp_path, answers, probes=windows_probes(ids=["d" * 16]))
+
+    assert code == 0
+    config = load_config(_config_file(tmp_path))
+    assert config.machines["workstation"].writer is True
+    assert config.machines[f"workstation-{'d' * 8}"].profile == "d" * 16
+
+
+def test_the_new_profile_id_never_lands_on_a_file_of_the_folder_that_does_not_read_as_a_profile(tmp_path: Path):
+    """A schema-1 file and a broken one carry no `profile_id` a scan could see; their names count."""
+    hardware = _results(tmp_path) / "state" / "hardware"
+    hardware.mkdir(parents=True)
+    legacy = hardware / f"{'a' * 16}.json"
+    legacy.write_text(json.dumps(dict(EXAMPLES["HardwareSnapshot"], machine="old")), encoding="utf-8")
+    broken = hardware / f"{'b' * 16}.json"
+    broken.write_text("{", encoding="utf-8")
+    before = {path: path.read_bytes() for path in (legacy, broken)}
+
+    answers = {**ENTERED_UNIFIED, "write_config": True}
+    code, _lines = _run(tmp_path, answers, probes=windows_probes(ids=["a" * 16, "b" * 16, "e" * 16]))
+
+    assert code == 0
+    assert {path: path.read_bytes() for path in (legacy, broken)} == before
+    assert [path.stem for path in _profiles(tmp_path)] == ["a" * 16, "b" * 16, "e" * 16]
+    assert load_config(_config_file(tmp_path)).machines["studio"].profile == "e" * 16
+
+
+def test_a_file_name_in_another_letter_case_counts_as_taken(tmp_path: Path):
+    """On a file system that ignores letter case, `AAAA….json` and `aaaa….json` are one file."""
+    hardware = _results(tmp_path) / "state" / "hardware"
+    hardware.mkdir(parents=True)
+    upper = hardware / f"{'A' * 16}.json"
+    upper.write_text("{", encoding="utf-8")
+
+    answers = {**ENTERED_UNIFIED, "write_config": True}
+    code, _lines = _run(tmp_path, answers, probes=windows_probes(ids=["a" * 16, "e" * 16]))
+
+    assert code == 0
+    assert upper.read_text(encoding="utf-8") == "{"
+    assert load_config(_config_file(tmp_path)).machines["studio"].profile == "e" * 16
+
+
+def test_a_lock_another_process_holds_stops_the_entry_before_the_profile_is_written(tmp_path: Path):
+    """Every writer of a profile holds `modelroom.lock`; the machine entered by hand is no exception."""
+    from modelroom.state import LockHeldError
+
+    held = []
+
+    class _LockingAsker(FileAsker):
+        """Another process takes the lock while the shape question is on screen."""
+
+        def select(self, key, question, choices, instruction=None):
+            if key == "entered_gpu":
+                held.append(acquire_lock(_results(tmp_path) / "state" / "modelroom.lock", "test", RUN1))
+            return super().select(key, question, choices, instruction)
+
+    try:
+        with pytest.raises(LockHeldError):
+            run_guided(
+                _LockingAsker(ENTERED_UNIFIED),
+                here=_results(tmp_path),
+                pointer_path=_pointer(tmp_path),
+                transport=build_transport(guided_transport_mapping()),
+                probes=windows_probes(),
+                daemon=offline_daemon(),
+                now=RUN1,
+                out=[].append,
+            )
+    finally:
+        for handle in held:
+            release_lock(handle)
+
+    assert held, "the shape question was never asked"
+    assert _profiles(tmp_path) == []
+    assert "studio" not in load_config(_config_file(tmp_path)).machines
+
+
+def test_the_machine_list_shows_each_shape_entered_by_hand_as_what_it_is(tmp_path: Path):
+    from modelroom.guided_entered import entered_profile
+
+    hardware = _results(tmp_path) / "state" / "hardware"
+    for shape, ram, vram, profile_id, name in (
+        ("card", 64.0, 24.0, "1" * 16, "tower"),
+        ("none", 64.0, 0.0, "2" * 16, "box"),
+        ("unified", 32.0, 0.0, "3" * 16, "studio"),
+    ):
+        profile = entered_profile(name, ram, shape, vram, profile_id, RUN1)
+        atomic_write_json(hardware / f"{profile_id}.json", profile.model_dump(mode="json"))
+
+    asker = _watched(tmp_path, {**FULL_ANSWERS, "machines": [], "write_config": True})
+
+    groups = {choice.label: choice.disabled for choice in asker.choices["machines"] if choice.value.startswith("group:")}
+    assert groups == {
+        "graphics card 24.00 GiB (entered) / 64.00 GiB RAM -- 1 machine: tower": "already in this results folder",
+        "no graphics card (entered) / 64.00 GiB RAM -- 1 machine: box": "already in this results folder",
+        "shared memory 32.00 GiB (entered) -- 1 machine: studio": "already in this results folder",
+    }
+
+
+def test_a_machine_entered_by_hand_is_named_so_and_computed_on_shared_memory_in_every_view(tmp_path: Path):
+    """Unified memory, 32 GiB, reserves 8 + 1: one pool of 23 GiB, both reserves taken from it."""
+    code, lines = _run(tmp_path, ENTERED_UNIFIED)
+
+    assert code == 0
+    stripped = [line.strip() for line in lines]
+    assert any(line.startswith("studio (entered) · context") for line in stripped)
+    assert any("fit into shared memory, 23.0 GB free after both reserves" in line for line in stripped)
+    card = next(line for line in stripped if line.startswith("machine") and "studio" in line)
+    assert card.endswith("shared memory 32 GB, entered")
+    assert "measured" not in card
+    markdown = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+    assert "studio (entered) -- ranked" in markdown
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    block = next(block for block in payload["machines"] if block["machine"] == "studio")
+    gpu = [entry for entry in block["ranked"] if entry["fit"]["mode"] == "gpu"]
+    assert gpu, "unified memory computes in mode gpu"
+    assert {entry["fit"]["pool_gib"] for entry in gpu} == {23.0}
+    assert {entry["note"]["origin"] for entry in block["ranked"] + block["too_tight"]} == {"computed"}
+    own = next(block for block in payload["machines"] if block["machine"] == "workstation")
+    assert own["status"] == "no_profile"
+
+
+def test_a_machine_entered_by_hand_leaves_a_card_without_an_install_line_and_no_load_test(tmp_path: Path):
+    code, lines = _run(tmp_path, ENTERED_CARD)
+
+    assert code == 0
+    stripped = [line.strip() for line in lines]
+    assert any(line.startswith("no load test: ") for line in stripped)
+    assert not any(line.startswith("install ") for line in stripped)
+    card = next(line for line in stripped if line.startswith("machine") and "tower" in line)
+    assert card.endswith("graphics card 24 GB, 64 GB memory, entered")
+
+
+def test_a_home_binding_on_a_machine_entered_by_hand_measures_this_machine_into_a_profile_of_its_own(tmp_path: Path):
+    """No clone question (the answer file has no `clone`); the entered file stays byte for byte."""
+    assert _run(tmp_path, ENTERED_UNIFIED, probes=windows_probes(ids=["c" * 16]))[0] == 0
+    hand = _results(tmp_path) / "state" / "hardware" / f"{'c' * 16}.json"
+    before = hand.read_bytes()
+    write_pointer(_pointer(tmp_path), read_pointer(_pointer(tmp_path)).with_binding(_results(tmp_path), "c" * 16))
+
+    code, _lines = _run(tmp_path, _answers_without_folder(FULL_ANSWERS), now=RUN2)
+
+    assert code == 0
+    assert hand.read_bytes() == before
+    measured = _measured_stem(tmp_path)
+    assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) == measured
+    config = load_config(_config_file(tmp_path))
+    assert (config.machines["studio"].profile, config.machines["workstation"].profile) == ("c" * 16, measured)
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [block["status"] for block in payload["machines"]] == ["ranked", "ranked"]
+
+
+def test_a_local_entry_on_a_machine_entered_by_hand_is_bound_to_the_new_measurement(tmp_path: Path):
+    """The entry is taken over by the measurement; the entered file stays and is entered again next run."""
+    from modelroom.guided_write import update_config
+
+    assert _run(tmp_path, ENTERED_UNIFIED, probes=windows_probes(ids=["c" * 16]))[0] == 0
+    hand = _results(tmp_path) / "state" / "hardware" / f"{'c' * 16}.json"
+    before = hand.read_bytes()
+
+    def only_the_local_entry(current):
+        data = current.model_dump(mode="json")
+        del data["machines"]["studio"]
+        data["machines"]["workstation"]["profile"] = "c" * 16
+        return type(current).from_dict(data)
+
+    update_config(_config_file(tmp_path), only_the_local_entry, now=RUN1)
+    answers = _answers_without_folder(FULL_ANSWERS)
+
+    code, _lines = _run(tmp_path, answers, now=RUN2)
+
+    assert code == 0
+    assert hand.read_bytes() == before
+    assert load_config(_config_file(tmp_path)).machines["workstation"].profile == _measured_stem(tmp_path)
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [block["machine"] for block in payload["machines"]] == ["workstation"]
+
+    code, _lines = _run(tmp_path, {**answers, "machines": []}, now=RUN3)
+
+    assert code == 0
+    assert hand.read_bytes() == before
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert sorted(block["machine"] for block in payload["machines"]) == ["studio", "workstation"]

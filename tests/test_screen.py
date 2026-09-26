@@ -198,6 +198,7 @@ def test_the_machine_list_is_read_back_in_the_words_of_its_entries():
     assert machines_words(["this-machine"]) == "this machine"
     assert machines_words(["this-machine", "import"]) == "this machine, a profile file"
     assert machines_words([]) == "none"
+    assert machines_words(["this-machine", "enter"]) == "this machine, a machine entered by hand"
 
 
 @pytest.mark.parametrize("answer, words", [("same", "the same machine"), ("clone", "a clone")])
@@ -309,6 +310,45 @@ def test_a_machine_without_a_profile_carries_its_reason_instead():
     fact = machine_fact("workstation", None, NOW, "no hardware profile yet")
 
     assert (fact.label, fact.value, fact.note) == ("machine", "workstation", "no hardware profile yet")
+
+
+def _entered(shape: str, ram: float = 64.0, vram: float = 0.0):
+    from modelroom.guided_entered import entered_profile
+
+    return entered_profile("studio", ram, shape, vram, "a" * 16, NOW)
+
+
+@pytest.mark.parametrize(
+    ("shape", "ram", "vram", "value"),
+    [
+        ("card", 64.0, 24.0, "graphics card 24 GB, 64 GB memory, entered"),
+        ("none", 64.0, 0.0, "no graphics card, 64 GB memory, entered"),
+        ("unified", 32.0, 0.0, "shared memory 32 GB, entered"),
+        ("unified", 31.5, 0.0, "shared memory 31.5 GB, entered"),
+        ("card", 31.999999, 11.9999999, "graphics card 11.9999999 GB, 31.999999 GB memory, entered"),
+    ],
+)
+def test_a_machine_entered_by_hand_says_entered_on_the_card_and_never_measured(shape, ram, vram, value):
+    fact = machine_fact("studio (entered)", _entered(shape, ram, vram), NOW, "")
+
+    assert (fact.label, fact.value, fact.note) == ("machine", "studio (entered)", value)
+    assert "measured" not in fact.note
+
+
+@pytest.mark.parametrize(
+    ("shape", "ram", "vram", "note"),
+    [
+        ("card", 64.0, 24.0, "entered studio: 64 GiB memory, graphics card 24 GiB"),
+        ("none", 64.0, 0.0, "entered studio: 64 GiB memory, no graphics card"),
+        ("unified", 32.0, 0.0, "entered studio: 32 GiB memory, shared memory"),
+        ("card", 31.5, 11.5, "entered studio: 31.5 GiB memory, graphics card 11.5 GiB"),
+        ("unified", 31.999999, 0.0, "entered studio: 31.999999 GiB memory, shared memory"),
+    ],
+)
+def test_the_note_of_a_machine_entered_by_hand_names_its_memory(shape, ram, vram, note):
+    from modelroom.screen import entered_note
+
+    assert entered_note(_entered(shape, ram, vram)) == note
 
 
 def test_up_to_three_accounts_are_named_and_the_rest_is_a_count():

@@ -50,6 +50,14 @@ NOTHING_CHOSEN = {**CHOSEN, "select": []}
 # The level `S` for the run that measures: the fixture daemon loads 8192, so any other context
 # would make the measurement not comparable and no row would carry a speed.
 MEASURED = {**CHOSEN, "context": "S", "load_test": True, "load_test_packages": [DEEPSEEK_OLLAMA_NAME]}
+# This machine measured, and a second one entered by hand from its data sheet: unified memory.
+ENTERED = {
+    **CHOSEN,
+    "machines": ["this-machine", "enter"],
+    "entered_name": "studio",
+    "entered_ram": 32,
+    "entered_gpu": "unified",
+}
 
 
 def _screen(tmp_path: Path, answers: dict, *, daemon=None) -> str:
@@ -107,9 +115,15 @@ def test_the_screen_of_a_run_that_pulls_the_first_row_ends_with_the_pull(tmp_pat
     _compare("guided-screen-pull.txt", _screen(tmp_path, {**CHOSEN, "pull": True}, daemon=daemon))
 
 
-def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path):
+def test_the_screen_of_a_run_with_a_machine_entered_by_hand_reads_as_the_golden_file(tmp_path: Path):
+    """Two blocks: this machine measured, and `studio` entered by hand, computed on shared memory."""
+    _compare("guided-screen-entered.txt", _screen(tmp_path, ENTERED))
+
+
+@pytest.mark.parametrize("answers", [CHOSEN, ENTERED], ids=["measured", "entered"])
+def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path, answers):
     """The head is 72, the table 100; nothing the run draws may wrap in a 100-column window."""
-    for line in _screen(tmp_path, CHOSEN).splitlines():
+    for line in _screen(tmp_path, answers).splitlines():
         if "<results>" in line or "Hugging Face" in line or "no load test" in line:
             continue  # a path and a registry's own message are as long as they are
         assert len(line) <= 100, line

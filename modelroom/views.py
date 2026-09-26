@@ -160,7 +160,8 @@ def _machine_row(block: MachineRanking, rendered_at: datetime) -> list[str]:
         ]
     return [
         _cell(block.machine),
-        _cell(f"{profile.display_name} ({profile.profile_id})"),
+        # A machine entered by hand says so behind its name (decided 2026-09-26).
+        _cell(f"{profile.display_name}{' (entered)' if profile.ram_physical_source == 'entered' else ''} ({profile.profile_id})"),
         profile.origin,
         _number(profile.ram_physical_gib),
         profile.ram_physical_source,

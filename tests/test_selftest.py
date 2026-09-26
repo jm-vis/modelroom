@@ -163,6 +163,97 @@ def test_criterion_ten_names_a_run_that_pulled_or_lost_its_install_line(sp, line
     assert any(words in problem for problem in sp.declined_problems(lines))
 
 
+# --- criterion 12: a machine entered by hand, in a run of its own ----------------------------------------
+
+
+@pytest.fixture
+def se():
+    """`scripts/selftest_entered.py`, the criterion of a machine entered by hand."""
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_entered", REPO / "scripts" / "selftest_entered.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _entered_payload(**studio) -> dict:
+    """A document of the run: this machine without a profile, and `studio` entered by hand."""
+    block = {
+        "machine": "studio",
+        "status": "ranked",
+        "label": "studio (entered)",
+        "profile": {"origin": "entered", "ram_physical_source": "entered", "gpu_state": "unified_memory"},
+        "ranked": [{"fit": {"mode": "gpu", "pool_gib": 23.0}, "note": {"origin": "computed", "code": "fits_in_shared_memory"}}],
+        "too_tight": [],
+    }
+    block.update(studio)
+    own = {"machine": "workstation", "status": "no_profile", "label": "workstation", "profile": None, "ranked": [], "too_tight": []}
+    return {"machines": [own, block]}
+
+
+def test_the_entered_answer_file_marks_only_the_machine_entered_by_hand(se):
+    from modelroom.guided import QUESTIONS
+
+    raw = tomllib.loads(st.answers_toml(se.ENTERED_ANSWERS))
+    assert raw["machines"] == ["enter"]
+    assert (raw["entered_name"], raw["entered_ram"], raw["entered_gpu"]) == ("studio", 32, "unified")
+    assert raw["pull"] is False
+    assert set(se.ENTERED_ANSWERS) <= set(QUESTIONS)
+
+
+def test_the_first_two_answer_files_stay_as_they_were():
+    """Criterion 6 counts one profile file after the second run; nothing is entered there."""
+    assert st.ANSWERS_FIRST["machines"] == ["this-machine"]
+    assert not any(key.startswith("entered_") for key in (*st.ANSWERS_FIRST, *st.ANSWERS_SECOND))
+
+
+def test_criterion_twelve_passes_on_a_document_with_the_machine_entered_by_hand(se):
+    assert se.entered_problems(_entered_payload(), "workstation") == []
+
+
+@pytest.mark.parametrize(
+    "studio, words",
+    [
+        ({"label": "studio"}, "(entered)"),
+        ({"status": "no_profile", "profile": None, "ranked": []}, "no block"),
+        ({"ranked": []}, "no fit"),
+        ({"ranked": [{"fit": {"mode": "gpu", "pool_gib": 31.0}, "note": {"origin": "computed", "code": "fits_in_shared_memory"}}]}, "23"),
+        ({"ranked": [{"fit": {"mode": "gpu", "pool_gib": 23.0}, "note": {"origin": "measured", "code": "measured"}}]}, "computed"),
+        ({"ranked": [{"fit": {"mode": "gpu", "pool_gib": 23.0}, "note": {"origin": "computed", "code": "fits_in_gpu"}}]}, "shared memory"),
+        ({"ranked": [{"fit": {"mode": "cpu", "pool_gib": 23.0}, "note": {"origin": "computed", "code": "fits_in_ram"}}]}, "shared memory"),
+        (
+            {
+                "profile": {"origin": "entered", "ram_physical_source": "entered", "gpu_state": "none"},
+                "ranked": [{"fit": {"mode": "cpu", "pool_gib": 23.0}, "note": {"origin": "computed", "code": "fits_in_ram"}}],
+            },
+            "unified memory",
+        ),
+    ],
+)
+def test_criterion_twelve_names_what_the_machine_entered_by_hand_lacks(se, studio, words):
+    assert any(words in problem for problem in se.entered_problems(_entered_payload(**studio), "workstation"))
+
+
+def test_criterion_twelve_names_a_document_without_this_machines_own_entry(se):
+    payload = _entered_payload()
+    payload["machines"] = payload["machines"][1:]
+
+    assert any("machine blocks: 1, not two" in problem for problem in se.entered_problems(payload, "workstation"))
+    assert any("no_profile" in problem for problem in se.entered_problems(payload, "workstation"))
+
+
+def test_criterion_twelve_passes_on_a_real_isolated_run(se, tmp_path: Path):
+    """The whole criterion, in process: its own results folder, its own pointer, no daemon, no net."""
+    from datetime import datetime, timezone
+
+    steps = se.entered_steps(tmp_path, st.answers_toml, datetime(2026, 9, 26, 12, 0, 0, tzinfo=timezone.utc))
+
+    assert len(steps) == 1
+    name, ok, detail = steps[0]
+    assert name.startswith("(12) ")
+    assert ok, detail
+    assert "23.0" in detail
+
+
 # --- criterion 1 -------------------------------------------------------------------------------------
 
 

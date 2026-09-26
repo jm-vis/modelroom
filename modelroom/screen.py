@@ -208,7 +208,8 @@ NOTHING_CHOSEN = "nothing"
 SAME_MACHINE = "the same machine"
 A_CLONE = "a clone"
 CLONE_QUESTION = "The profile of this folder is gone. Is this the same machine or a clone?"
-_MACHINE_WORDS = {"this-machine": THIS_MACHINE, "import": A_PROFILE_FILE}
+A_MACHINE_ENTERED = "a machine entered by hand"
+_MACHINE_WORDS = {"this-machine": THIS_MACHINE, "import": A_PROFILE_FILE, "enter": A_MACHINE_ENTERED}
 
 
 def yes_no(answer: bool) -> str:
@@ -253,6 +254,31 @@ def measured_note(profile: HardwareProfile, *, again: bool) -> str:
     confirmed = checks.ram_physical.status == "confirmed" and checks.vram.status == "confirmed"
     opening = "measured again" if again else "measured"
     return f"{opening}: {hardware_words(profile)}" + (", confirmed by llmfit" if confirmed else "")
+
+
+def entered_number(value: float) -> str:
+    """A size someone entered, as they entered it: `64`, `31.5`, `31.999999` -- never rounded."""
+    return str(int(value)) if value.is_integer() else repr(value)
+
+
+def gib_words(value: float) -> str:
+    """A size someone entered, with its unit: `64 GiB`, `31.5 GiB`."""
+    return f"{entered_number(value)} GiB"
+
+
+def entered_note(profile: HardwareProfile) -> str:
+    """The one note step 1 leaves behind about a machine entered by hand: its name and its memory.
+
+    Its own words and not `intro.hardware_words`, which says of every graphics card that was not
+    measured that its memory "was not measured" -- true, and not what this machine is.
+    """
+    if profile.gpu_state == "entered":
+        graphics = f"graphics card {gib_words(profile.vram_gib or 0.0)}"
+    elif profile.gpu_state == "unified_memory":
+        graphics = "shared memory"
+    else:
+        graphics = "no graphics card"
+    return f"entered {profile.display_name}: {gib_words(profile.ram_physical_gib or 0.0)} memory, {graphics}"
 
 
 def imported_note(display_name: str, profile: HardwareProfile) -> str:
@@ -369,10 +395,25 @@ def measured_when(profile: HardwareProfile, now: datetime) -> str:
     return "measured today" if recorded == now.date() else f"measured {recorded.isoformat()}"
 
 
+def entered_hardware(profile: HardwareProfile) -> str:
+    """A machine entered by hand in the card's short form: what it is, and that it was entered.
+
+    No date and no `measured`: nothing of it was measured (decided 2026-09-26). The sizes stand as
+    they were entered, `31.5` included.
+    """
+    memory = f"{entered_number(profile.ram_physical_gib or 0.0)} GB"
+    if profile.gpu_state == "unified_memory":
+        return f"shared memory {memory}, entered"
+    card = f"graphics card {entered_number(profile.vram_gib or 0.0)} GB" if profile.gpu_state == "entered" else "no graphics card"
+    return f"{card}, {memory} memory, entered"
+
+
 def machine_fact(label: str, profile: HardwareProfile | None, now: datetime, reason: str) -> Fact:
     """One machine's row of the card: what it is called, and what it is."""
     if profile is None:
         return Fact("machine", label, reason)
+    if profile.ram_physical_source == "entered":
+        return Fact("machine", label, entered_hardware(profile))
     return Fact("machine", label, f"{short_hardware(profile)}, {measured_when(profile, now)}")
 
 
@@ -515,7 +556,11 @@ __all__ = [
     "card_lines",
     "clone_words",
     "context_tokens_text",
+    "entered_hardware",
+    "entered_note",
+    "entered_number",
     "fit_word",
+    "gib_words",
     "head_line",
     "import_notes",
     "imported_note",

@@ -46,7 +46,8 @@ Criteria (the plan's own numbering):
    is the shape of that report (`tests/test_selftest.py`);
 9. and 10. the pull of step 5 (`scripts/selftest_pull.py`): the first row pulled to `success` from a
    fixture daemon that plays a recorded pull, and the first live run's `pull = false`;
-11. the head count of step 3, one person and one request, kept (`scripts/selftest_head.py`).
+11. the head count of step 3, one person and one request, kept (`scripts/selftest_head.py`);
+12. a machine entered by hand, in a run and a results folder of its own (`scripts/selftest_entered.py`).
 
 The test set and the live search run as smokes afterwards and never decide the exit code.
 
@@ -735,27 +736,25 @@ def _testset_step() -> Step:
 
 def run_steps(work: Path) -> list[Step]:
     build_transport, guided_transport_mapping = _import_test_support()
+    from selftest_entered import entered_steps
+    from selftest_head import head_count_step
+    from selftest_pull import pull_steps
     pointer = _redirect_home(work / "home")
     results = work / "results"
     results.mkdir(parents=True)
     transport = build_transport(guided_transport_mapping())
     started = datetime.now(timezone.utc).replace(microsecond=0)
     steps, first_lines = _first_run(results, pointer, transport, started)
-    from selftest_head import head_count_step
-
     steps.append(Step(*head_count_step(results)))
     machine = _machine_name((results / "modelroom.toml").read_text(encoding="utf-8"))
     steps.append(_load_test_step(results, machine))
     scale = _scale_labels(results, pointer)
     models = _model_list_labels(results, pointer, build_transport(guided_transport_mapping()))
-    steps += _second_run(
-        results, build_transport(guided_transport_mapping()), started + timedelta(minutes=1), machine
-    )
+    steps += _second_run(results, build_transport(guided_transport_mapping()), started + timedelta(minutes=1), machine)
     steps.append(_guided_mode_step(first_lines, scale, models))
     steps.append(_testset_step())
-    from selftest_pull import pull_steps
-
     steps += [Step(*step) for step in pull_steps(results, pointer, machine, first_lines, started)]
+    steps += [Step(*step) for step in entered_steps(work, answers_toml, started + timedelta(minutes=2))]
     steps.append(_live_search_smoke())
     return steps
 

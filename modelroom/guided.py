@@ -40,6 +40,7 @@ from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import USERS_KEY, USERS_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
+from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, enter_step, entered_class
 from .guided_install import QUESTIONS as PULL_QUESTIONS, FirstRow, first_row, pull_step
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
@@ -119,6 +120,7 @@ QUESTIONS: dict[str, str] = {
     "machines": "Which machines should the result cover?",
     "import_file": "Path to the profile file to import",
     "clone": "Is this the same machine or a clone?",
+    **ENTERED_QUESTIONS,  # step 1's machine entered by hand (`modelroom/guided_entered.py`)
     # Step 2's two search questions live with the search (`modelroom/guided_search.py`).
     "search": SEARCH_QUESTION,
     "filter_owners": FILTER_QUESTION,
@@ -382,6 +384,8 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path) -> Configuratio
 
 def _hardware_class(profile: HardwareProfile) -> str:
     """What makes two machines the same to the user: the GPU, its memory and the system memory."""
+    if profile.ram_physical_source == "entered":
+        return entered_class(profile)
     gpu = profile.gpu_name or profile.gpu_state
     return f"{gpu} {_gib(profile.vram_gib)} VRAM / {_gib(profile.ram_physical_gib)} RAM"
 
@@ -434,7 +438,7 @@ def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None) -> list[C
         this_machine,
         *_profile_choices(scan),
         Choice("import", "import a profile file"),
-        Choice("enter", "enter a machine by hand", disabled="stage 2"),
+        Choice("enter", "enter a machine by hand"),
     ]
 
 
@@ -587,6 +591,8 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
         config = _measure_this_machine(run, config_file, config, scan, bound is not None)
     if "import" in picked:
         config = _import_a_profile(run, config_file, config)
+    if "enter" in picked:
+        config = enter_step(run, config_file, config)
     return config
 
 
