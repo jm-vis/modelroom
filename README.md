@@ -102,8 +102,12 @@ Which machines the result covers. **this machine** is measured right here, once 
 answered; the gray line under it lists the machine profiles this folder already holds, here the
 one an earlier run left, with the graphics card, its memory and the system memory. A **profile
 file** measured on another machine can be imported instead, so one folder can rank the same
-packages for a laptop and a server. Entering a machine by hand is not in yet. The measurement is
-cross-checked with [llmfit](https://github.com/AlexsJones/llmfit) when it is installed.
+packages for a laptop and a server. A machine you do not have yet can be **entered by hand**
+from its data sheet: its name, its memory, and whether a graphics card with its own memory, no
+graphics card or unified memory runs the model. It gets a profile and a place in the result of
+its own, next to the machines you measured, and says `(entered)` wherever its name stands --
+every number of such a machine is computed, none measured. The measurement is cross-checked with
+[llmfit](https://github.com/AlexsJones/llmfit) when it is installed.
 
 ### Step 2, Packages
 
@@ -259,6 +263,7 @@ Under `paths.state`:
 |---|---|---|
 | `modelroom.json` | `fetch` | snapshot, versioned contract |
 | `hardware/<profile_id>.json` | `hardware`, on that machine | hardware profile, versioned contract |
+| `hardware/<profile_id>.json` | the guided mode, for a machine entered by hand | hardware profile, versioned contract |
 | `measurements/<profile_id>/<id>.json` | the load test | speed measurement, versioned contract |
 | `modelroom.lock` | `fetch`, `render` | runtime only, not a contract |
 | `run-status.json` | `fetch` | runtime only, not a contract |
@@ -315,10 +320,11 @@ labeled "fit (computed, v1)" in the output for that reason.
   is coarser than a `good` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
 - Only complete GGUF packages are judged; other formats are `unknown`.
 - A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
-- Unified memory is not modeled: a machine whose profile records `unified_memory` gets no fit
-  from v1, and the automatic graphics measurement covers NVIDIA cards only; on other platforms
-  the graphics side of the profile is recorded as `unsupported_platform` (`CONTRACTS.md`,
-  "Hardware profile").
+- Unified memory is computed as one pool -- the memory minus both reserves, since the system and
+  the model share it -- but the rule has not been measured on a real machine yet: we have no such
+  machine to measure it on. Such a machine comes in by hand, from its data sheet; the automatic
+  graphics measurement still covers NVIDIA cards only, and on other platforms the graphics side
+  of the profile is recorded as `unsupported_platform` (`CONTRACTS.md`, "Hardware profile").
 
 ## Exit codes
 
@@ -376,10 +382,8 @@ In the order we plan to build it, none of it dated:
   workstation; beyond roughly eight concurrent requests it is a server with vLLM, and the fit
   then counts the KV cache per concurrent request. Rule of thumb, not measured yet; the release
   that brings it will carry the measurements.
-- **A machine entered by hand.** Size a box you do not have yet, from its data sheet, and rank
-  the same packages for it next to the machines you measured.
-- **Unified memory.** A fit rule for machines whose graphics and system memory are one pool,
-  once we have the measurements to back it.
+- **Unified memory, measured.** The rule is in; a measured profile of such a machine is what is
+  missing -- an export from one is welcome.
 - **The catalog's successors.** A model shows `legacy` only when the catalog names its
   successor with the page that says so; many families still carry no such line, and those
   rows show `–`. The catalog is a data file in this repository and takes pull requests.

@@ -77,7 +77,22 @@ All notable changes to this project are documented in this file. The format foll
   ranking and the row notes call it `shared memory`. Tested with synthetic profiles only -- no such machine has been
   measured yet, and no fit there is ever `measured`. A profile entered by hand is never the one a
   measurement adopts: the takeover rule gives this machine a profile of its own, also with
-  `--same-machine`. Entering a machine in the dialog is a later step.
+  `--same-machine`. The guided mode enters such a machine (next entry).
+- **Step 1 enters a machine by hand** (`modelroom/guided_entered.py`, new; CONTRACTS.md, "Guided
+  mode", step 1; decided 2026-09-26). `enter a machine by hand` in the machine list is no longer
+  grayed out: four questions -- the name, the memory in GiB, what runs the model (a graphics card
+  with its own memory, no graphics card, unified memory) and, for a graphics card, its memory --
+  size a machine from its data sheet. It is written as `<state>/hardware/<profile_id>.json` (a new
+  id never lands on a file name of the folder, a schema-1 or a broken file included) and gets a
+  `[machines.<name>]` entry of its own with `writer = false` and the reserves of `[defaults]`; no
+  binding, and entering it again makes a new profile. Its group in the machine list, its block
+  head, its Markdown heading and its row of the Machines table say `(entered)`, the card of step 5
+  says `entered` and never `measured`. Answer file keys `entered_name`, `entered_ram`,
+  `entered_gpu`, `entered_vram`, asked only when `enter` is marked, so an answer file written
+  before runs unchanged. Unified memory computes as one pool after both reserves; no such machine was measured,
+  every number there is computed. `scripts/selftest.py` gets criterion 11
+  (`scripts/selftest_entered.py`): a run of its own that enters unified memory of 32 GiB and finds
+  it ranked on a shared pool of 23 GiB, next to this machine's own entry without a profile.
 - **Render document schema 2** (ADR 0003): `Fit.requests` in every row, `users` and
   `requests_origin` in `docs/models.json` when the rendered scenario is the configuration's.
 - **`docs/adr/`**, the first three decision records, with its index.

@@ -1,0 +1,88 @@
+ ██ ██ ▓▓ ██   ModelRoom
+ ██ ██ ██ ░░   Which local model packages fit your machine.
+ ▓▓ ██ ░░ ░░   modelroom 0.1.0 · github.com/jm-vis/modelroom
+
+ folder    not chosen yet          the first question asks where results live
+ daemon    Ollama                  not reachable
+ machine   workstation             not measured in this results folder yet
+
+ Five steps: configuration, packages, context, measurement, results.
+ Files are written as the run goes on. Esc leaves a list, Ctrl-C leaves at any point.
+
+ ── Step 1 of 5  Configuration ──────────────────────────────────────────
+ ? Where should results live?  this folder
+ ? Which machines should the result cover?  this machine, a machine entered by hand
+   measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
+ ? What is the machine called?  studio
+ ? How much memory does it have, in GiB?  32 GiB
+ ? What runs the model?  unified memory (system and graphics share one pool)
+   entered studio: 32 GiB memory, shared memory
+ ✓ Configuration   <results>, 2 machines
+
+ ── Step 2 of 5  Packages ───────────────────────────────────────────────
+ ? What are you looking for?  qwen
+ ? Show only repositories of a publisher or a listed packager?  Yes
+   searched Hugging Face at the publisher Qwen and the five listed packagers
+   4 repositories, 2 of them models you can pick from
+ ? Which of these models should the result cover?  Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B
+ ✓ Packages        2 models, 24 packages from 3 repositories
+
+ ── Step 3 of 5  Context ────────────────────────────────────────────────
+ ? How much text should a model handle at once?  L  32k  24,000 words  a report or a long contract
+ ✓ Context         L 32k
+
+ ── Step 4 of 5  Measurement ────────────────────────────────────────────
+ ? Measure the speed of the checked models that are already installed here?  No
+   no load test: cannot reach the Ollama daemon at http://127.0.0.1:11434: http://127.0.0.1:11434: the Ollama daemon did not answer (refused)
+ – Measurement     none in this run
+
+ ── Step 5 of 5  Results ────────────────────────────────────────────────
+
+ folder    <results>
+ machine   workstation             12 GB graphics, 128 GB memory, measured today
+ machine   studio (entered)        shared memory 32 GB, entered
+ models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
+ context   L 32k                   24,000 words, a report or a long contract
+ speed     not measured            say Yes in step 4 to measure an installed package
+ result    docs\models.md          22 packages ranked, 2 too tight
+
+ workstation · context L 32k
+ #    Model                     Package                 Fit                   Speed         Memory
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+ 1    Qwen3.5-9B                unsloth · UD-IQ2_XXS    good                  –             8.3 GB
+ 2    Qwen3.5-9B                unsloth · UD-IQ2_M      good                  –             8.7 GB
+ 3    Qwen3.5-9B                unsloth · UD-Q2_K_XL    good                  –             9.2 GB
+ 4    Qwen3.5-9B                unsloth · UD-IQ3_XXS    good                  –             9.1 GB
+ 5    Qwen3.5-9B                ollama · Q4_K_M         good (RAM)            –             11.8 GB
+ 6    Qwen3.5-9B                unsloth · UD-Q4_K_XL    good (RAM)            –             11.1 GB
+ 7    Qwen3.5-9B                unsloth · Q5_K_S        good (RAM)            –             11.5 GB
+ 8    Qwen3.5-9B                unsloth · Q5_K_M        good (RAM)            –             11.7 GB
+ 9    Qwen3.5-9B                unsloth · UD-Q5_K_XL    good (RAM)            –             11.9 GB
+ 10   Qwen3.5-9B                unsloth · Q6_K          good (RAM)            –             12.6 GB
+ shown     10 of 22 packages · 2 too tight (unsloth Q4_1, unsloth Q4_K_M)
+ memory    #1–4 fit into graphics memory, 11.0 GB free after the reserve
+           #5–10 need system memory, the graphics card helps
+ basis     #1–10 computed from the package size, not its architecture
+ speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
+
+ install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS
+
+ studio (entered) · context L 32k
+ #    Model                     Package                 Fit                   Speed         Memory
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+ 1    DeepSeek-R1-0528-Qwen3-8  unsloth · Q4_K_M        perfect               –             10.2 GB
+ 2    Qwen3.5-9B                unsloth · UD-IQ2_XXS    good                  –             8.3 GB
+ 3    Qwen3.5-9B                unsloth · UD-IQ2_M      good                  –             8.7 GB
+ 4    Qwen3.5-9B                unsloth · UD-Q2_K_XL    good                  –             9.2 GB
+ 5    Qwen3.5-9B                unsloth · UD-IQ3_XXS    good                  –             9.1 GB
+ 6    Qwen3.5-9B                unsloth · Q3_K_S        good                  –             9.4 GB
+ 7    Qwen3.5-9B                unsloth · Q3_K_M        good                  –             9.8 GB
+ 8    Qwen3.5-9B                unsloth · UD-Q3_K_XL    good                  –             10.2 GB
+ 9    Qwen3.5-9B                unsloth · IQ4_XS        good                  –             10.3 GB
+ 10   Qwen3.5-9B                unsloth · IQ4_NL        good                  –             10.5 GB
+ shown     10 of 23 packages · 1 too tight (unsloth BF16)
+ memory    #1–10 fit into shared memory, 23.0 GB free after both reserves
+ basis     #2–10 computed from the package size, not its architecture
+ speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
+
+ ✓ Results         docs\models.md

@@ -1941,7 +1941,8 @@ The coupled rules behind it: an `entered` memory or graphics memory requires `or
 `gpu_state` `entered` and `vram_source` `entered` only come together, so a measured GPU never
 carries an entered size. `gpu_name` is free or `None`. A `hardware --cpu-only` profile
 (`origin` `entered`, `ram_physical_source` `os`) is no hand-entered machine and stays valid as it
-is. No fit on such a machine is ever `measured`: every number there is `computed`.
+is. No fit on such a machine is ever `measured`: every number there is `computed`. Such a profile
+is entered by the guided mode, step 1 (`enter a machine by hand`, "Guided mode").
 
 **Cross-check with llmfit.** Only like with like: physical RAM against llmfit `total_ram_gb`,
 VRAM against llmfit `gpu_vram_gb`. `crosscheck(own, llmfit)` is `confirmed` when
@@ -4298,8 +4299,12 @@ matter, so the move is invisible to it.
 | 1 | `results` | Where should results live? | `here` or `path` |
 | 1 | `results_path` | Path to the results folder | text (only after `path`) |
 | 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
-| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import` |
+| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `enter` |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
+| 1 | `entered_name` | What is the machine called? | text, 1 to 128 characters after trimming (only after `enter`) |
+| 1 | `entered_ram` | How much memory does it have, in GiB? | a number above 0: `16` … `256` from the list, or any other, decimals allowed as text (`"31.5"`); a TOML float is no answer (only after `enter`) |
+| 1 | `entered_gpu` | What runs the model? | `card`, `none` or `unified` -- the value, not the words of the list (only after `enter`) |
+| 1 | `entered_vram` | How much graphics memory, in GiB? | a number above 0, as `entered_ram` (only after `card`) |
 | 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`; both measure -- `same` under the bound profile id, `clone` under a new one) |
 | 2 | `search` | What are you looking for? | text: a word, a name with blanks, a repository id, or the empty string ("show me what fits this machine") |
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
@@ -4323,9 +4328,10 @@ applied, and `write_configuration` compares the file with that text under the lo
 run wrote in between, the step reads again, applies **its own change** to the new state, writes
 once more and goes on with what it really wrote; a second conflict in a row ends the run with exit
 `2`, like any other step that cannot go on (a held lock stays `1`, an unsupported schema `3`). No
-merge of two configurations is attempted: the five changes are the machine entries for the profiles
-the folder holds, this machine as the writer, the profile a measurement recorded, the models the
-search added and the context the scale kept. Two of them have a rule of their own:
+merge of two configurations is attempted: the six changes are the machine entries for the profiles
+the folder holds, this machine as the writer, the profile a measurement recorded, the entry of a
+machine entered by hand, the models the search added and the context the scale kept. Two of them
+have a rule of their own:
 
 - **The first write of a new file** is no change that could be applied again -- it is a whole initial
   state with empty families. When another run created the file meanwhile, this run takes that file
@@ -4368,15 +4374,20 @@ profile id, `wrote <toml> with <name> as the writer of this results folder`, `<n
 and `<name> is measured as profile <id>` are the configuration's and the profile file's business and
 are no longer printed (`cli.hardware_with_config(..., summary=False)`; `modelroom hardware` prints
 its summary line unchanged). An import leaves `imported <display_name>: <the hardware in plain
-words>`; an import that does not go through stays a `run.failed` sentence.
+words>`; an import that does not go through stays a `run.failed` sentence. A machine entered by
+hand leaves `entered <name>: 64 GiB memory, graphics card 24 GiB` (or `…, no graphics card`, `…,
+shared memory`), the sizes as they were entered.
 
 **Step 1, the machines.** The list is built from every profile file in the results folder
 (`scan_profiles`), grouped by hardware class (GPU, VRAM, RAM) with the count and the names,
 alphabetical. The group is a matter of operation only -- the ranking is computed per device.
 Those entries are shown and cannot be picked: they are already part of the result. So are the
-schema-1 files (`run modelroom migrate`), the files that do not read (with their reason), and
-`enter a machine by hand` (`stage 2`). The two entries that can be picked are `this machine` and
-`import a profile file`.
+schema-1 files (`run modelroom migrate`) and the files that do not read (with their reason). A
+machine entered by hand stands in a group that says what it is: `graphics card 24.00 GiB (entered)
+/ 64.00 GiB RAM`, `no graphics card (entered) / 64.00 GiB RAM`, `shared memory 32.00 GiB
+(entered)`. The three entries that can be picked are `this machine`, `import a profile file` and
+`enter a machine by hand` (since 2026-09-26), and they run in this order when more than one is
+marked: measure, import, enter.
 
 **This machine is marked only when it has not been measured here.** With no profile bound to this
 machine for this folder the entry is `this machine (measure now)` and starts marked -- that is
@@ -4398,6 +4409,51 @@ step 3, an empty step 4 and "nothing to render" was the hand test this rule come
 measurement the guided mode writes `[machines.<name>].profile` -- the one configuration write
 `hardware` leaves to it. `import a profile file` runs `import-profile`, which never changes the
 binding; a file that does not import is reported and the run goes on.
+
+**`enter a machine by hand`** (decided 2026-09-26, `modelroom/guided_entered.py`) sizes a machine
+from its data sheet -- one that is not in the house yet, or one no measurement here covers (the
+automatic measurement covers NVIDIA only). Four questions, in this order: `entered_name`,
+`entered_ram`, `entered_gpu` and, only for `card`, `entered_vram` (keys in the table above). The
+sizes are GiB above 0, decimals allowed; an empty name, a name over 128 characters, a size that is
+no number, `0` or below ends the run with exit `2` and names the key, before anything is written.
+The answers make one of the three shapes of a machine entered by hand ("Hardware profile v2", the
+table under "A machine entered by hand"): `card` → `gpu_state` `entered` with its graphics memory,
+`none` → no graphics card, `unified` → `unified_memory`; always `origin` and `ram_physical_source`
+`entered`, no fingerprint (`none`), no RAM limit, both cross-checks `absent`, no `gpu_name`, no
+`llmfit_version`, `recorded_at` the time of the run. A value the profile refuses is exit `2` with
+the profile's own reason, never a traceback. Then, in this order:
+
+- **The file.** `<state>/hardware/<profile_id>.json`, written with the writer `hardware` uses and
+  under `modelroom.lock`, like every writer of a profile; a lock another process holds ends the run
+  with exit `1` before anything is written. Under the lock, immediately before the write, the new
+  `profile_id` is checked against every file name in that folder, in any letter case -- a schema-1
+  file and one that does not read carry no `profile_id` a scan could see, and neither is ever
+  replaced. A file that cannot be written is a `run.failed` sentence; the run goes on.
+- **The entry.** `[machines.<name>]` with `profile = <id>`, `writer = false` and the reserves of
+  `[defaults]`, the name from the `display_name` by the rule of `import-profile` (a name that is
+  taken gets the short id). It is a change like every other write of this mode, so it is worked out
+  again after a conflict; a name that cannot be found, or a `[paths]` whose state folder no longer
+  holds the profile, is a `run.failed` sentence, and the profile stays where the next run enters it
+  ("Profiles the folder already holds get a machine entry").
+- **No binding.** The pointer file stays as it is: a machine entered by hand is never this machine.
+  The load test measures bound profiles only, so it never measures one ("Load test (stage 1)").
+- **Entered again is new.** Entering the same machine again makes a new profile; the one before
+  stays, as a measured one would. There is no editing and no deleting of it in the dialog.
+- **Measuring this machine never writes into it.** When a binding or `[machines.<name>].profile`
+  of this machine points at a profile entered by hand -- neither comes about by itself, both can be
+  written by hand -- the takeover rule answers `new` before the fingerprint ("Profile binding", "A
+  machine entered by hand is never adopted"): no clone question, a fresh profile for this machine,
+  the entered file unchanged byte for byte. Through the home binding, the entered machine keeps its
+  own entry and the result has both blocks. Through `[machines.<host>].profile`, the measurement
+  binds that entry to the new profile (the profile record of step 1), so the entered profile is
+  without an entry for the rest of this run -- one block -- and the next run enters it again (two
+  blocks).
+
+Where it stands, it says so: the block head and the Markdown heading read `<name> (entered)`, the
+Machines table `<name> (entered) (<profile_id>)`, and the card of step 5 `graphics card 24 GB, 64 GB
+memory, entered` (or `no graphics card, …`, `shared memory 32 GB, entered`) -- no date and never
+`measured`. Unified memory computes as one pool, the memory minus both reserves, and its rows say
+`shared memory` ("Fit contract v1", "Unified memory").
 
 **Step 2, search, choice and fetch.** The two search questions, the search itself and its notes live
 in `modelroom/guided_search.py` (`search_step`, since 2026-09-25); the choice and the write-back into

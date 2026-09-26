@@ -24,7 +24,7 @@ meanwhile, that file is taken over as it is and nothing is written. Its values s
 own entry is added by the writer step, as in any folder someone else set up.
 
 The changes of the individual steps live here as well (`with_writer`, `with_profile`,
-`with_context`, `with_found_profiles`), so each can be tested on its own. CONTRACTS.md,
+`with_context`, `with_found_profiles`, `with_entered_machine`), so each can be tested on its own. CONTRACTS.md,
 "Configuration" and "Guided mode".
 """
 
@@ -191,6 +191,42 @@ def with_found_profiles(said: Said) -> Change:
     return change
 
 
+def with_entered_machine(profile_id: str, display_name: str, said: Said) -> Change:
+    """A machine entered by hand gets its `[machines.<name>]` entry, the rule of `with_found_profiles`.
+
+    Name from the `display_name` (`importer.machine_name_for`), reserves from `[defaults]`, `writer`
+    false, `profile` the entered one; no binding. Worked out on every read: a name another run took
+    meanwhile is not written over, and a profile it already entered is not entered twice. A
+    `[paths]` whose state folder no longer holds the profile, and a name that cannot be found, are
+    problems the run reports; nothing is written then, and the profile stays in its folder.
+    """
+
+    def change(current: Configuration) -> Configuration | None:
+        said.clear()
+        # First the folder, then an entry another run may have made: an entry under a `[paths]`
+        # that no longer holds the profile points at nothing, and that is said either way.
+        if not (current.paths.hardware_dir / f"{profile_id}.json").is_file():
+            said.problems.append(f"[paths] changed while the machine {display_name!r} was entered; run again")
+            return None
+        if any(machine.profile == profile_id for machine in current.machines.values()):
+            return None
+        try:
+            name = machine_name_for(display_name, profile_id, set(current.machines))
+        except ImportConflictError as exc:
+            said.problems.append(f"the profile {profile_id} stays without a machine entry: {exc}")
+            return None
+        data = current.model_dump(mode="json")
+        data["machines"][name] = {
+            "reserve_ram_gib": current.defaults.reserve_ram_gib,
+            "reserve_vram_gib": current.defaults.reserve_vram_gib,
+            "writer": False,
+            "profile": profile_id,
+        }
+        return Configuration.from_dict(data)
+
+    return change
+
+
 __all__ = [
     "Change",
     "Said",
@@ -199,6 +235,7 @@ __all__ = [
     "read_stored",
     "update_config",
     "with_context",
+    "with_entered_machine",
     "with_found_profiles",
     "with_profile",
     "with_writer",

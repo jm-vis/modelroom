@@ -514,6 +514,46 @@ def test_a_legacy_machine_is_shown_as_legacy_with_the_fit_reason():
     assert document_markdown(_document([_hf_package()], profiles=profiles)).count("legacy") >= 1
 
 
+def _entered_studio(profile_id: str = PROFILE_ID) -> HardwareProfile:
+    """A machine entered by hand: unified memory of 32 GiB, as the guided mode writes it."""
+    from modelroom.guided_entered import entered_profile
+
+    return entered_profile("studio", 32.0, "unified", 0.0, profile_id, NOW)
+
+
+def test_a_machine_entered_by_hand_is_labeled_entered_wherever_its_name_stands():
+    profile = _entered_studio()
+    found = machine_profile("workstation", _config().machines["workstation"], ProfileScan(profiles={PROFILE_ID: profile}))
+
+    assert found == MachineProfile(status="ranked", label="studio (entered)", profile=profile, reason=None)
+    document = _document([_hf_package()], profiles={"workstation": found})
+    markdown = document_markdown(document)
+    assert "studio (entered) -- ranked" in markdown
+    assert f"| studio (entered) ({PROFILE_ID}) |" in markdown
+    assert any(line.strip().startswith("studio (entered) ") for line in document_terminal(document).splitlines())
+
+
+def test_a_measured_machine_keeps_its_plain_name():
+    found = machine_profile("workstation", _config().machines["workstation"], ProfileScan(profiles={PROFILE_ID: _profile()}))
+
+    assert found.label == "workstation"
+    assert "(entered)" not in document_markdown(_document([_hf_package()], profiles={"workstation": found}))
+
+
+def test_unified_memory_entered_by_hand_computes_one_pool_after_both_reserves():
+    """32 GiB, reserves 8 + 1: the document carries a pool of 23 GiB and says shared memory."""
+    machines = {"studio": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False, "profile": PROFILE_ID}}
+    config = _config(machines)
+    found = machine_profile("studio", config.machines["studio"], ProfileScan(profiles={PROFILE_ID: _entered_studio()}))
+    block = _document([_hf_package()], machines=machines, profiles={"studio": found}).machines[0]
+
+    assert block.status == "ranked" and block.ranked
+    assert {entry.fit.pool_gib for entry in block.ranked} == {23.0}
+    assert {entry.fit.mode for entry in block.ranked} == {"gpu"}
+    assert {entry.note.origin for entry in block.ranked} == {"computed"}
+    assert {entry.note.code for entry in block.ranked} == {"fits_in_shared_memory"}
+
+
 # --- stars / rating ---------------------------------------------------------------------------
 
 

@@ -344,3 +344,105 @@ def test_hits_without_an_ollama_name_leave_the_configured_pair_after_the_reload(
     entry = written.families[0].base_models[0]
     assert (entry.ollama_base, entry.ollama_tag) == ("my-qwen", "9b")
     assert "unsloth/Qwen3.5-9B-GGUF" in entry.repos
+
+
+# --- the entry of a machine entered by hand ------------------------------------------------------
+
+
+def _with_entered_machine(profile_id: str, display_name: str, said: Said):
+    from modelroom.guided_write import with_entered_machine
+
+    return with_entered_machine(profile_id, display_name, said)
+
+
+def test_the_machine_entered_by_hand_gets_its_entry_on_top_of_the_other_runs_change(tmp_path: Path):
+    path = _config_file(tmp_path, defaults={"reserve_ram_gib": 6.0, "reserve_vram_gib": 2.0})
+    _place(tmp_path, "7" * 16, "studio")
+    said = Said()
+    change, calls = _meanwhile(path, _with_entered_machine("7" * 16, "studio", said), _add_machine("other"))
+
+    written = update_config(path, change, now=NOW)
+
+    assert calls["count"] == 2
+    assert "other" in written.machines, "the other run's machine was written over"
+    entry = written.machines["studio"]
+    assert (entry.writer, entry.profile, entry.reserve_ram_gib, entry.reserve_vram_gib) == (False, "7" * 16, 6.0, 2.0)
+    assert said.problems == []
+    assert load_config(path).machines["studio"].profile == "7" * 16
+
+
+def test_a_name_another_run_took_meanwhile_is_not_written_over_by_the_entry(tmp_path: Path):
+    path = _config_file(tmp_path)
+    _place(tmp_path, "7" * 16, "studio")
+    said = Said()
+    change, _ = _meanwhile(path, _with_entered_machine("7" * 16, "studio", said), _add_machine("studio"))
+
+    written = update_config(path, change, now=NOW)
+
+    assert written.machines["studio"].profile is None
+    assert written.machines[f"studio-{'7' * 8}"].profile == "7" * 16
+
+
+def test_an_entry_another_run_made_for_the_same_profile_is_not_made_twice(tmp_path: Path):
+    path = _config_file(tmp_path)
+    _place(tmp_path, "7" * 16, "studio")
+    said = Said()
+
+    def enter(data: dict) -> None:
+        data["machines"]["mine"] = {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False, "profile": "7" * 16}
+
+    change, _ = _meanwhile(path, _with_entered_machine("7" * 16, "studio", said), enter)
+    written = update_config(path, change, now=NOW)
+
+    assert [name for name, machine in written.machines.items() if machine.profile == "7" * 16] == ["mine"]
+    assert said.problems == []
+
+
+def test_a_machine_entered_by_hand_without_a_free_name_stays_without_an_entry_and_says_so(tmp_path: Path):
+    path = _config_file(tmp_path, machines=_every_name_of(tmp_path, "studio", "7" * 16))
+    _place(tmp_path, "7" * 16, "studio")
+    _mark_untouched(path)
+    said = Said()
+
+    update_config(path, _with_entered_machine("7" * 16, "studio", said), now=NOW)
+
+    assert path.read_text(encoding="utf-8").endswith(UNTOUCHED)
+    assert len(said.problems) == 1
+    assert said.problems[0].startswith(f"the profile {'7' * 16} stays without a machine entry: ")
+
+
+def test_a_state_folder_that_changed_meanwhile_leaves_the_entry_unwritten_and_says_so(tmp_path: Path):
+    """The profile was written into the folder `[paths]` named before; the file names another now."""
+    path = _config_file(tmp_path)
+    _place(tmp_path, "7" * 16, "studio")
+    said = Said()
+
+    def move_the_state(data: dict) -> None:
+        data["paths"]["state"] = str(tmp_path / "elsewhere")
+
+    change, _ = _meanwhile(path, _with_entered_machine("7" * 16, "studio", said), move_the_state)
+    written = update_config(path, change, now=NOW)
+
+    assert "studio" not in written.machines
+    assert len(said.problems) == 1
+    assert "[paths] changed" in said.problems[0]
+
+
+def test_a_state_folder_that_changed_is_reported_even_when_another_run_entered_the_profile(tmp_path: Path):
+    """The other run names the profile **and** moves the state folder: the entry now points nowhere."""
+    path = _config_file(tmp_path)
+    _place(tmp_path, "7" * 16, "studio")
+    profile_file = tmp_path / "state" / "hardware" / f"{'7' * 16}.json"
+    before = profile_file.read_bytes()
+    said = Said()
+
+    def enter_and_move(data: dict) -> None:
+        data["machines"]["mine"] = {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False, "profile": "7" * 16}
+        data["paths"]["state"] = str(tmp_path / "elsewhere")
+
+    change, _ = _meanwhile(path, _with_entered_machine("7" * 16, "studio", said), enter_and_move)
+    update_config(path, change, now=NOW)
+
+    assert len(said.problems) == 1
+    assert "[paths] changed" in said.problems[0]
+    assert profile_file.read_bytes() == before

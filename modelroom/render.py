@@ -107,7 +107,8 @@ class MachineProfile:
 
     `ranked` carries the schema-2 profile the fit computes with; `legacy` and `no_profile`
     carry no profile at all and say why in `reason`. `label` is what the document shows: the
-    profile's `display_name`, the schema-1 file's name, or the machine name.
+    profile's `display_name` (with `(entered)` behind it for a machine entered by hand), the
+    schema-1 file's name, or the machine name.
     """
 
     status: MachineStatus
@@ -165,7 +166,9 @@ def machine_profile(machine: str, machine_config: MachineConfig, scan: ProfileSc
     if wanted is not None:
         found = scan.profiles.get(wanted)
         if found is not None:
-            return MachineProfile("ranked", found.display_name, found, None)
+            # A machine entered by hand says so wherever its name stands (decided 2026-09-26).
+            entered = found.ram_physical_source == "entered"
+            return MachineProfile("ranked", f"{found.display_name} (entered)" if entered else found.display_name, found, None)
         return MachineProfile("no_profile", machine, None, _missing_profile_reason(wanted, scan))
     legacy = next((path for path in scan.legacy if path.stem == machine), None)
     if legacy is not None:

@@ -45,7 +45,8 @@ Criteria (the plan's own numbering):
    Hub's answer for a word changes by the hour, so a missing model is a `WARN`. What the tests gate
    is the shape of that report (`tests/test_selftest.py`);
 9. and 10. the pull of step 5 (`scripts/selftest_pull.py`): the first row pulled to `success` from a
-   fixture daemon that plays a recorded pull, and the first live run's `pull = false`.
+   fixture daemon that plays a recorded pull, and the first live run's `pull = false`;
+11. a machine entered by hand, in a run and a results folder of its own (`scripts/selftest_entered.py`).
 
 The test set and the live search run as smokes afterwards and never decide the exit code.
 
@@ -751,6 +752,9 @@ def run_steps(work: Path) -> list[Step]:
     from selftest_pull import pull_steps
 
     steps += [Step(*step) for step in pull_steps(results, pointer, machine, first_lines, started)]
+    from selftest_entered import entered_steps
+
+    steps += [Step(*step) for step in entered_steps(work, answers_toml, started + timedelta(minutes=2))]
     steps.append(_live_search_smoke())
     return steps
 
