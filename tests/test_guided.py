@@ -343,7 +343,7 @@ def test_the_run_closes_with_the_card_and_the_relative_path_of_the_document(tmp_
     assert str(_results(tmp_path)) in card["folder"]
     assert "GB graphics" in card["machine"] and "GB memory" in card["machine"]
     assert "Qwen3.5-9B" in card["models"] and "packages from" in card["models"]
-    assert card["context"] == "context   8192 (entered), KV cache f16 (assumed), 1 request (from 1 user)"
+    assert card["context"] == "context   8k (entered), KV cache f16 (assumed), 1 request (from 1 user)"
     assert card["speed"].startswith("speed     not measured")
     assert "models.md" in card["result"] and "packages ranked" in card["result"]
     assert not any(line.startswith("Written to ") for line in lines)
@@ -1563,7 +1563,7 @@ def test_a_later_render_of_its_own_uses_the_kept_context(tmp_path: Path):
     assert main(["render", "--config", str(_config_file(tmp_path))], now=RUN2) == 0
 
     text = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
-    assert "Scenario: context 4096 (entered)" in text
+    assert "Scenario: context 4k (entered)" in text
     assert _ranked_deepseek(tmp_path)["measurement_group"] == 0
 
 
@@ -1577,7 +1577,7 @@ def test_a_configuration_without_a_kept_context_still_renders_with_8192(tmp_path
     assert main(["render", "--config", str(config_file)], now=RUN2) == 0
 
     text = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
-    assert "Scenario: context 8192 (default)" in text
+    assert "Scenario: context 8k (default)" in text
 
 
 def test_a_kept_context_of_8192_is_entered_when_render_runs_alone(tmp_path: Path):
@@ -1590,7 +1590,7 @@ def test_a_kept_context_of_8192_is_entered_when_render_runs_alone(tmp_path: Path
     assert main(["render", "--config", str(_config_file(tmp_path))], now=RUN2) == 0
 
     text = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
-    assert "Scenario: context 8192 (entered)" in text
+    assert "Scenario: context 8k (entered)" in text
 
 
 def test_a_context_that_is_not_a_number_ends_the_run(tmp_path: Path):
@@ -1680,7 +1680,7 @@ def test_a_head_count_is_kept_with_its_requests_and_reaches_the_document(tmp_pat
     fits = [row["fit"] for row in payload["machines"][0]["ranked"] + payload["machines"][0]["too_tight"]]
     assert fits and {fit["requests"] for fit in fits} == {3}
     assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  25 (3 requests)"
-    sentence = "context 8192 (entered), KV cache f16 (assumed), 3 requests (from 25 users)"
+    sentence = "context 8k (entered), KV cache f16 (assumed), 3 requests (from 25 users)"
     assert f"Scenario: {sentence}" in _markdown(tmp_path)
     assert _card(lines)["context"] == "context   " + sentence.removeprefix("context ")
 
@@ -1692,7 +1692,7 @@ def test_one_person_is_a_head_count_too_and_says_so_in_the_singular(tmp_path: Pa
     assert _kept_requests(tmp_path) == (1, 1, "from_users")
     assert (_document(tmp_path)["users"], _document(tmp_path)["requests_origin"]) == (1, "from_users")
     assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  1 (1 request)"
-    assert "Scenario: context 8192 (entered), KV cache f16 (assumed), 1 request (from 1 user)" in _markdown(tmp_path)
+    assert "Scenario: context 8k (entered), KV cache f16 (assumed), 1 request (from 1 user)" in _markdown(tmp_path)
     # One request: no hint, no sentence in step 4.
     printed = "\n".join(lines)
     assert "throughput" not in printed and "measurements run one request" not in printed
@@ -1709,7 +1709,7 @@ def test_requests_named_outright_are_entered_and_carry_the_hint_beyond_eight(tmp
     assert (payload["users"], payload["requests_origin"], payload["scenario"]["requests"]) == (None, "entered", 12)
     assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  12 requests"
     markdown = _markdown(tmp_path)
-    assert "Scenario: context 8192 (entered), KV cache f16 (assumed), 12 requests (entered)" in markdown
+    assert "Scenario: context 8k (entered), KV cache f16 (assumed), 12 requests (entered)" in markdown
     assert f"Load: {OLLAMA_REQUEST_HINT_TEXT}" in markdown
     card = _card(lines)
     assert card["load"].startswith("load      beyond 8 requests at once")
@@ -2595,6 +2595,36 @@ def test_a_file_name_in_another_letter_case_counts_as_taken(tmp_path: Path):
     assert load_config(_config_file(tmp_path)).machines["studio"].profile == "e" * 16
 
 
+def test_the_new_profile_id_never_takes_the_profile_id_a_file_of_another_name_carries(tmp_path: Path):
+    """`aaaa….json` carrying `profile_id` `bbbb…` names two taken ids: `hardware` reads the id, the
+    scan of the guided mode sets the file aside -- one rule for both writers (Codex round 1)."""
+    from modelroom.guided_entered import entered_profile
+
+    hardware = _results(tmp_path) / "state" / "hardware"
+    hardware.mkdir(parents=True)
+    renamed = hardware / f"{'a' * 16}.json"
+    renamed.write_text(entered_profile("old", 16.0, "unified", 0.0, "b" * 16, RUN1).model_dump_json(), encoding="utf-8")
+    before = renamed.read_bytes()
+
+    answers = {**ENTERED_UNIFIED, "write_config": True}
+    code, _lines = _run(tmp_path, answers, probes=windows_probes(ids=["b" * 16, "e" * 16]))
+
+    assert code == 0
+    assert renamed.read_bytes() == before
+    assert [path.stem for path in _profiles(tmp_path)] == ["a" * 16, "e" * 16]
+    assert load_config(_config_file(tmp_path)).machines["studio"].profile == "e" * 16
+
+
+def test_the_empty_card_of_a_folder_whose_only_machine_was_entered_by_hand_says_it_is_never_measured(tmp_path: Path):
+    """A run that chose nothing still draws its card; step 4 has nothing to measure for a machine
+    entered by hand, so the card says why instead of the advice (Codex round 1)."""
+    _code, lines = _run(tmp_path, {**ENTERED_UNIFIED, "select": []})
+
+    speed = _card(lines)["speed"]
+    assert speed.startswith("speed     not measured")
+    assert speed.endswith("a machine entered by hand is never measured"), speed
+
+
 def test_a_lock_another_process_holds_stops_the_entry_before_the_profile_is_written(tmp_path: Path):
     """Every writer of a profile holds `modelroom.lock`; the machine entered by hand is no exception."""
     from modelroom.state import LockHeldError
@@ -2703,6 +2733,42 @@ def test_a_home_binding_on_a_machine_entered_by_hand_measures_this_machine_into_
     assert (config.machines["studio"].profile, config.machines["workstation"].profile) == ("c" * 16, measured)
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     assert [block["status"] for block in payload["machines"]] == ["ranked", "ranked"]
+
+
+def _bound_by_hand_to_an_entered_profile(tmp_path: Path) -> tuple[_WatchingAsker, list[str]]:
+    """A folder whose pointer binds this machine to a profile entered by hand, then one run measuring it."""
+    assert _run(tmp_path, ENTERED_UNIFIED, probes=windows_probes(ids=["c" * 16]))[0] == 0
+    write_pointer(_pointer(tmp_path), read_pointer(_pointer(tmp_path)).with_binding(_results(tmp_path), "c" * 16))
+    lines: list[str] = []
+    asker = _WatchingAsker(_answers_without_folder(FULL_ANSWERS), lines)
+    run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        now=RUN2,
+        out=lines.append,
+    )
+    return asker, [line.strip() for line in lines]
+
+
+def test_a_home_binding_on_a_machine_entered_by_hand_offers_to_measure_now_and_marks_it(tmp_path: Path):
+    """Nothing of this machine was measured here, so there is no `last measured` date to name."""
+    asker, _lines = _bound_by_hand_to_an_entered_profile(tmp_path)
+
+    this_machine = asker.choices["machines"][0]
+    assert this_machine.value == "this-machine"
+    assert this_machine.label == "this machine (measure now, the bound profile was entered by hand)"
+    assert this_machine.checked is True
+
+
+def test_the_first_measurement_after_a_binding_on_a_machine_entered_by_hand_is_no_second_one(tmp_path: Path):
+    _asker, lines = _bound_by_hand_to_an_entered_profile(tmp_path)
+
+    assert any(line.startswith("measured: ") for line in lines)
+    assert not any(line.startswith("measured again") for line in lines)
 
 
 def test_a_local_entry_on_a_machine_entered_by_hand_is_bound_to_the_new_measurement(tmp_path: Path):

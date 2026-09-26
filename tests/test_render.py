@@ -620,7 +620,7 @@ def test_the_markdown_view_names_the_rule_and_the_scenario():
     text = document_markdown(_document([_hf_package()]))
 
     assert RANKING_RULE in text
-    assert "context 8192" in text
+    assert "context 8k (default)" in text
     assert "f16" in text
 
 
@@ -975,12 +975,12 @@ def _card_facts(document: RenderDocument) -> list:
 def test_the_scenario_line_names_where_the_requests_came_from(requests, users, origin, said):
     scenario = default_scenario().model_copy(update={"requests": requests})
 
-    assert scenario_line(scenario, users, origin) == f"context 8192 (default), KV cache f16 (assumed), {said}"
+    assert scenario_line(scenario, users, origin) == f"context 8k (default), KV cache f16 (assumed), {said}"
 
 
 def test_the_markdown_head_and_the_card_say_the_same_sentence():
     document = _for_requests(3, 25, "from_users")
-    sentence = "context 8192 (default), KV cache f16 (assumed), 3 requests (from 25 users)"
+    sentence = "context 8k (default), KV cache f16 (assumed), 3 requests (from 25 users)"
 
     assert f"Scenario: {sentence}\n" in document_markdown(document)
     context = next(fact for fact in _card_facts(document) if fact.label == "context")
@@ -1047,3 +1047,91 @@ def test_a_long_list_of_unused_measurements_keeps_the_card_row_within_a_hundred_
     assert len(plain(fact_line(speed))) <= 100
     assert speed.note == f"6 rows measured with 1 request, ranking assumes {requests}"
     assert f"#1–2, #4, #6, #8, #10 measured with 1 request, ranking assumes {requests}" in document_terminal(scattered)
+
+
+# --- the machine the card counts, a machine entered by hand under speed, the context as the scale says it ---
+
+ENTERED_ID = "4e1b7d02c3a5f968"
+
+
+def _this_machine_and_studio(this_machine_ranked: bool, studio_first: bool = False) -> RenderDocument:
+    """This machine (`workstation`, 127 GiB) and `studio`, entered by hand with 32 GiB of unified memory.
+
+    Two packages: 5 GiB fits both machines, 60 GiB only this machine -- so the two blocks rank a
+    different number of packages, and the card shows which one it counted. `studio_first` puts the
+    entered machine before this one in the configuration, and so in the document.
+    """
+    machines = {
+        "workstation": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": True, "profile": PROFILE_ID},
+        "studio": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False, "profile": ENTERED_ID},
+    }
+    own = _ready() if this_machine_ranked else MachineProfile("no_profile", "workstation", None, NO_PROFILE_REASON)
+    studio = MachineProfile("ranked", "studio (entered)", _entered_studio(ENTERED_ID), None)
+    profiles = {"workstation": own, "studio": studio}
+    if studio_first:
+        machines, profiles = dict(reversed(machines.items())), dict(reversed(profiles.items()))
+    packages = [_hf_package(), _hf_package(weights_bytes=60 * GIB, repo="packager/Nova-8B-large-GGUF")]
+    return _document(packages, machines=machines, profiles=profiles)
+
+
+def _card_row(document: RenderDocument, label: str):
+    return next(fact for fact in _card_facts(document) if fact.label == label)
+
+
+def test_the_card_counts_the_machine_entered_by_hand_where_this_machine_has_no_ranking():
+    document = _this_machine_and_studio(this_machine_ranked=False)
+
+    assert [(block.status, block.ranked_total) for block in document.machines] == [("no_profile", 0), ("ranked", 1)]
+    assert _card_row(document, "result").note == "1 package ranked, 1 too tight"
+
+
+def test_the_card_counts_this_machine_where_it_has_a_ranking_of_its_own():
+    """The guard: with the entered machine first in the document, "the first ranked block" would
+    count its one package; the card still counts this machine's two (Codex round 1)."""
+    document = _this_machine_and_studio(this_machine_ranked=True, studio_first=True)
+
+    assert [block.ranked_total for block in document.machines] == [1, 2]
+    assert _card_row(document, "result").note == "2 packages ranked, none too tight"
+
+
+def _speed_lines(document: RenderDocument) -> list[str]:
+    return [line.strip() for line in document_terminal(document).splitlines() if line.strip().startswith("speed ")]
+
+
+def test_a_machine_entered_by_hand_is_never_told_to_be_measured():
+    """It is not this machine, and measuring this machine never writes into its profile."""
+    document = _this_machine_and_studio(this_machine_ranked=True)
+
+    assert _speed_lines(document) == [
+        f"speed     nothing measured in the rows shown · {MEASURE_HINT}",
+        "speed     nothing measured in the rows shown · a machine entered by hand is never measured",
+    ]
+
+
+def test_the_card_of_a_machine_entered_by_hand_says_it_is_never_measured():
+    card = _card_row(_this_machine_and_studio(this_machine_ranked=False), "speed")
+
+    assert (card.value, card.note) == ("not measured", "a machine entered by hand is never measured")
+    assert _card_row(_this_machine_and_studio(this_machine_ranked=True), "speed").note == MEASURE_HINT
+
+
+@pytest.mark.parametrize(
+    "tokens, said", [(4096, "4k"), (8192, "8k"), (32768, "32k"), (131072, "128k"), (12000, "12000"), (32769, "32769")]
+)
+def test_the_scenario_sentence_says_a_level_of_the_scale_as_the_scale_does(tokens, said):
+    scenario = default_scenario().model_copy(update={"context_requested": tokens, "context_origin": "entered"})
+
+    sentence = scenario_line(scenario, 1, "from_users")
+
+    assert sentence == f"context {said} (entered), KV cache f16 (assumed), 1 request (from 1 user)"
+
+
+def test_the_markdown_head_and_the_card_say_a_level_the_same_way():
+    document = _for_requests(1, 1, "from_users")
+    scenario = document.scenario.model_copy(update={"context_requested": 32768, "context_origin": "entered"})
+    document = document.model_copy(update={"scenario": scenario})
+    sentence = "context 32k (entered), KV cache f16 (assumed), 1 request (from 1 user)"
+
+    assert f"Scenario: {sentence}\n" in document_markdown(document)
+    context = _card_row(document, "context")
+    assert f"{context.label} {context.value}" == sentence

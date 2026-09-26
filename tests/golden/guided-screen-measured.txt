@@ -44,7 +44,7 @@
  folder    <results>
  machine   workstation             12 GB graphics, 128 GB memory, measured today
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
- context   8192 (entered), KV cache f16 (assumed), 1 request (from 1 user)
+ context   8k (entered), KV cache f16 (assumed), 1 request (from 1 user)
  speed     1 measured              fastest DeepSeek-R1-0528-Qwen3-8B at <speed>
  result    docs\models.md          24 packages ranked, none too tight
 

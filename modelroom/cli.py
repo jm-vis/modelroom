@@ -56,6 +56,7 @@ from .dialog import (
 )
 from .fetch import run_fetch
 from .guided import GuidedError, run_guided
+from .guided_entered import fresh_profile_id
 from .http import DEFAULT_REQUEST_BUDGET, RequestBudget, Transport, UrllibTransport
 from .importer import (
     ImportConflictError,
@@ -82,9 +83,6 @@ from .state import (
     write_run_status,
     write_snapshot,
 )
-
-
-_FRESH_ID_ATTEMPTS = 8
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -465,7 +463,7 @@ def _hardware_locked(
     raw_id = measured.identity.raw_id
     machine_config = config.machines.get(machine) if machine is not None else None
     known = {key: KnownProfile(key, p.os_fingerprint, p.origin, p.ram_physical_source) for key, p in profiles.items()}
-    fresh_profile_id = _fresh_profile_id(probes, _taken_profile_ids(config, profiles))
+    fresh_id = fresh_profile_id(probes.new_id, config.paths.hardware_dir)  # no name or id of the folder, any letter case
     try:
         pointer = read_pointer(pointer_file)
     except (SchemaVersionError, PointerFileError) as exc:
@@ -476,7 +474,7 @@ def _hardware_locked(
         machine_config.profile if machine_config is not None else None,
         known,
         os_fingerprint(raw_id) if raw_id else "none",
-        fresh_profile_id,
+        fresh_id,
         new_identity,
         same_machine,
     )
@@ -587,27 +585,6 @@ def _read_profile_file(path: Path) -> HardwareSnapshot | HardwareProfile:
         raise SchemaVersionError(f"{path}: {exc}") from exc
     except (json.JSONDecodeError, ValidationError, StateFileShapeError, UnicodeDecodeError, ValueError, OSError) as exc:
         raise UnreadableStateFileError(f"{path}: cannot read hardware profile: {exc}") from exc
-
-
-def _taken_profile_ids(config: Configuration, profiles: dict[str, HardwareProfile]) -> set[str]:
-    """Every name a new profile must not take: each file name in the folder and each `profile_id`.
-
-    The file names matter on their own, because a schema-1 file (`<machine>.json`) carries no
-    `profile_id` and a machine name may well look like one -- a fresh id landing on it would
-    overwrite a profile this command promises never to touch.
-    """
-    folder = config.paths.hardware_dir
-    stems = {path.stem for path in folder.glob("*.json")} if folder.is_dir() else set()
-    return stems | set(profiles)
-
-
-def _fresh_profile_id(probes: Probes, taken: set[str]) -> str:
-    """A `profile_id` no file in this folder uses yet (16 random hex characters, `Probes`)."""
-    for _ in range(_FRESH_ID_ATTEMPTS):
-        candidate = probes.new_id()
-        if candidate not in taken:
-            return candidate
-    raise ValueError(f"no unused profile_id after {_FRESH_ID_ATTEMPTS} attempts; the id source repeats itself")
 
 
 def _print_hardware_summary(

@@ -427,10 +427,13 @@ def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None) -> list[C
     A machine that is already measured here is **not** marked: measuring it again is a decision,
     not the default, and the entry says when it was last measured so that the decision can be
     made. A machine with no profile in this folder is marked, because that is the one thing a
-    first run is for.
+    first run is for -- and so is a machine bound by hand to a profile entered by hand: nothing of
+    this machine was measured here (decided 2026-09-26).
     """
     if bound is None:
         this_machine = Choice("this-machine", "this machine (measure now)", checked=True)
+    elif not _measured_here(bound):
+        this_machine = Choice("this-machine", "this machine (measure now, the bound profile was entered by hand)", checked=True)
     else:
         measured = bound.recorded_at.date().isoformat()
         this_machine = Choice("this-machine", f"this machine (measure again, last measured {measured})")
@@ -588,12 +591,21 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound))
     run.screen.answer(QUESTIONS["machines"], machines_words(picked))
     if "this-machine" in picked:
-        config = _measure_this_machine(run, config_file, config, scan, bound is not None)
+        config = _measure_this_machine(run, config_file, config, scan, _measured_here(bound))
     if "import" in picked:
         config = _import_a_profile(run, config_file, config)
     if "enter" in picked:
         config = enter_step(run, config_file, config)
     return config
+
+
+def _measured_here(bound: HardwareProfile | None) -> bool:
+    """Whether this machine was measured in this folder: bound, and not to a profile entered by hand.
+
+    A binding to a profile entered by hand comes about only by hand; the list and the note of the
+    first measurement then say `measure now` and `measured`, never `again` (decided 2026-09-26).
+    """
+    return bound is not None and bound.ram_physical_source != "entered"
 
 
 def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> HardwareProfile | None:

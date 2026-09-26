@@ -1977,7 +1977,10 @@ a cross-check of two quantities, never the source and never a requirement -- a m
 configuration entry whose `profile` the takeover rule may adopt. The schema-1 writer
 (`write_hardware_snapshot`, `<machine>.json`) stays readable for `render` until the renderer
 switches; `hardware` no longer writes it, and a schema-1 file in the folder is skipped, never
-adopted and never overwritten. The command reads no Ollama daemon: the installed packages are a
+adopted and never overwritten. A new `profile_id` is none of the folder's file names and none of
+the `profile_id`s its files carry, whatever they are called, in any letter case -- the rule of a
+machine entered by hand, one function for both (`guided_entered.fresh_profile_id`, decided
+2026-09-26). The command reads no Ollama daemon: the installed packages are a
 point-in-time observation the load test records (CONTRACTS.md, "MeasurementRecord"), not part of
 a profile.
 
@@ -3539,7 +3542,9 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    assumes 3` (the row note `measured_with_one_request`, "Ranking rule"). Only where **neither** is
    there does it say `nothing measured in the rows shown · say Yes in step 4 to measure an installed
    package`: a row that names why its measurement does not count was measured, and to be told to
-   measure it would be wrong (decided 2026-09-26). **Of the rows shown,
+   measure it would be wrong (decided 2026-09-26). Under a machine entered by hand the advice gives
+   way to `nothing measured in the rows shown · a machine entered by hand is never measured`: it is
+   not this machine, and measuring this machine never writes into its profile. **Of the rows shown,
    not of the machine**: the ranking rule sorts by fit class first, so a measured package can stand
    behind eleven unmeasured ones and be in no `RankedEntry` of the document at all -- the card of the
    same screen counts that measurement, and the two may not contradict each other (second-model
@@ -3812,10 +3817,12 @@ passed with other requests leaves both `None`, so the document never names a wro
 rules of `GuidedConfig` hold between the three (`default`: one request and no head count,
 `from_users`: the head count and its derived number); `users` alone, without an origin, is
 invalid. The views say them in the scenario sentence (`scenario_text.scenario_line`, which `views` uses; decided 2026-09-26):
-`context 32768 (entered), KV cache f16 (assumed), 3 requests (from 25 users)`, `12 requests
+`context 32k (entered), KV cache f16 (assumed), 3 requests (from 25 users)`, `12 requests
 (entered)`, and `1 request` with no bracket for `default` or a scenario that is not the
 configuration's -- the Markdown head's `Scenario:` line and the `context` row of the guided mode's
-card say the same sentence. Beyond `OLLAMA_REQUEST_HINT` (8) requests both carry the hint
+card say the same sentence. A context that is a level of the scale is said as the scale says it,
+without the level's letter (`8k`, `32k`, `128k`), any other as its number (`context 12000
+(entered)`); `docs/models.json` keeps the number (`scenario_text.context_words`, decided 2026-09-26). Beyond `OLLAMA_REQUEST_HINT` (8) requests both carry the hint
 `beyond 8 requests at once this fit says nothing about throughput: measure under load, or look at a
 serving stack (rule of thumb, not measured)` -- `Load:` in the Markdown head, a `load` row in the
 card; a hint, never a limit.
@@ -4382,7 +4389,9 @@ folder that already holds results but no `modelroom.toml` is a question, never a
 
 **What step 1 leaves on the screen** (decided 2026-09-24): the answers, and **one note about the
 measurement** -- `measured: <the hardware in plain words>, confirmed by llmfit`, or `measured again:
-…` where this machine was already measured in this folder (and for a `the same machine` answer). The
+…` where this machine was already measured in this folder (and for a `the same machine` answer);
+a binding to a profile entered by hand is no measurement of this machine, and its first one says
+`measured:`. The
 sentence ends after the hardware where `llmfit` confirmed nothing. The readings themselves, the
 profile id, `wrote <toml> with <name> as the writer of this results folder`, `<name> is now a writer`
 and `<name> is measured as profile <id>` are the configuration's and the profile file's business and
@@ -4407,8 +4416,10 @@ marked: measure, import, enter.
 machine for this folder the entry is `this machine (measure now)` and starts marked -- that is
 what a first run is for. Once there is one, it is `this machine (measure again, last measured
 <date>)` and starts **unmarked**: measuring again is a decision, and `Enter` alone must not make
-it. The key and the answer stay the same (`machines`, `this-machine`), so an answer file is
-unaffected.
+it. A binding to a profile entered by hand (which comes about only by hand) is no measurement of
+this machine: the entry is then `this machine (measure now, the bound profile was entered by hand)`
+and starts marked (decided 2026-09-26). The key and the answer stay the same (`machines`,
+`this-machine`), so an answer file is unaffected.
 
 `this machine (measure now)` makes sure `[machines.<host>]` exists and is a writer -- this
 machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the
@@ -4716,13 +4727,15 @@ report a reader looks at once the run is over:
 | `folder` | the results folder | -- |
 | `machine` | one row per machine of the result, its `display_name` | `12 GB graphics, 127 GB memory, measured today` (else `measured <YYYY-MM-DD>` from the profile's `recorded_at`); a machine without a profile carries its own reason |
 | `models` | the base models of the snapshot, by name | `<p> packages from <up to three packager accounts, else "and n more">` |
-| `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32768 (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
+| `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32k (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
 | `load` | only beyond `OLLAMA_REQUEST_HINT` (8) requests: the hint of the Markdown head's `Load:` line, wrapped on rows of its own so no line is wider than 100 columns | -- |
-| `speed` | `not measured` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts but for its requests alone (`#3 measured with 1 request, ranking assumes 3`; by count, `6 rows measured with ...`, where the ranks would make the row wider than 100 columns), and only without such a row `say Yes in step 4 to measure an installed package` -- the rule of the `speed` note under the table |
+| `speed` | `not measured` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts but for its requests alone (`#3 measured with 1 request, ranking assumes 3`; by count, `6 rows measured with ...`, where the ranks would make the row wider than 100 columns), and only without such a row `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table |
 | `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> too tight` (else `, none too tight`), and every other set-aside reason with its count behind a `·` |
 
-The `speed` and `result` rows count **one** machine's ranking: the machine of the run, else the first
-that has one. A package that fits two machines is one package and two rows, and a sum over the
+The `speed` and `result` rows count **one** machine's ranking: the machine of the run where it has a
+ranking, else the first machine that has one, and only where none has one the machine of the run
+(decided 2026-09-26: a run on a machine without a profile next to a machine entered by hand counted
+`0 packages ranked` above a table of 25). A package that fits two machines is one package and two rows, and a sum over the
 machines would count it twice while the `models` row of the same card counts the packages of the
 snapshot once (second-model round, 2026-09-24). The tables below the card carry every machine.
 
@@ -4734,8 +4747,10 @@ balance of the step both say where the document is, and the run said the same pa
 all the same (`views.show_nothing`, decided 2026-09-25): the note `nothing to rank: no package in
 this folder yet`, the card with the rows it still knows -- the folder, the machines the configuration
 names with the profiles this folder holds (`render.machine_profile`, the same decision the document
-would have rested on), `models none`, the context that was chosen, no measurement and `result –` --
-and the balance `– Results         nothing to rank`. Before that the step was a head with nothing
+would have rested on), `models none`, the context that was chosen, no measurement (with the reason
+`a machine entered by hand is never measured` where every profile the folder holds was entered by
+hand, `scenario_text.never_measured_of`) and `result –` -- and the balance `– Results         nothing
+to rank`. Before that the step was a head with nothing
 under it and the reason stood on stderr, where no reader of the run is (test round, 2026-09-25). The
 exit code is the render's, unchanged (`1`, "nothing to render").
 

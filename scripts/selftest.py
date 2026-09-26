@@ -81,10 +81,9 @@ UNSLOTH_GGUF = "unsloth/Qwen3.5-9B-GGUF"
 # test itself runs against the real local daemon -- that is what criterion 5 is about.
 DEEPSEEK_GGUF = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
 DEEPSEEK_OLLAMA_NAME = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
-# The scale's level `S`, which is 8192 tokens: criteria 4 and 5 keep the numbers they were pinned
-# with, and the answer file shows that a level is a valid answer (CONTRACTS.md, "Guided mode").
-ANSWERED_LEVEL = "S"
-ANSWERED_CONTEXT = 8192
+# The scale's level `S`, 8192 tokens, `8k` in the scenario sentence: criteria 4 and 5 keep the numbers
+# they were pinned with, and the answer file shows that a level is a valid answer (CONTRACTS.md).
+ANSWERED_LEVEL, ANSWERED_CONTEXT, ANSWERED_SHOWN = "S", 8192, "8k"
 ANSWERS_FIRST = {
     "results": "here",
     "machines": ["this-machine"],
@@ -209,7 +208,7 @@ def ranking_problems(text: str, machine: str, block: dict) -> list[str]:
     """
     lines = text.splitlines()
     problems = []
-    for expected in ("Ranking rule: ", f"Scenario: context {ANSWERED_CONTEXT} (entered)", f"## Ranking: {machine}"):
+    for expected in ("Ranking rule: ", f"Scenario: context {ANSWERED_SHOWN} (entered)", f"## Ranking: {machine}"):
         if not any(line.startswith(expected) for line in lines):
             problems.append(f"the document has no line starting with {expected!r}")
     judged = [
@@ -304,8 +303,8 @@ def stored_context_problems(
         problems.append(f"the scale of the second run starts on level {level!r}, expected {ANSWERED_LEVEL!r}")
     if header is None:
         problems.append("the document of the standalone render carries no Scenario line")
-    elif f"context {answered} " not in header:
-        problems.append(f"the standalone render wrote {header!r}, expected context {answered}")
+    elif f"context {ANSWERED_SHOWN} " not in header:
+        problems.append(f"the standalone render wrote {header!r}, expected context {ANSWERED_SHOWN}")
     if row is None or row["measurement_group"] != 0:
         problems.append("the standalone render does not keep the first run's measurement in group 0")
     return problems
