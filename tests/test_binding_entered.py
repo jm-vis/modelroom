@@ -21,6 +21,7 @@ from modelroom.examples import EXAMPLES
 from modelroom.profile import HardwareProfile
 from modelroom.state import atomic_write_json
 
+from test_guided import FULL_ANSWERS
 from test_guided import _run as guided_run
 from test_hardware_cmd import ID_ONE, ID_TWO, _config, _profiles
 from test_hardware_cmd import _run as hardware_run
@@ -103,20 +104,38 @@ def test_hardware_measures_a_new_profile_next_to_a_configured_hand_profile(tmp_p
 
 
 def test_the_guided_mode_builds_known_profiles_with_both_marks(tmp_path, monkeypatch):
-    """`guided._clone_mode` and `guided_loadtest._bound_profile_id` hand the rule both marks."""
-    seen: list[KnownProfile] = []
+    """`guided._clone_mode` and `guided_loadtest._bound_profile_id` hand the rule both marks.
+
+    A hand-entered profile lies in the folder before the run, so each of the two sites has to
+    read `entered`/`entered` from the file -- a site that hard-coded `measured`/`os` would fail
+    here (review round, 2026-09-26). Both sites are recorded on their own.
+    """
+    seen: dict[str, list[KnownProfile]] = {"guided": [], "loadtest": []}
     real = resolve_profile_target
 
-    def spy(home_binding, config_profile, profiles, *args, **kwargs):
-        seen.extend(profiles.values())
-        return real(home_binding, config_profile, profiles, *args, **kwargs)
+    def spy_for(site: str):
+        def spy(home_binding, config_profile, profiles, *args, **kwargs):
+            seen[site].extend(profiles.values())
+            return real(home_binding, config_profile, profiles, *args, **kwargs)
 
-    monkeypatch.setattr(guided_module, "resolve_profile_target", spy)
-    monkeypatch.setattr(loadtest_module, "resolve_profile_target", spy)
+        return spy
+
+    monkeypatch.setattr(guided_module, "resolve_profile_target", spy_for("guided"))
+    monkeypatch.setattr(loadtest_module, "resolve_profile_target", spy_for("loadtest"))
     (tmp_path / "results").mkdir()
     (tmp_path / "home").mkdir()
+    hardware_dir = tmp_path / "results" / "state" / "hardware"
+    hardware_dir.mkdir(parents=True)
+    atomic_write_json(hardware_dir / f"{HAND}.json", _hand_profile(HAND))
 
-    assert guided_run(tmp_path)[0] == 0
+    # The state folder is there already, so the run asks whether to write a configuration into it.
+    assert guided_run(tmp_path, {**FULL_ANSWERS, "write_config": True})[0] == 0
 
-    assert seen, "neither step asked the rule about a stored profile"
-    assert all((known.origin, known.ram_physical_source) == ("measured", "os") for known in seen)
+    marks = {
+        site: {(profile.profile_id, profile.origin, profile.ram_physical_source) for profile in known}
+        for site, known in seen.items()
+    }
+    for site in ("guided", "loadtest"):
+        assert (HAND, "entered", "entered") in marks[site], f"{site} did not hand the rule the entered profile"
+    # The machine step asks before it measures, so only the load test also sees this machine's own profile.
+    assert any(mark[1:] == ("measured", "os") for mark in marks["loadtest"] if mark[0] != HAND)

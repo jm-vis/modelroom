@@ -94,7 +94,9 @@ All notable changes to this project are documented in this file. The format foll
 - **Shared results folders need updated readers.** Version 0.1.0 refuses a schema-3 profile or
   configuration with `schema_version 3 is outside the accepted range` and exit `3`. Once one
   machine of a shared folder has written schema 3, every machine that reads the folder needs this
-  version or a later one.
+  version or a later one. An export file written by this version stays schema 1 but carries the
+  schema-3 profile inside, so a 0.1.0 `import-profile` fails on that profile with a validation
+  error (exit `3`), not with the version message.
 
 - **A size in a model name can be in millions and can carry an `E`** (`guided_models.parameters_from_name`):
   `SmolLM2-360M-Instruct` is 0.36B and `gemma-4-E4B-it` 4B. The list computes a fit for such names

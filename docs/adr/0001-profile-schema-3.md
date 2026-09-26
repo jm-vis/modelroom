@@ -51,7 +51,10 @@ reader cannot say why.
   accepted range (>= 1 and < 3)`, exit `3`, instead of a validation error about one value.
 - **Shared results folders need updated readers.** Once one machine writes schema 3, every
   machine that reads the folder needs this version or later. This is the honest limit, stated in
-  the changelog.
+  the changelog. An export file written now stays schema 1 but carries a schema-3 profile inside:
+  a 0.1.0 `import-profile` fails on that profile with a validation error (`schema_version must be
+  2, got 3`), exit `3` as well, not with the version message -- the export's own version is not
+  raised for a change inside it.
 - Every fit on unified memory is `computed`; no such machine has been measured yet. The rules are
   tested with synthetic profiles; a real profile of such a machine is still to come.
 

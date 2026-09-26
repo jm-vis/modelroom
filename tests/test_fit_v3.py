@@ -36,6 +36,7 @@ from modelroom.guided_models import model_choices, model_fit
 from modelroom.measurements import Scenario
 from modelroom.profile import HardwareProfile
 
+from test_guided import RUN2
 from test_guided import _run as guided_run
 
 MACHINE =MachineConfig(reserve_ram_gib=8.0, reserve_vram_gib=1.0, writer=True)
@@ -220,8 +221,23 @@ def test_the_preview_takes_the_requests_and_defaults_to_one():
     assert model_fit(7.0, checked, 8192, requests=3).requests == 3
 
 
+def _store_requests(config_file, requests: int) -> None:
+    """Write `[guided].requests` straight into the file -- what a hand edit or a later run leaves."""
+    replaced = {"requests = ": f"requests = {requests}", "requests_origin = ": 'requests_origin = "entered"'}
+    lines = [
+        next((value for key, value in replaced.items() if line.startswith(key)), line)
+        for line in config_file.read_text(encoding="utf-8").splitlines()
+    ]
+    config_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def test_the_search_step_hands_the_configured_requests_to_the_list(tmp_path, monkeypatch):
-    """`guided_search` passes `[guided].requests` -- one request by default -- to `model_choices`."""
+    """`guided_search` passes `[guided].requests` to `model_choices` -- the file's value, not a default.
+
+    The first run writes the configuration with one request; the file is then set to three, the
+    way a hand edit leaves it, and the second run's list has to compute for three (review round,
+    2026-09-26: an assertion on the default of 1 could not fail on a hard-coded 1).
+    """
     seen: list[dict] = []
     real = guided_search_module.model_choices
 
@@ -229,13 +245,16 @@ def test_the_search_step_hands_the_configured_requests_to_the_list(tmp_path, mon
         seen.append(kwargs)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(guided_search_module, "model_choices", spy)
     (tmp_path / "results").mkdir()
     (tmp_path / "home").mkdir()
-
     assert guided_run(tmp_path)[0] == 0
+    _store_requests(tmp_path / "results" / "modelroom.toml", 3)
+    monkeypatch.setattr(guided_search_module, "model_choices", spy)
 
-    assert seen and all(kwargs.get("requests") == 1 for kwargs in seen)
+    # A later clock: a second fetch at the very same time is "not newer than the stored snapshot".
+    assert guided_run(tmp_path, now=RUN2)[0] == 0
+
+    assert seen and all(kwargs.get("requests") == 3 for kwargs in seen)
 
 
 def test_model_choices_hand_the_requests_to_every_row():
