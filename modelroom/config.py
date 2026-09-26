@@ -8,10 +8,11 @@ model for readers and repeats `EXAMPLES` verbatim under its "Configuration" sect
 from __future__ import annotations
 
 import copy
+import math
 import re
 import tomllib
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -25,14 +26,23 @@ from .contracts import (
     validate_repo_aliases,
 )
 
-CONFIG_SCHEMA_VERSION = 2
+CONFIG_SCHEMA_VERSION = 3
 # Half-open range: a reader accepts schema_version >= low and < high, same convention as the
-# snapshot's SNAPSHOT_SCHEMA_RANGE. Readers accept schema_version 1 (normalized to 2 in memory by
-# `normalize_config_v1`) and 2; 3 and above are refused before any field is validated.
-CONFIG_SCHEMA_RANGE: tuple[int, int] = (1, 3)
+# snapshot's SNAPSHOT_SCHEMA_RANGE. Readers accept schema_version 1 and 2 (normalized to 3 in
+# memory by `normalize_config`) and 3; 4 and above are refused before any field is validated.
+CONFIG_SCHEMA_RANGE: tuple[int, int] = (1, 4)
 
 DEFAULT_RESERVE_RAM_GIB = 8.0
 DEFAULT_RESERVE_VRAM_GIB = 1.0
+
+# The share of the people using a server who send a request at the same moment, when only the
+# head count is known: rule of thumb, not measured (decided 2026-09-25).
+ACTIVE_SHARE = 0.10
+MAX_USERS = 10240
+MAX_REQUESTS = 1024
+RequestsOrigin = Literal["default", "entered", "from_users"]
+# The keys schema 3 added to `[guided]`; a file that says it is schema 2 cannot carry them.
+_GUIDED_KEYS_OF_SCHEMA_3 = ("users", "requests", "requests_origin")
 
 _FAMILY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
 _MIN_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -162,8 +172,13 @@ class UpdatesConfig(BaseModel):
     check: bool = True
 
 
+def requests_from_users(users: int) -> int:
+    """The parallel requests a head count stands for: `ceil(users x ACTIVE_SHARE)`, 1 to 1024."""
+    return min(MAX_REQUESTS, max(1, math.ceil(users * ACTIVE_SHARE)))
+
+
 class GuidedConfig(BaseModel):
-    """Schema 2: what the guided mode recorded when it wrote this configuration.
+    """Schema 2 and 3: what the guided mode recorded when it wrote this configuration.
 
     `results` is the results folder; it is resolved against the configuration file's own
     directory by `load_config`, exactly like `paths.state`, and `None` means no guided run wrote
@@ -172,12 +187,21 @@ class GuidedConfig(BaseModel):
     has chosen one yet. Its bounds are `Scenario.context_requested`'s own
     (`modelroom/measurements.py`), which this module cannot import -- `modelroom/state.py` reads
     `Configuration`, so the dependency only ever runs the other way.
+
+    Schema 3 (decided 2026-09-25): `requests` are the parallel slots the ranking assumes (the
+    daemon's `OLLAMA_NUM_PARALLEL`), `requests_origin` says where the number came from, `users`
+    is the head count a user named. Named directly: `entered`, a head count stays for the
+    display. Only a head count: `from_users`, `requests_from_users(users)`. Neither: `default`,
+    one request. `requests` and `requests_origin` are written together or not at all.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     results: Path | None = None
     context: Annotated[int, Field(gt=0, le=2**31 - 1)] | None = None
+    users: Annotated[int, Field(ge=1, le=MAX_USERS)] | None = None
+    requests: int = Field(default=1, ge=1, le=MAX_REQUESTS)
+    requests_origin: RequestsOrigin = "default"
 
     @field_validator("results")
     @classmethod
@@ -185,6 +209,40 @@ class GuidedConfig(BaseModel):
         if value is not None and not value.is_absolute():
             raise ValueError(f"guided.results must be an absolute path (load_config resolves relative ones): {value}")
         return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_from_users(cls, data: object) -> object:
+        """Only a head count in the table: the requests follow the rule of thumb (`from_users`).
+
+        A head count outside its bounds is left to the field validator, so the error names it.
+        """
+        if not isinstance(data, dict) or "users" not in data or "requests" in data or "requests_origin" in data:
+            return data
+        users = data["users"]
+        if isinstance(users, bool) or not isinstance(users, int) or not 1 <= users <= MAX_USERS:
+            return data
+        return {**data, "requests": requests_from_users(users), "requests_origin": "from_users"}
+
+    @model_validator(mode="after")
+    def _check_requests(self) -> "GuidedConfig":
+        if ("requests" in self.model_fields_set) != ("requests_origin" in self.model_fields_set):
+            raise ValueError("guided.requests and guided.requests_origin are written together or not at all")
+        check_requests_origin(self.requests_origin, self.requests, self.users)
+        return self
+
+
+def check_requests_origin(origin: str, requests: int, users: int | None) -> None:
+    """The rule between `requests`, its origin and the head count; `ValueError` when it breaks.
+
+    Shared by the configuration and the render document, so both say the same about one number.
+    """
+    if origin == "default" and (requests != 1 or users is not None):
+        raise ValueError("requests_origin 'default' means one request and no head count")
+    if origin == "from_users" and (users is None or requests != requests_from_users(users)):
+        raise ValueError(
+            f"requests_origin 'from_users' means requests == ceil(users x {ACTIVE_SHARE}) between 1 and {MAX_REQUESTS}"
+        )
 
 
 class PathsConfig(BaseModel):
@@ -461,24 +519,51 @@ def normalize_config_v1(data: dict) -> dict:
     `modelroom migrate`'s job, once the profile files exist. Schema 1's own rule that at least
     one family is configured is checked here, since schema 2 drops it. No writer rule is added:
     a schema-1 file without a writer or without machines stays valid, and `fetch` alone checks
-    for a writer, as before.
+    for a writer, as before. `normalize_config_v2` takes the result on to schema 3.
     """
     families = data.get("families")
     if not isinstance(families, list) or not families:
         raise ValueError("schema_version 1 requires at least one entry in families")
     normalized = copy.deepcopy(data)
-    normalized["schema_version"] = CONFIG_SCHEMA_VERSION
+    normalized["schema_version"] = 2
     normalized.setdefault("defaults", DefaultsConfig().model_dump(mode="json"))
     normalized.setdefault("updates", UpdatesConfig().model_dump(mode="json"))
     return normalized
 
 
+def normalize_config_v2(data: dict) -> dict:
+    """A schema-2 configuration dict as the equivalent schema-3 dict; `data` is left unchanged.
+
+    Pure and lossless: every value stays, `schema_version` becomes 3, and a `[guided]` table
+    gets the default of the two keys schema 3 added -- one request, origin `default` (a missing
+    `[guided]` stays missing, `GuidedConfig()` has the same defaults). A file that says it is
+    schema 2 but carries a key of schema 3 is refused, never read as a file of a later schema.
+    """
+    normalized = copy.deepcopy(data)
+    guided = normalized.get("guided")
+    if isinstance(guided, dict):
+        present = [key for key in _GUIDED_KEYS_OF_SCHEMA_3 if key in guided]
+        if present:
+            raise ValueError(f"schema 2 has no guided.{present[0]}; that key needs schema_version 3")
+        guided.update(requests=1, requests_origin="default")
+    normalized["schema_version"] = CONFIG_SCHEMA_VERSION
+    return normalized
+
+
+def normalize_config(data: dict) -> dict:
+    """Any readable configuration dict as the current schema's dict; `data` is left unchanged."""
+    version = data.get("schema_version")
+    if version == 1:
+        data = normalize_config_v1(data)
+    if data.get("schema_version") == 2:
+        data = normalize_config_v2(data)
+    return data
+
+
 def _build_configuration(data: dict, label: str) -> Configuration:
-    version = read_config_schema_version(data, label)
+    read_config_schema_version(data, label)
     try:
-        if version == 1:
-            data = normalize_config_v1(data)
-        return Configuration.model_validate(data)
+        return Configuration.model_validate(normalize_config(data))
     except (ValidationError, ValueError) as exc:
         raise ConfigError(f"{label}: invalid configuration: {exc}") from exc
 
@@ -622,6 +707,9 @@ EXAMPLES: dict[str, dict] = {
     "GuidedConfig": {
         "results": "//models/modelroom",
         "context": 4096,
+        "users": 25,
+        "requests": 3,
+        "requests_origin": "from_users",
     },
     "PathsConfig": {
         "state": "//models/modelroom/state",
@@ -631,7 +719,7 @@ EXAMPLES: dict[str, dict] = {
         "min_version": "1.1.16",
     },
     "Configuration": {
-        "schema_version": 2,
+        "schema_version": 3,
         "families": [
             {
                 "name": "nova",
@@ -663,6 +751,12 @@ EXAMPLES: dict[str, dict] = {
         "llmfit": {"min_version": "1.1.16"},
         "defaults": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0},
         "updates": {"check": True},
-        "guided": {"results": "//models/modelroom", "context": 4096},
+        "guided": {
+            "results": "//models/modelroom",
+            "context": 4096,
+            "users": 25,
+            "requests": 3,
+            "requests_origin": "from_users",
+        },
     },
 }

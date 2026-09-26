@@ -155,11 +155,12 @@ def test_a_blocked_profile_is_unknown_before_any_size_is_read():
     assert (fit.fit_class, fit.basis) == ("unknown", "architecture")
 
 
-def test_more_than_one_request_is_unknown_on_the_size_basis_as_well():
+def test_more_than_one_request_is_computed_on_the_size_basis_as_well():
+    """Until 2026-09-25 `unknown`; since then the KV cache counts once per request."""
     fit = compute_fit_v2(_profile(), _package(), _base_model("unknown"), _scenario(requests=2), MACHINE)
 
-    assert fit.fit_class == "unknown"
-    assert "one request" in str(fit.reason)
+    assert fit.fit_class != "unknown" and fit.basis == "size"
+    assert fit.kv_gib == pytest.approx(2 * KV_AT_8192)
 
 
 def test_the_context_of_the_scenario_is_the_one_the_kv_cache_is_computed_for():

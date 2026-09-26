@@ -17,14 +17,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .config import MAX_USERS, RequestsOrigin, check_requests_origin
 from .contracts import Area, Fit, Rating, check_aware_utc, validate_hf_repo
 from .guided_contracts import Note
 from .measurements import Scenario
 from .profile import HardwareProfile
 
-DOCUMENT_SCHEMA_VERSION = 1
+# Schema 2 (decided 2026-09-25): every fit carries `requests`, the document carries `users` and
+# `requests_origin`.
+DOCUMENT_SCHEMA_VERSION = 2
 
-# What a machine's block says about itself: a schema-2 profile that the fit could use
+# What a machine's block says about itself: a profile (schema 2 or later) that the fit could use
 # (`ranked`), a schema-1 file that has to be migrated and measured again (`legacy`), or no
 # profile at all yet (`no_profile`). Only `ranked` ever carries entries.
 MachineStatus = Literal["ranked", "legacy", "no_profile"]
@@ -139,6 +142,11 @@ class RenderDocument(BaseModel):
     `ratings` holds the market rating of a base model the `RatingSource` answered for; a base
     model that is not a key has no rating (`-` in the Stars column). `rating_unavailable` is the
     source's own message when it failed; then no rating is shown at all and the run still ends 0.
+
+    `users` and `requests_origin` say where `scenario.requests` came from, copied from the
+    configuration's `[guided]` when the rendered scenario is that configuration's; both `None`
+    when a caller passed a scenario of other requests, so the document never names a wrong
+    origin. Every ranked and too-tight fit was computed for `scenario.requests`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -154,6 +162,21 @@ class RenderDocument(BaseModel):
     ratings: dict[str, Rating] = Field(default_factory=dict)
     areas: list[Area] = Field(default_factory=list)
     machines: list[MachineRanking] = Field(default_factory=list)
+    users: int | None = Field(default=None, ge=1, le=MAX_USERS)
+    requests_origin: RequestsOrigin | None = None
+
+    @model_validator(mode="after")
+    def _check_requests(self) -> "RenderDocument":
+        if self.requests_origin is None:
+            if self.users is not None:
+                raise ValueError("users is only set together with requests_origin")
+        else:
+            check_requests_origin(self.requests_origin, self.scenario.requests, self.users)
+        for block in self.machines:
+            for entry in [*block.ranked, *block.too_tight]:
+                if entry.fit.requests != self.scenario.requests:
+                    raise ValueError(f"a fit for {entry.fit.requests} requests in a document of {self.scenario.requests}")
+        return self
 
     @model_validator(mode="after")
     def _check_document(self) -> "RenderDocument":

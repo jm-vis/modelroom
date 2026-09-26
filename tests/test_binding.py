@@ -28,7 +28,7 @@ ELSEWHERE = "0000000000000001"
 
 def _profiles(**fingerprints: str) -> dict[str, KnownProfile]:
     ids = {"bound": BOUND, "configured": CONFIGURED}
-    return {ids[key]: KnownProfile(ids[key], value) for key, value in fingerprints.items()}
+    return {ids[key]: KnownProfile(ids[key], value, "measured", "os") for key, value in fingerprints.items()}
 
 
 # --- pointer file ------------------------------------------------------------------------------

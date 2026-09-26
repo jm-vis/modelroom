@@ -27,7 +27,14 @@ from modelroom.contracts import (
 from modelroom.document import RenderDocument
 from modelroom.importer import ProfileScan
 from modelroom.measurements import MeasurementRecord, PackageRef, RunCounters, Scenario, default_scenario
-from modelroom.profile import CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason, normalize_profile_v1
+from modelroom.profile import (
+    PROFILE_SCHEMA_VERSION,
+    CrossCheck,
+    HardwareProfile,
+    LlmfitCrosscheck,
+    fit_block_reason,
+    normalize_profile_v1,
+)
 from modelroom.ranking import RANKING_RULE, TOP_LIMIT
 from modelroom.render import (
     LEGACY_FIT_REASON,
@@ -120,7 +127,7 @@ def _hf_package(
 def _profile(*, vram_gib: float = 11.94, ram_gib: float = 127.46, profile_id: str = PROFILE_ID) -> HardwareProfile:
     absent = CrossCheck(status="absent")
     return HardwareProfile(
-        schema_version=2,
+        schema_version=PROFILE_SCHEMA_VERSION,
         profile_id=profile_id,
         display_name="workstation",
         os_fingerprint="9d2f4b6a8c0e1357",

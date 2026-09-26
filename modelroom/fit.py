@@ -12,12 +12,16 @@ at all from its parameter count (`fit_from_parameters`) -- the same formula with
 taken from a constant, one assumption for every such package. Both are `computed`, never
 measured, both cap at `good`, and both say `from size` in every view
 (CONTRACTS.md, "Fit from size (basis `size`)").
+
+Every entry point takes the parallel requests the daemon is assumed to keep: the weights are
+loaded once, the KV cache once per request (decided 2026-09-25). A graphics card entered by hand
+counts like a measured one, and unified memory is one pool of its own (`_choose_pool`).
 """
 
 from __future__ import annotations
 
 from .config import MachineConfig
-from .contracts import BaseModelSpec, Fit, HardwareSnapshot, Package
+from .contracts import Architecture, BaseModelSpec, Fit, HardwareSnapshot, Package
 from .measurements import Scenario
 from .profile import HardwareProfile, fit_block_reason
 
@@ -47,6 +51,17 @@ KV_PER_TOKEN_SIZE_BASIS = 147_456
 BYTES_PER_PARAMETER_Q4 = 0.6
 
 ARCHITECTURE_NOT_COVERED = "architecture not covered by v1"
+
+# Beyond this many parallel requests a memory fit says nothing about throughput (decided
+# 2026-09-25): rule of thumb, not measured; the release that measures it moves this number. A
+# hint next to the fit, never a limit on it -- the fit itself computes up to 1024.
+OLLAMA_REQUEST_HINT = 8
+OLLAMA_REQUEST_HINT_TEXT = (
+    f"beyond {OLLAMA_REQUEST_HINT} requests at once this fit says nothing about throughput: measure under "
+    "load, or look at a serving stack (rule of thumb, not measured)"
+)
+# The GPU states whose graphics memory is a pool of its own: measured, or entered by hand.
+_OWN_VRAM_STATES = ("measured", "entered")
 
 PERFECT_RATIO = 0.60
 GOOD_RATIO = 0.85
@@ -84,29 +99,35 @@ def compute_fit_v2(
     scenario: Scenario,
     machine_config: MachineConfig,
 ) -> Fit:
-    """Fit contract v1 for a schema-2 profile and a ranking scenario.
+    """Fit contract v1 for a profile and a ranking scenario.
 
-    The GPU gate comes first: only `gpu_state` `none` (CPU; VRAM 0) and `measured` compute, as
-    does only a profile with a known physical RAM and no llmfit deviation (`profile.
-    fit_block_reason`); everything else is `unknown` with that reason. The context is the
-    scenario's `context_requested` for every package -- the package's own `default_context` is
-    never used here -- and fit v1 covers one request with a 16-bit KV cache only. The formula
-    itself is fit v1's, unchanged (`_fit_for_memory`). Physical RAM is the RAM pool; a cgroup
-    limit is a note, never an input.
+    The GPU gate comes first: only `gpu_state` `none` (CPU; VRAM 0), `measured`, `entered` and
+    `unified_memory` compute, as does only a profile with a known physical RAM and no llmfit
+    deviation (`profile.fit_block_reason`); everything else is `unknown` with that reason. The
+    context is the scenario's `context_requested` for every package -- the package's own
+    `default_context` is never used here -- with a 16-bit KV cache for each of the scenario's
+    `requests` (decided 2026-09-25). The formula itself is fit v1's (`_fit_for_memory`).
+    Physical RAM is the RAM pool; a cgroup limit is a note, never an input.
     """
     blocked = fit_block_reason(profile)
     if blocked is not None:
         return unknown_fit(blocked)
-    if scenario.requests != 1:
-        return unknown_fit("fit v1 covers one request; more requests are the reverse calculation")
-    vram_gib = profile.vram_gib if profile.gpu_state == "measured" else 0.0
+    vram_gib, shared_memory = profile_memory(profile)
     package_reason = _package_reason(package)
     if package_reason is not None:
         return unknown_fit(package_reason)
     if base_model.architecture.kind != "dense_classic":
         # The architecture is no reason to say nothing any more: the size of the package
         # answers instead, on its own basis (decided 2026-09-24).
-        return fit_from_size(package, vram_gib, profile.ram_physical_gib, machine_config, scenario.context_requested)
+        return fit_from_size(
+            package,
+            vram_gib,
+            profile.ram_physical_gib,
+            machine_config,
+            scenario.context_requested,
+            requests=scenario.requests,
+            shared_memory=shared_memory,
+        )
     return _fit_for_memory(
         package,
         base_model,
@@ -115,7 +136,20 @@ def compute_fit_v2(
         machine_config,
         context=scenario.context_requested,
         context_assumed=False,
+        requests=scenario.requests,
+        shared_memory=shared_memory,
     )
+
+
+def profile_memory(profile: HardwareProfile) -> tuple[float, bool]:
+    """The graphics memory the fit counts for `profile`, and whether it is unified memory.
+
+    A graphics memory of its own counts when it was measured or entered by hand; every other
+    state computes with 0. Unified memory has none of its own: the fit takes the one pool from
+    the RAM instead (`_choose_pool`).
+    """
+    vram_gib = (profile.vram_gib or 0.0) if profile.gpu_state in _OWN_VRAM_STATES else 0.0
+    return vram_gib, profile.gpu_state == "unified_memory"
 
 
 def count_fitting(
@@ -124,12 +158,13 @@ def count_fitting(
     packages: list[Package],
     base_models: dict[str, BaseModelSpec],
     context: int,
+    requests: int = 1,
 ) -> int:
-    """How many of `packages` the ranking would rank on `profile` at `context`.
+    """How many of `packages` the ranking would rank on `profile` at `context` and `requests`.
 
     The one question the size scale of the guided mode asks, six times over -- once per level --
     so that each line can say how many packages still fit. Nothing new is computed here: the fit
-    is `compute_fit_v2`'s, unchanged, for one request and a 16-bit KV cache, and "fits" is the
+    is `compute_fit_v2`'s, unchanged, with a 16-bit KV cache per request, and "fits" is the
     ranking rule's own predicate, asked by handing the fits to `ranking.rank_packages` with no
     measurements. So the scale and the ranking of the same folder can never disagree. A package
     whose base model is not in `base_models` is not counted (the snapshot itself refuses one).
@@ -137,7 +172,7 @@ def count_fitting(
     from .ranking import rank_packages  # imported here: the rule reads a fit, so it is the later layer
 
     scenario = Scenario(
-        context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1
+        context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=requests
     )
     entries = [
         (package, compute_fit_v2(profile, package, base_models[package.base_model_hf_repo], scenario, machine_config))
@@ -178,16 +213,21 @@ def fit_from_size(
     ram_gib: float | None,
     machine_config: MachineConfig,
     context: int,
+    *,
+    requests: int = 1,
+    shared_memory: bool = False,
 ) -> Fit:
     """Fit contract v1's formula for a package whose architecture it cannot read (basis `size`).
 
     The weights are the package's own files, as always; the KV cache is `context x
-    KV_PER_TOKEN_SIZE_BASIS` instead of the architecture's own layers and heads -- one fixed
-    assumption, which is why the class is capped at `good`: `perfect` stays reserved for a package
-    a read architecture proves comfortable (decided 2026-09-24).
+    KV_PER_TOKEN_SIZE_BASIS x requests` instead of the architecture's own layers and heads -- one
+    fixed assumption, which is why the class is capped at `good`: `perfect` stays reserved for a
+    package a read architecture proves comfortable (decided 2026-09-24). Multiplying by the
+    requests does not make the assumption any more exact. `shared_memory` is unified memory
+    (`_choose_pool`).
     """
     weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
-    return _size_fit(weights_gib, ram_gib, vram_gib, machine_config, context)
+    return _size_fit(weights_gib, ram_gib, vram_gib, machine_config, context, requests, shared_memory)
 
 
 def fit_from_parameters(
@@ -196,6 +236,9 @@ def fit_from_parameters(
     ram_gib: float | None,
     machine_config: MachineConfig,
     context: int,
+    *,
+    requests: int = 1,
+    shared_memory: bool = False,
 ) -> Fit:
     """The same fit for a model no package has been fetched for yet: from its parameter count.
 
@@ -204,19 +247,25 @@ def fit_from_parameters(
     `fit_from_size`'s (CONTRACTS.md, "Fit from size (basis `size`)").
     """
     weights_gib = parameters_b * 1e9 * BYTES_PER_PARAMETER_Q4 / GIB
-    return _size_fit(weights_gib, ram_gib, vram_gib, machine_config, context)
+    return _size_fit(weights_gib, ram_gib, vram_gib, machine_config, context, requests, shared_memory)
 
 
 def _size_fit(
-    weights_gib: float, ram_gib: float | None, vram_gib: float, machine_config: MachineConfig, context: int
+    weights_gib: float,
+    ram_gib: float | None,
+    vram_gib: float,
+    machine_config: MachineConfig,
+    context: int,
+    requests: int,
+    shared_memory: bool,
 ) -> Fit:
     """The shared tail of the two size-basis entry points; `ram_gib` unknown is a `0` pool."""
     try:
-        kv_gib = context * KV_PER_TOKEN_SIZE_BASIS / GIB
+        kv_gib = context * KV_PER_TOKEN_SIZE_BASIS * requests / GIB
         need_gib = weights_gib * WEIGHTS_OVERHEAD_RATIO + kv_gib + FIXED_OVERHEAD_GIB
     except OverflowError:  # the same second line of defense as `_fit_for_memory`
         return unknown_fit("size values out of range")
-    mode, pool_gib, reserve_gib, _cap = _choose_pool(need_gib, vram_gib, ram_gib or 0.0, machine_config)
+    mode, pool_gib, reserve_gib, _cap = _choose_pool(need_gib, vram_gib, ram_gib or 0.0, machine_config, shared_memory)
     return Fit(
         fit_class=_classify(need_gib, pool_gib, cap_at_good=True),
         mode=mode,
@@ -229,6 +278,7 @@ def _size_fit(
         context_assumed=False,
         basis="size",
         reason=None,
+        requests=requests,
     )
 
 
@@ -240,8 +290,13 @@ def _fit_for_memory(
     machine_config: MachineConfig,
     context: int,
     context_assumed: bool,
+    requests: int = 1,
+    shared_memory: bool = False,
 ) -> Fit:
-    """Fit contract v1's formula and classes for given memory and context (no gate here)."""
+    """Fit contract v1's formula and classes for given memory and context (no gate here).
+
+    The weights are loaded once, the KV cache once per request (decided 2026-09-25).
+    """
     arch = base_model.architecture
 
     # R7-10 (fix-round 6): `Architecture`'s own numeric fields are bounded (`le=2**31 - 1`,
@@ -257,14 +312,12 @@ def _fit_for_memory(
     # "unknown"`, never the whole render.
     try:
         weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
-        kv_gib = (
-            2 * arch.num_hidden_layers * arch.num_key_value_heads * arch.head_dim * KV_BYTES_PER_ELEMENT * context
-        ) / GIB
+        kv_gib = _architecture_kv_gib(arch, context, requests)
         need_gib = weights_gib * WEIGHTS_OVERHEAD_RATIO + kv_gib + FIXED_OVERHEAD_GIB
     except OverflowError:
         return unknown_fit("architecture values out of range")
 
-    mode, pool_gib, reserve_gib, cap_at_good = _choose_pool(need_gib, vram_gib, ram_gib, machine_config)
+    mode, pool_gib, reserve_gib, cap_at_good = _choose_pool(need_gib, vram_gib, ram_gib, machine_config, shared_memory)
     fit_class = _classify(need_gib, pool_gib, cap_at_good)
 
     return Fit(
@@ -278,11 +331,19 @@ def _fit_for_memory(
         context=context,
         context_assumed=context_assumed,
         reason=None,
+        requests=requests,
     )
 
 
+def _architecture_kv_gib(arch: Architecture, context: int, requests: int) -> float:
+    """The 16-bit KV cache in GiB: key and value, per layer, KV head and head width, per token and
+    request. Exact integers until the one division, which may raise `OverflowError`."""
+    per_token = 2 * arch.num_hidden_layers * arch.num_key_value_heads * arch.head_dim * KV_BYTES_PER_ELEMENT
+    return per_token * context * requests / GIB
+
+
 def _choose_pool(
-    need_gib: float, vram_gib: float, ram_gib: float, machine_config: MachineConfig
+    need_gib: float, vram_gib: float, ram_gib: float, machine_config: MachineConfig, shared_memory: bool = False
 ) -> tuple[str, float, float, bool]:
     """The memory pool `need_gib` is judged against, and whether the class is capped at "good".
 
@@ -291,7 +352,15 @@ def _choose_pool(
     mode `cpu_gpu` when there is some VRAM at all, `cpu` when there is none -- and the class is
     capped at "good" off the GPU, since "perfect" only ever describes a package that fits
     comfortably in VRAM.
+
+    Unified memory (`shared_memory`) is its own case (decided 2026-09-25): the system and the
+    model share one memory, so the pool is the RAM minus **both** reserves, the mode is `gpu`
+    and nothing is capped -- and there is no fallback, since the RAM is that same memory. A pool
+    of 0 or less is `too_tight` (`_classify`).
     """
+    if shared_memory:
+        reserve_gib = machine_config.reserve_ram_gib + machine_config.reserve_vram_gib
+        return "gpu", ram_gib - reserve_gib, reserve_gib, False
     available_vram = vram_gib - machine_config.reserve_vram_gib
     if need_gib <= available_vram:
         return "gpu", available_vram, machine_config.reserve_vram_gib, False

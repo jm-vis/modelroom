@@ -12,7 +12,7 @@ from copy import deepcopy
 # Shared by more than one example below (e.g. `ExportObject` carries a profile and a
 # measurement); each use is a deep copy, so a test that edits one example never edits another.
 _HARDWARE_PROFILE = {
-    "schema_version": 2,
+    "schema_version": 3,
     "profile_id": "3f9a0c21d4e6b870",
     "display_name": "workstation",
     "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -88,6 +88,7 @@ _RANKED_FIT = {
     "context_assumed": False,
     "basis": "architecture",
     "reason": None,
+    "requests": 1,
 }
 _NOT_COVERED_FIT = {
     "fit_class": "unknown",
@@ -101,6 +102,7 @@ _NOT_COVERED_FIT = {
     "context_assumed": False,
     "basis": "architecture",
     "reason": "a weight file has no size",
+    "requests": 1,
 }
 _RANKED_ENTRY = {
     "package_identity": ["huggingface", "packager/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf"],
@@ -392,6 +394,7 @@ EXAMPLES: dict[str, dict] = {
         "context_assumed": True,
         "basis": "architecture",
         "reason": None,
+        "requests": 1,
     },
     "Rating": {
         "stars": 3.5,
@@ -493,6 +496,7 @@ EXAMPLES: dict[str, dict] = {
             "context_assumed": False,
             "basis": "size",
             "reason": None,
+            "requests": 1,
         },
     },
     "Requirement": {
@@ -524,7 +528,7 @@ EXAMPLES: dict[str, dict] = {
     "SetAsideEntry": deepcopy(_SET_ASIDE_ENTRY),
     "MachineRanking": deepcopy(_MACHINE_RANKING),
     "RenderDocument": {
-        "schema_version": 1,
+        "schema_version": 2,
         "snapshot_run_at": "2026-09-22T09:00:00Z",
         "rendered_at": "2026-09-23T09:00:00Z",
         "base_model_count": 2,
@@ -548,5 +552,7 @@ EXAMPLES: dict[str, dict] = {
             }
         ],
         "machines": [deepcopy(_MACHINE_RANKING)],
+        "users": None,
+        "requests_origin": "default",
     },
 }

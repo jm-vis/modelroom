@@ -100,7 +100,7 @@ def test_same_numbers_as_fit_v1_for_the_same_memory_and_context():
     assert (v1.fit_class, v1.mode, v1.need_gib, v1.pool_gib) == (v2.fit_class, v2.mode, v2.need_gib, v2.pool_gib)
 
 
-@pytest.mark.parametrize("state", ["present_unmeasured", "multi_gpu_not_covered", "unified_memory", "unsupported_platform"])
+@pytest.mark.parametrize("state", ["present_unmeasured", "multi_gpu_not_covered", "unsupported_platform"])
 def test_every_uncovered_gpu_state_is_unknown_with_its_reason(state):
     fit = compute_fit_v2(_profile(gpu_state=state), _package(), _base_model(), default_scenario(), MACHINE)
     assert fit.fit_class == "unknown"
@@ -126,9 +126,10 @@ def test_a_llmfit_deviation_blocks_the_fit():
     assert fit.fit_class == "unknown" and "VRAM differs" in fit.reason
 
 
-def test_more_than_one_request_is_left_to_the_reverse_calculation():
+def test_more_than_one_request_is_computed_with_a_kv_cache_per_request():
+    """Until 2026-09-25 `unknown`; since then the KV cache counts once per request (test_fit_v3.py)."""
     fit = compute_fit_v2(_profile(), _package(), _base_model(), _scenario(requests=2), MACHINE)
-    assert fit.fit_class == "unknown" and "one request" in fit.reason
+    assert fit.fit_class != "unknown" and fit.reason is None and fit.requests == 2
 
 
 def _profile_in_state(state: str) -> HardwareProfile:
@@ -137,6 +138,17 @@ def _profile_in_state(state: str) -> HardwareProfile:
         return _cpu_profile()
     if state == "measured":
         return _profile()
+    if state in ("entered", "unified_memory"):
+        return _profile(
+            os_fingerprint="none",
+            os_fingerprint_source="none",
+            origin="entered",
+            ram_physical_source="entered",
+            vram_gib=12.0 if state == "entered" else 0.0,
+            vram_source="entered" if state == "entered" else "none",
+            gpu_state=state,
+            llmfit_crosscheck={"ram_physical": {"status": "absent"}, "vram": {"status": "absent"}},
+        )
     if state == "legacy_unknown":
         return _profile(
             os_fingerprint="none",

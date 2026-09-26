@@ -1,0 +1,34 @@
+# A schema-3 configuration with one machine of its own, as a guided run leaves it.
+# `[defaults]` carries the reserves an imported machine gets; paths are relative to this file.
+# The same values as `config_v2/config.toml`; schema 3 adds the parallel requests of `[guided]`,
+# which a file without `[guided]` leaves at their defaults.
+schema_version = 3
+
+packagers = ["packager"]
+publishers = ["acme"]
+
+[[families]]
+name = "nova"
+
+  [[families.base_models]]
+  hf_repo = "acme/Nova-7B"
+  repo_aliases = ["Nova-7B-Instruct-GGUF"]
+  ollama_base = "nova"
+  ollama_tag = "7b"
+
+[machines.laptop]
+reserve_ram_gib = 8.0
+reserve_vram_gib = 1.0
+writer = true
+profile = "c0ffee0000000001"
+
+[defaults]
+reserve_ram_gib = 6.0
+reserve_vram_gib = 0.5
+
+[paths]
+state = "state"
+markdown = "docs/models.md"
+
+[llmfit]
+min_version = "1.1.16"

@@ -1753,7 +1753,7 @@ def test_write_configuration_writes_a_file_that_reads_back_as_the_same_configura
 
     reread = load_config(path)
     assert reread.model_dump(mode="json") == config.model_dump(mode="json")
-    assert tomllib.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["schema_version"] == 3
 
 
 def test_write_configuration_leaves_out_a_context_no_guided_run_chose(tmp_path):

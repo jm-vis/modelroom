@@ -205,10 +205,15 @@ def test_fit_gate_open_for_measured_and_cpu_profiles():
     assert fit_block_reason(HardwareProfile.model_validate(_cpu_only())) is None
 
 
-@pytest.mark.parametrize("state", ["present_unmeasured", "multi_gpu_not_covered", "unified_memory", "unsupported_platform"])
+@pytest.mark.parametrize("state", ["present_unmeasured", "multi_gpu_not_covered", "unsupported_platform"])
 def test_fit_gate_closed_for_every_other_gpu_state(state):
     profile = HardwareProfile.model_validate(_profile(gpu_state=state))
     assert state in fit_block_reason(profile)
+
+
+def test_fit_gate_open_for_unified_memory_since_schema_3():
+    """Closed until 2026-09-25; unified memory is one pool of its own since then (test_fit_v3.py)."""
+    assert fit_block_reason(HardwareProfile.model_validate(_profile(gpu_state="unified_memory"))) is None
 
 
 def test_fit_gate_closed_on_a_llmfit_deviation():
@@ -233,7 +238,7 @@ def test_read_profile_document_reads_schema_2_as_hardware_profile():
     assert isinstance(read_profile_document(copy.deepcopy(EXAMPLES["HardwareProfile"])), HardwareProfile)
 
 
-@pytest.mark.parametrize("version", [3, 0, None, "2", True])
+@pytest.mark.parametrize("version", [4, 0, None, "2", True])
 def test_read_profile_document_refuses_other_versions_before_field_validation(version):
     with pytest.raises(SchemaVersionError):
         read_profile_document({"schema_version": version, "garbage": True})

@@ -57,8 +57,46 @@ All notable changes to this project are documented in this file. The format foll
   and no statement), Llama 3 (gated cards) and DeepSeek-V3.2 (the V4 collection names no one current
   build). `tests/test_catalog.py` holds the file to the rule: every successor is a `latest` row of
   the same publisher (one stated exception, EuroLLM, whose collection lists both lines side by side).
+- **A fit for parallel requests** (`modelroom/fit.py`, `modelroom/ranking.py`; CONTRACTS.md, "Fit
+  contract v1", "Parallel requests"; decided 2026-09-25). `requests` are the parallel slots the
+  Ollama daemon is assumed to keep (`OLLAMA_NUM_PARALLEL`); the weights count once, the KV cache
+  once per request, on the architecture and the size basis alike. A ranking of more than one
+  request is computed instead of `unknown`, and every `Fit` carries its `requests`.
+  `OLLAMA_REQUEST_HINT = 8` is the rule of thumb, not measured, above which a fit says nothing
+  about throughput -- a hint for a later view, never a limit. A measurement runs one request, so
+  it counts in measured group 0 only for a ranking of one request; where it fails on `requests`
+  alone, the row's note says `measured with 1 request, ranking assumes N`.
+- **Configuration schema 3: `[guided]` keeps the requests and where they came from** (ADR 0002).
+  `users` (a head count), `requests` and `requests_origin` (`default`, `entered`, `from_users` --
+  one in ten of the head count, a rule of thumb, not measured). A later `modelroom render` of the
+  folder computes for them. The guided dialog does not ask yet: a run assumes one request.
+- **Hardware profile schema 3: a machine entered by hand, and unified memory** (ADR 0001). The
+  value `entered` for memory, graphics memory and GPU state, in exactly three shapes (a graphics
+  card of N GiB, none, unified memory). Unified memory is computed now: one pool, the memory minus
+  both reserves, in mode `gpu`, with no fallback onto the same memory; the memory line under the
+  ranking and the row notes call it `shared memory`. Tested with synthetic profiles only -- no such machine has been
+  measured yet, and no fit there is ever `measured`. A profile entered by hand is never the one a
+  measurement adopts: the takeover rule gives this machine a profile of its own, also with
+  `--same-machine`. Entering a machine in the dialog is a later step.
+- **Render document schema 2** (ADR 0003): `Fit.requests` in every row, `users` and
+  `requests_origin` in `docs/models.json` when the rendered scenario is the configuration's.
+- **`docs/adr/`**, the first three decision records, with its index.
 
 ### Changed
+
+- **`modelroom migrate` takes schema 2 on to schema 3, in place** (CONTRACTS.md, "Migration to
+  schema 2"). A schema-2 profile keeps its name and id, a schema-2 configuration its machines;
+  the originals are kept as `<file>.v2.bak`, next to the `.v1.bak` files of an earlier step. The
+  guided mode starts the same run when it finds a configuration of an earlier schema and says which backup it
+  kept, and `import-profile` writes a schema-2 configuration back as schema 3 even when it adds no
+  machine, keeping `modelroom.toml.v2.bak` next to its own `.bak`. Every other command reads schema 2 as schema 3 and leaves the file as it is -- also the
+  profile inside an export file an earlier version wrote.
+- **Shared results folders need updated readers.** Version 0.1.0 refuses a schema-3 profile or
+  configuration with `schema_version 3 is outside the accepted range` and exit `3`. Once one
+  machine of a shared folder has written schema 3, every machine that reads the folder needs this
+  version or a later one. An export file written by this version stays schema 1 but carries the
+  schema-3 profile inside, so a 0.1.0 `import-profile` fails on that profile with a validation
+  error (exit `3`), not with the version message.
 
 - **A size in a model name can be in millions and can carry an `E`** (`guided_models.parameters_from_name`):
   `SmolLM2-360M-Instruct` is 0.36B and `gemma-4-E4B-it` 4B. The list computes a fit for such names

@@ -26,6 +26,7 @@ from modelroom.config import (
     UpdatesConfig,
     load_config,
     normalize_config_v1,
+    normalize_config_v2,
     package_targets,
 )
 from modelroom.contracts import SchemaVersionError
@@ -353,7 +354,7 @@ def test_configuration_rejects_a_default_gguf_name_colliding_with_another_base_m
 
 def _minimal_two_owner_payload(packagers: list[str]) -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": CONFIG_SCHEMA_VERSION,
         "families": [
             {"name": "nova", "base_models": [{"hf_repo": "acme/Nova", "repo_aliases": []}]},
             {"name": "nova-other", "base_models": [{"hf_repo": "other/Nova", "repo_aliases": []}]},
@@ -441,9 +442,9 @@ def test_configuration_accepts_empty_machines():
     Configuration.model_validate(payload)
 
 
-@pytest.mark.parametrize("version", [1, 3])
-def test_configuration_model_accepts_only_schema_2(version):
-    # Schema 1 reaches the model only through `normalize_config_v1`; the model itself is v2.
+@pytest.mark.parametrize("version", [1, 2, 4])
+def test_configuration_model_accepts_only_the_current_schema(version):
+    # Schema 1 and 2 reach the model only through `normalize_config`; the model itself is v3.
     payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
     payload["schema_version"] = version
     with pytest.raises(ValidationError):
@@ -490,10 +491,11 @@ def test_machine_config_rejects_a_profile_that_is_not_a_profile_id():
 
 
 def test_defaults_updates_and_guided_have_their_documented_defaults():
-    config = Configuration.model_validate({"schema_version": 2, "paths": EXAMPLES["PathsConfig"]})
+    config = Configuration.model_validate({"schema_version": CONFIG_SCHEMA_VERSION, "paths": EXAMPLES["PathsConfig"]})
     assert (config.defaults.reserve_ram_gib, config.defaults.reserve_vram_gib) == (8.0, 1.0)
     assert config.updates.check is True
     assert config.guided.results is None
+    assert (config.guided.users, config.guided.requests, config.guided.requests_origin) == (None, 1, "default")
 
 
 # --- package_targets: one target set for the collision check (and later fetch/provenance) ----
@@ -552,7 +554,7 @@ def test_normalize_config_v1_is_lossless_and_leaves_its_input_unchanged():
     assert normalized["defaults"] == {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0}
     assert normalized["updates"] == {"check": True}
     assert "guided" not in normalized
-    Configuration.model_validate(normalized)
+    Configuration.model_validate(normalize_config_v2(normalized))
 
 
 def test_normalize_config_v1_keeps_schema_1s_rule_of_at_least_one_family():
@@ -562,9 +564,9 @@ def test_normalize_config_v1_keeps_schema_1s_rule_of_at_least_one_family():
         normalize_config_v1(legacy)
 
 
-def test_from_dict_reads_a_schema_1_dict_as_schema_2():
+def test_from_dict_reads_a_schema_1_dict_as_the_current_schema():
     config = Configuration.from_dict(_schema_1_payload())
-    assert config.schema_version == 2
+    assert config.schema_version == CONFIG_SCHEMA_VERSION
     assert config.machines["workstation"].profile is None
 
 
@@ -583,7 +585,7 @@ def test_shipped_example_file_is_written_as_schema_2():
 
 def test_schema_1_fixture_with_two_machines_still_loads():
     config = load_config(REPO / "tests" / "fixtures" / "config_v1" / "config.toml")
-    assert config.schema_version == 2
+    assert config.schema_version == CONFIG_SCHEMA_VERSION
     assert set(config.machines) == {"laptop", "server"}
     assert all(machine.profile is None for machine in config.machines.values())
 
@@ -699,7 +701,7 @@ def test_from_dict_rejects_a_relative_guided_results_path():
 
 def test_from_dict_wrong_schema_version_raises_schema_version_error_before_field_errors():
     payload = json.loads(json.dumps(EXAMPLES["Configuration"]))
-    payload["schema_version"] = 3
+    payload["schema_version"] = 4
     payload["publishers"] = []  # would also fail field validation, but must never get there
     with pytest.raises(SchemaVersionError):
         Configuration.from_dict(payload)
@@ -775,7 +777,7 @@ def test_load_config_wrong_schema_version_raises_schema_version_error_before_fie
     config_path = tmp_path / "modelroom.toml"
     config_path.write_text(
         """
-schema_version = 3
+schema_version = 4
 publishers = []
 
 [paths]
@@ -813,8 +815,8 @@ markdown = "docs/models.md"
 
 
 def test_config_schema_range_matches_snapshot_convention():
-    assert CONFIG_SCHEMA_RANGE == (1, 3)
-    assert CONFIG_SCHEMA_VERSION == 2
+    assert CONFIG_SCHEMA_RANGE == (1, 4)
+    assert CONFIG_SCHEMA_VERSION == 3
 
 
 # --- F7: paths.state must be confined to the config file's own directory tree --------------

@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .catalog import Age
 from .contracts import Fit, validate_hf_repo
 from .dialog import Asker, Choice, FileAsker, columns
-from .fit import fit_from_parameters, unknown_fit
+from .fit import fit_from_parameters, profile_memory, unknown_fit
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .screen import context_tokens_text
 from .guided_contracts import SearchHit
@@ -308,6 +308,7 @@ def model_choices(
     context: int,
     typed: str | None = None,
     configured_ollama: Mapping[str, str] | None = None,
+    requests: int = 1,
 ) -> list[ModelChoice]:
     """One `ModelChoice` per resolved base model of the search, best fit first.
 
@@ -320,6 +321,8 @@ def model_choices(
 
     `configured_ollama` is the `ollama_base:ollama_tag` pair the configuration holds per base
     model: where no hit names an Ollama name, the list shows that pair, which the fetch uses anyway.
+    `requests` is the configuration's `[guided].requests` (one by default), the number a later
+    `modelroom render` of the folder computes for.
     """
     grouped: dict[str, list[SearchHit]] = {}
     for hit in hits:
@@ -327,7 +330,9 @@ def model_choices(
             continue
         grouped.setdefault(str(hit.resolved_base_model), []).append(hit)
     configured = configured_ollama or {}
-    models = [_model_choice(base, repos, checked, context, configured.get(base)) for base, repos in grouped.items()]
+    models = [
+        _model_choice(base, repos, checked, context, configured.get(base), requests) for base, repos in grouped.items()
+    ]
     models.sort(key=_list_order)
     return models
 
@@ -348,7 +353,12 @@ def _list_order(model: ModelChoice) -> tuple:
 
 
 def _model_choice(
-    base_model: str, repos: list[SearchHit], checked: Checked, context: int, configured_ollama: str | None
+    base_model: str,
+    repos: list[SearchHit],
+    checked: Checked,
+    context: int,
+    configured_ollama: str | None,
+    requests: int = 1,
 ) -> ModelChoice:
     publisher, _slash, name = base_model.partition("/")
     parameters_b = next((hit.parameters_b for hit in repos if hit.parameters_b is not None), None)
@@ -369,7 +379,7 @@ def _model_choice(
         age=judged.age if judged is not None else UNKNOWN,
         release_basis=judged.release_basis if judged is not None else None,
         parameters_b=parameters_b,
-        fit=model_fit(parameters_b, checked, context),
+        fit=model_fit(parameters_b, checked, context, requests),
     )
 
 
@@ -388,21 +398,29 @@ def _accounts(repos: Sequence[SearchHit]) -> list[str]:
     return accounts
 
 
-def model_fit(parameters_b: float | None, checked: Checked, context: int) -> Fit:
+def model_fit(parameters_b: float | None, checked: Checked, context: int, requests: int = 1) -> Fit:
     """The fit of one model before any package of it has been fetched, or why there is none.
 
     The machine is the one the size scale is about as well (`guided_context.machine_checked`):
     the profile this folder binds this machine to, with the reserves of its own
     `[machines.<name>]`. Without such a profile, and without a parameter count, the fit is
-    `unknown` with that reason -- the list never shows a number nobody computed.
+    `unknown` with that reason -- the list never shows a number nobody computed. The memory is
+    read the way the ranking reads it (`fit.profile_memory`): a graphics card measured or entered
+    by hand counts, unified memory is one pool of its own.
     """
     if checked.profile is None or checked.machine_config is None:
         return unknown_fit(MACHINE_NOT_MEASURED)
     if parameters_b is None:
         return unknown_fit(PARAMETER_COUNT_UNKNOWN)
-    vram_gib = checked.profile.vram_gib if checked.profile.gpu_state == "measured" else 0.0
+    vram_gib, shared_memory = profile_memory(checked.profile)
     return fit_from_parameters(
-        parameters_b, vram_gib or 0.0, checked.profile.ram_physical_gib, checked.machine_config, context
+        parameters_b,
+        vram_gib,
+        checked.profile.ram_physical_gib,
+        checked.machine_config,
+        context,
+        requests=requests,
+        shared_memory=shared_memory,
     )
 
 

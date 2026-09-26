@@ -126,10 +126,21 @@ def write_pointer(path: Path, pointer: GuidedPointer) -> None:
 
 @dataclass(frozen=True)
 class KnownProfile:
-    """What the takeover rule needs to know about a profile file in the results folder."""
+    """What the takeover rule needs to know about a profile file in the results folder.
+
+    `origin` and `ram_physical_source` together tell a machine entered by hand (both `entered`)
+    from a `hardware --cpu-only` profile (`origin` `entered`, RAM measured by the OS), which
+    keeps its identity (decided 2026-09-25).
+    """
 
     profile_id: str
     os_fingerprint: str
+    origin: str
+    ram_physical_source: str
+
+    @property
+    def entered_by_hand(self) -> bool:
+        return self.origin == "entered" and self.ram_physical_source == "entered"
 
 
 @dataclass(frozen=True)
@@ -177,6 +188,11 @@ def resolve_profile_target(
     the very id the binding names, so a results folder someone emptied is measured into again
     (decided 2026-09-24). It changes nothing where the rule does not ask. The two switches are
     two answers to one question and are never both given.
+
+    A bound or configured profile entered by hand (`KnownProfile.entered_by_hand`) is asked
+    first, before its fingerprint -- which is `none` and so agrees with every machine -- and
+    with `same_machine` as well: this machine gets a `new` profile of its own, the entered file
+    stays (decided 2026-09-25).
     """
     if new_identity and same_machine:
         raise ValueError("new_identity and same_machine are two answers to one question; pass one of them")
@@ -184,9 +200,9 @@ def resolve_profile_target(
         raise ValueError(f"fresh_profile_id must be a new profile_id: {fresh_profile_id!r}")
     if new_identity:
         return ProfileTarget("new", fresh_profile_id, "new identity requested")
-    for candidate, action, source in (
-        (home_binding, "bound", "home binding"),
-        (config_profile, "adopt_config", "configuration"),
+    for candidate, action, source, word in (
+        (home_binding, "bound", "home binding", "bound"),
+        (config_profile, "adopt_config", "configuration", "configured"),
     ):
         if candidate is None:
             continue
@@ -196,6 +212,10 @@ def resolve_profile_target(
             if same_machine:
                 return ProfileTarget("rewrite", candidate, f"{missing}; measured again under the same id")
             return ProfileTarget("ask_clone", candidate, missing)
+        if known.entered_by_hand:
+            return ProfileTarget(
+                "new", fresh_profile_id, f"{word} profile was entered by hand; this machine is measured as its own profile"
+            )
         if not _fingerprints_agree(known, local_fingerprint):
             differs = f"profile from {source} has another os_fingerprint"
             if same_machine:

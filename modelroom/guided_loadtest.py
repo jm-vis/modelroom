@@ -78,7 +78,10 @@ def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path
         run.screen.note("no load test: this machine is not bound to a profile in this results folder")
         return None
     scan = scan_profiles(config.paths.hardware_dir)
-    known = {key: KnownProfile(key, profile.os_fingerprint) for key, profile in scan.profiles.items()}
+    known = {
+        key: KnownProfile(key, profile.os_fingerprint, profile.origin, profile.ram_physical_source)
+        for key, profile in scan.profiles.items()
+    }
     identity = read_os_identity(run.probes.platform, run.probes.runner, run.probes.read_text)
     local = os_fingerprint(identity.raw_id) if identity.raw_id else "none"
     # `resolve_profile_target` refuses a `fresh_profile_id` that is already a profile; any unused

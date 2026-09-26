@@ -245,12 +245,16 @@ names, paths or people. Written 2026-09-23.
   `server`), paths relative to its own folder; `tests/test_migrate.py` copies it next to
   `profiles_v1/` into a temporary folder as `modelroom.toml`. The fixture is not named
   `modelroom.toml` itself: the release gate treats a file of that name as an operator's
-  configuration, which never ships. `config_v2/config.toml` is the schema-2 counterpart for
-  `tests/test_importer.py`.
+  configuration, which never ships. `config_v2/config.toml` is the schema-2 counterpart; it stays
+  as the evidence of the step to schema 3 (`tests/test_migrate_v3.py`, `tests/test_config_v3.py`).
+  `config_v3/config.toml` holds the same values as schema 3 for `tests/test_importer.py` (written
+  2026-09-25).
 - `catalog_excerpt.toml` -- a catalog in the shipped format with one `latest`, one `legacy`
   (with successor) and one `unknown` model.
 - `export_v1.json` -- an export object: the `HardwareProfile` example plus two measurements,
-  one protocol `v1` and one migrated (`protocol: none`) from the laptop fixture.
+  one protocol `v1` and one migrated (`protocol: none`) from the laptop fixture. Its profile is
+  schema 2, as version 0.1.0 wrote it, and stays so: it is the evidence that an export of an
+  earlier version still imports (the profile is read as schema 3).
 - `measurement_v2_invalid.json` -- a protocol-v1 measurement stored as `invalid` (run 2 ended
   with `done_reason: stop`), with its reason.
 

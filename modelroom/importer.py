@@ -31,6 +31,7 @@ from .config import (
     Configuration,
     config_from_text,
     load_config,
+    normalize_config,
     read_config_schema_version,
 )
 from .contracts import PROFILE_ID_RE, HardwareSnapshot, SchemaVersionError, validate_machine_name
@@ -44,7 +45,7 @@ from .measurements import (
     read_measurements,
     write_measurement,
 )
-from .migrate import NOTHING_TO_DO  # one wording for "nothing changed", defined once
+from .migrate import NOTHING_TO_DO, backup_suffix  # one wording and one backup name, defined once
 from .profile import HardwareProfile, read_profile_document
 from .state import LockHandle, acquire_lock, atomic_write_json, atomic_write_text, release_lock
 from .toml_writer import dump_toml
@@ -56,7 +57,7 @@ NOTHING_WRITTEN = "nothing written"
 # The one backup of a hand-written configuration: written before the first rewrite, never again.
 CONFIG_BACKUP_SUFFIX = ".bak"
 
-_CONFIG_HEADER = "modelroom configuration, schema 2 (rewritten by `modelroom import-profile`)."
+_CONFIG_HEADER = f"modelroom configuration, schema {CONFIG_SCHEMA_VERSION} (rewritten by `modelroom import-profile`)."
 _MACHINE_UNSAFE_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -240,6 +241,8 @@ class ImportPlan:
     # The backup to write before the configuration is rewritten; `None` when one is already
     # there (it is never overwritten) or when the configuration stays as it is.
     config_backup: Path | None = None
+    # The `.v2.bak` of a configuration this run takes on to the current schema; `None` otherwise.
+    schema_backup: Path | None = None
     lines: list[str] = field(default_factory=list)
 
     def writes_nothing(self) -> bool:
@@ -279,12 +282,16 @@ def import_profile(config_path: Path, export_path: Path, now: datetime) -> list[
 
 
 def _read_raw_config(config_path: Path) -> dict:
-    """The configuration as the raw table the rewrite starts from; schema 1 needs `migrate`."""
+    """The configuration as the raw table the rewrite starts from; schema 1 needs `migrate`.
+
+    Schema 2 is read as it is stored: `_plan_machine` writes it back as schema 3, even when it
+    adds no machine (decided 2026-09-25).
+    """
     try:
         raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise ConfigError(f"{config_path}: cannot read config file: {exc}") from exc
-    if read_config_schema_version(raw, str(config_path)) != CONFIG_SCHEMA_VERSION:
+    if read_config_schema_version(raw, str(config_path)) == 1:
         raise PrerequisiteError(f"{config_path}: is still a schema-1 configuration; {MIGRATE_HINT}")
     return raw
 
@@ -311,7 +318,33 @@ def plan_import(config: Configuration, config_path: Path, raw: dict, export: Exp
     if plan.config_text is not None:
         plan.config_backup, line = _plan_config_backup(config_path)
         plan.lines.append(line)
+        plan.schema_backup, schema_line = _plan_schema_backup(config_path, raw)
+        plan.lines += [schema_line] if schema_line else []
     return plan
+
+
+def _plan_schema_backup(config_path: Path, raw: dict) -> tuple[Path | None, str | None]:
+    """The backup of a configuration this run takes on to the current schema, and its line.
+
+    Named after the version it leaves, as `modelroom migrate` names it (`.v2.bak`), and kept
+    apart from the one `.bak` above, which is never overwritten and may hold an earlier state:
+    the bytes of the schema-2 file are kept in every case (decided 2026-09-25). A backup of that
+    name with other content is a conflict; nothing is written.
+    """
+    version = raw.get("schema_version")
+    if version == CONFIG_SCHEMA_VERSION:
+        return None, None
+    backup = config_path.with_name(config_path.name + backup_suffix(version))
+    line = f"note: the configuration is written as schema {CONFIG_SCHEMA_VERSION}; schema {version} kept as {backup.name}"
+    if not backup.exists():
+        return backup, line
+    try:
+        same = backup.read_bytes() == config_path.read_bytes()
+    except OSError as exc:
+        raise ImportConflictError(f"{backup}: cannot read existing backup ({exc})\n{NOTHING_WRITTEN}") from exc
+    if not same:
+        raise ImportConflictError(f"{backup}: backup exists with other content; move it away and run again\n{NOTHING_WRITTEN}")
+    return None, line
 
 
 def _plan_config_backup(config_path: Path) -> tuple[Path | None, str]:
@@ -390,21 +423,28 @@ def _plan_machine(
 ) -> tuple[str | None, str | None]:
     """The `[machines.<name>]` entry an imported machine gets, and the configuration text for it.
 
-    `(None, None)` when a machine already carries this `profile`. The rewritten file is
-    validated exactly as `load_config` would before it is ever written; it carries no comments
-    (the TOML writer emits data, not comments), so a hand-written remark is lost on the first
-    import -- named in the report line and in CONTRACTS.md.
+    `(None, None)` when a machine already carries this `profile` and the file is on the current
+    schema; a file of an earlier schema is rewritten all the same, with no machine added. The
+    rewritten file is validated exactly as `load_config` would before it is ever written; it
+    carries no comments (the TOML writer emits data, not comments), so a hand-written remark is
+    lost on the first import -- named in the report line and in CONTRACTS.md.
     """
-    if any(machine.profile == profile.profile_id for machine in config.machines.values()):
+    known = any(machine.profile == profile.profile_id for machine in config.machines.values())
+    if known and raw.get("schema_version") == CONFIG_SCHEMA_VERSION:
         return None, None
-    name = machine_name_for(profile.display_name, profile.profile_id, set(config.machines))
-    data = copy.deepcopy(raw)
-    data.setdefault("machines", {})[name] = {
-        "reserve_ram_gib": config.defaults.reserve_ram_gib,
-        "reserve_vram_gib": config.defaults.reserve_vram_gib,
-        "writer": False,
-        "profile": profile.profile_id,
-    }
+    try:
+        data = copy.deepcopy(normalize_config(raw))
+    except ValueError as exc:
+        raise ConfigError(f"{config_path}: invalid configuration: {exc}") from exc
+    name = None
+    if not known:
+        name = machine_name_for(profile.display_name, profile.profile_id, set(config.machines))
+        data.setdefault("machines", {})[name] = {
+            "reserve_ram_gib": config.defaults.reserve_ram_gib,
+            "reserve_vram_gib": config.defaults.reserve_vram_gib,
+            "writer": False,
+            "profile": profile.profile_id,
+        }
     try:
         text = dump_toml(data, header=_CONFIG_HEADER)
     except TypeError as exc:
@@ -486,10 +526,11 @@ def _execute(plan: ImportPlan, config: Configuration, config_path: Path, handle:
         )
     for record in plan.measurements:
         write_measurement(config.paths.state, record, handle)
-    if plan.config_backup is not None:
-        # The file as it stands, byte for byte: `newline="\n"` leaves an existing "\r\n" alone,
-        # and the configuration was already read as UTF-8 by `load_config` (same as `migrate`).
-        atomic_write_text(plan.config_backup, config_path.read_bytes().decode("utf-8"))
+    for backup in (plan.config_backup, plan.schema_backup):
+        if backup is not None:
+            # The file as it stands, byte for byte: `newline="\n"` leaves an existing "\r\n" alone,
+            # and the configuration was already read as UTF-8 by `load_config` (same as `migrate`).
+            atomic_write_text(backup, config_path.read_bytes().decode("utf-8"))
     if plan.config_text is not None:
         atomic_write_text(config_path, plan.config_text)
     return plan.lines if not plan.writes_nothing() else [*plan.lines, NOTHING_TO_DO]

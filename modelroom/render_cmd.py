@@ -44,22 +44,38 @@ from .views import document_markdown, document_terminal
 
 
 def scenario_from_config(config: Configuration) -> Scenario:
-    """The context `render` computes for when no caller passes one: `[guided].context`, else 8192.
+    """The scenario `render` computes for when no caller passes one: `[guided]`, else the defaults.
 
     A guided run keeps the context its ranking was computed for in the configuration, so a later
     `modelroom render --config` of that folder shows the same ranking and leaves a measurement of
     that context in measured group 0. A kept context is `entered`, 8192 included: it is what
     that run chose, and the dialog names it so -- `default` is only what a configuration no
     guided run has chosen a context in gets, through `default_scenario()`, exactly as before.
+    `[guided].requests` is read whether a context is kept or not (decided 2026-09-25).
     """
     if config.guided.context is None:
-        return default_scenario()
+        return default_scenario().model_copy(update={"requests": config.guided.requests})
     return Scenario(
         context_requested=config.guided.context,
         context_origin="entered",
         kv_type="f16",
         kv_type_assumed=True,
-        requests=1,
+        requests=config.guided.requests,
+    )
+
+
+def with_requests_origin(document: RenderDocument, config: Configuration) -> RenderDocument:
+    """`document` with `users` and `requests_origin` from `[guided]`, when that is its scenario's.
+
+    The render computes for the scenario of the configuration unless a caller passes one; a passed
+    scenario of the same requests is still that configuration's number (the guided mode always
+    passes one). A passed scenario of other requests leaves both fields empty: the configuration
+    says nothing about where that number came from.
+    """
+    if document.scenario.requests != config.guided.requests:
+        return document
+    return RenderDocument.model_validate(
+        {**document.model_dump(), "users": config.guided.users, "requests_origin": config.guided.requests_origin}
     )
 
 
@@ -160,7 +176,7 @@ def _render_locked(
     scan = scan_profiles(config.paths.hardware_dir)
     profiles = _machine_profiles(config, scan)
     measurements, notes = _measurements_of(config, profiles)
-    document = build_render_document(config, snapshot, profiles, measurements, scenario, rendered_at, rating)
+    document = with_requests_origin(build_render_document(config, snapshot, profiles, measurements, scenario, rendered_at, rating), config)
     # Each file is replaced atomically, but two files cannot be replaced as one: between the two
     # writes a reader can see the new JSON view next to the old Markdown one. The JSON view goes
     # first on purpose -- the Markdown header is the promise "this render happened", and a later

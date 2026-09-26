@@ -429,20 +429,24 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
     needs each statement once, with the ranks it is about, and since 2026-09-25 each on a line of
     its own under the `memory` label -- two statements joined by a `·` read as one. The numbers come
     from the fields of `Fit`; `pool_gib` of a graphics-memory fit is what is left there after the
-    reserve.
+    reserve. Unified memory computes in mode `gpu` too, but it is no graphics memory of its own:
+    those rows say `shared memory` (decided 2026-09-25).
     """
     by_mode: dict[str, list[RankedEntry]] = {}
     for entry in block.ranked:
         by_mode.setdefault(str(entry.fit.mode), []).append(entry)
+    shared = block.profile is not None and block.profile.gpu_state == "unified_memory"
     pieces = []
     for mode in _POOL_ORDER:
         entries = by_mode.get(mode)
         if not entries:
             continue
         plural, singular = _POOL_WORDS[mode]
+        if shared and mode == "gpu":
+            plural, singular = "fit into shared memory", "fits into shared memory"
         text = f"{ranks_text([entry.rank for entry in entries], dash)} {singular if len(entries) == 1 else plural}"
         if mode == "gpu":
-            text += f", {entries[0].fit.pool_gib:.1f} GB free after the reserve"
+            text += f", {entries[0].fit.pool_gib:.1f} GB free after {'both reserves' if shared else 'the reserve'}"
         pieces.append(text)
     return pieces
 

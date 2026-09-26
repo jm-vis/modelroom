@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
 
     migrate_parser = subparsers.add_parser(
-        "migrate", help="Move schema-1 hardware profiles and configuration to schema 2 (backups are kept)."
+        "migrate", help="Move hardware profiles and configuration of an earlier schema to the current one (backups are kept)."
     )
     migrate_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
 
@@ -464,7 +464,7 @@ def _hardware_locked(
 
     raw_id = measured.identity.raw_id
     machine_config = config.machines.get(machine) if machine is not None else None
-    known = {key: KnownProfile(key, profile.os_fingerprint) for key, profile in profiles.items()}
+    known = {key: KnownProfile(key, p.os_fingerprint, p.origin, p.ram_physical_source) for key, p in profiles.items()}
     fresh_profile_id = _fresh_profile_id(probes, _taken_profile_ids(config, profiles))
     try:
         pointer = read_pointer(pointer_file)
