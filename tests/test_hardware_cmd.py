@@ -609,6 +609,60 @@ def test_a_fresh_id_never_lands_on_a_file_that_is_already_there(tmp_path: Path):
     assert (config.paths.hardware_dir / f"{ID_ONE}.json").is_file()
 
 
+def test_a_file_name_in_another_letter_case_counts_as_taken_for_hardware_too(tmp_path: Path):
+    """On a file system that ignores letter case, `AAAA….json` and `aaaa….json` are one file.
+
+    The rule of the guided mode's machine entered by hand (`guided_entered.taken_profile_ids`),
+    one function for both writers.
+    """
+    config = _config(tmp_path)
+    upper = config.paths.hardware_dir / f"{'A' * 16}.json"
+    atomic_write_json(upper, {**EXAMPLES["HardwareSnapshot"], "machine": "a" * 16})
+    before = upper.read_bytes()
+
+    assert _run(config, tmp_path, probes=_probes(ids=["a" * 16, ID_ONE])) == 0
+
+    assert upper.read_bytes() == before
+    assert (config.paths.hardware_dir / f"{ID_ONE}.json").is_file()
+    assert _existing_names(config) == sorted([f"{'A' * 16}.json", f"{ID_ONE}.json"])
+
+
+def test_the_profile_id_a_file_carries_counts_as_taken_whatever_the_file_is_called(tmp_path: Path):
+    """`hardware` reads a profile by the `profile_id` it carries, the scan of the guided mode sets a
+    file whose name differs aside: the one rule counts the id from the file itself, without letter
+    case, and a file that does not read as one counts by its name (Codex round 1)."""
+    from modelroom.guided_entered import taken_profile_ids
+
+    hardware = tmp_path / "hardware"
+    hardware.mkdir()
+    (hardware / "Workstation.json").write_text('{"profile_id": "ABCD"}', encoding="utf-8")
+    (hardware / "Broken.json").write_text("{", encoding="utf-8")
+    (hardware / "List.json").write_text("[1]", encoding="utf-8")
+    (hardware / "Number.json").write_text('{"profile_id": 7}', encoding="utf-8")
+
+    assert taken_profile_ids(hardware) == {"workstation", "abcd", "broken", "list", "number"}
+    assert taken_profile_ids(tmp_path / "absent") == set()
+
+
+def test_hardware_never_takes_the_profile_id_a_file_of_another_name_carries(tmp_path: Path):
+    """A profile file renamed by hand still carries its `profile_id`; a fresh id never repeats it."""
+    from modelroom.guided_entered import entered_profile
+
+    config = _config(tmp_path)
+    renamed = config.paths.hardware_dir / f"{'a' * 16}.json"
+    atomic_write_json(renamed, entered_profile("old", 16.0, "unified", 0.0, "b" * 16, RUN1).model_dump(mode="json"))
+    before = renamed.read_bytes()
+
+    assert _run(config, tmp_path, probes=_probes(ids=["b" * 16, ID_ONE])) == 0
+
+    assert renamed.read_bytes() == before
+    assert _existing_names(config) == sorted([f"{'a' * 16}.json", f"{ID_ONE}.json"])
+
+
+def _existing_names(config: Configuration) -> list[str]:
+    return sorted(path.name for path in config.paths.hardware_dir.iterdir())
+
+
 def test_a_profile_file_with_an_over_long_number_is_exit_3_not_a_crash(tmp_path: Path, capsys):
     """`json.loads` raises a plain `ValueError`, not a `JSONDecodeError`, for an integer above
     Python's int/str conversion limit -- it must still be an ordinary unreadable file."""

@@ -18,7 +18,8 @@ from .guided_context import LEVELS
 from .intro import LABEL_COLUMN, STEP_COUNT, Fact, glyphs, label_line
 from .measurements import Scenario
 from .render import format_header_line
-from .scenario_text import document_scenario, load_hint, scenario_line, scenario_words, unused_measurements
+from .scenario_text import document_scenario, load_hint, never_measured, never_measured_of, scenario_line
+from .scenario_text import scenario_words, unused_measurements
 from .screen import (
     JOIN_WIDTH,
     MEASURE_HINT,
@@ -450,13 +451,14 @@ def _speed_pieces(block: MachineRanking, dash: str) -> list[str]:
     One piece per measured row (`#3 measured 41.1 tok/s`), in the ranking's own order, then the rows
     whose measurement did not count for its requests alone (`#3 measured with 1 request, ranking
     assumes 3`). Only where neither is there does it say nothing was measured and what to do: a
-    row that names its reason was measured, and to be told to measure it would be wrong.
+    row that names its reason was measured, and to be told to measure it would be wrong -- as a
+    machine entered by hand would be (`never_measured`).
     """
     if not block.ranked:
         return []
     pieces = [f"#{entry.rank} measured {entry.speed_tps:.1f} tok/s" for entry in block.ranked if entry.speed_tps is not None]
     unused = unused_measurements(block, dash)
-    return pieces + ([unused] if unused else []) or [_NO_SPEED_YET, MEASURE_HINT]
+    return pieces + ([unused] if unused else []) or [_NO_SPEED_YET, never_measured(block) or MEASURE_HINT]
 
 
 def _labeled_rows(label: str, texts: list[str]) -> list[Line]:
@@ -571,17 +573,18 @@ def context_fact(context: int) -> Fact:
 
 
 def _card_block(document: RenderDocument, machine: str | None) -> MachineRanking | None:
-    """The machine the card counts: the one the run is on, else the first that has a ranking.
+    """The machine the card counts: the one the run is on where it has a ranking, else the first that has one.
 
     One machine, not every one: a package that fits two machines is one package and two rows, and a
     sum over the machines would count it twice while the `models` row of the same card counts the
-    packages of the snapshot once (second-model round, 2026-09-24).
+    packages of the snapshot once (second-model round, 2026-09-24). A run on a machine without a
+    ranking counted `0 packages` next to a table of 25 (live probe, 2026-09-26).
     """
     blocks = document.machines
-    return next(
-        (block for block in blocks if block.machine == machine),
-        next((block for block in blocks if block.status == "ranked"), blocks[0] if blocks else None),
-    )
+    own = next((block for block in blocks if block.machine == machine), None)
+    if own is not None and own.status == "ranked":
+        return own
+    return next((block for block in blocks if block.status == "ranked"), own or (blocks[0] if blocks else None))
 
 
 def _measured_speeds(block: MachineRanking | None) -> tuple[int, tuple[str, float] | None]:
@@ -627,13 +630,12 @@ def empty_card(config, *, folder: Path, scenario: Scenario, now: datetime) -> li
 
     scan = scan_profiles(config.paths.hardware_dir)
     facts = [Fact("folder", str(folder), "")]
-    for name, machine in config.machines.items():
-        found = machine_profile(name, machine, scan)
-        facts.append(machine_fact(found.label, found.profile, now, found.reason or found.status))
+    found = [machine_profile(name, machine, scan) for name, machine in config.machines.items()]
+    facts += [machine_fact(entry.label, entry.profile, now, entry.reason or entry.status) for entry in found]
     snapshot = snapshot_facts(config)
     facts.append(models_fact(snapshot.model_names, snapshot.packages, snapshot.accounts))
     facts.append(context_fact(scenario.context_requested))
-    facts.append(speed_fact(0, None))
+    facts.append(speed_fact(0, None, never_measured_of(entry.profile for entry in found)))
     facts.append(Fact("result", _DASH, ""))
     return facts
 
@@ -670,7 +672,7 @@ def result_card(
     facts += [Fact("" if index else "load", row, "") for index, row in enumerate(load_hint(document, 86))]
     # 65: what is left of 100 columns behind the screen's leading blank, the card's label and value
     # columns and the two gaps (`screen.plain`, `intro.fact_line`).
-    facts.append(speed_fact(measured, fastest, unused_measurements(block, glyphs().skip, 65)))
+    facts.append(speed_fact(measured, fastest, unused_measurements(block, glyphs().skip, 65) or never_measured(block)))
     facts.append(
         result_fact(
             relative_path(markdown, folder),

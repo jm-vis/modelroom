@@ -157,6 +157,14 @@ All notable changes to this project are documented in this file. The format foll
   written back is unchanged.
 - **One repository is counted without `of them`**: `1 repository, a model you can pick from`, or
   `not a model you can pick from` (`modelroom/screen.py`).
+- **The scenario sentence says a level of the scale as the scale does** (`scenario_text.context_words`;
+  CONTRACTS.md, "Render"): `context 32k (entered), KV cache f16 (assumed), 1 request (from 1 user)`
+  in the Markdown head and the card's `context` row, where it said `32768`. A context that is no
+  level stays a number (`context 12000 (entered)`); `docs/models.json` keeps the number.
+- **A machine entered by hand is never told to be measured** (`scenario_text.never_measured`;
+  CONTRACTS.md, "Guided mode"): under its table and on the card the advice `say Yes in step 4 to
+  measure an installed package` gives way to `a machine entered by hand is never measured`; so
+  does the card of a run that ranked nothing, where every profile the folder holds was entered.
 
 ### Fixed
 
@@ -169,6 +177,20 @@ All notable changes to this project are documented in this file. The format foll
   `ConfigChangedError` and reads again -- also when Windows refuses its read of the file the other
   run is renaming into place at that moment. The file mode stays the one of any other written file,
   and the temporary file goes on every early end, Ctrl-C included.
+- **The card counts a machine that has a ranking** (`views._card_block`; CONTRACTS.md, "Guided
+  mode", the card). A run on a machine without a profile next to a machine entered by hand said
+  `0 packages ranked` above a table of 25; the card now counts the machine of the run where it has
+  a ranking, else the first machine that has one.
+- **`hardware` no longer lands on a profile file in another letter case** (`taken_profile_ids` and
+  `fresh_profile_id` in `modelroom/guided_entered.py`, the one rule of both writers of a new
+  profile). On a file system that ignores letter case, a fresh `abcd…` replaced an existing `ABCD….json`; file
+  names and the `profile_id` every file carries, whatever it is called, are now compared without
+  letter case, and the folder is looked at once more right before the id is handed out.
+- **A binding by hand to a profile entered by hand is no measurement of this machine**
+  (`modelroom/guided.py`; CONTRACTS.md, "Guided mode", step 1). The machine list said `this machine
+  (measure again, last measured <date>)` and the first real measurement `measured again:`; the
+  entry is now `this machine (measure now, the bound profile was entered by hand)`, marked, and the
+  note `measured:`.
 
 ## [0.1.0] - 2026-09-25
 

@@ -619,7 +619,7 @@ def test_render_ranks_the_packages_of_a_schema_two_profile(tmp_path: Path):
 
     text = (tmp_path / "models.md").read_text(encoding="utf-8")
     assert "## Ranking: workstation" in text
-    assert "Scenario: context 8192 (default), KV cache f16 (assumed), 1 request" in text
+    assert "Scenario: context 8k (default), KV cache f16 (assumed), 1 request" in text
     assert "Ranking rule: fit class (perfect, good, marginal)" in text
 
 

@@ -383,7 +383,7 @@ def test_criterion_three_names_a_screen_that_says_nothing_about_the_search():
 
 GOOD_DOCUMENT = "\n".join(
     [
-        "Scenario: context 8192 (entered), KV cache f16 (assumed), 1 request",
+        "Scenario: context 8k (entered), KV cache f16 (assumed), 1 request",
         "Ranking rule: fit class (perfect, good, marginal), then measured group",
         "## Ranking: workstation",
     ]
@@ -487,7 +487,7 @@ def test_criterion_five_names_a_package_that_is_not_ranked_with_its_speed(row):
 BEFORE = {"machines": {"workstation": {"profile": "3f9a0c21d4e6b870"}}, "guided": {"results": str(RESULTS)}}
 ANSWERED_CONTEXT = st.ANSWERED_CONTEXT
 KEPT = {"machines": BEFORE["machines"], "guided": {"results": str(RESULTS), "context": ANSWERED_CONTEXT}}
-GOOD_HEADER = f"Scenario: context {ANSWERED_CONTEXT} (entered), KV cache f16 (assumed), 1 request"
+GOOD_HEADER = "Scenario: context 8k (entered), KV cache f16 (assumed), 1 request"
 
 
 def test_criterion_six_passes_when_nothing_changed():
@@ -544,7 +544,7 @@ def test_criterion_six_names_a_configuration_that_starts_the_question_at_another
 
 
 def test_criterion_six_names_a_standalone_render_with_another_context():
-    header = "Scenario: context 4096 (entered), KV cache f16 (assumed), 1 request"
+    header = "Scenario: context 4k (entered), KV cache f16 (assumed), 1 request"
     problems = st.stored_context_problems(KEPT, ANSWERED_CONTEXT, header, _row())
     assert any("expected context" in problem for problem in problems)
 

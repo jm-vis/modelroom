@@ -43,7 +43,7 @@
  machine   workstation             12 GB graphics, 128 GB memory, measured today
  machine   studio (entered)        shared memory 32 GB, entered
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
- context   32768 (entered), KV cache f16 (assumed), 1 request (from 1 user)
+ context   32k (entered), KV cache f16 (assumed), 1 request (from 1 user)
  speed     not measured            say Yes in step 4 to measure an installed package
  result    docs\models.md          22 packages ranked, 2 too tight
 
@@ -84,6 +84,6 @@
  shown     10 of 23 packages · 1 too tight (unsloth BF16)
  memory    #1–10 fit into shared memory, 23.0 GB free after both reserves
  basis     #2–10 computed from the package size, not its architecture
- speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
+ speed     nothing measured in the rows shown · a machine entered by hand is never measured
 
  ✓ Results         docs\models.md

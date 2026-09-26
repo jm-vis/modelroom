@@ -16,12 +16,13 @@ would. CONTRACTS.md, "Guided mode", step 1.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from pydantic import ValidationError
 
@@ -160,23 +161,49 @@ def entered_class(profile: HardwareProfile) -> str:
 
 
 def taken_profile_ids(hardware_dir: Path) -> set[str]:
-    """Every name a new profile must not take: each file name in the folder, in any letter case.
+    """Every name a new profile must not take: each file name in the folder and each `profile_id` a file carries.
 
     A schema-1 file (`<machine>.json`) and a file that does not read carry no `profile_id` a scan
     could see, and `atomic_write_json` would replace either; so the file names count on their
-    own (the rule `hardware` follows, `cli._taken_profile_ids`). Compared without letter case: on
-    a file system that ignores it, `ABCD….json` and `abcd….json` are one file.
+    own. A file renamed by hand still carries its `profile_id`, which `hardware` reads it by, so
+    that counts too, whatever the file is called. Compared without letter case: on a file system
+    that ignores it, `ABCD….json` and `abcd….json` are one file. One rule for both writers of a
+    new profile, `hardware` and the machine entered by hand (decided 2026-09-26).
     """
-    return {path.stem.casefold() for path in hardware_dir.glob("*.json")} if hardware_dir.is_dir() else set()
+    paths = list(hardware_dir.glob("*.json")) if hardware_dir.is_dir() else []
+    names = [path.stem for path in paths] + [_stored_profile_id(path) for path in paths]
+    return {name.casefold() for name in names if name is not None}
 
 
-def _fresh_profile_id(run: "GuidedRun", hardware_dir: Path) -> str:
+def _stored_profile_id(path: Path) -> str | None:
+    """The `profile_id` a file carries, whatever its name; `None` for a file that does not read as one."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    profile_id = data.get("profile_id") if isinstance(data, dict) else None
+    return profile_id if isinstance(profile_id, str) else None
+
+
+def fresh_profile_id(new_id: Callable[[], str], hardware_dir: Path) -> str:
+    """A `profile_id` that is none of `taken_profile_ids` and names no file of the folder.
+
+    `os.path.lexists` looks at the folder once more right before the id is handed out; a link that
+    points nowhere is a name as well. An id source that repeats itself is a `ValueError`.
+    """
     taken = taken_profile_ids(hardware_dir)
     for _ in range(_FRESH_ID_ATTEMPTS):
-        candidate = run.probes.new_id()
+        candidate = new_id()
         if candidate.casefold() not in taken and not os.path.lexists(hardware_dir / f"{candidate}.json"):
             return candidate
-    raise _guided_error(f"no unused profile_id after {_FRESH_ID_ATTEMPTS} attempts; the id source repeats itself")
+    raise ValueError(f"no unused profile_id after {_FRESH_ID_ATTEMPTS} attempts; the id source repeats itself")
+
+
+def _new_profile_id(run: "GuidedRun", hardware_dir: Path) -> str:
+    try:
+        return fresh_profile_id(run.probes.new_id, hardware_dir)
+    except ValueError as exc:
+        raise _guided_error(str(exc)) from exc
 
 
 def _built(machine: EnteredMachine, profile_id: str, now: datetime) -> HardwareProfile:
@@ -213,7 +240,7 @@ def _write_profile(run: "GuidedRun", config: Configuration, machine: EnteredMach
         run.failed(f"nothing entered: {config.paths.lock_file}: the lock could not be taken ({exc})")
         return None
     try:
-        profile = _built(machine, _fresh_profile_id(run, hardware_dir), run.now)
+        profile = _built(machine, _new_profile_id(run, hardware_dir), run.now)
         path = hardware_dir / f"{profile.profile_id}.json"
         try:
             atomic_write_json(path, profile.model_dump(mode="json"))

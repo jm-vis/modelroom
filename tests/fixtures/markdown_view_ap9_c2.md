@@ -5,7 +5,7 @@
 Snapshot run at: 2026-09-22T09:00:00+00:00
 Rendered at: 2026-09-22T10:00:00+00:00
 Base models / packages: 1 / 2
-Scenario: context 8192 (default), KV cache f16 (assumed), 1 request
+Scenario: context 8k (default), KV cache f16 (assumed), 1 request
 Ranking rule: fit class (perfect, good, marginal), then measured group (valid comparable measurement first), then measured speed (faster first), then quantization, then larger weights, then package identity
 
 ## Areas
