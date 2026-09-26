@@ -987,20 +987,23 @@ def test_rows_without_any_measurement_still_say_so_and_what_to_do():
     assert card.note == MEASURE_HINT
 
 
-def test_a_long_list_of_unused_measurements_keeps_the_card_row_within_a_hundred_columns():
-    """Six scattered ranks at 1024 requests would make the card's speed note 101 columns wide; the
-    card then counts the rows instead of naming them -- the table notes below still name them."""
+@pytest.mark.parametrize("requests", [100, 1024])
+def test_a_long_list_of_unused_measurements_keeps_the_card_row_within_a_hundred_columns(requests):
+    """Six scattered ranks at 100 or 1024 requests would make the card's speed row 101 columns wide
+    as the screen prints it (its leading blank counted); the card then counts the rows instead of
+    naming them -- the table notes below still name them."""
     from modelroom.intro import fact_line
+    from modelroom.screen import plain
 
     package = _hf_package(file_digest="sha256:" + "c" * 64)
     document = _for_requests(3, 25, "from_users", [package], {PROFILE_ID: [_measurement(package)]})
     entry = document.machines[0].ranked[0]
-    note = entry.note.model_copy(update={"text": "measured with 1 request, ranking assumes 1024"})
+    note = entry.note.model_copy(update={"text": f"measured with 1 request, ranking assumes {requests}"})
     rows = [entry.model_copy(update={"rank": rank, "note": note}) for rank in (1, 2, 4, 6, 8, 10)]
     block = document.machines[0].model_copy(update={"ranked": rows})
     scattered = document.model_copy(update={"machines": [block]})
 
     speed = next(fact for fact in _card_facts(scattered) if fact.label == "speed")
-    assert len("".join(text for _style, text in fact_line(speed))) <= 100
-    assert speed.note == "6 rows measured with 1 request, ranking assumes 1024"
-    assert "#1–2, #4, #6, #8, #10 measured with 1 request, ranking assumes 1024" in document_terminal(scattered)
+    assert len(plain(fact_line(speed))) <= 100
+    assert speed.note == f"6 rows measured with 1 request, ranking assumes {requests}"
+    assert f"#1–2, #4, #6, #8, #10 measured with 1 request, ranking assumes {requests}" in document_terminal(scattered)

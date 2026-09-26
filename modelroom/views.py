@@ -667,8 +667,9 @@ def result_card(
     # beyond 8 requests wrapped under it, so no line of the run is wider than 100 columns.
     facts.append(Fact("context", scenario_words(document.scenario, document.users, document.requests_origin), ""))
     facts += [Fact("" if index else "load", row, "") for index, row in enumerate(load_hint(document, 86))]
-    # 66: what is left of 100 columns behind the card's label and value columns.
-    facts.append(speed_fact(measured, fastest, unused_measurements(block, glyphs().skip, 66)))
+    # 65: what is left of 100 columns behind the screen's leading blank, the card's label and value
+    # columns and the two gaps (`screen.plain`, `intro.fact_line`).
+    facts.append(speed_fact(measured, fastest, unused_measurements(block, glyphs().skip, 65)))
     facts.append(
         result_fact(
             relative_path(markdown, folder),
