@@ -51,7 +51,7 @@ def test_the_document_round_trips_through_json_with_every_new_field():
         scenario={**EXAMPLES["RenderDocument"]["scenario"], "requests": 3}, users=25, requests_origin="from_users"
     )
     for block in payload["machines"]:
-        for entry in [*block["ranked"], *block["not_covered"], *block["too_tight"]]:
+        for entry in [*block["ranked"], *block["not_covered"], *block["no_fit"]]:
             entry["fit"]["requests"] = 3
     document = RenderDocument.model_validate(payload)
     again = RenderDocument.model_validate(json.loads(json.dumps(document.model_dump(mode="json"))))
@@ -167,7 +167,7 @@ def test_the_pool_line_still_says_graphics_memory_for_a_graphics_card():
     assert any("graphics memory" in piece for piece in _pool_pieces(block, "-"))
 
 
-def test_the_too_tight_note_names_both_reserves_for_unified_memory():
+def test_the_no_fit_note_names_both_reserves_for_unified_memory():
     fit = Fit.model_validate({**EXAMPLES["RankedEntry"]["fit"], "fit_class": "no_fit"})
     item = SetAside(package=None, fit=fit, reason="does not fit this machine")  # type: ignore[arg-type]
     assert "after both reserves" in _set_aside_note(item, covered=True, shared_memory=True).text

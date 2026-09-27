@@ -279,7 +279,7 @@ cat docs/models.md
    measured the machine. It assumes the context the last guided run of that folder chose
    (`[guided].context`), so the ranking it writes is the one that run showed; a configuration no
    guided run has chosen a context in assumes 8192.
-5. Read the table. Only active, complete packages with `metadata_ok` or `approved`
+5. Read the table. Only active, complete packages with `from_metadata` or `approved`
    provenance are shown, and every one of them is ranked per machine: best fit first, a
    measured package ahead of an unmeasured one of the same fit class, with the rule and the
    scenario printed in the header. Packages fit v1 cannot judge stand under "not covered"

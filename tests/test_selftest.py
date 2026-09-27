@@ -187,10 +187,10 @@ def _entered_payload(**studio) -> dict:
         "label": "studio (entered)",
         "profile": {"origin": "entered", "ram_physical_source": "entered", "gpu_state": "unified_memory"},
         "ranked": [{"fit": {"mode": "gpu", "pool_gib": 23.0}, "note": {"origin": "computed", "code": "fits_in_shared_memory"}}],
-        "too_tight": [],
+        "no_fit": [],
     }
     block.update(studio)
-    own = {"machine": "workstation", "status": "no_profile", "label": "workstation", "profile": None, "ranked": [], "too_tight": []}
+    own = {"machine": "workstation", "status": "no_profile", "label": "workstation", "profile": None, "ranked": [], "no_fit": []}
     return {"machines": [own, block]}
 
 
@@ -439,7 +439,7 @@ GOOD_DOCUMENT = "\n".join(
 def _block(**changes) -> dict:
     """A machine block in which Qwen3.5 is ranked from the size of its packages."""
     entry = {"base_model_hf_repo": st.QWEN_BASE, "fit": {"basis": "size"}, "reason": None}
-    data = {"ranked": [entry], "too_tight": [], "not_covered": []}
+    data = {"ranked": [entry], "no_fit": [], "not_covered": []}
     data.update(changes)
     return data
 

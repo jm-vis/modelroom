@@ -93,7 +93,7 @@ def _hf_package(
     revision: str = "a" * 40,
     complete: bool = True,
     active: bool = True,
-    provenance: str = "metadata_ok",
+    provenance: str = "from_metadata",
     file_digest: str | None = None,
     default_context: int | None = None,
     approval=None,
@@ -405,7 +405,7 @@ def test_a_package_set_aside_on_the_size_basis_names_that_basis_in_its_note():
     unknown = [_base_model(architecture=_architecture(kind="unknown"))]
     huge = _hf_package(weights_bytes=400 * GIB)
 
-    entry = _document([huge], base_models=unknown).machines[0].too_tight[0]
+    entry = _document([huge], base_models=unknown).machines[0].no_fit[0]
 
     assert entry.fit.basis == "size"
     assert entry.note.text.endswith("From the size of the package, not its architecture.")
@@ -424,18 +424,18 @@ def test_a_package_that_does_not_fit_is_set_aside_and_never_in_the_ranking():
     huge = _hf_package(weights_bytes=400 * GIB)
     block = _document([huge]).machines[0]
     assert block.ranked == []
-    assert len(block.too_tight) == 1
-    assert block.too_tight[0].note.code == "too_tight"
+    assert len(block.no_fit) == 1
+    assert block.no_fit[0].note.code == "no_fit"
 
 
-def test_the_too_tight_note_claims_no_overrun_that_did_not_happen():
+def test_the_no_fit_note_claims_no_overrun_that_did_not_happen():
     """Fit v1 sets `no_fit` above 98 % of the pool, so the need can be below the pool.
 
     Found by the second-model review: the note used to say "more than the machine offers after
     the reserve", which is false for every package between 98 % and 100 % of the pool.
     """
     tight = _hf_package(weights_bytes=int(98.8 * GIB))
-    entry = _document([tight]).machines[0].too_tight[0]
+    entry = _document([tight]).machines[0].no_fit[0]
 
     assert entry.fit.fit_class == "no_fit"
     assert entry.fit.need_gib < entry.fit.pool_gib
@@ -510,7 +510,7 @@ def test_machine_profile_reports_an_unreadable_profile_file(tmp_path):
 def test_a_machine_without_a_profile_shows_its_reason_and_no_entries():
     profiles = {"workstation": MachineProfile("no_profile", "workstation", None, NO_PROFILE_REASON)}
     block = _document([_hf_package()], profiles=profiles).machines[0]
-    assert (block.status, block.ranked, block.not_covered, block.too_tight) == ("no_profile", [], [], [])
+    assert (block.status, block.ranked, block.not_covered, block.no_fit) == ("no_profile", [], [], [])
     assert block.reason == NO_PROFILE_REASON
 
 

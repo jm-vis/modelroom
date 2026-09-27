@@ -107,7 +107,7 @@ def test_requirement_perfect_is_not_reachable_in_cpu_mode():
     payload["mode"] = "cpu"
     with pytest.raises(ValidationError, match="cpu"):
         Requirement.model_validate(payload)
-    payload["perfect_reachable"] = False
+    payload["ample_reachable"] = False
     Requirement.model_validate(payload)
 
 

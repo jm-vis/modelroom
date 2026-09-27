@@ -47,7 +47,7 @@ def _entered_block(blocks: list[dict]) -> dict | None:
 
 def _row_problems(block: dict) -> list[str]:
     """The rows of the machine entered by hand: computed, on shared memory, one pool of 23 GiB."""
-    rows = block["ranked"] + block["too_tight"]
+    rows = block["ranked"] + block["no_fit"]
     problems = []
     if not block["ranked"]:
         problems.append("the machine entered by hand has no fit in its ranking")

@@ -24,10 +24,13 @@ where a value came from; `publisher`, `listed packager` and `other` for who owns
 which is a class and never a verdict; `unknown` for a fact with no evidence behind it;
 `not comparable` for measurements taken under different scenarios. Schema names, field names
 and literal values are contract: they are never changed for a language reason, so a value like
-`unified_memory` keeps its spelling even where the prose around it is rewritten. The one
-exception are the fit classes of 2026-09-27 (`perfect`, `good`, `marginal`, `too_tight` became
+`unified_memory` keeps its spelling even where the prose around it is rewritten. The
+exceptions are the fit classes of 2026-09-27 (`perfect`, `good`, `marginal`, `too_tight` became
 `ample`, `fits`, `tight`, `no_fit`), decided as a contract change by ADR 0006: those values were
-judgements, not names. No other literal follows them.
+judgements, not names; and the four identifiers that carried the old words, renamed by ADR 0007
+the same day (`metadata_ok` became `from_metadata`, `too_tight` became `no_fit`,
+`perfect_reachable` became `ample_reachable`, `cpu_caps_at_good` became `cpu_caps_at_fits`).
+No other literal follows them.
 `tests/test_language_standard.py` holds the rule in executable form.
 
 ## The three persisted forms
@@ -63,6 +66,7 @@ documented decision (`docs/adr/`), never a side effect.
 
 | Form | Writes | Reads | Earlier versions | Decision |
 |---|---|---|---|---|
+| Snapshot | 1 | `[1, 2)` | the value `metadata_ok` of 0.1.0 reads as `from_metadata` | ADR 0007, 2026-09-27 |
 | Configuration (`modelroom.toml`) | 3 | `[1, 4)` | 1 and 2 read as 3 in memory; `migrate` and the guided mode write 1 and 2 back, `import-profile` writes 2 back (1 needs `migrate`) | ADR 0002, 2026-09-25 |
 | Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26; ADR 0006, 2026-09-27 |
 | Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26; ADR 0006, 2026-09-27 (the fit words) |
@@ -72,6 +76,11 @@ documented decision (`docs/adr/`), never a side effect.
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
 every machine once one of them has written a later schema** (decided 2026-09-25).
+
+Snapshot schema 1 accepts `metadata_ok` as `from_metadata` on read and writes only
+`from_metadata` (ADR 0007). Nothing to migrate by hand. The released 0.1.0 reader cannot read
+a rewritten snapshot: every machine that shares the results folder updates before the next
+`fetch` writes.
 
 `modelroom.contracts.load_snapshot(data)` is the entry point for reading a persisted snapshot:
 it checks `schema_version` against `SNAPSHOT_SCHEMA_RANGE` with `check_schema_version` *before*
@@ -255,7 +264,7 @@ and never take part in quantization parsing or shard-completeness.
 A human decision that vouches for a specific package content, despite what its metadata
 says. An approval is bound to the exact content it was given for; once that content moves on
 (a new commit, a new manifest digest) the approval is void and `decide_provenance` falls back
-to the metadata rules, never a blanket `metadata_ok`.
+to the metadata rules, never a blanket `from_metadata`.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
@@ -320,7 +329,7 @@ different content does not validate, it has to be re-approved or left to the met
 | `complete` | `bool` | derived from `files` by `shards_complete`, see above | whether all weight shards are present |
 | `quantization` | `str \| None` | a `QUANT_ORDER` member, or `None` | `None` means unknown and sorts last |
 | `default_context` | `int \| None` | `> 0` | Ollama's `num_ctx`; `None` for Hugging Face |
-| `provenance` | `"metadata_ok" \| "approved" \| "unresolved"` | -- | see `modelroom/provenance.py` |
+| `provenance` | `"from_metadata" \| "approved" \| "unresolved"` | -- | see `modelroom/provenance.py` |
 | `unresolved_reason` | `str \| None` | non-empty iff `provenance == "unresolved"`, see above | why provenance could not be resolved |
 | `approval` | `Approval \| None` | required when `provenance == "approved"`, content must match current revision/digest | the approval that made this package trusted |
 | `observed_at` | `datetime` | -- | when this run first recorded this package |
@@ -345,7 +354,7 @@ different content does not validate, it has to be re-approved or left to the met
   "complete": true,
   "quantization": "Q4_K_M",
   "default_context": null,
-  "provenance": "metadata_ok",
+  "provenance": "from_metadata",
   "unresolved_reason": null,
   "approval": null,
   "observed_at": "2026-09-22T09:00:00Z",
@@ -386,7 +395,7 @@ filename-or-tag)` must be unique across `packages`.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `schema_version` | `int` | must equal `SNAPSHOT_SCHEMA_VERSION` (currently `1`) | the snapshot's schema version |
+| `schema_version` | `int` | must equal `SNAPSHOT_SCHEMA_VERSION` (currently `1`) | the snapshot's schema version; schema 1 written by 0.1.0 spells the provenance `metadata_ok`, the reader takes it as `from_metadata` and `fetch` writes it back (ADR 0007) |
 | `run_at` | `datetime` | -- | when this `fetch` run started |
 | `areas` | `list[Area]` | -- | the fetch units this run covered |
 | `base_models` | `list[BaseModelSpec]` | -- | the base models this run knows |
@@ -444,7 +453,7 @@ filename-or-tag)` must be unique across `packages`.
       "complete": true,
       "quantization": "Q4_K_M",
       "default_context": null,
-      "provenance": "metadata_ok",
+      "provenance": "from_metadata",
       "unresolved_reason": null,
       "approval": null,
       "observed_at": "2026-09-22T09:00:00Z",
@@ -591,9 +600,8 @@ every time against the current snapshot and hardware profile, rather than storin
 verdict. See "Fit contract v1" below for the formula, thresholds and the exact wording a
 renderer must use.
 
-The field names `MachineRanking.too_tight` and `Requirement.perfect_reachable` and the note
-codes `too_tight` and `cpu_caps_at_good` are identifiers of the data contract, not words a reader
-is shown: they keep their spelling (decided 2026-09-27, ADR 0006; a rename is a schema decision).
+The field names `MachineRanking.no_fit` and `Requirement.ample_reachable` and the note codes
+`no_fit` and `cpu_caps_at_fits` follow the words of the fit classes (decided 2026-09-27, ADR 0007).
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
@@ -1839,7 +1847,7 @@ the installed-model count or `unknown (<installed_unavailable_reason>)`; a machi
 hardware profile yet renders `no hardware profile yet` for every measured column), and the
 Package table.
 
-**Eligibility.** Only packages with `provenance in ("metadata_ok", "approved")`, `complete ==
+**Eligibility.** Only packages with `provenance in ("from_metadata", "approved")`, `complete ==
 True` and `active == True` are ever shown.
 
 **Grouping and ordering.** Eligible packages group by (base model, packager), packager being the
@@ -2962,7 +2970,7 @@ quantization of exactly the configured base model. It reads the repo's `tags`
 4. `derivative`: `finetune`, `adapter` or `merge`;
 5. `quantized`: the only pass.
 
-A pass allows at most `metadata_ok` together with the other provenance rules; only a human
+A pass allows at most `from_metadata` together with the other provenance rules; only a human
 `Approval` makes a package `approved`. Search and fetch use the same function.
 
 ### Fit with profile v2
@@ -3003,7 +3011,7 @@ Where a measurement would count but for `requests` alone, `RankedPackage.measure
 so -- `measured with 1 request, ranking assumes N` -- and the render hands it on as the note of
 that row (code `measured_with_one_request`); it is never written into the measurement file
 (decided 2026-09-25). `unknown` fits are set aside as not covered, with their reason; `no_fit`
-fits are listed apart (field `too_tight`) and never ranked; a computed fit for another context or another number of
+fits are listed apart (field `no_fit`) and never ranked; a computed fit for another context or another number of
 requests than the ranking's is a caller error. `Ranking.top` is the first 10. The rule states
 facts in order; it recommends nothing.
 
@@ -3121,7 +3129,7 @@ model (`model_choices(..., configured_ollama=...)`, since 2026-09-25), else `Non
 
 What one package needs for a scenario, `computed`, never measured: the reverse calculation.
 `kv_gib_total` is `kv_gib_per_request x scenario.requests`; `need_gib` is fit v1's formula with
-that total (`weights_gib x 1.10 + kv_gib_total + 0.50`); `perfect_reachable` (a field name, see "Fit") is
+that total (`weights_gib x 1.10 + kv_gib_total + 0.50`); `ample_reachable` is
 `false` in `cpu` mode, where fit v1 caps at `fits`. It carries no speed statement. `package_identity` is the
 package identity triple.
 
@@ -3146,7 +3154,7 @@ package identity triple.
   "kv_gib_total": 4.0,
   "reserve_gib": 1.0,
   "need_gib": 9.45,
-  "perfect_reachable": true
+  "ample_reachable": true
 }
 ```
 
@@ -3158,7 +3166,7 @@ is at most 240 characters.
 
 ```json
 {
-  "code": "cpu_caps_at_good",
+  "code": "cpu_caps_at_fits",
   "subject": "package",
   "origin": "computed",
   "text": "Runs in system memory only, so the best possible rating on this machine is 'fits'.",
@@ -3562,7 +3570,7 @@ the old schema and say nothing about what schema 2 measures. One unreadable prof
 `note:` line on stdout and never keeps another machine's ranking out of the document; only the
 snapshot's own `schema_version` still ends the run with exit `3`.
 
-**Eligibility** is unchanged: `provenance in ("metadata_ok", "approved")`, `complete`, `active`.
+**Eligibility** is unchanged: `provenance in ("from_metadata", "approved")`, `complete`, `active`.
 There is no grouping and no selection any more -- **every** eligible package is ranked, and
 `_select_for_machine` (one variant per packager) and the reading of measurements embedded in a
 schema-1 profile (`_speed_cell`) are gone.
@@ -3579,7 +3587,7 @@ scenario and `ranking.RANKING_RULE` are printed in every view.
 
 **The ranking** per machine is `ranking.rank_packages` ("Ranking rule" above): `ranked` holds the
 first `ranking.TOP_LIMIT` entries and `ranked_total` says how many there were, `not_covered`
-holds the `unknown` fits with their reason, `too_tight` (a field name) the `no_fit` ones. A measurement
+holds the `unknown` fits with their reason, `no_fit` the packages whose fit class is `no_fit`. A measurement
 counts only in measured group 0, and only then are `measurement_id` and `speed_tps` set.
 
 **Provenance per value.** Every computed number carries `(computed)` in its column name
@@ -3594,8 +3602,8 @@ gets `measured_here` with `origin: measured`; an entry without a measurement get
 its fit mode (`fits_in_graphics_memory`, `spread_over_graphics_cards` -- "Fits into graphics
 memory spread over 2 cards: it needs about N GiB of the M GiB left after the reserve of R GiB on
 each card.", the card count from the profile's `gpus`, since document schema 3 --,
-`shared_between_memories`, `cpu_caps_at_good`); a
-set-aside package gets `not_covered` or `too_tight`. `facts` names the fields the text was
+`shared_between_memories`, `cpu_caps_at_fits`); a
+set-aside package gets `not_covered` or `no_fit`. `facts` names the fields the text was
 derived from, so a reader can check it.
 
 **The two files.** The Markdown view goes to `config.paths.markdown` (same fixed header line,
@@ -3728,7 +3736,7 @@ One row of one machine's ranking. `package_identity` is the package identity tri
   "format": "gguf",
   "weights_gib": 5.0,
   "package_context": null,
-  "provenance": "metadata_ok",
+  "provenance": "from_metadata",
   "note": {
     "code": "measured_here",
     "subject": "package",
@@ -3778,7 +3786,7 @@ package fields as `RankedEntry`, plus the `reason` shown next to it.
   "format": "gguf",
   "weights_gib": 6.4,
   "package_context": 4096,
-  "provenance": "metadata_ok",
+  "provenance": "from_metadata",
   "note": {
     "code": "not_covered",
     "subject": "package",
@@ -3873,7 +3881,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
       "format": "gguf",
       "weights_gib": 5.0,
       "package_context": null,
-      "provenance": "metadata_ok",
+      "provenance": "from_metadata",
       "note": {
         "code": "measured_here",
         "subject": "package",
@@ -3918,7 +3926,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
       "format": "gguf",
       "weights_gib": 6.4,
       "package_context": 4096,
-      "provenance": "metadata_ok",
+      "provenance": "from_metadata",
       "note": {
         "code": "not_covered",
         "subject": "package",
@@ -3946,7 +3954,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
       "reason": "a weight file has no size"
     }
   ],
-  "too_tight": []
+  "no_fit": []
 }
 ```
 
@@ -4073,7 +4081,7 @@ card; a hint, never a limit.
           "format": "gguf",
           "weights_gib": 5.0,
           "package_context": null,
-          "provenance": "metadata_ok",
+          "provenance": "from_metadata",
           "note": {
             "code": "measured_here",
             "subject": "package",
@@ -4118,7 +4126,7 @@ card; a hint, never a limit.
           "format": "gguf",
           "weights_gib": 6.4,
           "package_context": 4096,
-          "provenance": "metadata_ok",
+          "provenance": "from_metadata",
           "note": {
             "code": "not_covered",
             "subject": "package",
@@ -4146,7 +4154,7 @@ card; a hint, never a limit.
           "reason": "a weight file has no size"
         }
       ],
-      "too_tight": []
+      "no_fit": []
     }
   ],
   "users": null,

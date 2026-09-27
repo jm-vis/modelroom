@@ -525,7 +525,7 @@ def test_two_repos_of_one_owner_share_a_single_area_and_both_stay_active(tmp_pat
     packages = [p for p in result.snapshot.packages if p.repo and p.repo.startswith("packager/")]
     assert {p.repo for p in packages} == {"packager/Nova-7B-GGUF", "packager/Nova-7B-i1-GGUF"}
     assert all(p.active for p in packages)
-    assert all(p.provenance == "metadata_ok" for p in packages)
+    assert all(p.provenance == "from_metadata" for p in packages)
 
 
 def test_a_repos_target_is_fetched_even_though_its_owner_is_no_configured_packager(tmp_path):
@@ -606,3 +606,28 @@ def test_a_budget_that_runs_out_before_an_owner_names_that_owners_area(tmp_path)
     assert all(
         area.error == "budget exhausted before this area was started" for area in result.snapshot.areas
     )
+
+
+# --- ADR 0007: a snapshot written by 0.1.0 spells the provenance `metadata_ok` ------------
+
+
+def test_fetch_reads_a_0_1_0_snapshot_with_metadata_ok_and_writes_from_metadata_back(tmp_path):
+    from modelroom.cli import fetch_with_config
+
+    config = _config(tmp_path)
+    assert fetch_with_config(config, "workstation", build_transport(qwen35_transport_mapping()), RUN1) == 0
+    path = config.paths.snapshot_file
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    for package in stored["packages"]:
+        if package["provenance"] in ("from_metadata", "metadata_ok"):
+            package["provenance"] = "metadata_ok"
+    assert any(package["provenance"] == "metadata_ok" for package in stored["packages"])
+    path.write_bytes(json.dumps(stored, indent=2).encode("utf-8"))
+
+    code = fetch_with_config(config, "workstation", build_transport(qwen35_transport_mapping()), RUN2)
+
+    assert code in (0, 1)
+    written = json.loads(path.read_text(encoding="utf-8"))
+    provenances = {package["provenance"] for package in written["packages"]}
+    assert "metadata_ok" not in provenances
+    assert "from_metadata" in provenances

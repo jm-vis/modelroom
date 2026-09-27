@@ -69,7 +69,7 @@ def test_a_machine_without_a_profile_carries_a_reason_and_no_entries():
         MachineRanking.model_validate(_machine(status="legacy", profile=None, reason=None))
     without = MachineRanking.model_validate(
         _machine(status="no_profile", profile=None, reason="no hardware profile yet", ranked=[],
-                 ranked_total=0, not_covered=[], too_tight=[])
+                 ranked_total=0, not_covered=[], no_fit=[])
     )
     assert without.ranked == []
     with pytest.raises(ValidationError):

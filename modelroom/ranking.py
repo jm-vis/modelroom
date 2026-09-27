@@ -55,7 +55,7 @@ class Ranking:
     rule: str = RANKING_RULE
     ranked: list[RankedPackage] = field(default_factory=list)
     not_covered: list[SetAside] = field(default_factory=list)
-    too_tight: list[SetAside] = field(default_factory=list)
+    no_fit: list[SetAside] = field(default_factory=list)
 
     @property
     def top(self) -> list[RankedPackage]:
@@ -142,7 +142,7 @@ def rank_packages(
     """Rank one device's packages; `measurements` are that device's own measurement records.
 
     `ample`/`fits`/`tight` are ranked by the tuple key; `unknown` goes to `not_covered`
-    with the fit's reason; `no_fit` is listed apart (in `too_tight`, a field name) and never in the top 10. Every computed
+    with the fit's reason; `no_fit` is listed apart in its own list and never in the top 10. Every computed
     fit must belong to the ranking's context and requests (a fit for another context or another
     number of requests is a caller error).
     """
@@ -154,7 +154,7 @@ def rank_packages(
             continue
         _check_fit_belongs(fit, scenario)
         if fit.fit_class == "no_fit":
-            ranking.too_tight.append(SetAside(package, fit, "does not fit this machine"))
+            ranking.no_fit.append(SetAside(package, fit, "does not fit this machine"))
             continue
         measurement = group_zero_measurement(package, measurements, scenario)
         rankable.append((_sort_key(package, fit, measurement), package, fit, measurement))
@@ -171,7 +171,7 @@ def rank_packages(
         for rank, (_, package, fit, measurement) in enumerate(rankable, start=1)
     ]
     ranking.not_covered.sort(key=lambda s: package_identity_key(s.package))
-    ranking.too_tight.sort(key=lambda s: package_identity_key(s.package))
+    ranking.no_fit.sort(key=lambda s: package_identity_key(s.package))
     return ranking
 
 

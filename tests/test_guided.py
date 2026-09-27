@@ -1683,7 +1683,7 @@ def test_a_head_count_is_kept_with_its_requests_and_reaches_the_document(tmp_pat
     assert (raw["users"], raw["requests"], raw["requests_origin"]) == (25, 3, "from_users")
     payload = _document(tmp_path)
     assert (payload["users"], payload["requests_origin"], payload["scenario"]["requests"]) == (25, "from_users", 3)
-    fits = [row["fit"] for row in payload["machines"][0]["ranked"] + payload["machines"][0]["too_tight"]]
+    fits = [row["fit"] for row in payload["machines"][0]["ranked"] + payload["machines"][0]["no_fit"]]
     assert fits and {fit["requests"] for fit in fits} == {3}
     assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  25 (3 requests)"
     sentence = "context 8k (entered), KV cache f16 (assumed), 3 requests (from 25 users)"
@@ -1934,7 +1934,7 @@ def test_the_run_ends_with_both_views_and_a_word_on_the_load_test(tmp_path: Path
 def _ranked_deepseek(tmp_path: Path) -> dict:
     """The row of the measured example package in the machine block the render wrote."""
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    rows = payload["machines"][0]["ranked"] + payload["machines"][0]["too_tight"]
+    rows = payload["machines"][0]["ranked"] + payload["machines"][0]["no_fit"]
     return next(row for row in rows if row["package_identity"][1] == DEEPSEEK)
 
 
@@ -2707,7 +2707,7 @@ def test_a_machine_entered_by_hand_is_named_so_and_computed_on_shared_memory_in_
     gpu = [entry for entry in block["ranked"] if entry["fit"]["mode"] == "gpu"]
     assert gpu, "unified memory computes in mode gpu"
     assert {entry["fit"]["pool_gib"] for entry in gpu} == {23.0}
-    assert {entry["note"]["origin"] for entry in block["ranked"] + block["too_tight"]} == {"computed"}
+    assert {entry["note"]["origin"] for entry in block["ranked"] + block["no_fit"]} == {"computed"}
     own = next(block for block in payload["machines"] if block["machine"] == "workstation")
     assert own["status"] == "no_profile"
 

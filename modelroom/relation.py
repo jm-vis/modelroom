@@ -3,7 +3,7 @@
 One pure function for search and fetch alike. It reads the repo's `tags` (where Hugging Face
 publishes `base_model:<repo>` and `base_model:<relation>:<repo>`) and its `cardData`
 (`base_model`, `base_model_relation`) and compares them with the configured `hf_repo`. A pass
-(`quantized`) allows at most `metadata_ok` together with the other provenance rules; it never
+(`quantized`) allows at most `from_metadata` together with the other provenance rules; it never
 makes a package `approved`, which only a human `Approval` does (CONTRACTS.md, "Relation check").
 """
 
