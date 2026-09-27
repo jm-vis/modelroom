@@ -72,7 +72,7 @@ def test_measured_gpu_profile_computes_on_the_gpu_with_the_scenario_context():
     assert fit.kv_gib == pytest.approx(1.0)
     assert fit.need_gib == pytest.approx(4.0 * 1.10 + 1.0 + 0.5)
     assert fit.pool_gib == pytest.approx(7.0)
-    assert fit.fit_class == "good"  # 5.9 / 7.0 = 0.84
+    assert fit.fit_class == "fits"  # 5.9 / 7.0 = 0.84
     assert fit.context == 8192 and fit.context_assumed is False
 
 
@@ -82,11 +82,11 @@ def test_package_default_context_is_never_used():
     assert fit.kv_gib == pytest.approx(2.0)
 
 
-def test_cpu_profile_uses_physical_ram_and_caps_at_good():
+def test_cpu_profile_uses_physical_ram_and_caps_at_fits():
     fit = compute_fit_v2(_cpu_profile(), _package(weights_gib=2.0), _base_model(), default_scenario(), MACHINE)
     assert fit.mode == "cpu"
     assert fit.pool_gib == pytest.approx(31.7 - 8.0)
-    assert fit.fit_class == "good"  # ratio 0.16 would be perfect on a GPU
+    assert fit.fit_class == "fits"  # ratio 0.16 would be ample on a GPU
 
 
 def test_ram_limit_is_a_note_and_never_the_pool():
@@ -125,11 +125,13 @@ def test_a_migrated_profile_is_unknown_until_measured_again():
     assert fit.fit_class == "unknown" and "measure again" in fit.reason
 
 
-def test_a_llmfit_deviation_blocks_the_fit():
+def test_a_llmfit_deviation_is_computed_on_the_own_reading():
+    """A deviation is shown, never a block (decided 2026-09-27): the fit uses the own 8 GiB."""
     block = copy.deepcopy(EXAMPLES["HardwareProfile"]["llmfit_crosscheck"])
     block["vram"] = {"status": "deviation", "own_gib": 8.0, "llmfit_gib": 6.0}
     fit = compute_fit_v2(_profile(llmfit_crosscheck=block), _package(), _base_model(), default_scenario(), MACHINE)
-    assert fit.fit_class == "unknown" and "VRAM differs" in fit.reason
+    assert fit.fit_class != "unknown" and fit.reason is None
+    assert fit.mode == "gpu" and fit.pool_gib == 8.0 - MACHINE.reserve_vram_gib
 
 
 def test_more_than_one_request_is_computed_with_a_kv_cache_per_request():
@@ -191,7 +193,7 @@ def test_an_architecture_v1_cannot_read_is_computed_from_the_size_instead():
     )
     fit = compute_fit_v2(_profile(), _package(), base, default_scenario(), MACHINE)
     assert (fit.basis, fit.reason) == ("size", None)
-    assert fit.fit_class in ("good", "marginal", "too_tight")
+    assert fit.fit_class in ("fits", "tight", "no_fit")
 
 
 def test_the_v1_package_rules_still_apply():

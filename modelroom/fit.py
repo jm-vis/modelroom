@@ -10,7 +10,7 @@ A package whose architecture this formula cannot read is judged from its size in
 aside (`fit_from_size`, basis `size`, decided 2026-09-24), and a model that has not been fetched
 at all from its parameter count (`fit_from_parameters`) -- the same formula with the KV cache
 taken from a constant, one assumption for every such package. Both are `computed`, never
-measured, both cap at `good`, and both say `from size` in every view
+measured, both cap at `fits`, and both say `from size` in every view
 (CONTRACTS.md, "Fit from size (basis `size`)").
 
 Every entry point takes the parallel requests the daemon is assumed to keep: the weights are
@@ -41,11 +41,11 @@ FIXED_OVERHEAD_GIB = 0.50
 # dense transformer at 16-bit precision, key and value each.
 #
 # It is one **fixed assumption**, not a bound in either direction, and it is why the class is
-# capped at `good`: a hybrid or mixture architecture keeps fewer layers of full attention and needs
+# capped at `fits`: a hybrid or mixture architecture keeps fewer layers of full attention and needs
 # less than this, while a dense model with more layers needs more. Measured against the 5.29 GiB
 # `Q4_K_M` package of the fixtures at 131072 tokens (second-model round, 2026-09-24): 24.32 GiB on
 # this basis, 22.32 for 32 layers, 27.32 for 42, 30.32 for 48. A package this basis calls
-# `marginal` can therefore be `too_tight` in truth, and the row says `from size` so that a reader
+# `tight` can therefore be `no_fit` in truth, and the row says `from size` so that a reader
 # can see which of the two numbers they are looking at.
 KV_PER_TOKEN_SIZE_BASIS = 147_456
 # Bytes per parameter of a `Q4_K_M` build, for the fit of a model that has not been fetched yet:
@@ -83,9 +83,9 @@ def gpu_pool(memory: GpuPool | float, shared_memory: bool = False) -> GpuPool:
         return memory
     return GpuPool((memory,) if memory > 0 else (), shared_memory)
 
-PERFECT_RATIO = 0.60
-GOOD_RATIO = 0.85
-MARGINAL_RATIO = 0.98
+AMPLE_RATIO = 0.60
+FITS_RATIO = 0.85
+TIGHT_RATIO = 0.98
 
 _WEIGHT_ROLES = ("weights", "weights_shard")
 
@@ -122,8 +122,9 @@ def compute_fit_v2(
     """Fit contract v1 for a profile and a ranking scenario.
 
     The GPU gate comes first: only `gpu_state` `none` (CPU; VRAM 0), `measured`, `entered` and
-    `unified_memory` compute, as does only a profile with a known physical RAM and no llmfit
-    deviation (`profile.fit_block_reason`); everything else is `unknown` with that reason. The
+    `unified_memory` compute, as does only a profile with a known physical RAM
+    (`profile.fit_block_reason`; an llmfit deviation is shown, never a reason); everything else is
+    `unknown` with that reason. The
     context is the scenario's `context_requested` for every package -- the package's own
     `default_context` is never used here -- with a 16-bit KV cache for each of the scenario's
     `requests` (decided 2026-09-25). The formula itself is fit v1's (`_fit_for_memory`).
@@ -234,8 +235,8 @@ def fit_from_size(
 
     The weights are the package's own files, as always; the KV cache is `context x
     KV_PER_TOKEN_SIZE_BASIS x requests` instead of the architecture's own layers and heads -- one
-    fixed assumption, which is why the class is capped at `good`: `perfect` stays reserved for a
-    package a read architecture proves comfortable (decided 2026-09-24). Multiplying by the
+    fixed assumption, which is why the class is capped at `fits`: `ample` stays reserved for a
+    package whose architecture was read (decided 2026-09-24). Multiplying by the
     requests does not make the assumption any more exact. `vram_gib` is the card pool
     (`profile_memory`), or one graphics memory as a number with `shared_memory` for unified
     memory (`gpu_pool`).
@@ -280,7 +281,7 @@ def _size_fit(
         return unknown_fit("size values out of range")
     mode, pool_gib, reserve_gib, _cap = _choose_pool(need_gib, pool, ram_gib or 0.0, machine_config)
     return Fit(
-        fit_class=_classify(need_gib, pool_gib, cap_at_good=True),
+        fit_class=_classify(need_gib, pool_gib, cap_at_fits=True),
         mode=mode,
         need_gib=need_gib,
         weights_gib=weights_gib,
@@ -329,8 +330,8 @@ def _fit_for_memory(
     except OverflowError:
         return unknown_fit("architecture values out of range")
 
-    mode, pool_gib, reserve_gib, cap_at_good = _choose_pool(need_gib, pool, ram_gib, machine_config)
-    fit_class = _classify(need_gib, pool_gib, cap_at_good)
+    mode, pool_gib, reserve_gib, cap_at_fits = _choose_pool(need_gib, pool, ram_gib, machine_config)
+    fit_class = _classify(need_gib, pool_gib, cap_at_fits)
 
     return Fit(
         fit_class=fit_class,
@@ -357,7 +358,7 @@ def _architecture_kv_gib(arch: Architecture, context: int, requests: int) -> flo
 def _choose_pool(
     need_gib: float, pool: GpuPool, ram_gib: float, machine_config: MachineConfig
 ) -> tuple[str, float, float, bool]:
-    """The memory pool `need_gib` is judged against, and whether the class is capped at "good".
+    """The memory pool `need_gib` is judged against, and whether the class is capped at `fits`.
 
     One card first, the way Ollama loads a model: the package fits the GPU when `need_gib` is at
     most the largest card's VRAM left after `reserve_vram_gib` (mode `gpu`). With two cards or
@@ -366,13 +367,13 @@ def _choose_pool(
     fit reports is the reserve of all cards together; nothing is capped, the package lies in
     graphics memory whole. Otherwise it falls back to the RAM pool (minus `reserve_ram_gib`),
     mode `cpu_gpu` when there is some VRAM at all, `cpu` when there is none -- and the class is
-    capped at "good" off the GPU, since "perfect" only ever describes a package that fits
-    comfortably in VRAM.
+    capped at `fits` off the GPU, since `ample` only ever describes a package with room to spare
+    in VRAM.
 
     Unified memory (`pool.shared`) is its own case (decided 2026-09-25): the system and the
     model share one memory, so the pool is the RAM minus **both** reserves, the mode is `gpu`
     and nothing is capped -- and there is no fallback, since the RAM is that same memory. A pool
-    of 0 or less is `too_tight` (`_classify`).
+    of 0 or less is `no_fit` (`_classify`).
     """
     reserve = machine_config.reserve_vram_gib
     if pool.shared:
@@ -389,17 +390,17 @@ def _choose_pool(
     return mode, pool_gib, machine_config.reserve_ram_gib, True
 
 
-def _classify(need_gib: float, pool_gib: float, cap_at_good: bool = False) -> str:
+def _classify(need_gib: float, pool_gib: float, cap_at_fits: bool = False) -> str:
     if pool_gib <= 0:
-        return "too_tight"
+        return "no_fit"
     ratio = need_gib / pool_gib
-    if ratio <= PERFECT_RATIO:
-        return "good" if cap_at_good else "perfect"
-    if ratio <= GOOD_RATIO:
-        return "good"
-    if ratio <= MARGINAL_RATIO:
-        return "marginal"
-    return "too_tight"
+    if ratio <= AMPLE_RATIO:
+        return "fits" if cap_at_fits else "ample"
+    if ratio <= FITS_RATIO:
+        return "fits"
+    if ratio <= TIGHT_RATIO:
+        return "tight"
+    return "no_fit"
 
 
 def unknown_fit(reason: str) -> Fit:

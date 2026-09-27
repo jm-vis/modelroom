@@ -74,6 +74,12 @@ same thing in the same way:
 | `not comparable` | two measurements from different scenarios | "slower", "worse" |
 | `display adapter only` | a GPU that is present but cannot carry a fit | "no GPU" |
 | `none known` | no Ollama name is mapped to this package, in prose and in a log | "missing", "not available"; in a column of a list it is `–`, see above |
+| `ample`, `fits`, `tight`, `no_fit` (`no fit` in prose and headings) | the fit class: the share of a memory pool a package needs, computed (decided 2026-09-27, ADR 0006) | `perfect`, `good`, `marginal`, `too tight`, `safe`, `comfortable` |
+
+A rating word says only what was computed or measured, never a judgement; one word per level; the
+code value is the text a cell shows (the underscore of `no_fit` gives way to a space only outside a
+cell); and every table with such a column carries one hint line under it, short enough for a reader
+without the contract (decided 2026-09-27).
 
 A **stated** age is positive evidence about one model (a successor named at the publisher's
 repository, or the shipped catalog), never a comparison of two version numbers; the list's

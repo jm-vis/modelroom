@@ -74,10 +74,16 @@ class _WatchingAsker(FileAsker):
         self.instructions[key] = instruction
         return super().checkbox(key, question, choices, instruction)
 
+    def select(self, key: str, question: str, choices, instruction=None) -> str:
+        self.choices[key] = list(choices)
+        return super().select(key, question, choices, instruction)
+
 
 FULL_ANSWERS = {
     "results": "here",
     "machines": ["this-machine"],
+    # The class is asked on every measurement (decided 2026-09-27); the fixture chassis reads `laptop`.
+    "machine_class": "laptop",
     "search": "qwen",
     "filter_owners": True,
     "select": [UNSLOTH, QWEN_GGUF],
@@ -1295,7 +1301,7 @@ def test_the_list_shows_one_line_per_model_with_its_fit_and_its_packagers(tmp_pa
     assert all(choice.disabled is None for choice in listed)
     qwen = next(choice for choice in listed[1:3] if choice.value == "Qwen/Qwen3.5-9B")
     assert qwen.label.startswith("Qwen3.5-9B")
-    assert any(word in qwen.label for word in ("good", "marginal", "too tight", "unknown"))
+    assert any(word in qwen.label for word in ("fits", "tight", "no_fit", "unknown"))
     # Twelve characters for the packagers since 2026-09-25: the first account and a count.
     assert "Qwen +1" in qwen.label
     assert all(len(choice.label) <= 95 for choice in listed[:3])
@@ -2364,7 +2370,7 @@ def _measured_stem(tmp_path: Path) -> str:
     return next(stem for stem in stems if stem != "c" * 16)
 
 
-def _watched(tmp_path: Path, answers: dict) -> _WatchingAsker:
+def _watched(tmp_path: Path, answers: dict, probes=None) -> _WatchingAsker:
     """One run with an asker that keeps the choices of every list; returns the asker."""
     lines: list[str] = []
     asker = _WatchingAsker(answers, lines)
@@ -2373,7 +2379,7 @@ def _watched(tmp_path: Path, answers: dict) -> _WatchingAsker:
         here=_results(tmp_path),
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
-        probes=windows_probes(),
+        probes=probes if probes is not None else windows_probes(),
         daemon=offline_daemon(),
         now=RUN1,
         out=lines.append,

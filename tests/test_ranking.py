@@ -74,12 +74,12 @@ F16 = _package("F16", "F16", 14_000_000_000, 6)
 
 def _entries() -> list[tuple[Package, Fit]]:
     return [
-        (Q4, _fit("perfect")),
-        (Q5, _fit("perfect")),
-        (Q6, _fit("good")),
-        (Q8, _fit("marginal")),
-        (Q4_OTHER, _fit("perfect")),
-        (F16, _fit("too_tight")),
+        (Q4, _fit("ample")),
+        (Q5, _fit("ample")),
+        (Q6, _fit("fits")),
+        (Q8, _fit("tight")),
+        (Q4_OTHER, _fit("ample")),
+        (F16, _fit("no_fit")),
     ]
 
 
@@ -95,11 +95,11 @@ def test_fit_class_before_speed_before_quantization():
     ranking = rank_packages(_entries(), _measurements(), default_scenario())
     names = [(r.package.repo.split("/")[0], r.package.quantization, r.measurement_group) for r in ranking.ranked]
     assert names == [
-        ("packager", "Q5_K_M", 0),  # perfect, measured
-        ("other", "Q4_K_M", 1),  # perfect, unmeasured: same quant as the next, identity decides
+        ("packager", "Q5_K_M", 0),  # ample, measured
+        ("other", "Q4_K_M", 1),  # ample, unmeasured: same quant as the next, identity decides
         ("packager", "Q4_K_M", 1),
-        ("packager", "Q6_K", 0),  # good, although it is the fastest measured package
-        ("packager", "Q8_0", 1),  # marginal
+        ("packager", "Q6_K", 0),  # fits, although it is the fastest measured package
+        ("packager", "Q8_0", 1),  # tight
     ]
     assert [r.rank for r in ranking.ranked] == [1, 2, 3, 4, 5]
     assert [s.package.quantization for s in ranking.too_tight] == ["F16"]
@@ -113,7 +113,7 @@ def test_ranking_is_the_same_for_every_input_order():
 
 
 def test_faster_measured_package_ranks_first_within_its_class_and_group():
-    entries = [(Q4, _fit("perfect")), (Q5, _fit("perfect"))]
+    entries = [(Q4, _fit("ample")), (Q5, _fit("ample"))]
     ranking = rank_packages(entries, [_measurement(Q4, 60.0), _measurement(Q5, 40.0, minutes=1)], default_scenario())
     assert [r.package.quantization for r in ranking.ranked] == ["Q4_K_M", "Q5_K_M"]
 
@@ -121,7 +121,7 @@ def test_faster_measured_package_ranks_first_within_its_class_and_group():
 def test_larger_weights_break_a_tie_on_quantization():
     small = _package("Q4_K_M", "Q4_K_M", 4_000_000_000, 7, repo="aaa/Nova-7B-GGUF")
     large = _package("Q4_K_M", "Q4_K_M", 4_600_000_000, 8, repo="zzz/Nova-7B-GGUF")
-    ranking = rank_packages([(small, _fit("good")), (large, _fit("good"))], [], default_scenario())
+    ranking = rank_packages([(small, _fit("fits")), (large, _fit("fits"))], [], default_scenario())
     assert [r.package.repo for r in ranking.ranked] == ["zzz/Nova-7B-GGUF", "aaa/Nova-7B-GGUF"]
 
 
@@ -182,26 +182,26 @@ def test_ollama_measurement_matches_by_manifest_digest():
 
 
 def test_unknown_fits_are_set_aside_with_their_reason():
-    ranking = rank_packages([(Q4, _fit("unknown")), (Q5, _fit("good"))], [], default_scenario())
+    ranking = rank_packages([(Q4, _fit("unknown")), (Q5, _fit("fits"))], [], default_scenario())
     assert [r.package.quantization for r in ranking.ranked] == ["Q5_K_M"]
     assert ranking.not_covered[0].reason == "architecture not covered by v1"
 
 
 def test_a_fit_for_another_context_is_a_caller_error():
     with pytest.raises(ValueError, match="context"):
-        rank_packages([(Q4, _fit("good", context=4096))], [], default_scenario())
+        rank_packages([(Q4, _fit("fits", context=4096))], [], default_scenario())
 
 
 def test_top_is_the_first_ten():
     packages = [_package(f"Q4_K_M-{i}", "Q4_K_M", 4_000_000_000 + i, 10 + i) for i in range(12)]
-    ranking = rank_packages([(p, _fit("good")) for p in packages], [], default_scenario())
+    ranking = rank_packages([(p, _fit("fits")) for p in packages], [], default_scenario())
     assert len(ranking.ranked) == 12
     assert ranking.top == ranking.ranked[:TOP_LIMIT] and len(ranking.top) == 10
 
 
 def test_shuffled_large_input_gives_one_order():
     packages = [_package(f"Q4_K_M-{i}", "Q4_K_M", 4_000_000_000 + (i % 3), 30 + i) for i in range(20)]
-    entries = [(p, _fit(("perfect", "good", "marginal")[i % 3])) for i, p in enumerate(packages)]
+    entries = [(p, _fit(("ample", "fits", "tight")[i % 3])) for i, p in enumerate(packages)]
     expected = _order(rank_packages(entries, [], default_scenario()))
     rng = random.Random(7)
     for _ in range(50):

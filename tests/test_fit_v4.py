@@ -83,18 +83,18 @@ def test_one_card_first_means_the_largest_card():
 
 def test_a_package_only_all_cards_hold_is_spread_with_the_reserve_on_each_card():
     fit = _fit(_cards(24.0, 24.0), 30.0)  # need 34.5 > 23, <= 46
-    assert (fit.mode, fit.pool_gib, fit.reserve_gib, fit.fit_class) == ("gpu_split", 46.0, 2.0, "good")
+    assert (fit.mode, fit.pool_gib, fit.reserve_gib, fit.fit_class) == ("gpu_split", 46.0, 2.0, "fits")
 
 
-def test_a_spread_package_is_not_capped_and_may_be_perfect():
+def test_a_spread_package_is_not_capped_and_may_be_ample():
     fit = _fit(_cards(24.0, 24.0), 20.0)  # need 23.5 > 23; 23.5 / 46 = 0.51
-    assert (fit.mode, fit.fit_class) == ("gpu_split", "perfect")
+    assert (fit.mode, fit.fit_class) == ("gpu_split", "ample")
 
 
-def test_a_package_no_card_holds_falls_back_to_the_system_memory_capped_at_good():
+def test_a_package_no_card_holds_falls_back_to_the_system_memory_capped_at_fits():
     fit = _fit(_cards(24.0, 24.0), 50.0)  # need 56.5 > 46
     assert (fit.mode, fit.pool_gib, fit.reserve_gib) == ("cpu_gpu", 120.0, 8.0)
-    assert fit.fit_class == "good"
+    assert fit.fit_class == "fits"
 
 
 def test_no_card_at_all_is_the_cpu_pool_and_one_card_never_splits():
@@ -117,7 +117,7 @@ def test_every_value_of_a_one_card_fit_is_the_same_as_before(sizes, need):
 def test_the_size_basis_keeps_its_cap_when_spread():
     spread = GpuPool((24.0, 24.0))
     fit = fit_from_size(_package(20.0), spread, 128.0, MACHINE, 8192)
-    assert fit.mode == "gpu_split" and fit.fit_class == "good" and fit.basis == "size"
+    assert fit.mode == "gpu_split" and fit.fit_class == "fits" and fit.basis == "size"
     assert fit_from_parameters(40.0, spread, 128.0, MACHINE, 8192).mode == "gpu_split"  # 22.4 GiB of weights
 
 
@@ -171,7 +171,7 @@ def test_the_note_of_a_spread_row_names_the_cards_and_the_reserve_on_each_card()
     )
 
 
-def test_a_too_tight_row_names_no_card_count():
+def test_a_no_fit_row_names_no_card_count():
     fit = _fit(_cards(24.0, 24.0), 200.0)
     text = _set_aside_note(SetAside(package=_package(200.0), fit=fit, reason="too tight"), covered=True).text
     assert "card" not in text and "after the reserve" in text

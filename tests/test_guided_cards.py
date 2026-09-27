@@ -2,7 +2,8 @@
 
 A machine entered by hand names its class (`entered_class`, always asked) and may have several
 graphics cards of one size (`cards`, then `entered_cards`, then the size per card). This machine,
-measured, is asked for its class only when its chassis says nothing (`machine_class`).
+measured, is asked for its class on every measurement (`machine_class`, decided 2026-09-27): the
+class the chassis reads is the entry the list starts on, and an answer equal to it keeps `chassis`.
 """
 
 from __future__ import annotations
@@ -170,13 +171,34 @@ def test_every_view_names_the_class_first_and_counts_the_cards(cards, machine_cl
     assert _hardware_class(profile) == group
 
 
-# --- this machine: the class question only when the chassis says nothing -----------------------------------
+# --- this machine: the class question on every measurement (decided 2026-09-27) ---------------------------
 
 
-def test_a_chassis_that_names_the_class_asks_nothing_and_needs_no_answer(tmp_path: Path):
-    asker = _watched(tmp_path, FULL_ANSWERS)
-    assert "machine_class" not in asker.asked
+def test_a_chassis_that_names_the_class_is_asked_and_the_same_answer_keeps_chassis(tmp_path: Path):
+    asker = _watched(tmp_path, {**FULL_ANSWERS, "machine_class": "laptop"})
+    assert "machine_class" in asker.asked
     assert (_measured(tmp_path).machine_class, _measured(tmp_path).machine_class_source) == ("laptop", "chassis")
+
+
+def test_an_answer_other_than_the_chassis_is_entered(tmp_path: Path):
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "machine_class": "server"})
+    assert code == 0
+    assert (_measured(tmp_path).machine_class, _measured(tmp_path).machine_class_source) == ("server", "entered")
+    assert "? What kind of machine is this?  server" in [line.strip() for line in lines]
+
+
+def test_the_list_starts_on_the_class_the_chassis_reads_and_has_no_unknown_entry(tmp_path: Path):
+    asker = _watched(tmp_path, FULL_ANSWERS)
+    choices = asker.choices["machine_class"]
+    assert [choice.value for choice in choices] == ["laptop", "workstation", "server"]
+    assert [choice.value for choice in choices if choice.checked] == ["laptop"]
+
+
+def test_a_silent_chassis_asks_with_four_entries_and_none_marked(tmp_path: Path):
+    asker = _watched(tmp_path, {**FULL_ANSWERS, "machine_class": "server"}, probes=_silent_chassis())
+    choices = asker.choices["machine_class"]
+    assert [choice.value for choice in choices] == ["laptop", "workstation", "server", "unknown"]
+    assert not any(choice.checked for choice in choices)
 
 
 def test_a_silent_chassis_asks_and_the_answer_is_entered(tmp_path: Path):
@@ -195,8 +217,9 @@ def test_not_sure_about_this_machine_leaves_the_class_unknown_with_the_note(tmp_
 
 
 def test_a_silent_chassis_without_an_answer_ends_the_run_naming_the_key(tmp_path: Path):
+    without = {key: value for key, value in FULL_ANSWERS.items() if key != "machine_class"}
     with pytest.raises(Exception, match="machine_class"):
-        _run(tmp_path, FULL_ANSWERS, probes=_silent_chassis())
+        _run(tmp_path, without, probes=_silent_chassis())
 
 
 def test_measuring_again_reads_the_class_again(tmp_path: Path):

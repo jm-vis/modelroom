@@ -51,7 +51,8 @@ from modelroom.render import (
 )
 from modelroom.fit import OLLAMA_REQUEST_HINT_TEXT
 from modelroom.screen import MEASURE_HINT
-from modelroom.views import _cell, document_markdown, document_terminal, result_card, scenario_line
+from modelroom.screen import FIT_HINT
+from modelroom.views import CLASS_HINT, GPU_STATE_HINT, SPEED_HINT, _cell, document_markdown, document_terminal, result_card, scenario_line
 
 NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)
 RENDERED_AT = datetime(2026, 9, 22, 10, 0, 0, tzinfo=timezone.utc)
@@ -400,7 +401,7 @@ def test_an_architecture_fit_v1_cannot_judge_is_ranked_from_the_size():
 
 
 def test_a_package_set_aside_on_the_size_basis_names_that_basis_in_its_note():
-    """The Markdown reader sees the basis of a `too_tight` row in its note (second-model round)."""
+    """The Markdown reader sees the basis of a `no_fit` row in its note (second-model round)."""
     unknown = [_base_model(architecture=_architecture(kind="unknown"))]
     huge = _hf_package(weights_bytes=400 * GIB)
 
@@ -419,7 +420,7 @@ def test_a_weight_file_without_a_size_is_still_not_covered():
     assert block.not_covered[0].note.code == "not_covered"
 
 
-def test_a_package_that_does_not_fit_lands_in_too_tight_and_never_in_the_ranking():
+def test_a_package_that_does_not_fit_is_set_aside_and_never_in_the_ranking():
     huge = _hf_package(weights_bytes=400 * GIB)
     block = _document([huge]).machines[0]
     assert block.ranked == []
@@ -428,7 +429,7 @@ def test_a_package_that_does_not_fit_lands_in_too_tight_and_never_in_the_ranking
 
 
 def test_the_too_tight_note_claims_no_overrun_that_did_not_happen():
-    """Fit v1 sets `too_tight` above 98 % of the pool, so the need can be below the pool.
+    """Fit v1 sets `no_fit` above 98 % of the pool, so the need can be below the pool.
 
     Found by the second-model review: the note used to say "more than the machine offers after
     the reserve", which is false for every package between 98 % and 100 % of the pool.
@@ -436,7 +437,7 @@ def test_the_too_tight_note_claims_no_overrun_that_did_not_happen():
     tight = _hf_package(weights_bytes=int(98.8 * GIB))
     entry = _document([tight]).machines[0].too_tight[0]
 
-    assert entry.fit.fit_class == "too_tight"
+    assert entry.fit.fit_class == "no_fit"
     assert entry.fit.need_gib < entry.fit.pool_gib
     assert "more than" not in entry.note.text
     assert f"{entry.fit.need_gib:.1f}" in entry.note.text
@@ -544,7 +545,9 @@ def test_a_measured_machine_keeps_its_plain_name():
     found = machine_profile("workstation", _config().machines["workstation"], ProfileScan(profiles={PROFILE_ID: _profile()}))
 
     assert found.label == "workstation"
-    assert "(entered)" not in document_markdown(_document([_hf_package()], profiles={"workstation": found}))
+    text = document_markdown(_document([_hf_package()], profiles={"workstation": found}))
+    row = next(line for line in text.splitlines() if line.startswith("| workstation |"))
+    assert "(entered)" not in row.split(" | ")[1]
 
 
 def test_unified_memory_entered_by_hand_computes_one_pool_after_both_reserves():
@@ -659,20 +662,20 @@ def test_a_fit_in_system_memory_says_ram_and_never_from_size():
     """The same word the selection list of step 2 uses; where the size came from is a note."""
     unknown = [_base_model(architecture=_architecture(kind="unknown"))]
     # 90 GiB of weights: need 100.6 GiB against the system-memory pool of 111.46, ratio 0.90.
-    marginal = _hf_package(weights_bytes=90 * GIB)
+    tight = _hf_package(weights_bytes=90 * GIB)
 
-    text = document_terminal(_document([marginal], base_models=unknown))
+    text = document_terminal(_document([tight], base_models=unknown))
 
-    assert "marginal (RAM)" in text
+    assert "tight (RAM)" in text
     assert "basis     #1 computed from the package size" in text  # a note under the table, not the cell
-    assert "marginal (from size)" not in text
+    assert "tight (from size)" not in text
 
 
 def test_a_fit_in_graphics_memory_carries_no_suffix():
     text = document_terminal(_document([_hf_package()]))
 
-    assert re.search(r"\bgood\s{2,}", text)
-    assert "(RAM)" not in text
+    assert re.search(r"\bfits\s{2,}", text)
+    assert "(RAM)" not in next(line for line in text.splitlines() if line.startswith(" 1 "))
 
 
 def test_a_row_without_a_measurement_shows_a_dash_and_never_unknown():
@@ -713,7 +716,7 @@ def test_the_terminal_view_lists_the_ranking_and_the_blocks():
     huge = _hf_package(weights_bytes=400 * GIB, repo="packager/Nova-8B-XL-GGUF")
     text = document_terminal(_document([_hf_package(), huge]))
     assert "workstation" in text
-    assert "too tight" in text.lower()
+    assert "no fit" in text.lower()
 
 
 def test_the_terminal_view_carries_the_head_of_the_last_step():
@@ -1086,7 +1089,7 @@ def test_the_card_counts_the_machine_entered_by_hand_where_this_machine_has_no_r
     document = _this_machine_and_studio(this_machine_ranked=False)
 
     assert [(block.status, block.ranked_total) for block in document.machines] == [("no_profile", 0), ("ranked", 1)]
-    assert _card_row(document, "result").note == "1 package ranked, 1 too tight"
+    assert _card_row(document, "result").note == "1 package ranked, 1 no fit"
 
 
 def test_the_card_counts_this_machine_where_it_has_a_ranking_of_its_own():
@@ -1095,7 +1098,7 @@ def test_the_card_counts_this_machine_where_it_has_a_ranking_of_its_own():
     document = _this_machine_and_studio(this_machine_ranked=True, studio_first=True)
 
     assert [block.ranked_total for block in document.machines] == [1, 2]
-    assert _card_row(document, "result").note == "2 packages ranked, none too tight"
+    assert _card_row(document, "result").note == "2 packages ranked, 0 no fit"
 
 
 def _speed_lines(document: RenderDocument) -> list[str]:
@@ -1139,3 +1142,88 @@ def test_the_markdown_head_and_the_card_say_a_level_the_same_way():
     assert f"Scenario: {sentence}\n" in document_markdown(document)
     context = _card_row(document, "context")
     assert f"{context.label} {context.value}" == sentence
+
+
+# --- llmfit as a safety net: a deviation is shown, never a block (decided 2026-09-27) ----------------
+
+
+def _checked(ram_llmfit: float | None, vram_llmfit: float | None) -> dict:
+    """This machine ranked on a profile whose llmfit cross-check read what it is given."""
+    from modelroom.profile import crosscheck
+
+    profile = _profile()
+    checks = LlmfitCrosscheck(
+        ram_physical=crosscheck(profile.ram_physical_gib, ram_llmfit), vram=crosscheck(profile.vram_gib, vram_llmfit)
+    )
+    return {"workstation": MachineProfile("ranked", "workstation", profile.model_copy(update={"llmfit_crosscheck": checks}), None)}
+
+
+@pytest.mark.parametrize(
+    ("ram", "vram", "clause"),
+    [
+        (96.0, 11.94, "; llmfit reads RAM 96.0 GiB, this measurement 127.5 GiB"),
+        (127.46, 8.0, "; llmfit reads VRAM 8.0 GiB, this measurement 11.9 GiB"),
+    ],
+    ids=["ram", "vram"],
+)
+def test_a_deviation_is_named_in_the_markdown_headline_and_the_terminal_head_and_the_fit_computes(ram, vram, clause):
+    document = _document([_hf_package()], profiles=_checked(ram, vram))
+
+    assert document.machines[0].ranked[0].fit.fit_class == "fits"
+    assert f"workstation -- ranked{clause}" in document_markdown(document).splitlines()
+    assert any(line.startswith(" workstation ") and line.endswith(clause) for line in document_terminal(document).splitlines())
+
+
+@pytest.mark.parametrize(("ram", "vram"), [(127.9, 11.94), (None, None)], ids=["confirmed", "absent"])
+def test_a_confirmed_or_absent_check_leaves_both_heads_as_they_are(ram, vram):
+    document = _document([_hf_package()], profiles=_checked(ram, vram))
+
+    assert "workstation -- ranked" in document_markdown(document).splitlines()
+    assert "llmfit" not in document_terminal(document)
+
+
+# --- the hint lines under a table with a word of its own (decided 2026-09-27) -----------------------
+
+
+def test_the_markdown_ranking_carries_the_fit_hint_and_the_speed_sentence_under_its_table():
+    """The fit words and the speed column each say once, under the table, what they are."""
+    lines = document_markdown(_document([_hf_package()])).splitlines()
+    table_end = max(index for index, line in enumerate(lines) if line.startswith("| 1 |"))
+
+    assert lines[table_end + 1 : table_end + 5] == ["", " · ".join(FIT_HINT), "", SPEED_HINT]
+
+
+def test_the_markdown_machines_table_carries_one_hint_line_per_word_list():
+    lines = document_markdown(_document([_hf_package()])).splitlines()
+    table_end = next(index for index, line in enumerate(lines) if line.startswith("| workstation |"))
+
+    assert lines[table_end + 1 : table_end + 5] == ["", GPU_STATE_HINT, "", CLASS_HINT]
+
+
+def test_a_machine_without_a_ranking_carries_no_fit_hint():
+    machines = {"workstation": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": True}}
+    profiles = {"workstation": MachineProfile("no_profile", "workstation", None, NO_PROFILE_REASON)}
+    document = _document([_hf_package()], machines=machines, profiles=profiles)
+
+    assert " · ".join(FIT_HINT) not in document_markdown(document)
+    assert "Fit is memory only" not in document_terminal(document)
+
+
+def test_the_terminal_ranking_carries_the_fit_hint_under_its_label_within_a_hundred_columns():
+    lines = document_terminal(_document([_hf_package()])).splitlines()
+    first = next(index for index, line in enumerate(lines) if line.startswith(" key "))
+    hint = lines[first : lines.index(" " * 11 + SPEED_HINT) + 1]
+    text = " ".join(line[11:] for line in hint)
+
+    assert all(piece in text for piece in FIT_HINT)
+    assert text.startswith(FIT_HINT[0]) and text.endswith(FIT_HINT[-1] + " " + SPEED_HINT)
+    assert all(len(line) <= 100 for line in hint)
+
+
+def test_the_fit_hint_states_the_thresholds_the_fit_computes_with():
+    from modelroom.fit import AMPLE_RATIO, FITS_RATIO, TIGHT_RATIO
+
+    text = " · ".join(FIT_HINT)
+    for word, ratio in (("ample", AMPLE_RATIO), ("fits", FITS_RATIO), ("tight", TIGHT_RATIO)):
+        assert f"{word}: up to {round(ratio * 100)} %" in text
+    assert "no fit: more" in text

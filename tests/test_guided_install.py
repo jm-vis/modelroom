@@ -60,6 +60,7 @@ FIRST_NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS"
 ANSWERS = {
     "results": "here",
     "machines": ["this-machine"],
+    "machine_class": "laptop",
     "search": "qwen",
     "filter_owners": True,
     "select": [UNSLOTH, QWEN_GGUF],

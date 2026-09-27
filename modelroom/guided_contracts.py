@@ -88,7 +88,7 @@ class Requirement(BaseModel):
     """What one package needs for a scenario (computed, never measured): the reverse calculation.
 
     `kv_gib_total` is `kv_gib_per_request` x `scenario.requests`; `need_gib` is fit v1's formula
-    with that KV total; `perfect_reachable` is false in CPU mode, where fit v1 caps at `good`.
+    with that KV total; `perfect_reachable` (a field name) is false in CPU mode, where fit v1 caps at `fits`.
     It carries no speed statement.
     """
 
@@ -113,7 +113,7 @@ class Requirement(BaseModel):
         if not math.isclose(self.need_gib, expected_need, rel_tol=1e-9):
             raise ValueError(f"need_gib must be fit v1's formula with kv_gib_total ({expected_need})")
         if self.mode == "cpu" and self.perfect_reachable:
-            raise ValueError("'perfect' is not reachable in cpu mode")
+            raise ValueError("'ample' is not reachable in cpu mode")
         return self
 
 

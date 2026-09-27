@@ -33,7 +33,7 @@ from .contracts import Fit, validate_hf_repo
 from .dialog import Asker, Choice, FileAsker, columns
 from .fit import fit_from_parameters, profile_memory, unknown_fit
 from .guided_context import DEFAULT_CONTEXT, Checked
-from .screen import context_tokens_text
+from .screen import FIT_SCALE_HINT, context_tokens_text
 from .guided_contracts import SearchHit
 from .search_pages import format_downloads
 
@@ -90,16 +90,15 @@ COMPUTED_MARK = "*"
 # `latest` first, then a release nobody knows, then `legacy`: a reader is choosing what to fetch,
 # and a model whose family has moved on belongs under the ones that have not (decided 2026-09-25).
 _RELEASE_ORDER = ("latest", UNKNOWN, "legacy")
-_FIT_WORDS = {"perfect": "good", "good": "good", "marginal": "marginal", "too_tight": "too tight", "unknown": UNKNOWN}
-_CLASS_ORDER = ("perfect", "good", "marginal", "too_tight", "unknown")
-# A fit against system memory says so behind its word: fit v1 caps that pool at `good`, and live
-# on 2026-09-24 a 122B model stood as `good` above a 9B `marginal` that fits the graphics card,
+_CLASS_ORDER = ("ample", "fits", "tight", "no_fit", "unknown")
+# A fit against system memory says so behind its word: fit v1 caps that pool at `fits`, and live
+# on 2026-09-24 a 122B model stood as `fits` above a 9B `tight` that fits the graphics card,
 # with nothing to tell the two pools apart. The list is what a person chooses by, so a fit in
 # graphics memory stands above one in system memory, whatever its class (decided 2026-09-24).
 _RAM_MODES = ("cpu_gpu", "cpu")
 _RAM_SUFFIX = " (RAM)"
 _MODE_ORDER = ("gpu", "gpu_split", "cpu_gpu", "cpu", None)
-_SETTLED = ("too_tight", "unknown")
+_SETTLED = ("no_fit", "unknown")
 
 # A stated age is positive evidence about one model; a computed one compares the version numbers of
 # one family and variant and carries the star (AGENTS.md, the language standard). `legacy` means a
@@ -108,7 +107,10 @@ RELEASE_HINT = (
     "latest: the publisher's current release of its family · legacy: a successor is named · "
     "*: computed from the version numbers of the family, not stated by the publisher"
 )
-FIT_FROM_SIZE_HINT = "fit from the size at {context} context, exact after the fetch"
+# The fit words of the list, in the words of every other view (`screen.FIT_SCALE_HINT`), and its one
+# pool the list names: the list shows no mode, only `(RAM)` (decided 2026-09-27).
+FIT_RAM_HINT = f"{_RAM_SUFFIX.strip()}: the pool is the system memory"
+FIT_FROM_SIZE_HINT = "fit from the size at {context} context, the best is fits, exact after the fetch"
 FIT_UNKNOWN_HINT = "fit unknown until this machine is measured"
 
 # A parameter count in a model name: `9B`, `0.6B`, `2.4T`, `360M`, the effective size `E4B`, and
@@ -159,10 +161,10 @@ class ModelChoice(BaseModel):
 
     @property
     def fit_word(self) -> str:
-        """The fit as the list shows it: `good`, `marginal`, `too tight`, `unknown` -- and
-        `good (RAM)` or `marginal (RAM)` where the graphics memory is too small and the fit is
-        against system memory. `too tight` is too tight for either pool."""
-        word = _FIT_WORDS[self.fit.fit_class]
+        """The fit as the list shows it: the class itself (`fits`, `tight`, `no_fit`, `unknown`) --
+        and `fits (RAM)` or `tight (RAM)` where the graphics memory is too small and the fit is
+        against system memory. `no_fit` fits neither pool."""
+        word = self.fit.fit_class
         if self.fit.mode in _RAM_MODES and self.fit.fit_class not in _SETTLED:
             return f"{word}{_RAM_SUFFIX}"
         return word
@@ -316,7 +318,7 @@ def model_choices(
     a publisher nor a listed packager is no target of this run and no part of a model's `repos`
     either -- except the one repository `typed` names, which the filter never hides. The order is
     the memory pool (graphics memory first), then the fit class, then the downloads, then the name,
-    with `too tight` and `unknown` last -- the fit is what a reader is choosing by, and the
+    with `no_fit` and `unknown` last -- the fit is what a reader is choosing by, and the
     downloads say what many people take (never a rank).
 
     `configured_ollama` is the `ollama_base:ollama_tag` pair the configuration holds per base
@@ -457,7 +459,8 @@ def list_choices(models: Sequence[ModelChoice]) -> list[Choice]:
 
 
 def hint_line(checked: Checked, context: int) -> str:
-    """What this list has to say about itself: the release words, the star, and where its fit is from.
+    """What this list has to say about itself: the release words, the star, the fit words and where
+    its fit is from.
 
     It is an instruction line of the question, not a line of the run (decided 2026-09-24): a
     sentence that explains a list has nothing to say once the list is gone. The context it names is
@@ -466,8 +469,10 @@ def hint_line(checked: Checked, context: int) -> str:
     (`dialog.TerminalAsker.checkbox`, decided 2026-09-25).
     """
     measured = checked.profile is not None and checked.machine_config is not None
-    fit = FIT_FROM_SIZE_HINT.format(context=context_tokens_text(context)) if measured else FIT_UNKNOWN_HINT
-    return f"{RELEASE_HINT} · {fit}"
+    if not measured:
+        return f"{RELEASE_HINT} · {FIT_UNKNOWN_HINT}"
+    fit = FIT_FROM_SIZE_HINT.format(context=context_tokens_text(context))
+    return " · ".join([RELEASE_HINT, *FIT_SCALE_HINT, FIT_RAM_HINT, fit])
 
 
 def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instruction: str) -> list[str]:

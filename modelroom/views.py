@@ -21,9 +21,12 @@ from .render import format_header_line
 from .scenario_text import document_scenario, load_hint, never_measured, never_measured_of, scenario_line
 from .scenario_text import scenario_words, unused_measurements
 from .screen import (
+    FIT_HINT,
     JOIN_WIDTH,
     MEASURE_HINT,
+    NO_FIT,
     Line,
+    deviation_words,
     fit_word,
     head_line,
     install_name,
@@ -112,6 +115,20 @@ _MACHINE_COLUMNS = (
     "Reserve RAM GiB", "Reserve VRAM GiB", "Recorded at", "Profile age (days)",
 )
 _AREA_COLUMNS = ("Source", "Base model", "Packager", "Status", "Last success", "Error")
+# One hint line under every table whose column has words of its own, in plain words and one short
+# clause per word (decided 2026-09-27). The fit's own is `screen.FIT_HINT`, shared with the terminal.
+SPEED_HINT = "Speed is measured, see its column."
+GPU_STATE_HINT = (
+    "GPU state: measured = read from nvidia-smi; entered = typed in by hand; multi_gpu = several cards, "
+    "added up; present_unmeasured = a card may be there, its memory was not read; none = no usable card "
+    "(none found, display adapter only, or --cpu-only); unified_memory = system and card share one "
+    "memory; unsupported_platform = not read on this platform; multi_gpu_not_covered = several cards, "
+    "measured before the fit covered them; legacy_unknown = from a schema-1 profile"
+)
+CLASS_HINT = (
+    "Class: laptop, workstation or server, as the chassis reports it (chassis) or as the user gave it "
+    "(entered); unknown where neither says. It changes no number."
+)
 
 
 def _table(columns: tuple[str, ...], rows: list[list[str]]) -> str:
@@ -223,7 +240,7 @@ def _summary_lines(document: RenderDocument) -> list[str]:
 
 def _machine_sections(block: MachineRanking, document: RenderDocument) -> list[str]:
     """One machine's sections: its ranking, then what was set aside, each as its own heading."""
-    headline = f"{block.label} -- {block.status}"
+    headline = f"{block.label} -- {block.status}{_deviation(block)}"
     if block.reason is not None:
         headline = f"{headline}: {_cell(block.reason)}"
     sections = [f"## Ranking: {block.machine}", "", headline, ""]
@@ -233,10 +250,14 @@ def _machine_sections(block: MachineRanking, document: RenderDocument) -> list[s
             "",
             _table(_RANKED_COLUMNS, [_ranked_row(entry, document) for entry in block.ranked]),
             "",
+            " · ".join(FIT_HINT),
+            "",
+            SPEED_HINT,
+            "",
         ]
     else:
         sections += ["No package of the configured base models is ranked on this machine.", ""]
-    for heading, items in (("Not covered", block.not_covered), ("Too tight", block.too_tight)):
+    for heading, items in (("Not covered", block.not_covered), (NO_FIT.capitalize(), block.too_tight)):
         if not items:
             continue
         sections += [
@@ -263,6 +284,10 @@ def document_markdown(document: RenderDocument) -> str:
         "",
         _table(_MACHINE_COLUMNS, [_machine_row(block, document.rendered_at) for block in document.machines]),
         "",
+        GPU_STATE_HINT,
+        "",
+        CLASS_HINT,
+        "",
     ]
     for block in document.machines:
         sections += _machine_sections(block, document)
@@ -274,8 +299,8 @@ def document_markdown(document: RenderDocument) -> str:
 # The result table as the mockup of 2026-09-24 draws it: what a reader recognizes a package by
 # (its model and its packager) before what a fit is made of. 99 characters wide plus the one space
 # every line of this view is indented by, so it fits a 100-column window without wrapping.
-# `Fit` is 20 and not 18: `marginal (from size)` is 20 characters and was cut to
-# `marginal (from siz` (second-model round, 2026-09-24). The two came off `Package`, whose cell
+# `Fit` is 20 and not 18: a fit word with its suffix was cut mid-word at 18 (second-model round,
+# 2026-09-24). The two came off `Package`, whose cell
 # says so with `…` instead of ending mid-word.
 _TERMINAL_COLUMNS = (
     ("#", 3),
@@ -294,6 +319,9 @@ SHOWN_LABEL = "shown"
 MEMORY_LABEL = "memory"
 BASIS_LABEL = "basis"
 SPEED_LABEL = "speed"
+# The words of the table's own columns, under the notes and above the install line (decided
+# 2026-09-27): the same hint the Markdown file carries under its ranking.
+KEY_LABEL = "key"
 INSTALL_LABEL = "install"
 # What is left of the 100 characters for the text of a labeled line: the label's own column, and
 # the one space every line of this screen carries.
@@ -340,7 +368,7 @@ def _set_aside_pieces(word: str, entries: list[SetAsideEntry]) -> list[str]:
     41 lines of `not covered`, one per package, said the same thing 41 times and pushed the
     ranking itself off the screen (hand test, 2026-09-24); since 2026-09-24 they stand behind the
     `shown` count as pieces of one line. The reason is named only where the list has more than
-    one -- with a single reason the word (`too tight`, `not covered`) already says it, and the
+    one -- with a single reason the word (`no fit`, `not covered`) already says it, and the
     reason itself is in the Markdown file, which has room for it. The word `package` is the
     `shown` piece's own (`10 of 23 packages`), so a piece behind it is the count and the reason.
     """
@@ -403,10 +431,19 @@ def _terminal_speed(entry: RankedEntry, dash: str) -> str:
 
 
 def _block_head(block: MachineRanking, scenario: Scenario, dot: str) -> str:
-    """The line above one machine's table: what the machine is called, and what was computed for it."""
+    """The line above one machine's table: what the machine is called, and what was computed for it.
+
+    Where llmfit read the profile otherwise, both readings follow (`screen.deviation_words`); a
+    confirmed or absent check leaves the line as it is.
+    """
     if block.status == "ranked":
-        return f"{block.label} {dot} context {context_short(scenario.context_requested)}"
+        return f"{block.label} {dot} context {context_short(scenario.context_requested)}{_deviation(block)}"
     return f"{block.label} {dot} {block.status}"
+
+
+def _deviation(block: MachineRanking) -> str:
+    """The deviation clause of a machine's profile, or nothing where there is no profile."""
+    return "" if block.profile is None else deviation_words(block.profile)
 
 
 def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
@@ -469,7 +506,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | N
     """Everything under one machine's table, in the order a reader reads it, each line labeled."""
     shown = [f"{len(block.ranked)} of {block.ranked_total} packages"]
     shown += _set_aside_pieces("not covered", block.not_covered)
-    shown += _set_aside_pieces("too tight", block.too_tight)
+    shown += _set_aside_pieces(NO_FIT, block.too_tight)
     lines = _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
     lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash))
@@ -477,6 +514,8 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | N
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
+    if block.ranked:
+        lines += _labeled_rows(KEY_LABEL, joined(FIT_HINT, dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
     lines += _install_lines(block, install_for)
     return lines
 
@@ -592,7 +631,7 @@ def _set_aside_counts(block: MachineRanking | None) -> list[tuple[str, int]]:
     """How many packages this machine set aside, by the word that says why, where there are any."""
     if block is None:
         return []
-    counted = (("too tight", len(block.too_tight)), ("not covered", len(block.not_covered)))
+    counted = ((NO_FIT, len(block.too_tight)), ("not covered", len(block.not_covered)))
     return [pair for pair in counted if pair[1]]
 
 

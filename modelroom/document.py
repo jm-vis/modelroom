@@ -33,7 +33,7 @@ DOCUMENT_SCHEMA_VERSION = 3
 # profile at all yet (`no_profile`). Only `ranked` ever carries entries.
 MachineStatus = Literal["ranked", "legacy", "no_profile"]
 
-_RANKABLE_CLASSES = ("perfect", "good", "marginal")
+_RANKABLE_CLASSES = ("ample", "fits", "tight")
 
 
 class PackageLine(BaseModel):
@@ -85,7 +85,7 @@ class RankedEntry(PackageLine):
 
 
 class SetAsideEntry(PackageLine):
-    """One package outside the ranking -- not covered, or too tight -- with the reason shown."""
+    """One package outside the ranking -- not covered, or no fit -- with the reason shown."""
 
     fit: Fit
     reason: str = Field(min_length=1)

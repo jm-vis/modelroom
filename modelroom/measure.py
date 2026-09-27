@@ -721,14 +721,23 @@ def build_crosscheck(measured: MeasuredHardware, reference: LlmfitReference) -> 
     `0` is the user's own statement, not a reading, and llmfit's number is about hardware the
     user has just said not to use. Measured against a machine that does have a card, that
     comparison was a `deviation`, which blocked the very CPU fit `--cpu-only` exists to produce
-    (probe: `hardware --cpu-only` on a laptop with one NVIDIA adapter, 2026-09-23).
+    (probe: `hardware --cpu-only` on a laptop with one NVIDIA adapter, 2026-09-23) and would be
+    shown as one since a deviation is no block (2026-09-27).
+
+    Cards of different sizes are `not_comparable`: llmfit multiplies one card's size by the count,
+    so its sum says nothing about them (decided 2026-09-27).
     """
     if measured.cpu_only:
         # Skipped on purpose, whatever llmfit did: `absent` says "never asked", `error` would say
         # the comparison was attempted and llmfit let it down.
         vram = CrossCheck(status="absent", own_gib=measured.gpu.vram_gib)
+    elif measured.gpu.gpu_state == "multi_gpu" and len({card.vram_gib for card in measured.gpu.adapters}) > 1:
+        # llmfit multiplies one card's size by the count, so its sum says nothing about cards of
+        # different sizes (decided 2026-09-27): shown, never held against the 5 % rule.
+        llmfit_gib = reference.cuda_vram_gib if reference.status == "available" else None
+        vram = CrossCheck(status="not_comparable", own_gib=measured.gpu.vram_gib, llmfit_gib=llmfit_gib)
     elif measured.gpu.gpu_state == "multi_gpu":
-        # Every card against the sum of llmfit's CUDA cards, the way llmfit counts them itself.
+        # Cards of one size against the sum of llmfit's CUDA cards, the way llmfit counts them itself.
         vram = _one_check(measured.gpu.vram_gib, reference.cuda_vram_gib, reference.status)
     else:
         vram = _one_check(measured.gpu.vram_gib, reference.vram_gib, reference.status)

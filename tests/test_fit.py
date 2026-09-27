@@ -162,18 +162,18 @@ def test_implausible_default_context_overflows_gracefully_to_unknown_fit():
 # --- brief's worked examples: 8B and 9B dense packages on laptop vs. server ----------------
 
 
-def test_dense_8b_package_is_good_gpu_on_laptop():
+def test_dense_8b_package_fits_the_gpu_on_laptop():
     # L=36, KVH=8, D=128, context assumed 8192: kv_gib = 2*36*8*128*2*8192 / 1024**3 = 1.125
     # GiB exactly. weights_gib = 5.0. need_gib = 5.0*1.10 + 1.125 + 0.50 = 7.125 GiB.
     # laptop available_vram = 11.94 - 1.0 = 10.94; 7.125 <= 10.94 -> gpu.
-    # ratio = 7.125 / 10.94 = 0.6513... -> "good" (> 0.60, <= 0.85).
+    # ratio = 7.125 / 10.94 = 0.6513... -> "fits" (> 0.60, <= 0.85).
     package = _gguf_package(weights_bytes=5 * GIB)
     base_model = _base_model(architecture=_architecture(num_hidden_layers=36, num_key_value_heads=8, head_dim=128))
 
     fit = compute_fit(package, base_model, LAPTOP, LAPTOP_MACHINE)
 
     assert fit.mode == "gpu"
-    assert fit.fit_class == "good"
+    assert fit.fit_class == "fits"
     assert fit.weights_gib == pytest.approx(5.0)
     assert fit.kv_gib == pytest.approx(1.125)
     assert fit.need_gib == pytest.approx(7.125)
@@ -182,41 +182,41 @@ def test_dense_8b_package_is_good_gpu_on_laptop():
     assert fit.reserve_gib == pytest.approx(1.0)
 
 
-def test_dense_8b_package_is_too_tight_on_server():
+def test_dense_8b_package_is_no_fit_on_server():
     # server: available_vram = 0 - 0 = 0, need(7.125) > 0 -> cpu path.
-    # pool = ram_gib(7.56) - reserve_ram(3.0) = 4.56; ratio = 7.125 / 4.56 = 1.5625 -> too_tight.
+    # pool = ram_gib(7.56) - reserve_ram(3.0) = 4.56; ratio = 7.125 / 4.56 = 1.5625 -> no_fit.
     package = _gguf_package(weights_bytes=5 * GIB)
     base_model = _base_model(architecture=_architecture(num_hidden_layers=36, num_key_value_heads=8, head_dim=128))
 
     fit = compute_fit(package, base_model, SERVER, SERVER_MACHINE)
 
     assert fit.mode == "cpu"
-    assert fit.fit_class == "too_tight"
+    assert fit.fit_class == "no_fit"
     assert fit.pool_gib == pytest.approx(4.56)
 
 
-def test_dense_9b_package_is_good_gpu_on_laptop():
+def test_dense_9b_package_fits_the_gpu_on_laptop():
     # L=42, KVH=8, D=128: kv_gib = 2*42*8*128*2*8192 / 1024**3 = 1.3125 GiB.
     # weights_gib = 5.6. need_gib = 5.6*1.10 + 1.3125 + 0.50 = 7.9725 GiB.
-    # laptop: available_vram = 10.94 >= 7.9725 -> gpu; ratio = 7.9725/10.94 = 0.7288 -> good.
+    # laptop: available_vram = 10.94 >= 7.9725 -> gpu; ratio = 7.9725/10.94 = 0.7288 -> fits.
     package = _gguf_package(weights_bytes=int(5.6 * GIB))
     base_model = _base_model(architecture=_architecture(num_hidden_layers=42, num_key_value_heads=8, head_dim=128))
 
     fit = compute_fit(package, base_model, LAPTOP, LAPTOP_MACHINE)
 
     assert fit.mode == "gpu"
-    assert fit.fit_class == "good"
+    assert fit.fit_class == "fits"
     assert fit.need_gib == pytest.approx(7.9725, abs=1e-3)
 
 
-def test_dense_9b_package_is_too_tight_on_server():
-    # server: pool = 4.56; need ~= 7.9725; ratio = 1.748 -> too_tight.
+def test_dense_9b_package_is_no_fit_on_server():
+    # server: pool = 4.56; need ~= 7.9725; ratio = 1.748 -> no_fit.
     package = _gguf_package(weights_bytes=int(5.6 * GIB))
     base_model = _base_model(architecture=_architecture(num_hidden_layers=42, num_key_value_heads=8, head_dim=128))
 
     fit = compute_fit(package, base_model, SERVER, SERVER_MACHINE)
 
-    assert fit.fit_class == "too_tight"
+    assert fit.fit_class == "no_fit"
 
 
 # --- default_context vs. package.default_context -------------------------------------------
@@ -256,12 +256,12 @@ def _need_gib_of(package: Package, base_model: BaseModelSpec) -> float:
 @pytest.mark.parametrize(
     "ratio, expected_class",
     [
-        (0.60, "perfect"),
-        (0.6000001, "good"),
-        (0.85, "good"),
-        (0.8500001, "marginal"),
-        (0.98, "marginal"),
-        (0.9800001, "too_tight"),
+        (0.60, "ample"),
+        (0.6000001, "fits"),
+        (0.85, "fits"),
+        (0.8500001, "tight"),
+        (0.98, "tight"),
+        (0.9800001, "no_fit"),
     ],
 )
 def test_gpu_mode_ratio_boundaries(ratio, expected_class):
@@ -279,7 +279,7 @@ def test_gpu_mode_ratio_boundaries(ratio, expected_class):
     assert fit.fit_class == expected_class
 
 
-def test_pool_at_or_below_zero_is_too_tight():
+def test_pool_at_or_below_zero_is_no_fit():
     package = _gguf_package(weights_bytes=5 * GIB, default_context=1024)
     base_model = _base_model()
     # vram_gib 0, reserve 0 -> available_vram 0, need > 0 -> falls to cpu path with ram_gib
@@ -290,16 +290,16 @@ def test_pool_at_or_below_zero_is_too_tight():
     fit = compute_fit(package, base_model, hardware, machine)
 
     assert fit.pool_gib <= 0
-    assert fit.fit_class == "too_tight"
+    assert fit.fit_class == "no_fit"
 
 
-def test_cpu_mode_is_capped_at_good_even_when_the_ratio_would_be_perfect():
+def test_cpu_mode_is_capped_at_fits_even_when_the_ratio_would_be_ample():
     package = _gguf_package(weights_bytes=5 * GIB, default_context=1024)
     base_model = _base_model()
     need_gib = _need_gib_of(package, base_model)
 
-    # Off the GPU (vram_gib=0): a pool sized to give ratio 0.30 (well under the 0.60 "perfect"
-    # boundary) must still come back "good", never "perfect".
+    # Off the GPU (vram_gib=0): a pool sized to give ratio 0.30 (well under the 0.60 "ample"
+    # boundary) must still come back "fits", never "ample".
     pool_gib = need_gib / 0.30
     hardware = _hardware(vram_gib=0.0, ram_gib=pool_gib)
     machine = _machine(reserve_ram_gib=0.0, reserve_vram_gib=0.0)
@@ -307,7 +307,7 @@ def test_cpu_mode_is_capped_at_good_even_when_the_ratio_would_be_perfect():
     fit = compute_fit(package, base_model, hardware, machine)
 
     assert fit.mode == "cpu"
-    assert fit.fit_class == "good"
+    assert fit.fit_class == "fits"
 
 
 def test_cpu_gpu_mode_when_some_vram_exists_but_package_does_not_fit_in_it():

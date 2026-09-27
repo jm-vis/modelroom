@@ -12,6 +12,7 @@
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
  ? Which machines should the result cover?  this machine
+ ? What kind of machine is this?  laptop
    measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ✓ Configuration   <results>, 1 machine
 

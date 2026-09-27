@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Callable, Iterable, Sequence
 
 from .dialog import QUESTION_RULES
+from .fit import AMPLE_RATIO, FITS_RATIO, TIGHT_RATIO
 from .intro import STEP_NAMES, Fact, Glyphs, class_words, fact_line, glyphs, hardware_words, style_rules, use_color
 from .intro import GAP, LABEL_WIDTH
 from .profile import HardwareProfile
@@ -44,6 +45,26 @@ JOIN_WIDTH = 100
 # result table alike: the same word in both places means the same thing (decided 2026-09-24).
 RAM_MODES = ("cpu_gpu", "cpu")
 RAM_SUFFIX = " (RAM)"
+# What a fit word says, under every table that shows one (decided 2026-09-27): only what was
+# computed, the share of a pool, in words a reader without the contract follows. One piece per
+# statement, so the terminal wraps between them (`joined`) and a file joins them with ` · `, the way
+# `guided_models.RELEASE_HINT` reads. The thresholds are the fit's own numbers.
+FIT_SCALE_HINT = (
+    "Fit is memory only: the package's need against a pool",
+    f"ample: up to {round(AMPLE_RATIO * 100)} % of the pool",
+    f"fits: up to {round(FITS_RATIO * 100)} %",
+    f"tight: up to {round(TIGHT_RATIO * 100)} %",
+    "no fit: more",
+)
+FIT_POOL_HINT = (
+    "the pool is what the mode names, minus its reserve (per card)",
+    "gpu: one card",
+    "gpu_split: all cards together",
+    f"cpu_gpu, cpu{RAM_SUFFIX}: the system memory",
+    "one memory shared by system and card counts as gpu, both reserves taken",
+    "off the card, and for a fit from size, the best is fits",
+)
+FIT_HINT = FIT_SCALE_HINT + FIT_POOL_HINT
 # Counts a sentence says in words rather than in digits; beyond ten the digits read better.
 _NUMBER_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 
@@ -106,7 +127,7 @@ def card_lines(facts: Sequence[Fact]) -> list[Line]:
 def joined(pieces: Sequence[str], *, dot: str = "·", width: int = JOIN_WIDTH, indent: int = 1) -> list[str]:
     """`pieces` as one line, joined with ` <dot> `, wrapped between pieces and never inside one.
 
-    A piece is a whole statement (`1 package too tight (unsloth IQ4_NL)`), so a break inside one
+    A piece is a whole statement (`1 package no fit (unsloth IQ4_NL)`), so a break inside one
     would split a number from what it counts. A piece longer than `width` therefore stands on a
     line of its own and is left as long as it is.
     """
@@ -248,12 +269,27 @@ def measured_note(profile: HardwareProfile, *, again: bool) -> str:
     """The one note step 1 leaves behind about a measurement: the hardware, and who confirmed it.
 
     Without a cross-check the sentence ends after the hardware: `llmfit` said nothing, so nothing
-    is claimed about it.
+    is claimed about it. Where llmfit read otherwise, both readings follow (`deviation_words`).
     """
     checks = profile.llmfit_crosscheck
     confirmed = checks.ram_physical.status == "confirmed" and checks.vram.status == "confirmed"
     opening = "measured again" if again else "measured"
-    return f"{opening}: {hardware_words(profile)}" + (", confirmed by llmfit" if confirmed else "")
+    return f"{opening}: {hardware_words(profile)}" + (", confirmed by llmfit" if confirmed else deviation_words(profile))
+
+
+def deviation_words(profile: HardwareProfile) -> str:
+    """Every quantity llmfit read otherwise than this measurement, both readings, each behind a `;`.
+
+    llmfit is a safety net against a wrong own reading, never a block (decided 2026-09-27): the fit
+    computes on the own reading, and this clause is where a reader sees that llmfit disagrees. Empty
+    where nothing deviates -- a confirmed, absent or failed check says nothing here.
+    """
+    checks = (("RAM", profile.llmfit_crosscheck.ram_physical), ("VRAM", profile.llmfit_crosscheck.vram))
+    return "".join(
+        f"; llmfit reads {name} {check.llmfit_gib:.1f} GiB, this measurement {check.own_gib:.1f} GiB"
+        for name, check in checks
+        if check.status == "deviation"
+    )
 
 
 def entered_number(value: float) -> str:
@@ -377,6 +413,9 @@ NOTHING_CHOSEN_SUMMARY = "nothing chosen, the folder stays as it is"
 # --- the card of step 5 ----------------------------------------------------------------------------
 
 SPEED_NOT_MEASURED = "not measured"
+# The fit class `no_fit` where prose says it: the words with a space, the underscore being the one
+# difference between a value and its text, and only outside a cell (decided 2026-09-27).
+NO_FIT = "no fit"
 MEASURE_HINT = "say Yes in step 4 to measure an installed package"
 
 
@@ -457,9 +496,9 @@ def result_fact(path: str, ranked: int, set_aside: Sequence[tuple[str, int]], do
     """The result row of the card: where the document is, and what it holds."""
     counted = f"{ranked} package" if ranked == 1 else f"{ranked} packages"
     pieces = [f"{counted} ranked"]
-    tight = next((count for word, count in set_aside if word == "too tight"), 0)
-    pieces[0] += f", {tight} too tight" if tight else ", none too tight"
-    pieces += [f"{count} {word}" for word, count in set_aside if word != "too tight"]
+    no_fit = next((count for word, count in set_aside if word == NO_FIT), 0)
+    pieces[0] += f", {no_fit} {NO_FIT}"
+    pieces += [f"{count} {word}" for word, count in set_aside if word != NO_FIT]
     return Fact("result", path, f" {dot} ".join(pieces))
 
 
@@ -551,10 +590,13 @@ def fit_word(fit_class: str, mode: str | None) -> str:
 
 __all__ = [
     "CLONE_QUESTION",
+    "FIT_HINT",
+    "FIT_SCALE_HINT",
     "HEAD_WIDTH",
     "JOIN_WIDTH",
     "MEASURE_HINT",
     "NAME_WIDTH",
+    "NO_FIT",
     "NOTHING_CHOSEN_SUMMARY",
     "RAM_MODES",
     "RAM_SUFFIX",
@@ -565,6 +607,7 @@ __all__ = [
     "card_lines",
     "clone_words",
     "context_tokens_text",
+    "deviation_words",
     "entered_hardware",
     "entered_note",
     "entered_number",

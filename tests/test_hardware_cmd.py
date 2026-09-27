@@ -418,7 +418,8 @@ def test_a_missing_llmfit_is_not_a_failure_and_leaves_the_cross_check_absent(tmp
     assert "llmfit" in capsys.readouterr().out
 
 
-def test_a_deviating_llmfit_reading_is_stored_and_blocks_the_fit(tmp_path: Path, capsys):
+def test_a_deviating_llmfit_reading_is_stored_and_the_fit_computes(tmp_path: Path, capsys):
+    """llmfit is a safety net, never a block (decided 2026-09-27): the summary says `deviation`."""
     config = _config(tmp_path)
     runner = _runner(llmfit_system=_llmfit_system(gpu_vram_gb=6.0))
 
@@ -426,8 +427,9 @@ def test_a_deviating_llmfit_reading_is_stored_and_blocks_the_fit(tmp_path: Path,
 
     profile = _written(config)
     assert profile.llmfit_crosscheck.vram.status == "deviation"
-    assert fit_block_reason(profile) is not None
-    assert "deviation" in capsys.readouterr().out
+    assert fit_block_reason(profile) is None
+    out = capsys.readouterr().out
+    assert "deviation" in out and "no fit is computed" not in out
 
 
 def test_a_failing_llmfit_is_recorded_as_an_error_not_as_a_deviation(tmp_path: Path):

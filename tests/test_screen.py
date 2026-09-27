@@ -162,7 +162,7 @@ def test_a_value_wider_than_its_column_pushes_the_note_along():
 
 
 def test_joined_puts_the_pieces_of_one_statement_on_one_line():
-    assert joined(["showing 5 of 25", "1 package too tight"]) == [" showing 5 of 25 · 1 package too tight"]
+    assert joined(["showing 5 of 25", "1 package no fit"]) == [" showing 5 of 25 · 1 package no fit"]
 
 
 def test_joined_breaks_between_pieces_and_never_inside_one():
@@ -241,6 +241,35 @@ def test_a_cross_check_that_confirmed_both_readings_is_named():
     )
 
     assert measured_note(profile, again=False).endswith(", confirmed by llmfit")
+
+
+def _deviating(ram_llmfit: float | None = None, vram_llmfit: float | None = None):
+    """`v2_profile()` (127.46 GiB of RAM, 11.94 of VRAM) with llmfit reading what it is given."""
+    from modelroom.profile import LlmfitCrosscheck, crosscheck
+
+    profile = v2_profile()
+    checks = LlmfitCrosscheck(
+        ram_physical=crosscheck(profile.ram_physical_gib, ram_llmfit), vram=crosscheck(profile.vram_gib, vram_llmfit)
+    )
+    return profile.model_copy(update={"llmfit_crosscheck": checks})
+
+
+def test_a_ram_deviation_names_both_readings_in_the_note():
+    """llmfit is a safety net: a deviation is shown, and the fit computes all the same (2026-09-27)."""
+    assert measured_note(_deviating(ram_llmfit=96.0), again=False) == (
+        "measured: one graphics card, 12 GB, 127 GB memory; llmfit reads RAM 96.0 GiB, this measurement 127.5 GiB"
+    )
+
+
+def test_a_vram_deviation_names_both_readings_in_the_note():
+    note = measured_note(_deviating(ram_llmfit=127.46, vram_llmfit=8.0), again=False)
+    assert note.endswith("; llmfit reads VRAM 8.0 GiB, this measurement 11.9 GiB")
+    assert "confirmed" not in note
+
+
+def test_both_deviations_are_named_one_after_the_other():
+    note = measured_note(_deviating(ram_llmfit=96.0, vram_llmfit=8.0), again=False)
+    assert note.endswith("; llmfit reads RAM 96.0 GiB, this measurement 127.5 GiB; llmfit reads VRAM 8.0 GiB, this measurement 11.9 GiB")
 
 
 def test_an_import_names_the_machine_that_came_in():
@@ -372,10 +401,10 @@ def test_the_speed_row_says_what_to_do_where_nothing_was_measured():
 
 
 def test_the_result_row_counts_what_was_ranked_and_what_was_set_aside():
-    assert result_fact("docs/models.md", 25, [("too tight", 1)]).note == "25 packages ranked, 1 too tight"
-    assert result_fact("docs/models.md", 25, []).note == "25 packages ranked, none too tight"
-    assert result_fact("docs/models.md", 25, [("too tight", 1), ("not covered", 3)]).note == (
-        "25 packages ranked, 1 too tight · 3 not covered"
+    assert result_fact("docs/models.md", 25, [("no fit", 1)]).note == "25 packages ranked, 1 no fit"
+    assert result_fact("docs/models.md", 25, []).note == "25 packages ranked, 0 no fit"
+    assert result_fact("docs/models.md", 25, [("no fit", 1), ("not covered", 3)]).note == (
+        "25 packages ranked, 1 no fit · 3 not covered"
     )
 
 
@@ -383,9 +412,9 @@ def test_the_result_row_counts_what_was_ranked_and_what_was_set_aside():
 
 
 def test_a_fit_against_system_memory_says_ram_behind_its_class():
-    assert fit_word("good", "gpu") == "good"
-    assert fit_word("good", "cpu_gpu") == "good (RAM)"
-    assert fit_word("marginal", "cpu") == "marginal (RAM)"
+    assert fit_word("fits", "gpu") == "fits"
+    assert fit_word("fits", "cpu_gpu") == "fits (RAM)"
+    assert fit_word("tight", "cpu") == "tight (RAM)"
 
 
 @pytest.mark.parametrize(

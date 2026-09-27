@@ -13,7 +13,8 @@ state the fit computes for. A schema-2 file reads as schema 3 (`normalize_profil
 
 Schema 4 (decided 2026-09-26) adds every graphics card `nvidia-smi` lists (`gpus`), the state
 `multi_gpu` for two cards or more, and the machine class with its source. A schema-3 file reads
-as schema 4 (`normalize_profile_v3`), a schema-2 file through both steps.
+as schema 4 (`normalize_profile_v3`), a schema-2 file through both steps. Schema 4, still
+unreleased, also carries the cross-check status `not_comparable` (decided 2026-09-27).
 """
 
 from __future__ import annotations
@@ -81,18 +82,23 @@ _SCHEMA_3_VALUES = {"ram_physical_source": "entered", "vram_source": "entered", 
 # The fields and the value schema 4 added; a file that says it is schema 2 or 3 carries none of them.
 _SCHEMA_4_FIELDS = ("gpus", "machine_class", "machine_class_source")
 _SCHEMA_4_VALUES = {"gpu_state": "multi_gpu"}
+# The cross-check status schema 4 added (decided 2026-09-27); a file of schema 2 or 3 carries none.
+_SCHEMA_4_CROSSCHECK_STATUS = "not_comparable"
 
 
 class CrossCheck(BaseModel):
     """One llmfit cross-check: own reading against llmfit's reading of the same quantity.
 
     `confirmed`/`deviation` carry both values; `absent` (llmfit not installed, or not asked)
-    and `error` (llmfit failed) carry no llmfit value.
+    and `error` (llmfit failed) carry no llmfit value. `not_comparable` (schema 4, decided
+    2026-09-27) carries the own reading and llmfit's where it said one, without the 5 % rule:
+    llmfit's number stands for something else (cards of different sizes, `measure.build_crosscheck`).
+    A deviation is shown, never a block: the own reading is the authority (`fit_block_reason`).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["confirmed", "deviation", "absent", "error"]
+    status: Literal["confirmed", "deviation", "absent", "error", "not_comparable"]
     own_gib: float | None = Field(default=None, ge=0)
     llmfit_gib: float | None = Field(default=None, ge=0)
 
@@ -103,6 +109,9 @@ class CrossCheck(BaseModel):
                 raise ValueError(f"status {self.status!r} requires own_gib and llmfit_gib")
             if _crosscheck_status(self.own_gib, self.llmfit_gib) != self.status:
                 raise ValueError(f"status {self.status!r} contradicts the 5 % rule for {self.own_gib} / {self.llmfit_gib}")
+        elif self.status == "not_comparable":
+            if self.own_gib is None:
+                raise ValueError("status 'not_comparable' requires own_gib")
         elif self.llmfit_gib is not None:
             raise ValueError(f"status {self.status!r} carries no llmfit_gib")
         return self
@@ -347,9 +356,10 @@ def fit_block_reason(profile: HardwareProfile) -> str | None:
     """Why the fit must not compute for `profile`, or `None` when it may.
 
     The fit computes only for `gpu_state` `none` (CPU), `measured`, `entered`, `multi_gpu` or
-    `unified_memory`, with a known physical RAM and no llmfit deviation on RAM or VRAM (then the
-    user measures again or enters the value). A profile from schema 1 never computes: its
-    `unified_memory` carries llmfit readings only, and the machine is measured again first.
+    `unified_memory`, with a known physical RAM. A profile from schema 1 never computes: its
+    `unified_memory` carries llmfit readings only, and the machine is measured again first. An
+    llmfit deviation is no reason: the own reading is the authority, and a view shows both
+    readings (decided 2026-09-27).
     """
     if profile.gpu_state not in FIT_GPU_STATES:
         return f"gpu_state {profile.gpu_state}: {_GPU_STATE_REASONS[profile.gpu_state]}"
@@ -357,9 +367,6 @@ def fit_block_reason(profile: HardwareProfile) -> str | None:
         return f"gpu_state {profile.gpu_state}: {_LEGACY_REASON}"
     if profile.ram_physical_gib is None:
         return "physical RAM unknown"
-    for name, check in (("RAM", profile.llmfit_crosscheck.ram_physical), ("VRAM", profile.llmfit_crosscheck.vram)):
-        if check.status == "deviation":
-            return f"{name} differs from llmfit by more than 5 %; measure again or enter the value"
     return None
 
 
@@ -430,6 +437,17 @@ def _refuse_later_values(data: dict, version: int, values: dict[str, str]) -> No
     for name in _SCHEMA_4_FIELDS:
         if name in data:
             raise ValueError(f"hardware profile: schema {version} has no field {name!r}")
+    _refuse_later_crosscheck(data, version)
+
+
+def _refuse_later_crosscheck(data: dict, version: int) -> None:
+    """`ValueError` for a cross-check of a file of schema `version` whose status schema 4 added."""
+    checks = data.get("llmfit_crosscheck")
+    for name, check in (checks.items() if isinstance(checks, dict) else ()):
+        if isinstance(check, dict) and check.get("status") == _SCHEMA_4_CROSSCHECK_STATUS:
+            raise ValueError(
+                f"hardware profile: schema {version} has no llmfit_crosscheck.{name}.status {_SCHEMA_4_CROSSCHECK_STATUS!r}"
+            )
 
 
 def normalize_profile_v1(legacy: HardwareSnapshot, profile_id: str) -> HardwareProfile:

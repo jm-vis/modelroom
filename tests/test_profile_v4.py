@@ -347,6 +347,26 @@ def test_an_export_with_an_embedded_schema_2_or_3_profile_loads_as_schema_4(name
     assert data["profile"]["schema_version"] == stored and "gpus" not in data["profile"]
 
 
+def _not_comparable(data: dict) -> dict:
+    """`data` with a VRAM cross-check of the status schema 4 added (decided 2026-09-27)."""
+    checks = copy.deepcopy(data["llmfit_crosscheck"])
+    checks["vram"] = {"status": "not_comparable", "own_gib": checks["vram"]["own_gib"]}
+    return {**data, "llmfit_crosscheck": checks}
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_schema_2_and_3_cannot_carry_a_cross_check_that_is_not_comparable(version):
+    with pytest.raises(ValueError, match=f"schema {version} has no llmfit_crosscheck.vram.status 'not_comparable'"):
+        read_profile_document(_not_comparable(v3_profile(schema_version=version)))
+
+
+def test_an_export_whose_schema_3_profile_is_not_comparable_is_refused():
+    data = json.loads((FIXTURES / "export_v1_profile_v3.json").read_text(encoding="utf-8"))
+    data["profile"] = _not_comparable(data["profile"])
+    with pytest.raises(ValueError, match="schema 3"):
+        load_export(data)
+
+
 def test_an_export_whose_schema_3_profile_carries_a_card_list_is_refused():
     data = json.loads((FIXTURES / "export_v1_profile_v3.json").read_text(encoding="utf-8"))
     data["profile"]["gpus"] = []

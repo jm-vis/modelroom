@@ -168,7 +168,7 @@ def test_the_pool_line_still_says_graphics_memory_for_a_graphics_card():
 
 
 def test_the_too_tight_note_names_both_reserves_for_unified_memory():
-    fit = Fit.model_validate({**EXAMPLES["RankedEntry"]["fit"], "fit_class": "too_tight"})
+    fit = Fit.model_validate({**EXAMPLES["RankedEntry"]["fit"], "fit_class": "no_fit"})
     item = SetAside(package=None, fit=fit, reason="does not fit this machine")  # type: ignore[arg-type]
     assert "after both reserves" in _set_aside_note(item, covered=True, shared_memory=True).text
     assert "after the reserve" in _set_aside_note(item, covered=True).text

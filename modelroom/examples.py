@@ -79,7 +79,7 @@ _MEASUREMENT_RECORD = {
     "load_state": {"gpu_utilization_percent": 3.0, "cpu_load": 0.4},
 }
 _RANKED_FIT = {
-    "fit_class": "good",
+    "fit_class": "fits",
     "mode": "gpu",
     "need_gib": 7.125,
     "weights_gib": 5.0,
@@ -386,7 +386,7 @@ EXAMPLES: dict[str, dict] = {
         "measurements": [],
     },
     "Fit": {
-        "fit_class": "good",
+        "fit_class": "fits",
         "mode": "gpu",
         "need_gib": 7.125,
         "weights_gib": 5.0,
@@ -488,7 +488,7 @@ EXAMPLES: dict[str, dict] = {
         "age": "legacy",
         "parameters_b": 7.6,
         "fit": {
-            "fit_class": "good",
+            "fit_class": "fits",
             "mode": "gpu",
             "need_gib": 6.3,
             "weights_gib": 4.25,
@@ -524,7 +524,7 @@ EXAMPLES: dict[str, dict] = {
         "code": "cpu_caps_at_good",
         "subject": "package",
         "origin": "computed",
-        "text": "Runs in system memory only, so the best possible rating on this machine is 'good'.",
+        "text": "Runs in system memory only, so the best possible rating on this machine is 'fits'.",
         "facts": ["fit.mode", "fit.fit_class"],
     },
     "RankedEntry": deepcopy(_RANKED_ENTRY),
@@ -538,7 +538,7 @@ EXAMPLES: dict[str, dict] = {
         "package_count": 2,
         "scenario": dict(_SCENARIO),
         "ranking_rule": (
-            "fit class (perfect, good, marginal), then measured group (valid comparable "
+            "fit class (ample, fits, tight), then measured group (valid comparable "
             "measurement first), then measured speed (faster first), then quantization, then "
             "larger weights, then package identity"
         ),

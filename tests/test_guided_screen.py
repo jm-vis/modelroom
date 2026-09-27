@@ -40,6 +40,7 @@ QWEN = "Qwen/Qwen3.5-9B"
 CHOSEN = {
     "results": "here",
     "machines": ["this-machine"],
+    "machine_class": "laptop",
     "search": "qwen",
     "filter_owners": True,
     "select": [QWEN, DEEPSEEK],

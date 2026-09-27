@@ -86,9 +86,10 @@ DEEPSEEK_OLLAMA_NAME = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
 # The scale's level `S`, 8192 tokens, `8k` in the scenario sentence: criteria 4 and 5 keep the numbers
 # they were pinned with, and the answer file shows that a level is a valid answer (CONTRACTS.md).
 ANSWERED_LEVEL, ANSWERED_CONTEXT, ANSWERED_SHOWN = "S", 8192, "8k"
-# The class the run answers when the chassis names none (`guided._asked_class` asks only then, so
-# the answer file is read only then; an answer nobody asks for is no error). A rented guest
-# machine reports chassis type 1 or 2 and is a server; a laptop or workstation never asks.
+# The class the run answers when the chassis names none. `guided._asked_class` asks on every
+# measurement (decided 2026-09-27), so both answer files carry the class: the one the chassis reads,
+# which keeps the source `chassis`, else this one -- a rented guest machine reports chassis type 1 or
+# 2 and is a server (`answered_class`, set into both files before the first is written).
 ANSWERED_CLASS = "server"
 ANSWERS_FIRST = {
     "results": "here",
@@ -156,6 +157,12 @@ def first_start_problems(config_text: str, pointer: dict, results: Path, machine
     return problems
 
 
+def answered_class(reading) -> str:
+    """The class the run answers: the one the chassis reads (the answer keeps `chassis`), else
+    `ANSWERED_CLASS`. `reading` is a `measure.MachineClassReading` of this machine."""
+    return reading.machine_class if reading.source == "chassis" else ANSWERED_CLASS
+
+
 def measurement_problems(profile: dict) -> list[str]:
     """Criterion 2: this machine was really measured -- one graphics card, or two and more with their
     sum -- its class read from the chassis, or the answered class where the chassis names none,
@@ -165,8 +172,8 @@ def measurement_problems(profile: dict) -> list[str]:
     if not ((state, len(cards)) == ("measured", 1) or (state == "multi_gpu" and len(cards) > 1 and abs(total - (profile.get("vram_gib") or 0)) <= 0.01)):
         problems.append(f"gpu_state {state!r} with {len(cards)} card(s), expected 'measured' with one or 'multi_gpu' with their sum")
     machine_class, source = profile.get("machine_class"), profile.get("machine_class_source")
-    # The guided run asks for the class only when the chassis names none, so `entered` here means
-    # the chassis was silent and the run answered; any other class than the answered one was not ours.
+    # The run answers the class the chassis reads wherever it reads one (`answered_class`), so
+    # `entered` here means the chassis was silent and the run answered; any other class was not ours.
     read = source == "chassis" and machine_class not in (None, "unknown")
     answered = source == "entered" and machine_class == ANSWERED_CLASS
     if not (read or answered):
@@ -404,7 +411,7 @@ def model_list_problems(models: list[str]) -> list[str]:
     for label in models:
         if len(label) > 100:
             problems.append(f"a line of the model list is {len(label)} characters wide: {label}")
-        if not any(word in label for word in ("good", "marginal", "too tight", "unknown")):
+        if not any(word in label for word in ("fits", "tight", "no_fit", "unknown")):
             problems.append(f"a line of the model list carries no fit: {label}")
     return problems
 
@@ -421,7 +428,7 @@ def result_table_problems(lines: list[str]) -> list[str]:
         problems.append("the result table says not how many of its rows are shown")
     if not any(line.strip().startswith("install ") for line in lines):
         problems.append("the result table carries no install line for the machine of this run")
-    pooled = [line for line in lines if "graphics memory" in line or "system memory" in line]
+    pooled = [line for line in _outside_key_block(lines) if "graphics memory" in line or "system memory" in line]
     if pooled and not all("#" in line for line in pooled):
         problems.append(f"a note about the memory pool names no rank: {pooled}")
     if len(pooled) > 3:
@@ -429,6 +436,19 @@ def result_table_problems(lines: list[str]) -> list[str]:
     if any(" unknown " in line for line in lines if line.strip().startswith(("1 ", "2 ", "3 "))):
         problems.append("a row of the result table says `unknown` where a dash belongs")
     return problems
+
+
+def _outside_key_block(lines: list[str]) -> list[str]:
+    """The lines minus the `key` block of the card (the hint of 2026-09-27 names the pools in words):
+    from the `key` label to the next label, where a label is the word at column 1."""
+    kept, in_key = [], False
+    for line in lines:
+        labeled = len(line) > 1 and line[0] == " " and line[1] != " "
+        if labeled:
+            in_key = line.strip().startswith("key ")
+        if not in_key:
+            kept.append(line)
+    return kept
 
 
 def format_report(steps: list[Step]) -> str:
@@ -527,6 +547,11 @@ def _machine_name(config_text: str) -> str:
 
 def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[list[Step], list[str]]:
     """Criteria 1 to 4, from one guided run and the files it left behind, plus that run's output."""
+    from modelroom.measure import Probes, read_machine_class
+
+    probes = Probes()
+    reading = read_machine_class(probes.platform, probes.runner, probes.read_text)
+    ANSWERS_FIRST["machine_class"] = ANSWERS_SECOND["machine_class"] = answered_class(reading)
     answers = results.parent / "answers-first.toml"
     answers.write_text(answers_toml(ANSWERS_FIRST), encoding="utf-8", newline="\n")
     code, lines = _guided_run(answers, results, transport, now)
@@ -566,7 +591,7 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             "(4) the ranking carries rule and context, Qwen3.5 is judged from its size",
             not ranking_problems(text, machine, block),
             "\n".join(ranking_problems(text, machine, block))
-            or f"{len(block['ranked'])} ranked, {len(block['too_tight'])} too tight, "
+            or f"{len(block['ranked'])} ranked, {len(block['too_tight'])} no fit, "
             f"{len(block['not_covered'])} not covered; "
             f"{sum(1 for e in block['ranked'] + block['too_tight'] if e['fit']['basis'] == 'size')} "
             f"rows judged from the size",

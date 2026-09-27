@@ -14,12 +14,12 @@ from .quantization import QUANT_ORDER, package_identity_key
 
 TOP_LIMIT = 10
 RANKING_RULE = (
-    "fit class (perfect, good, marginal), then measured group (valid comparable measurement "
+    "fit class (ample, fits, tight), then measured group (valid comparable measurement "
     "first), then measured speed (faster first), then quantization, then larger weights, "
     "then package identity"
 )
 
-_FIT_ORDER = {"perfect": 0, "good": 1, "marginal": 2}
+_FIT_ORDER = {"ample": 0, "fits": 1, "tight": 2}
 _WEIGHT_ROLES = ("weights", "weights_shard")
 
 
@@ -141,8 +141,8 @@ def rank_packages(
 ) -> Ranking:
     """Rank one device's packages; `measurements` are that device's own measurement records.
 
-    `perfect`/`good`/`marginal` are ranked by the tuple key; `unknown` goes to `not_covered`
-    with the fit's reason; `too_tight` is listed apart and never in the top 10. Every computed
+    `ample`/`fits`/`tight` are ranked by the tuple key; `unknown` goes to `not_covered`
+    with the fit's reason; `no_fit` is listed apart (in `too_tight`, a field name) and never in the top 10. Every computed
     fit must belong to the ranking's context and requests (a fit for another context or another
     number of requests is a caller error).
     """
@@ -153,7 +153,7 @@ def rank_packages(
             ranking.not_covered.append(SetAside(package, fit, fit.reason or "not covered"))
             continue
         _check_fit_belongs(fit, scenario)
-        if fit.fit_class == "too_tight":
+        if fit.fit_class == "no_fit":
             ranking.too_tight.append(SetAside(package, fit, "does not fit this machine"))
             continue
         measurement = group_zero_measurement(package, measurements, scenario)

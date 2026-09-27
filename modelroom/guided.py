@@ -76,7 +76,7 @@ from .intro import STEP_COUNT, card_names, class_words, collect_intro, print_int
 from .measure import Probes, read_machine_class, read_os_identity
 from .measurements import Scenario
 from .migrate import MigrationError, backup_suffix, migrate
-from .profile import HardwareProfile, os_fingerprint
+from .profile import MACHINE_CLASSES, HardwareProfile, os_fingerprint
 from .screen import (
     CLONE_QUESTION,
     NOTHING_CHOSEN_SUMMARY,
@@ -120,7 +120,7 @@ QUESTIONS: dict[str, str] = {
     "machines": "Which machines should the result cover?",
     "import_file": "Path to the profile file to import",
     "clone": "Is this the same machine or a clone?",
-    "machine_class": "What kind of machine is this?",  # only when the chassis says nothing (decided 2026-09-26)
+    "machine_class": "What kind of machine is this?",  # on every measurement (decided 2026-09-27)
     **ENTERED_QUESTIONS,  # step 1's machine entered by hand (`modelroom/guided_entered.py`)
     # Step 2's two search questions live with the search (`modelroom/guided_search.py`).
     "search": SEARCH_QUESTION,
@@ -529,13 +529,21 @@ def _measure_this_machine(
 
 
 def _asked_class(run: GuidedRun) -> str | None:
-    """The class the user names when the chassis says nothing, read anew on every measurement;
-    `None` leaves it to the chassis (decided 2026-09-26)."""
-    if read_machine_class(run.probes.platform, run.probes.runner, run.probes.read_text).source != "unknown":
-        return None
-    answer = run.asker.select("machine_class", QUESTIONS["machine_class"], [Choice(v, w) for v, w in CLASS_CHOICES.items()])
+    """The class of this machine, asked on every measurement (decided 2026-09-27).
+
+    The chassis is read first: where it names a class, the list is the three classes with that one
+    marked, and the answer that keeps it returns `None`, so the profile keeps the source `chassis`;
+    any other answer is that class, entered. Where it names none, the list is the four entries with
+    nothing marked, and `unknown` returns `None` as well.
+    """
+    read = read_machine_class(run.probes.platform, run.probes.runner, run.probes.read_text)
+    if read.source == "unknown":
+        choices = [Choice(value, words) for value, words in CLASS_CHOICES.items()]
+    else:
+        choices = [Choice(value, CLASS_CHOICES[value], checked=value == read.machine_class) for value in MACHINE_CLASSES]
+    answer = run.asker.select("machine_class", QUESTIONS["machine_class"], choices)
     run.screen.answer(QUESTIONS["machine_class"], CLASS_CHOICES[answer])
-    return None if answer == "unknown" else answer
+    return None if answer in ("unknown", read.machine_class) else answer
 
 
 def _measured(run: GuidedRun, config: Configuration, results_dir: Path, *, again: bool) -> None:

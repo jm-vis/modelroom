@@ -32,7 +32,7 @@ All notable changes to this project are documented in this file. The format foll
   "The machine class"). Read from the SMBIOS chassis type (Windows `Win32_SystemEnclosure`, Linux
   DMI), also under `--cpu-only`; a chassis that names no class is `unknown` with a note. New
   `hardware --machine-class laptop|workstation|server` states it instead. The guided mode asks
-  `machine_class` only when the chassis says nothing. Every view names the class first: `laptop,
+  `machine_class` on every measurement (see "Changed" below). Every view names the class first: `laptop,
   one graphics card, 12 GB, 128 GB memory`; the Markdown machine table gains `GPUs` and `Class`.
   The class changes no number of the fit.
 - **A machine entered by hand has a class and may have several cards** (`modelroom/guided_entered.py`).
@@ -149,6 +149,32 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **Fit words that say what was computed** (ADR 0006; decided 2026-09-27). `Fit.fit_class` is
+  `ample`, `fits`, `tight`, `no_fit` or `unknown`, one to one for llmfit's `perfect`, `good`,
+  `marginal`, `too_tight`; the thresholds and the cap are unchanged, the cap is called `fits`. A
+  cell prints the value itself, `no_fit` included, and the list of step 2 no longer renames a class;
+  prose and headings say `no fit` (`## No fit: <machine>`, `2 no fit` on the card, `0 no fit` where
+  there is none). The field names `too_tight` and `perfect_reachable` and the note codes `too_tight`
+  and `cpu_caps_at_good` stay. **Honest limit:** a tool that reads `docs/models.json` has to learn
+  the new words; nothing is migrated, since the package never reads a render document back.
+- **A hint line under every table with words of its own** (decided 2026-09-27). The fit hint
+  (`Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · ...`)
+  stands under the Markdown ranking, under the terminal table of step 5 (label `key`, with `Speed is
+  measured, see its column.`) and, with its words for the list, in the instruction line of step 2;
+  the GPU state hint and the class hint stand under the Markdown Machines table.
+- **The class question on every measurement** (`modelroom/guided.py`; decided 2026-09-27). The
+  guided mode asks `machine_class` whenever it measures this machine, with the class the chassis
+  reads marked; keeping it keeps the source `chassis`, another answer is `entered`. **Honest
+  limit:** an answer file that measures this machine needs `machine_class` (without it the run ends
+  with exit 2 and names the key). The self-test answers the class the chassis reads, else `server`.
+- **llmfit as a safety net, never a block** (ADR 0006; decided 2026-09-27). A deviation between the
+  own reading and llmfit's no longer makes a fit `unknown`: the fit computes on the own reading, and
+  the measured note of step 1, the machine's Markdown headline and its terminal head say `; llmfit
+  reads RAM X GiB, this measurement Y GiB`. Cards of different sizes are `not_comparable`
+  (`CrossCheck.status`, new in the unreleased profile schema 4); a schema-2 or schema-3 file that
+  carries it is refused. The self-test still requires `confirmed`.
+- **README "Tested on"**: the Class column says what the code prints, `server (entered)`, and the
+  sentence above the table says why.
 - **The self-test on a machine whose chassis names no class** (`scripts/selftest.py`, criterion 2;
   decided 2026-09-27). A rented guest machine reports chassis type 1 or 2, so the guided run asks
   for the class; the self-test's answer file now answers `server`, and criterion 2 accepts that
@@ -763,7 +789,7 @@ The subcommands, the contracts and the release tooling, before the guided mode.
   (`modelroom/ollama_local.py::fetch_installed_models`, `GET /api/tags`, never a command
   failure when the daemon is unreachable), and the pure fit computation contract v1
   (`modelroom/fit.py::compute_fit` -- weights/KV-cache sizing, GPU/RAM pool selection, the
-  perfect/good/marginal/too_tight thresholds, and the CPU cap). `hardware` only requires the
+  `perfect/good/marginal/too_tight` thresholds, and the CPU cap). `hardware` only requires the
   named machine to be configured, not a `writer`, and takes no lock (each machine writes only
   its own file). New fixtures (`llmfit_system_laptop.json`, `llmfit_version.txt`,
   `ollama_tags_local.json`, all recorded 2026-09-22) are documented in
@@ -1017,7 +1043,7 @@ The subcommands, the contracts and the release tooling, before the guided mode.
     every package cell `–` except each machine's fit cell (`no recommendation: <reason>`) and
     Variants (`<N> variants, none judged`). The "else the smallest" fallback still applies, but
     only across packages fit v1 *did* judge, when at least one was judged and none reached
-    good/perfect.
+    `good`/`perfect`.
   - **F6** (second addendum) `modelroom/ollama.py::_validated_layers` now raises when a manifest
     has no `'layers'` key at all (or an explicit `null`), instead of silently treating it as `[]`
     -- that used to build an empty/unresolved stub package under the *same* identity key as a

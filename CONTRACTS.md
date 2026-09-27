@@ -24,7 +24,10 @@ where a value came from; `publisher`, `listed packager` and `other` for who owns
 which is a class and never a verdict; `unknown` for a fact with no evidence behind it;
 `not comparable` for measurements taken under different scenarios. Schema names, field names
 and literal values are contract: they are never changed for a language reason, so a value like
-`unified_memory` keeps its spelling even where the prose around it is rewritten.
+`unified_memory` keeps its spelling even where the prose around it is rewritten. The one
+exception are the fit classes of 2026-09-27 (`perfect`, `good`, `marginal`, `too_tight` became
+`ample`, `fits`, `tight`, `no_fit`), decided as a contract change by ADR 0006: those values were
+judgements, not names. No other literal follows them.
 `tests/test_language_standard.py` holds the rule in executable form.
 
 ## The three persisted forms
@@ -61,8 +64,8 @@ documented decision (`docs/adr/`), never a side effect.
 | Form | Writes | Reads | Earlier versions | Decision |
 |---|---|---|---|---|
 | Configuration (`modelroom.toml`) | 3 | `[1, 4)` | 1 and 2 read as 3 in memory; `migrate` and the guided mode write 1 and 2 back, `import-profile` writes 2 back (1 needs `migrate`) | ADR 0002, 2026-09-25 |
-| Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26 |
-| Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26 |
+| Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26; ADR 0006, 2026-09-27 |
+| Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26; ADR 0006, 2026-09-27 (the fit words) |
 | Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
 | Measurement file | 2 | 2 | -- | -- |
 
@@ -588,9 +591,13 @@ every time against the current snapshot and hardware profile, rather than storin
 verdict. See "Fit contract v1" below for the formula, thresholds and the exact wording a
 renderer must use.
 
+The field names `MachineRanking.too_tight` and `Requirement.perfect_reachable` and the note
+codes `too_tight` and `cpu_caps_at_good` are identifiers of the data contract, not words a reader
+is shown: they keep their spelling (decided 2026-09-27, ADR 0006; a rename is a schema decision).
+
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `fit_class` | `"perfect" \| "good" \| "marginal" \| "too_tight" \| "unknown"` | -- | the fit verdict |
+| `fit_class` | `"ample" \| "fits" \| "tight" \| "no_fit" \| "unknown"` | -- | what was computed: the share of the pool the package needs (decided 2026-09-27, ADR 0006) |
 | `mode` | `"gpu" \| "gpu_split" \| "cpu_gpu" \| "cpu" \| None` | `None` only when `fit_class == "unknown"`; `gpu_split` since document schema 3 (2026-09-26) | where the package would run: one graphics card, spread over every card, system memory with a card helping, system memory only |
 | `need_gib` | `float` | `>= 0` | the memory needed, computed |
 | `weights_gib` | `float` | `>= 0` | the package's weight files, summed |
@@ -605,7 +612,7 @@ renderer must use.
 
 ```json
 {
-  "fit_class": "good",
+  "fit_class": "fits",
   "mode": "gpu",
   "need_gib": 7.125,
   "weights_gib": 5.0,
@@ -1635,9 +1642,9 @@ one `vram_gib` is one card above 0, else none. The rule, in order:
    available_all`, `reserve_gib = n x reserve_vram_gib` (the reserve of all cards), **not capped**:
    the package lies in graphics memory whole, and what the spread costs is speed, which the load
    test measures.
-4. The system memory as above: `mode="cpu_gpu"` with cards, `"cpu"` without, capped at `good`.
+4. The system memory as above: `mode="cpu_gpu"` with cards, `"cpu"` without, capped at `fits`.
 
-The size basis keeps its cap at `good` on every pool. `OLLAMA_SCHED_SPREAD=1` makes the daemon
+The size basis keeps its cap at `fits` on every pool. `OLLAMA_SCHED_SPREAD=1` makes the daemon
 spread a model although one card holds it: the fit then says `gpu` and the daemon spreads all the
 same.
 
@@ -1658,24 +1665,27 @@ a serving stack (rule of thumb, not measured)` for a view to show above it.
 graphics memory of its own: the system and the model share one memory. Its pool is
 `ram_physical_gib - reserve_ram_gib - reserve_vram_gib`, `reserve_gib` is the sum of both
 reserves, `mode="gpu"`, no fallback onto the same RAM, and the class is not capped on the
-architecture basis (the size basis stays capped at `good`); a pool of 0 or less is `too_tight`.
+architecture basis (the size basis stays capped at `fits`); a pool of 0 or less is `no_fit`.
 Example: 32 GiB, reserves 8 + 1 -> pool 23 GiB. Feeding the RAM in as graphics memory would let
 the GPU branch compute with 31 GiB and lose the system reserve -- hence the branch of its own.
 
-**Classification.** `ratio = need_gib / pool_gib` (a `pool_gib <= 0` is always `too_tight`,
-never a division): `ratio <= 0.60` is `perfect`, `<= 0.85` is `good`, `<= 0.98` is `marginal`,
-anything above is `too_tight`. **Off the GPU (`mode` is `cpu_gpu` or `cpu`), the class is
-capped at `good`** -- a ratio that would otherwise read `perfect` still comes back `good`,
-because "perfect" is reserved for a package that comfortably fits in VRAM.
+**Classification.** `ratio = need_gib / pool_gib` (a `pool_gib <= 0` is always `no_fit`,
+never a division): `ratio <= 0.60` is `ample`, `<= 0.85` is `fits`, `<= 0.98` is `tight`,
+anything above is `no_fit`. **Off the GPU (`mode` is `cpu_gpu` or `cpu`), the class is
+capped at `fits`** -- a ratio that would otherwise read `ample` still comes back `fits`,
+because `ample` is reserved for a package with room to spare in VRAM. Each word says only what
+was computed, the share of the pool, and the value is the text a view shows (decided
+2026-09-27, ADR 0006). llmfit's `perfect/good/marginal/too_tight` are `ample/fits/tight/no_fit`
+here; the thresholds are its.
 
 **Worked examples** (also `tests/test_fit.py`, values restated in each test's own comments so
 they can be recomputed by hand): a dense 8B Q4_K_M package (~5.0 GiB weights, `L=36, KVH=8,
 D=128`, context assumed 8192) has `kv_gib = 1.125` GiB and `need_gib = 7.125` GiB. On the
 reference laptop (`vram_gib=11.94`, `reserve_vram_gib=1.0`) that is `mode="gpu"`, ratio
-`0.6513` -> `good`. On a small server (`vram_gib=0`, `ram_gib=7.56`, `reserve_ram_gib=3.0`) it
-falls to `mode="cpu"`, `pool_gib=4.56`, ratio `1.5625` -> `too_tight`. A dense 9B Q4_K_M
-package (~5.6 GiB, `L=42, KVH=8, D=128`) has `need_gib = 7.9725` GiB: `good` on the laptop
-(ratio `0.7288`), `too_tight` on the server (ratio `1.748`).
+`0.6513` -> `fits`. On a small server (`vram_gib=0`, `ram_gib=7.56`, `reserve_ram_gib=3.0`) it
+falls to `mode="cpu"`, `pool_gib=4.56`, ratio `1.5625` -> `no_fit`. A dense 9B Q4_K_M
+package (~5.6 GiB, `L=42, KVH=8, D=128`) has `need_gib = 7.9725` GiB: `fits` on the laptop
+(ratio `0.7288`), `no_fit` on the server (ratio `1.748`).
 
 **`Measurement.profile_measured_at` cross-check.** `Measurement` itself does not check its
 `profile_measured_at` against any particular `HardwareSnapshot.measured_at` (see the
@@ -1713,7 +1723,7 @@ replaced:
   9,653,104,368 parameters (0.588) and 5,027,785,216 bytes for 8,190,735,360 parameters (0.614).
 
 `need_gib`, the pool, the mode and the thresholds are fit v1's, unchanged. **The class is capped
-at `good`**: `perfect` stays reserved for a package whose architecture was read. Multiplying the
+at `fits`**: `ample` stays reserved for a package whose architecture was read. Multiplying the
 KV cache by `requests` does not make this assumption any more exact.
 
 **The KV constant is one fixed assumption, not a bound in either direction** (corrected in the
@@ -1721,14 +1731,14 @@ second-model round of 2026-09-24, which measured the case). A hybrid or mixture 
 fewer layers of full attention and needs less than it; a dense model with more layers needs more.
 Measured on the 5.29 GiB `Q4_K_M` package of the fixtures at 131072 tokens: 24.32 GiB on this
 basis, against 22.32 GiB for 32 layers, 27.32 for 42 and 30.32 for 48. At 8192 tokens the same
-comparison is 7.44 against 7.32 / 7.63 / 7.82 GiB. So a package this basis calls `marginal` can be
-`too_tight` in truth, and one it calls `too_tight` can fit: the cap at `good` limits the claim, it
+comparison is 7.44 against 7.32 / 7.63 / 7.82 GiB. So a package this basis calls `tight` can be
+`no_fit` in truth, and one it calls `no_fit` can fit: the cap at `fits` limits the claim, it
 does not make the number exact. Every view therefore says `from size` next to the class, and an
 exact computation for these architectures is a work package of its own.
 
 **What stays `unknown`**, size or no size, because there is nothing to compute with: a package
-that is not a complete `gguf` build, a weight file with no size, the GPU states the gate refuses,
-and a llmfit deviation. More than one request is computed since 2026-09-25 (see "Parallel
+that is not a complete `gguf` build, a weight file with no size, and the GPU states the gate
+refuses; a llmfit deviation is shown, never a reason (decided 2026-09-27). More than one request is computed since 2026-09-25 (see "Parallel
 requests" above). For the list of step 2 there are two more of its own: `machine not measured`
 and `parameter count unknown`.
 
@@ -1738,7 +1748,7 @@ instead), and in the note of the row -- the note of a ranked package keeps
 the sentence of its memory pool in front (`Fits into graphics memory: …`, `Too large for graphics
 memory alone, …`; without it a row in system memory read as the equal of one in graphics memory,
 acceptance of 2026-09-24) and ends with `From the size of the package, not its architecture.`,
-with `fit.basis` added to its facts; a `too_tight` one ends with the same sentence. A row whose
+with `fit.basis` added to its facts; a `no_fit` one ends with the same sentence. A row whose
 speed was measured carries the measurement's note instead, so in
 the Markdown view the basis of such a row is in the JSON view only; the Markdown table's own `Fit
 (computed)` cell is unchanged.
@@ -1839,8 +1849,8 @@ always last.
 
 **Selection rule**, per group *and per configured machine*: the package with the largest
 quantization (`QUANT_ORDER` index, unknown sorting last -- same convention as
-`quantization.sort_key`) whose `fit.py::compute_fit` class on that machine is `"good"` or
-`"perfect"`; when none qualifies, the smallest *judged* package (`quantization.sort_key`, a real
+`quantization.sort_key`) whose `fit.py::compute_fit` class on that machine is `"fits"` or
+`"ample"`; when none qualifies, the smallest *judged* package (`quantization.sort_key`, a real
 `fit_class` other than `"unknown"`) with whatever class it gets. Ties among qualifying packages
 at the same quant index break by `sort_key`, first wins. **Fix-round 5, F5:** a machine makes
 **no pick at all** when it has no hardware profile, or when `compute_fit`'s class is `"unknown"`
@@ -1979,7 +1989,7 @@ is entered by the guided mode, step 1 (`enter a machine by hand`, "Guided mode")
 | `GpuAdapter.vram_gib` | `float` | `> 0`, MiB / 1024, two decimals |
 | `GpuAdapter.vram_source` | `nvidia-smi \| llmfit \| entered` | the profile's `vram_source` (`llmfit` only from a profile of an earlier schema) |
 | `machine_class` | `laptop \| workstation \| server \| unknown` | `unknown` exactly when `machine_class_source` is `unknown`; changes no number of the fit |
-| `machine_class_source` | `chassis \| entered \| unknown` | `chassis` requires a memory not entered by hand (measured, or `--cpu-only`); `entered` from `hardware --machine-class` or a guided question |
+| `machine_class_source` | `chassis \| entered \| unknown` | `chassis` requires a memory not entered by hand (measured, or `--cpu-only`); `entered` from `hardware --machine-class`, or from the guided question where the answer differs from the class the chassis reads (an answer equal to it keeps `chassis`, decided 2026-09-27) |
 
 A measured `multi_gpu` has `vram_source` `nvidia-smi`; one entered by hand has `entered`, an
 entered memory and no llmfit check, like `entered`. `binding.KnownProfile` still tells a machine
@@ -1995,10 +2005,16 @@ VRAM against llmfit `gpu_vram_gb` -- and, for `multi_gpu`, the sum of the cards 
 llmfit's own `system.gpus[]` entries of backend `CUDA`, `vram_gb x count` each, the way llmfit
 counts them (`LlmfitReference.cuda_vram_gib`; a missing or unreadable list is `absent`). `crosscheck(own, llmfit)` is `confirmed` when
 `|own - llmfit| / max(own, llmfit) <= 0.05` (both zero is `confirmed`), `deviation` otherwise,
-`absent` when llmfit gave no reading, `error` when llmfit failed. The own reading is the
-authority; a `deviation` blocks the fit until the user measures again or enters the value.
-`fit_block_reason(profile)` returns the reason the fit must not compute (GPU state, a profile
-migrated from schema 1, unknown RAM, a deviation), or `None`.
+`absent` when llmfit gave no reading, `error` when llmfit failed. Cards of different sizes are
+`not_comparable` (schema 4, decided 2026-09-27): llmfit multiplies one card's size by the count,
+so its sum says nothing about them; the check keeps the own sum and llmfit's where it said one,
+never `absent`. Cards of one size keep the sum check. **The own reading is the authority, and
+llmfit is a safety net, never a block** (decided 2026-09-27): a `deviation` is shown -- behind the
+measured note of step 1 (`; llmfit reads RAM X GiB, this measurement Y GiB`, per deviating
+quantity), in the machine's headline of the Markdown view and in the head of its terminal block
+-- and the fit computes on the own reading. A confirmed or absent check leaves both heads as they
+are; there is no column for it. `fit_block_reason(profile)` returns the reason the fit must not
+compute (GPU state, a profile migrated from schema 1, unknown RAM), or `None`.
 
 **Reading schema 1, 2 and 3.** `read_profile_document` validates schema 1 as `HardwareSnapshot`
 and schema 2 to 4 as `HardwareProfile`; 5 and above raise `SchemaVersionError` (exit 3) before
@@ -2008,7 +2024,7 @@ dict as schema 4 by `normalize_profile_v3` (`gpus` from the state -- one card of
 `vram_gib`, `gpu_name` and `vram_source` for `measured` and `entered`, none otherwise -- and the
 class `unknown`/`unknown`). A file that says schema 2 but carries a value of schema 3 (`entered`)
 is refused, and so is a file that says schema 2 or 3 but carries `gpus`, `machine_class`,
-`machine_class_source` or `gpu_state` `multi_gpu`. The caller's dict is never changed. The same
+`machine_class_source`, `gpu_state` `multi_gpu` or a cross-check of status `not_comparable`. The caller's dict is never changed. The same
 chain (`normalize_stored_profile`) runs for the profile inside an export file
 (`measurements.load_export`); the probe profile `render` builds and `normalize_profile_v1` set the
 new fields themselves. Reading never changes a file; `modelroom migrate` rewrites a schema-2 or
@@ -2113,9 +2129,10 @@ card that advice would be wrong, so it is not given there.
 **The cross-check and `--cpu-only`.** An entered `0` VRAM is not a reading, so it is not
 compared with llmfit's: the VRAM check of a `--cpu-only` profile is `absent`, whatever llmfit
 did -- `absent` means "never asked", while `error` would claim the comparison was attempted.
-Comparing them on a machine that does have a card was a `deviation`, and a deviation blocks the
-fit -- exactly the CPU fit `--cpu-only` exists to produce. The physical RAM is still measured
-there, and still cross-checked.
+Comparing them on a machine that does have a card was a `deviation`, which blocked the CPU fit
+`--cpu-only` exists to produce until 2026-09-27 and would be shown as one since; llmfit's number
+is about hardware the user has just said not to use. The physical RAM is still measured there,
+and still cross-checked.
 
 **Notes.** Facts only, printed after the summary line: the reason a reading is unknown, the GPU
 note, the reason the machine identifier could not be read (with its consequence: a clone of this
@@ -2176,7 +2193,9 @@ no permission -- is also exit `1`, with nothing written and nothing bound.
 One cross-check of one quantity. `confirmed`/`deviation` carry both values and must agree with
 the 5 % rule for them (a stored `confirmed` with a larger gap is refused; the bound is inclusive
 and compared with a float tolerance, so exactly 5 % such as 8.0 against 7.6 is `confirmed`); `absent`/`error`
-carry no llmfit value. `own_gib` must equal the profile's own value for that quantity.
+carry no llmfit value; `not_comparable` (schema 4, decided 2026-09-27) requires `own_gib`, may carry
+`llmfit_gib` and is not held against the 5 % rule. `own_gib` must equal the profile's own value for
+that quantity.
 
 ```json
 {
@@ -2950,7 +2969,7 @@ A pass allows at most `metadata_ok` together with the other provenance rules; on
 
 `compute_fit_v2(profile, package, base_model, scenario, machine_config)` is fit contract v1's
 formula and classes behind a gate: `fit_block_reason(profile)` first (GPU state, a profile
-migrated from schema 1, unknown RAM, a llmfit deviation), then the package rules (a complete
+migrated from schema 1, unknown RAM; a llmfit deviation is no reason since 2026-09-27), then the package rules (a complete
 `gguf` build, every weight file with a size). An architecture the formula cannot read is the
 one case that is **not** `unknown` here: the package is computed from its size instead,
 `basis: "size"` ("Fit from size" above, decided 2026-09-24). Since 2026-09-25 the KV cache counts
@@ -2968,15 +2987,14 @@ reserves) are inputs because the formula needs them.
 `rank_packages(entries, measurements, scenario)` orders one device's packages, best first, as a
 total order that does not depend on input order:
 
-1. fit class: `perfect`, `good`, `marginal`;
+1. fit class: `ample`, `fits`, `tight`;
 2. measured group: group 0 has a counting measurement, group 1 has none;
 3. measured speed `tps_mean`, faster first (group 0 only);
 4. quantization, in `QUANT_ORDER`;
 5. larger weights first;
 6. package identity.
 
-Fit comes before speed: a package that fits comfortably ranks above a faster one that fits
-only barely. A measurement counts (`group_zero_measurement`) when it is protocol `v1`, `valid`,
+Fit comes before speed: a package that is `ample` ranks above a faster one that is `tight`. A measurement counts (`group_zero_measurement`) when it is protocol `v1`, `valid`,
 comparable, for the same `context_requested` and the same `requests` as the ranking and for
 exactly this package content (manifest digest, or repo, revision and a weight file's digest); the
 newest one wins. A measurement always runs one request, so a ranking of more requests has no
@@ -2984,8 +3002,8 @@ group 0; the measurement stays `comparable` and counts again in a ranking of one
 Where a measurement would count but for `requests` alone, `RankedPackage.measurement_note` says
 so -- `measured with 1 request, ranking assumes N` -- and the render hands it on as the note of
 that row (code `measured_with_one_request`); it is never written into the measurement file
-(decided 2026-09-25). `unknown` fits are set aside as not covered, with their reason; `too_tight`
-fits are listed apart and never ranked; a computed fit for another context or another number of
+(decided 2026-09-25). `unknown` fits are set aside as not covered, with their reason; `no_fit`
+fits are listed apart (field `too_tight`) and never ranked; a computed fit for another context or another number of
 requests than the ranking's is a caller error. `Ranking.top` is the first 10. The rule states
 facts in order; it recommends nothing.
 
@@ -3083,7 +3101,7 @@ model (`model_choices(..., configured_ollama=...)`, since 2026-09-25), else `Non
   "age": "legacy",
   "parameters_b": 7.6,
   "fit": {
-    "fit_class": "good",
+    "fit_class": "fits",
     "mode": "gpu",
     "need_gib": 6.3,
     "weights_gib": 4.25,
@@ -3103,8 +3121,8 @@ model (`model_choices(..., configured_ollama=...)`, since 2026-09-25), else `Non
 
 What one package needs for a scenario, `computed`, never measured: the reverse calculation.
 `kv_gib_total` is `kv_gib_per_request x scenario.requests`; `need_gib` is fit v1's formula with
-that total (`weights_gib x 1.10 + kv_gib_total + 0.50`); `perfect_reachable` is `false` in `cpu`
-mode, where fit v1 caps at `good`. It carries no speed statement. `package_identity` is the
+that total (`weights_gib x 1.10 + kv_gib_total + 0.50`); `perfect_reachable` (a field name, see "Fit") is
+`false` in `cpu` mode, where fit v1 caps at `fits`. It carries no speed statement. `package_identity` is the
 package identity triple.
 
 ```json
@@ -3143,7 +3161,7 @@ is at most 240 characters.
   "code": "cpu_caps_at_good",
   "subject": "package",
   "origin": "computed",
-  "text": "Runs in system memory only, so the best possible rating on this machine is 'good'.",
+  "text": "Runs in system memory only, so the best possible rating on this machine is 'fits'.",
   "facts": [
     "fit.mode",
     "fit.fit_class"
@@ -3561,7 +3579,7 @@ scenario and `ranking.RANKING_RULE` are printed in every view.
 
 **The ranking** per machine is `ranking.rank_packages` ("Ranking rule" above): `ranked` holds the
 first `ranking.TOP_LIMIT` entries and `ranked_total` says how many there were, `not_covered`
-holds the `unknown` fits with their reason, `too_tight` the ones that do not fit. A measurement
+holds the `unknown` fits with their reason, `too_tight` (a field name) the `no_fit` ones. A measurement
 counts only in measured group 0, and only then are `measurement_id` and `speed_tps` set.
 
 **Provenance per value.** Every computed number carries `(computed)` in its column name
@@ -3603,8 +3621,17 @@ snapshot run time, rendered time, base model and package counts, `Scenario:`, `L
 `OLLAMA_REQUEST_HINT` requests, `Ranking rule:`, and `Market rating unavailable: <message>` when the
 rating source failed), `## Areas`,
 `## Machines`, and then per machine `## Ranking: <machine>`, `## Not covered: <machine>` and
-`## Too tight: <machine>` -- the last two only when they have rows. Every machine section is a
+`## No fit: <machine>` -- the last two only when they have rows. Every machine section is a
 `##` heading, so a reader can cut the document at headings.
+
+**One hint line under every table with words of its own** (decided 2026-09-27), one constant each
+and in plain words: under the Machines table `views.GPU_STATE_HINT` (`GPU state: measured = read
+from nvidia-smi; ...`) and `views.CLASS_HINT` (`Class: laptop, workstation or server, ...`), each
+a paragraph of its own; under every ranked table `screen.FIT_HINT`, its pieces joined with ` · `
+(`Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · fits: up
+to 85 % · tight: up to 98 % · no fit: more · ...`, the thresholds read from `fit.py`), and then
+`views.SPEED_HINT`, `Speed is measured, see its column.` A machine without a ranked table carries
+neither of the last two. The hints are prose, so they say `no fit`; the cell says `no_fit`.
 
 **The terminal view** is what step 5 of the guided mode shows, and `document_terminal` carries that
 step's head; `modelroom render` writes the two files and stays silent unless a caller asks for it.
@@ -3618,7 +3645,9 @@ that is 100 characters, and no line of this view is wider.
 Above each machine's table stands `<label> · context L 32k`, and `<label> · <status>` with its
 reason for a machine that is not `ranked` (decided 2026-09-24: `Ranking: dellpromax-jv
 (DellProMax_JV)` said the machine's key, its name and a word nobody asked about, and the scenario
-stood on a line of its own). **Fit** is the class with ` (RAM)` behind it where the pool is system
+stood on a line of its own); where llmfit read the profile otherwise, the deviation clause follows
+(`; llmfit reads RAM X GiB, this measurement Y GiB`, "Hardware profile v2"). **Fit** is the class
+with ` (RAM)` behind it where the pool is system
 memory -- the same word the selection list of step 2 uses -- and never ` (from size)`, which is a
 note now. **Speed** is `–` where nothing was measured, not `unknown`.
 
@@ -3630,7 +3659,7 @@ line that continues the one above it carries no label of its own. The pieces of 
 with ` · ` and wrapped between pieces at what the label leaves of the 100 characters
 (`screen.joined`):
 
-1. `shown` -- `<n> of <m> packages`, and one piece per set-aside group: `<k> too tight (<up to three
+1. `shown` -- `<n> of <m> packages`, and one piece per set-aside group: `<k> no fit (<up to three
    names> and <r> more)`, `<k> not covered (…)`, with the reason named where the list has more than
    one of them. The word `package` is the count's own and is not repeated per piece. The names are the
    evidence behind the count and are what gives way where the line has no room for them -- two, then
@@ -3655,7 +3684,10 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    behind eleven unmeasured ones and be in no `RankedEntry` of the document at all -- the card of the
    same screen counts that measurement, and the two may not contradict each other (second-model
    round, 2026-09-24 and 2026-09-25).
-5. `install` -- `#1  ollama pull <local name>`, behind a blank line, with the rank gray and the
+5. `key` -- only under a ranked table: the fit hint (`screen.FIT_HINT`, the same pieces as in the
+   Markdown view), wrapped between its pieces, and `Speed is measured, see its column.` on a row of
+   its own (decided 2026-09-27).
+6. `install` -- `#1  ollama pull <local name>`, behind a blank line, with the rank gray and the
    command drawn as a command, for the first row of the machine **the run passes in**
    (`views.show_result(..., install_for)`; the guided mode passes its own machine key) --
    `hf.co/<repo>:<quant>` for a Hugging Face build, `<name>:<tag>` for one of the Ollama registry,
@@ -3681,7 +3713,7 @@ unsupported or it does not read.
 One row of one machine's ranking. `package_identity` is the package identity triple;
 `quantization` is `unknown` when the package declares none, `package_context` is `null` then.
 `measurement_group` 0 carries `measurement_id` and `speed_tps`, group 1 carries neither. The
-`fit` is always `perfect`, `good` or `marginal` -- the other two classes are set aside.
+`fit` is always `ample`, `fits` or `tight` -- the other two classes are set aside.
 
 ```json
 {
@@ -3709,7 +3741,7 @@ One row of one machine's ranking. `package_identity` is the package identity tri
   },
   "rank": 1,
   "fit": {
-    "fit_class": "good",
+    "fit_class": "fits",
     "mode": "gpu",
     "need_gib": 7.125,
     "weights_gib": 5.0,
@@ -3730,7 +3762,7 @@ One row of one machine's ranking. `package_identity` is the package identity tri
 
 ### SetAsideEntry
 
-One package outside the ranking: an `unknown` fit (not covered) or a `too_tight` one. Same
+One package outside the ranking: an `unknown` fit (not covered) or a `no_fit` one. Same
 package fields as `RankedEntry`, plus the `reason` shown next to it.
 
 ```json
@@ -3854,7 +3886,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
       },
       "rank": 1,
       "fit": {
-        "fit_class": "good",
+        "fit_class": "fits",
         "mode": "gpu",
         "need_gib": 7.125,
         "weights_gib": 5.0,
@@ -3962,7 +3994,7 @@ card; a hint, never a limit.
     "kv_type_assumed": true,
     "requests": 1
   },
-  "ranking_rule": "fit class (perfect, good, marginal), then measured group (valid comparable measurement first), then measured speed (faster first), then quantization, then larger weights, then package identity",
+  "ranking_rule": "fit class (ample, fits, tight), then measured group (valid comparable measurement first), then measured speed (faster first), then quantization, then larger weights, then package identity",
   "rating_unavailable": null,
   "ratings": {
     "acme/Nova-7B": {
@@ -4054,7 +4086,7 @@ card; a hint, never a limit.
           },
           "rank": 1,
           "fit": {
-            "fit_class": "good",
+            "fit_class": "fits",
             "mode": "gpu",
             "need_gib": 7.125,
             "weights_gib": 5.0,
@@ -4454,7 +4486,7 @@ matter, so the move is invisible to it.
 | 1 | `entered_cards` | How many graphics cards? | a whole number of 2 to 1024: `2`, `4`, `8` from the list, or any other (only after `cards`) |
 | 1 | `entered_vram` | How much graphics memory, in GiB? | a number above 0, as `entered_ram` (only after `card`; after `cards` the question is "How much graphics memory per card, in GiB?") |
 | 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`; both measure -- `same` under the bound profile id, `clone` under a new one) |
-| 1 | `machine_class` | What kind of machine is this? | `laptop`, `workstation`, `server` or `unknown` ("not sure"): the class of this machine, asked before each measurement only when its chassis names none (since 2026-09-26); `unknown` leaves the class `unknown` |
+| 1 | `machine_class` | What kind of machine is this? | `laptop`, `workstation`, `server` or `unknown` ("not sure"): the class of this machine, asked before every measurement (since 2026-09-27; the class the chassis reads is marked and offered without `unknown`, and choosing it keeps the source `chassis`); `unknown` leaves the class `unknown` |
 | 2 | `search` | What are you looking for? | text: a word, a name with blanks, a repository id, or the empty string ("show me what fits this machine") |
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
 | 2 | `did_you_mean` | Nothing was found. Did you mean one of these? | one of the candidates, or `keep` (only when the search found no model and the catalog knows a word close to the one that was typed) |
@@ -4519,6 +4551,9 @@ folder that already holds results but no `modelroom.toml` is a question, never a
 **What step 1 leaves on the screen** (decided 2026-09-24): the answers, and **one note about the
 measurement** -- `measured: <the hardware in plain words>, confirmed by llmfit`, or `measured again:
 …` where this machine was already measured in this folder (and for a `the same machine` answer);
+where llmfit read a quantity otherwise, the note ends with `; llmfit reads RAM X GiB, this
+measurement Y GiB` per deviating quantity instead, and nothing about llmfit where its check is
+absent, failed or not comparable (decided 2026-09-27);
 a binding to a profile entered by hand is no measurement of this machine, and its first one says
 `measured:`. The
 sentence ends after the hardware where `llmfit` confirmed nothing. The readings themselves, the
@@ -4562,11 +4597,14 @@ to measure into; the run that answered "the same machine" and then stood in fron
 step 3, an empty step 4 and "nothing to render" was the hand test this rule comes from. After a
 measurement the guided mode writes `[machines.<name>].profile` -- the one configuration write
 `hardware` leaves to it. Before each measurement the chassis is read on its own
-(`measure.read_machine_class`); only when it names no class does the run ask `machine_class`
-and hand the answer on as `hardware_with_config(..., machine_class=)` (source `entered`; "not
-sure" leaves `unknown`, with the chassis note). A chassis that names the class asks nothing, so
-an answer file needs `machine_class` only where the question falls (decided 2026-09-26); an
-earlier answer is never taken over, the class is read again on every measurement.
+(`measure.read_machine_class`) and the run asks `machine_class` every time (decided 2026-09-27;
+until then only where the chassis named none). Where the chassis names a class, the list is the
+three classes with that one marked and the pointer on it; an answer equal to it keeps the source
+`chassis`, any other is handed on as `hardware_with_config(..., machine_class=)` (source
+`entered`). Where it names none, the list is the four entries with nothing marked; "not sure"
+leaves `unknown`, with the chassis note. So an answer file that measures this machine carries
+`machine_class`; an earlier answer is never taken over, the class is read again on every
+measurement.
 `import a profile file` runs `import-profile`, which never changes the
 binding; a file that does not import is reported and the run goes on.
 
@@ -4676,9 +4714,9 @@ it a reader had to guess what a cell meant and `latest` was invisible between tw
 Seven columns, and the **whole** line is at most 100 characters -- ` ❯ ○ ` included, which is the
 one space every line of this screen carries plus the pointer and the marker (`POINTER_WIDTH`, 5;
 a label of 100 made a line of 105): the model's name (the part after the `/`, 24), the fit in a word
-(14: `good`, `marginal`, `too tight`, `unknown` -- and `good (RAM)` or `marginal (RAM)` where the
-graphics memory is too small and the fit is against system memory: fit v1 caps that pool at `good`,
-and live on 2026-09-24 a 122B model stood as `good` above a 9B `marginal` that fits the graphics
+(14: the class itself, `fits`, `tight`, `no_fit`, `unknown` -- and `fits (RAM)` or `tight (RAM)` where the
+graphics memory is too small and the fit is against system memory: fit v1 caps that pool at `fits`,
+and live on 2026-09-24 a 122B model stood as `fits` above a 9B `tight` that fits the graphics
 card, with nothing to tell the two apart), its size (6: `9B`, `0.6B`, `2.4T`, `unknown`), where it
 stands in its family (`Release`, 7: `latest`, `legacy`, `–`, and `latest*` or `legacy*` where the
 status is **computed** from the version numbers of the family rather than stated -- "Computed
@@ -4707,7 +4745,7 @@ cut here; the install line of step 5 carries the whole one.
 
 The order is the memory pool (a fit in graphics memory before one in system memory, whatever its
 class), then the fit class, then the release (`latest`, then a release nobody knows, then `legacy`),
-then the downloads, then the name, with `too tight` and `unknown` last (decided 2026-09-24,
+then the downloads, then the name, with `no_fit` and `unknown` last (decided 2026-09-24,
 release 2026-09-25); a computed status sorts like a stated one of the same word. A **`legacy` row
 is drawn gray as a whole** (`dialog.Choice(dim=True)`), stated or computed: the family has moved on,
 and that belongs in the reading of the row rather than in one cell of it.
@@ -4720,9 +4758,11 @@ that filter never hides) -- the repositories themselves are no lines of the list
 list has to say about itself is its **instruction line** (`guided_models.hint_line`), under the
 list and behind the line of the keys: `latest: the publisher's current release of its family ·
 legacy: a successor is named · *: computed from the version numbers of the family, not stated by
-the publisher · fit from the size at 32k context, exact after the fetch` (a line longer than the
-window wraps, it is never cut)
--- with `fit unknown until this machine is measured` in place of the last piece when this folder
+the publisher · Fit is memory only: the package's need against a pool · ample: up to 60 % of the
+pool · fits: up to 85 % · tight: up to 98 % · no fit: more · (RAM): the pool is the system memory ·
+fit from the size at 32k context, the best is fits, exact after the fetch` (a line longer than the
+window wraps, it is never cut; the fit words since 2026-09-27, `screen.FIT_SCALE_HINT`)
+-- with `fit unknown until this machine is measured` in place of every fit piece when this folder
 holds no measured machine, and always the context the fit was really computed for. What nothing
 marked would do is no longer said there: `Enter` takes the row under the pointer now.
 
@@ -4872,7 +4912,7 @@ report a reader looks at once the run is over:
 | `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32k (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
 | `load` | only beyond `OLLAMA_REQUEST_HINT` (8) requests: the hint of the Markdown head's `Load:` line, wrapped on rows of its own so no line is wider than 100 columns | -- |
 | `speed` | `not measured` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts but for its requests alone (`#3 measured with 1 request, ranking assumes 3`; by count, `6 rows measured with ...`, where the ranks would make the row wider than 100 columns), and only without such a row `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table |
-| `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> too tight` (else `, none too tight`), and every other set-aside reason with its count behind a `·` |
+| `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> no fit` (`0 no fit` where there is none), and every other set-aside reason with its count behind a `·` |
 
 The `speed` and `result` rows count **one** machine's ranking: the machine of the run where it has a
 ranking, else the first machine that has one, and only where none has one the machine of the run
@@ -5008,12 +5048,15 @@ exit `3`. **The two exceptions are `load_test` and `pull`:** a file that does no
 either question is reached at all depends on the machine the file is run on -- its daemon, and what
 the daemon already holds -- not on the file. An answer of the wrong shape (`pull = "yes"`) is still
 an error. A `load_test = true` without `load_test_packages` is a missing answer like any other.
+Since 2026-09-27 `machine_class` is asked on every measurement of this machine, so a file that
+measures it carries the key.
 
 ```toml
 # modelroom guided answers
 schema_version = 1
 results = "here"
 machines = ["this-machine"]
+machine_class = "laptop"
 search = "qwen"
 filter_owners = true
 select = ["unsloth/Qwen3.5-9B-GGUF"]
