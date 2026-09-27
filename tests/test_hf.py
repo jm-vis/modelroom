@@ -1222,3 +1222,63 @@ def test_fetch_hf_area_treats_a_message_less_transport_exception_as_a_real_error
 
     assert outcome.status == "incomplete"
     assert outcome.error  # must be truthy, never ""
+
+
+# --- AP9-SV1: the tensor packages a vLLM server serves (recorded Hub answers) -------------------
+
+QWEN25_SHA = "7ae557604adf67be50417f59c2c2f167def9a775"
+QWEN3_AWQ_SHA = "4da05a8edb55c6046cce958586c33b61da07bb79"
+HF = "https://huggingface.co"
+
+
+def _tensor_area(repo: str, base: str, sha: str, fixture: str) -> list[Package]:
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): json_response(f"{fixture}_model.json"),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): json_response(f"{fixture}_tree.json"),
+        }
+    )
+    base_model = BaseModelSpec(
+        hf_repo=base, repo_aliases=[], publisher="Qwen", parameters_b=None, architecture=_unknown_architecture(base)
+    )
+    outcome = fetch_hf_area(transport, base_model, owner="Qwen", targets=[repo], run_at=RUN_AT)
+    assert outcome.status == "complete", outcome.error
+    return outcome.packages
+
+
+@pytest.mark.parametrize(
+    ("repo", "base", "sha", "fixture", "weights"),
+    [
+        ("Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen2.5-0.5B-Instruct", QWEN25_SHA, "hf_qwen25_05b_instruct", 988_097_824),
+        ("Qwen/Qwen3-8B-AWQ", "Qwen/Qwen3-8B", QWEN3_AWQ_SHA, "hf_qwen3_8b_awq", 4_853_922_024 + 1_244_659_840),
+    ],
+    ids=["one-file", "two-shards"],
+)
+def test_a_safetensors_repository_gives_one_complete_tensor_package(repo, base, sha, fixture, weights):
+    """What a vLLM server serves is the `tensor` package of today: complete, the weights the sum of
+    the safetensors files, no quantization word, and `unresolved`/`format` (AP9-SV1, D)."""
+    packages = _tensor_area(repo, base, sha, fixture)
+
+    assert len(packages) == 1
+    package = packages[0]
+    assert (package.format, package.complete, package.repo, package.revision) == ("tensor", True, repo, sha)
+    assert sum(f.size_bytes for f in package.files if f.role in ("weights", "weights_shard")) == weights
+    assert package.quantization is None
+    assert (package.provenance, package.unresolved_reason) == ("unresolved", "format")
+
+
+def test_the_served_models_config_has_no_head_dim_so_its_architecture_is_unknown():
+    """64 = 896 / 14 is the test's own number for the KV cross-check; the reader stays as it is."""
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/Qwen/Qwen2.5-0.5B-Instruct"): json_response("hf_qwen25_05b_instruct_model.json"),
+            ("GET", f"{HF}/Qwen/Qwen2.5-0.5B-Instruct/resolve/{QWEN25_SHA}/config.json"): json_response(
+                "hf_qwen25_05b_instruct_config.json"
+            ),
+        }
+    )
+
+    meta = fetch_base_model_meta(transport, "Qwen/Qwen2.5-0.5B-Instruct")
+
+    assert meta.architecture.kind == "unknown"
+    assert meta.architecture.max_context == 32768

@@ -282,6 +282,51 @@ Still synthetic: `nvidia_smi_one_gpu.csv` and the other `lspci_nn_*` and `proc_m
 files of the section above, and every list of three cards or more or of mixed sizes, which the
 tests write inline (`tests/test_measure_cards.py`, `tests/test_profile_v4.py`).
 
+## Local servers (AP9-SV1)
+
+Recorded on **2026-09-27** by the maintainer on the same two rented instances as the section above,
+against vLLM 0.30.0 in its container (`vllm serve`, `Qwen/Qwen2.5-0.5B-Instruct`, `--max-model-len
+4096`, `--gpu-memory-utilization 0.5`, one card of the two). The client made the three calls of
+`modelroom/vllm_server.py` and nothing else. The answers are whole files, verbatim; the two start
+logs are excerpts of the lines named below, verbatim, checked for addresses (none is in them). No
+host name, address or machine identifier is in any file.
+
+- `vllm_v1_models_l4.json` -- recorded 2026-09-27 on Scaleway, one NVIDIA L4: `GET /v1/models`,
+  one entry, `owned_by` `vllm`, `id` equal to `root` (`Qwen/Qwen2.5-0.5B-Instruct`), `max_model_len`
+  4096.
+- `vllm_chat_one_l4.json` -- the same server: the warm-up request (`Request 0.`) and its answer,
+  as the recording client wrote them (`request`, `status`, `response`, wall time): `finish_reason`
+  `length`, usage 43 prompt + 128 completion tokens.
+- `vllm_chat_concurrent_l4.json` -- the same server: twenty requests at once (`Request 1.` to
+  `Request 20.`), all `200`, `length`, 128 tokens; 2560 tokens in 0.7203 s is 3554 tok/s in all, one
+  request 179.4 to 185.2 tok/s. The load test tests replay the answers with the recorded wall times.
+- `vllm_metrics_before_l4.txt`, `vllm_metrics_after_l4.txt` -- the same server: `GET /metrics`
+  before and after the twenty. Running and waiting 0; `vllm:generation_tokens_total` 128 -> 2688,
+  twenty times 128. The tests set these three numbers per batch and keep the rest of the page.
+- `vllm_server_log_a100.txt` -- recorded 2026-09-27 on Verda, one NVIDIA A100-SXM4-80GB: lines 8,
+  13, 21, 28, 41, 43 and 50 of the server's start log -- the arguments (`max_model_len` 4096,
+  `gpu_memory_utilization` 0.5), the engine configuration (`dtype=torch.bfloat16`),
+  `Checkpoint size: 0.92 GiB`, the loaded model, `Available KV cache memory: 37.58 GiB`, `GPU KV cache size: 3,283,360
+  tokens` and the memory summary. With `nvidia_smi_two_gpus.csv` (80 GiB) it is the source of the
+  runtime of 1.50 GiB: `0.5 x 80 - 0.920 - 37.58`.
+- `vllm_server_log_l4.txt` -- recorded 2026-09-27 on Scaleway, one NVIDIA L4: lines 8, 13, 21, 28,
+  42, 44 and 51 of its start log, the same lines: `Available KV cache memory: 9.02 GiB`, `GPU KV
+  cache size: 787,840 tokens`. With `nvidia_smi_two_l4.csv` (22.494 GiB) it is the second measured
+  value, 1.31 GiB.
+- `hf_qwen25_05b_instruct_model.json`, `hf_qwen25_05b_instruct_config.json`,
+  `hf_qwen25_05b_instruct_tree.json` -- recorded 2026-09-27 from the Hub, one anonymous `GET` each,
+  at the URLs `modelroom/hf.py` builds: `/api/models/Qwen/Qwen2.5-0.5B-Instruct`, `config.json`
+  at sha `7ae557604adf67be50417f59c2c2f167def9a775` and the recursive tree at the same sha. One
+  `model.safetensors` of 988,097,824 bytes; the configuration has no `head_dim` (896 hidden, 14 heads, 2 KV heads, 24
+  layers), so the architecture is `unknown` and the fit is on the size basis.
+- `hf_qwen3_8b_awq_model.json`, `hf_qwen3_8b_awq_tree.json` -- recorded 2026-09-27 from the Hub the
+  same way: `Qwen/Qwen3-8B-AWQ` at sha `4da05a8edb55c6046cce958586c33b61da07bb79`, two safetensors
+  shards (4,853,922,024 and 1,244,659,840 bytes): one complete `tensor` package whose weights are
+  the sum.
+
+Synthetic, in the tests: the metrics numbers of each batch, the three batch times of the load test,
+a `401`, a list of two served models, a `finish_reason` `stop`, and a server that goes away.
+
 ## Schema 2 and migration (AP9-K)
 
 All hand-written, fictitious machines and models (`acme/Nova-*`, `packager/*`); no real host

@@ -16,6 +16,7 @@ import pytest
 import modelroom
 from modelroom.daemon import TAGS_PATH, VERSION_PATH, DaemonError, FixtureDaemon
 from modelroom.http import Response
+from modelroom.local_servers import ServerRun
 from modelroom.intro import (
     ASCII_GLYPHS,
     STEP_COUNT,
@@ -32,7 +33,7 @@ from modelroom.intro import (
     use_color,
 )
 
-from fixture_support import v2_profile, windows_probes
+from fixture_support import offline_servers, v2_profile, vllm_servers, windows_probes
 
 
 def _stream(encoding: str, *, tty: bool = False):
@@ -57,12 +58,13 @@ def _daemon(version: str = "0.34.2", models: int = 19, names: list[str] | None =
     )
 
 
-def _intro(daemon=None, config_file: Path | None = None, pointer: Path | None = None) -> Intro:
+def _intro(daemon=None, config_file: Path | None = None, pointer: Path | None = None, servers=None) -> Intro:
     return collect_intro(
         daemon if daemon is not None else _daemon(),
         windows_probes(),
         pointer if pointer is not None else Path("nowhere") / "guided.json",
         config_file,
+        ServerRun(servers if servers is not None else offline_servers()),
     )
 
 
@@ -252,6 +254,36 @@ def test_a_machine_with_no_profile_in_this_folder_says_so():
 
     assert machine.value == "workstation"
     assert machine.note == "not measured in this results folder yet"
+
+
+# --- the local servers beside the daemon (AP9-SV1) ------------------------------------------------
+
+
+def test_a_vllm_server_that_answers_has_a_row_under_the_daemon():
+    """The model it states it serves, its context, and `stated` -- the id last, as long as it is."""
+    intro = _intro(servers=vllm_servers())
+
+    assert [fact.label for fact in intro.facts] == ["folder", "daemon", "machine"]
+    assert intro.servers == (Fact("server", "vLLM", "context 4096, serves (stated) Qwen/Qwen2.5-0.5B-Instruct"),)
+    printed = _text(intro, _stream("utf-8")).splitlines()
+    daemon_at = next(index for index, line in enumerate(printed) if line.strip().startswith("daemon"))
+    assert printed[daemon_at + 1].split() == ["server", "vLLM", "context", "4096,", "serves", "(stated)", "Qwen/Qwen2.5-0.5B-Instruct"]
+
+
+def test_no_vllm_server_is_no_row_and_the_screen_it_always_was():
+    unreachable = offline_servers()
+
+    assert _intro(servers=unreachable).servers == ()
+    assert [call[:2] for call in unreachable["vllm"].calls] == [("GET", "/v1/models")]
+    assert _text(_intro(servers=offline_servers()), _stream("utf-8")) == _text(_intro(servers={}), _stream("utf-8"))
+
+
+def test_a_vllm_server_that_asks_for_a_key_says_so_on_its_row():
+    from modelroom.vllm_server import MODELS_PATH, FixtureVllmServer
+
+    asking = {"vllm": FixtureVllmServer({("GET", MODELS_PATH): Response(status=401, body=b'{"error": "Unauthorized"}')})}
+
+    assert _intro(servers=asking).servers == (Fact("server", "127.0.0.1:8000", "asks for an API key"),)
 
 
 def test_the_hardware_of_a_measured_machine_is_said_in_plain_words():

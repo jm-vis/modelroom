@@ -251,15 +251,16 @@ def _measure_candidate(
 
 
 def load_test_step(
-    run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path, ranking_requests: int = 1
+    run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path, ranking_requests: int = 1, named: bool = False
 ) -> str:
     """Step 4: measure installed packages, with the context this ranking is computed for.
 
     `scenario` is the one a measurement runs, always one request; `ranking_requests` is what the
-    ranking of this run assumes, and when that is more than one the step says so first.
+    ranking of this run assumes, and when that is more than one the step says so first (naming
+    Ollama where another local server is on the start screen, `named`).
 
-    Returns the one line the finished step leaves behind. Stage 1 measures what the daemon
-    already has. A folder this machine is not bound to a profile in, and one that holds no
+    Returns the one line the finished step leaves behind; stage 1 measures what the daemon has.
+    A folder this machine is not bound to a profile in, and one that holds no
     snapshot, are lines and no more -- there is nothing a load test could even be about. From the
     daemon on, a `load_test` yes that cannot be honored is a step that did not finish
     (`run.failed`, exit `1`), and the document is still written (CONTRACTS.md, "Load test
@@ -268,7 +269,7 @@ def load_test_step(
     run.screen.blank()
     run.screen.head(STEP)
     if ranking_requests > 1:
-        run.screen.note(ONE_REQUEST_LINE.format(requests=ranking_requests))
+        run.screen.note(("Ollama " if named else "") + ONE_REQUEST_LINE.format(requests=ranking_requests))
     profile_id = _bound_profile_id(run, config, results_dir)
     if profile_id is None:
         return NOTHING_MEASURED

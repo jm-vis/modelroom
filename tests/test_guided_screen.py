@@ -27,8 +27,10 @@ from fixture_support import (
     guided_transport_mapping,
     loadtest_daemon,
     offline_daemon,
+    offline_servers,
     pull_daemon,
     tags_with,
+    vllm_servers,
     windows_probes,
 )
 
@@ -36,6 +38,8 @@ GOLDEN = Path(__file__).parent / "golden"
 RUN_AT = datetime(2026, 9, 25, 8, 0, 0, tzinfo=timezone.utc)
 DEEPSEEK = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
 QWEN = "Qwen/Qwen3.5-9B"
+# The model the recorded vLLM server states it serves: an id is as long as it is, and stands last.
+SERVED_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 
 CHOSEN = {
     "results": "here",
@@ -62,7 +66,7 @@ ENTERED = {
 }
 
 
-def _screen(tmp_path: Path, answers: dict, *, daemon=None) -> str:
+def _screen(tmp_path: Path, answers: dict, *, daemon=None, servers=None) -> str:
     """Every line one `--answers` run prints, with what varies per machine masked out."""
     results = tmp_path / "results"
     results.mkdir(exist_ok=True)
@@ -74,6 +78,7 @@ def _screen(tmp_path: Path, answers: dict, *, daemon=None) -> str:
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(host="workstation", ids=["a" * 16]),
         daemon=daemon if daemon is not None else offline_daemon(),
+        servers=servers if servers is not None else offline_servers(),
         now=RUN_AT,
         out=lines.append,
         colored=False,
@@ -122,10 +127,16 @@ def test_the_screen_of_a_run_with_a_machine_entered_by_hand_reads_as_the_golden_
     _compare("guided-screen-entered.txt", _screen(tmp_path, ENTERED))
 
 
-@pytest.mark.parametrize("answers", [CHOSEN, ENTERED], ids=["measured", "entered"])
-def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path, answers):
+@pytest.mark.parametrize(
+    ("answers", "servers"),
+    [(CHOSEN, None), (ENTERED, None), ({**CHOSEN, "users": "20 requests", "load_test_vllm": True}, vllm_servers)],
+    ids=["measured", "entered", "vllm"],
+)
+def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path, answers, servers):
     """The head is 72, the table 100; nothing the run draws may wrap in a 100-column window."""
-    for line in _screen(tmp_path, answers).splitlines():
-        if "<results>" in line or "Hugging Face" in line or "no load test" in line:
-            continue  # a path and a registry's own message are as long as they are
+    screen = _screen(tmp_path, answers, servers=servers() if servers else None)
+    for line in screen.splitlines():
+        if "<results>" in line or "Hugging Face" in line or "no load test" in line or SERVED_ID in line:
+            continue  # a path, a registry's own message and a served model's id are as long as they are
         assert len(line) <= 100, line
+    assert servers is None or "vLLM measured" in screen

@@ -649,7 +649,7 @@ def _folder_is_empty(config) -> bool:
         return False
 
 
-def empty_card(config, *, folder: Path, scenario: Scenario, now: datetime) -> list[Fact]:
+def empty_card(config, *, folder: Path, scenario: Scenario, now: datetime, extra: Sequence[Fact] = ()) -> list[Fact]:
     """The card of a step 5 that had nothing to rank: the same rows, and a dash for the result.
 
     Everything a run without a snapshot still knows: the folder, the machines the configuration
@@ -669,6 +669,7 @@ def empty_card(config, *, folder: Path, scenario: Scenario, now: datetime) -> li
     facts.append(models_fact(snapshot.model_names, snapshot.packages, snapshot.accounts))
     facts.append(context_fact(scenario.context_requested))
     facts.append(speed_fact(0, None, never_measured_of(entry.profile for entry in found)))
+    facts += extra  # the rows of the local servers (`local_servers.card_facts`)
     facts.append(Fact("result", _DASH, ""))
     return facts
 
@@ -683,14 +684,13 @@ def result_card(
     accounts: Sequence[str],
     now: datetime,
     machine: str | None = None,
+    extra: Sequence[Fact] = (),
 ) -> list[Fact]:
     """The whole run in six kinds of row: folder, machine, models, context, speed, result.
 
-    The rows of the start screen, with what this run made of them (decided 2026-09-24): a reader
-    who looks at the screen once the run is over sees everything in one place, and the table under
-    it says the rest. Every number comes from the document the render just wrote or from the
-    snapshot it was built from -- nothing here is computed a second time. `machine` is the machine
-    of the run, whose ranking the `speed` and `result` rows count; the tables below carry them all.
+    The rows of the start screen, with what this run made of them (decided 2026-09-24), every number
+    from the document just written or its snapshot. `machine` is the machine of the run, whose ranking
+    the `speed` and `result` rows count; `extra` the rows of the local servers, above `result`.
     """
     block = _card_block(document, machine)
     facts = [Fact("folder", str(folder), "")]
@@ -706,6 +706,7 @@ def result_card(
     # 65: what is left of 100 columns behind the screen's leading blank, the card's label and value
     # columns and the two gaps (`screen.plain`, `intro.fact_line`).
     facts.append(speed_fact(measured, fastest, unused_measurements(block, glyphs().skip, 65) or never_measured(block)))
+    facts += extra
     facts.append(
         result_fact(
             relative_path(markdown, folder),
@@ -718,16 +719,15 @@ def result_card(
 
 
 def show_result(
-    screen, document: RenderDocument, facts, config, folder: Path, now: datetime, install_for: str | None = None
+    screen, document: RenderDocument, facts, config, folder: Path, now: datetime, install_for: str | None = None, extra=()
 ) -> None:
     """Draw step 5 of the guided mode: the card of the whole run, then one table per machine.
 
-    The head of the step is already on screen when this runs, so what is left is the report: the
-    card a reader looks at once the run is over, the tables under it, and the one line that says
-    where the document went (CONTRACTS.md, "Guided mode", "The screen"). `install_for` is the
-    machine this run is on, and the only one an install line may be about. Every line goes through
-    the screen, so the labels, the notes and the install command carry the colors of the card
-    (decided 2026-09-25).
+    The head of the step is already on screen, so what is left is the report: the card, the tables
+    under it, and the line that says where the document went (CONTRACTS.md, "Guided mode", "The
+    screen"). `install_for` is the machine this run is on, the only one an install line may be
+    about; `extra` the card rows of the local servers. Every line goes through the screen, so the
+    labels, the notes and the install command carry the colors of the card (decided 2026-09-25).
     """
     screen.blank()
     screen.card(
@@ -740,6 +740,7 @@ def show_result(
             accounts=facts.accounts,
             now=now,
             machine=install_for,
+            extra=extra,
         )
     )
     for line in terminal_blocks(document, install_for=install_for):
@@ -748,24 +749,22 @@ def show_result(
     screen.done(STEP_COUNT, relative_path(config.paths.markdown, folder))
 
 
-def show_nothing(screen, config, folder: Path, scenario: Scenario, now: datetime) -> None:
+def show_nothing(screen, config, folder: Path, scenario: Scenario, now: datetime, extra=()) -> None:
     """Draw step 5 where there is nothing to rank: the reason, the card, and a dash for a balance.
 
-    A head with nothing under it was the whole last step of a run that chose nothing (test round,
-    2026-09-25): the reason stood on stderr, where no reader of the run is, and the card that says
-    what the run did do was not drawn at all.
+    A head with nothing under it was the last step of a run that chose nothing (test round,
+    2026-09-25): the reason stood on stderr, and the card was not drawn. `extra`: the local servers.
 
-    Only where the folder really holds no snapshot. Every render that writes no document leaves
-    step 5 without one -- a lock another process holds, a snapshot of an unsupported schema, a view
-    that could not be written -- and none of those is a folder without packages. Then this draws
-    nothing at all and the sentence the command already printed stands on its own (second-model
-    round, 2026-09-25).
+    Only where the folder really holds no snapshot. A render that writes no document for another
+    reason -- a lock another process holds, a snapshot of an unsupported schema, a view that could
+    not be written -- draws nothing here, and the sentence the command already printed stands on its
+    own (second-model round, 2026-09-25).
     """
     if not _folder_is_empty(config):
         return
     screen.note(NOTHING_TO_RANK)
     screen.blank()
-    screen.card(empty_card(config, folder=folder, scenario=scenario, now=now))
+    screen.card(empty_card(config, folder=folder, scenario=scenario, now=now, extra=extra))
     screen.blank()
     screen.skipped(STEP_COUNT, NOTHING_RANKED_SUMMARY)
 

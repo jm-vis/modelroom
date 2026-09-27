@@ -34,6 +34,10 @@ def test_no_second_version_literal_in_tracked_files():
     for path in tracked_files():
         if path.name in {"pyproject.toml", "uv.lock", "CHANGELOG.md"} or path.suffix in {".png", ".jpg", ".svg"}:
             continue
+        # A recorded metrics page of a vLLM server, verbatim: the version its `python_info` line names is
+        # the server's Python, not a version of this package (AP9-SV1).
+        if path.parent.name == "fixtures" and path.name.startswith("vllm_metrics_"):
+            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for line_no, line in enumerate(text.splitlines(), start=1):
             if VERSION_LITERAL.search(line):

@@ -20,7 +20,8 @@ consumer build against the same expectations.
 Every field value, message and paragraph in this file is US English and uses the word list in
 `AGENTS.md`, section "Language standard": `latest`, `legacy` (with its `successor`) and
 `unknown` for where a model stands in its family; `measured`, `entered` and `computed` for
-where a value came from; `publisher`, `listed packager` and `other` for who owns a repository,
+where a value came from; `stated` for what a local server says about itself (the model it serves),
+which is never measured, never ranked and never provenance (AP9-SV1); `publisher`, `listed packager` and `other` for who owns a repository,
 which is a class and never a verdict; `unknown` for a fact with no evidence behind it;
 `not comparable` for measurements taken under different scenarios. Schema names, field names
 and literal values are contract: they are never changed for a language reason, so a value like
@@ -72,6 +73,9 @@ documented decision (`docs/adr/`), never a side effect.
 | Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26; ADR 0006, 2026-09-27 (the fit words) |
 | Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
 | Measurement file | 2 | 2 | -- | -- |
+
+AP9-SV1 changes no persisted form (ADR 0008): a vLLM server's reading and its load test live in
+memory for one guided run and are written nowhere.
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -4290,6 +4294,81 @@ and no second way of computing a speed. The load test measures what is there; th
 this package is a question of step 5 of its own ("The pull", under "Guided mode"), and a package
 it pulls is measured by the load test of the **next** run.
 
+## Local servers and the vLLM load test
+
+A machine may serve models through more than one local server. **The origins are a list**:
+`LOCAL_SERVERS` in `modelroom/local_servers.py` is the one place a server is registered, as
+`LocalServer(key, name, origin, transport(run), start_fact, step, card_facts)`. `ollama` wraps what
+existed before, unchanged in behavior (its daemon row, `guided_loadtest.load_test_step`, the run's
+`daemon`); `vllm` is the second (AP9-SV1, decided 2026-09-27). The start screen, step 4 and both
+card paths of step 5 loop over the list, so an entry added to it reaches all three. **Nothing a
+server states or measures is persisted**: no measurement file, no profile, no snapshot, no
+configuration, no export and no render document changes, and a machine without a vLLM server writes
+byte for byte what it wrote before (ADR 0008).
+
+**The transport** (`modelroom/vllm_server.py`). `LocalVllmServer` reaches exactly one origin,
+`http://127.0.0.1:8000`; a base URL with another scheme, host or port, or with a path, a query, a
+fragment or user info, is refused in the constructor (`VllmServerError`). Its opener is
+`daemon.py`'s: plain HTTP, no proxy handler, no redirect following. `ALLOWED_CALLS` is the whole
+surface -- `GET /v1/models`, `GET /metrics`, `POST /v1/chat/completions` -- checked before a
+connection; `/version`, `/health`, `/v1/completions` and everything else are refused. Time limits:
+600 s for a chat, 10 s for every other call; an answer above 4 MiB is a fault. A `401` is the
+reason `the vLLM server asks for an API key; modelroom reads an open local server only`: no key is
+ever sent. `FixtureVllmServer` is the test double, like `FixtureDaemon`. **Documented limit:**
+whatever answers on that port with a model list owned by `vllm` is taken as this machine's server.
+
+**The served model** (`read_vllm_models`). `GET /v1/models`, the one entry whose `owned_by` is
+`vllm`: `ServedModel(id, root, max_model_len)`, **stated** by the server. Several entries are a
+reason (`serves 2 models, modelroom reads one`) and no model. The server states no revision.
+
+**The package it serves** (`guided_vllm.match_served`). Exactly one active complete `tensor`
+package of the snapshot whose `repo` is the stated `root` -- the package the fetch records today for
+a safetensors repository (`unresolved`/`format`, weights the sum of its safetensors files, no
+quantization word; `hf.py`, `contracts.py` and `provenance.py` unchanged). None is the line `no
+package of this folder comes from <root>`; several (one repository at several revisions) is `the
+server names none of the <k> tensor packages of <root>`, and there is no fit.
+
+**The load test** (`modelroom/loadtest_vllm.py`). One warm-up request, then three batches of `n =
+min(scenario.requests, 64)` requests at once; the scenario itself never changes. Each request is
+the one recorded against vLLM 0.30.0: a chat of 128 tokens, temperature 0.0, seed 42, not streamed,
+`Describe how a public library shelves a new book. Request <i>.` (`0` the warm-up, `1..n` in each
+batch). Per batch: `GET /metrics`, n threads behind one `threading.Barrier`, `perf_counter_ns` per
+request and for the batch, `GET /metrics` -- `1 + 3 x n` chats and 6 metrics calls in all, the
+warm-up in no number.
+
+- **Valid**: every request answered 200, `finish_reason` `length`, 128 completion tokens, and
+  `prompt_tokens + 128 <= max_model_len`. The first rule that fails is the reason: `invalid (batch 3:
+  finish_reason stop)`, and then there are no speeds.
+- **Comparable**: `n` equals the ranking's requests, no request running or waiting before and after
+  each batch, `vllm:generation_tokens_total` grew by `n x 128` in each batch, and `max_model_len`
+  is the ranking's context. The first rule that fails is the reason: `not comparable (64 requests
+  measured, the ranking assumes 65)`, `not comparable (context 4096, the ranking's 32768)`.
+- **Speeds**: the total of a batch is its completion tokens over its wall time; the total speed is
+  the mean of the three, its range their minimum and maximum. The speed per request is the mean over
+  all `3 x n` requests, with their range. Each mean is held inside its range (`loadtest._mean_within`).
+  A wall time includes the prefill and the queue of the server, so it is never mixed with an Ollama
+  measurement of protocol v1. The result is `VllmMeasurement`, in memory. A server that goes away is
+  a `LoadTestError`.
+
+**The fit on one card** (`modelroom/fit_vllm.py`, computed, no `Fit` object; `fit.py` unchanged).
+
+```
+budget  = 0.92 x card_gib            0.92: vLLM 0.30.0 default, docs.vllm.ai/en/v0.30.0/configuration/engine_args
+kv_gib  = budget - weights - 1.50    weights: the safetensors sum, no 1.10 overhead
+at_once = floor(kv_gib / per_token / context)
+```
+
+`per_token` is the base model's architecture where fit v1 can read it, else the size basis of
+`fit.py` (147,456 bytes), and then the class is capped at `fits`. The class: `no_fit` below one
+request, `tight` below the ranking's requests, `ample` at twice them or more on the architecture
+basis, else `fits`. The card is the **largest card** of the profile this machine is bound to (the
+profile `guided_context.machine_checked` reads); tensor parallel over several cards is not computed.
+**1.50 GiB** is the runtime of the recording on one A100-SXM4-80GB at utilization 0.5 (`0.5 x 80 -
+0.920 - 37.58`, decided 2026-09-27); the recording on one L4 gave **1.31** (`0.5 x 22.494 - 0.920 -
+9.02`), the second measured value. **Limits:** one 0.5B model at utilization 0.5 is the evidence; a
+server started below 0.92 has less KV cache than computed; CUDA's first card need not be the largest;
+the prefix cache is not modeled; `render` never shows any of it.
+
 ## Guided mode
 
 `modelroom` with **no subcommand** is the guided mode (`modelroom/guided.py`): a configuration
@@ -4432,6 +4511,11 @@ Then the three facts that are known before anything is asked, each as `label val
   `loadtest.is_cloud` applies, asked of the name alone because nothing on the start screen may
   raise). `19 models installed` counted twelve entries the Ollama app offers as packages of this
   machine (test round, 2026-09-25).
+- `server`, one row under the daemon's for every other registered server that answers
+  (`local_servers.LOCAL_SERVERS`, AP9-SV1): a vLLM server's row is `server  vLLM  context 4096,
+  serves (stated) <id>`, the id last; a server that asks for a key is `server  127.0.0.1:8000  asks
+  for an API key`; a server that does not answer has **no row**, so the start screen of a machine
+  without one is the one it always was.
 - `machine`: this machine's host name, and the hardware of the profile this folder binds it to in
   plain words (`one graphics card, 12 GB, 128 GB memory`); `not measured in this results folder
   yet` when there is none.
@@ -4920,6 +5004,7 @@ report a reader looks at once the run is over:
 | `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32k (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
 | `load` | only beyond `OLLAMA_REQUEST_HINT` (8) requests: the hint of the Markdown head's `Load:` line, wrapped on rows of its own so no line is wider than 100 columns | -- |
 | `speed` | `not measured` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts but for its requests alone (`#3 measured with 1 request, ranking assumes 3`; by count, `6 rows measured with ...`, where the ranks would make the row wider than 100 columns), and only without such a row `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table |
+| `server` | only for a registered server step 4 read a served model of (AP9-SV1): `vLLM` | `<t> tok/s measured (vLLM, 20 requests, total)`, and on a row of its own without a label `identity stated · fit: 32 at once, fits` (`no fit computed` without a fit); without a speed one row: `no package of this folder`, `invalid (<reason>)`, `not comparable (<reason>)` or `not measured in this run`, the reason cut at 65 columns. The same rows on the card of a run with nothing to rank (`views.show_nothing`) |
 | `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> no fit` (`0 no fit` where there is none), and every other set-aside reason with its count behind a `·` |
 
 The `speed` and `result` rows count **one** machine's ranking: the machine of the run where it has a
@@ -5045,16 +5130,34 @@ the daemon's inventory is read and matched against the snapshot's active package
   written and the ranking says where such a measurement stands. A daemon that lets a run down here
   is a step that did not finish: the line names the model and the reason, the exit code is `1`, and
   the document is still written.
+- **A vLLM server** (AP9-SV1, "Local servers and the vLLM load test"). After the daemon's part,
+  every other registered server has its own (`local_servers.load_tests`). Where the start screen read
+  a served model, the step says `a vLLM server answers here, context 4096`, `it states it serves
+  <id>` and `revision unknown (not stated)`, then `one warm-up request, then three batches of 20
+  requests, 128 tokens each` and asks `Measure the vLLM server with 20 requests at once?` (key
+  `load_test_vllm`, default no). A measurement is `measured vLLM: <t> tok/s total (<a>–<b>), context
+  4k` and `per request: <r> tok/s (<c>–<e>)`; an invalid or not comparable one is `vLLM: <reason>`
+  in their place, and a capped one says `64 of 65 requests measured` first. Then `identity stated by
+  the server; not ranked, nothing written`. The fit follows for the package the server serves: `vLLM
+  fit, computed: one card of 22.49 GiB, 0.92 of it for vLLM`, `weights 0.92 GiB, runtime 1.50 GiB (one
+  recording), KV cache 18.27 GiB`, `32 requests of context 4k at once, from size: fits`; without a
+  profile the fit may compute for, `no vLLM fit: <reason>`; without the package, the reason of
+  `match_served`. A server that asks for a key says so and nothing is measured (exit `0`). With a
+  vLLM row on the start screen the daemon's first line names it: `Ollama measurements run one
+  request; this ranking assumes 20`. **The balance** is the daemon's own where it measured, then `·
+  vLLM measured`; only vLLM: `vLLM measured` (done). A vLLM server that lets the load test down is a
+  step that did not finish (`nothing measured for vLLM: <reason>`, exit `1`). Nothing of it is written.
 
 **The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question
 with no answer ends the run with exit `2` and names the question -- an answer file written for 0.1.0
 has no `users` and stops at step 3 until the key is added (`users = 1` keeps its old ranking); an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
-exit `3`. **The two exceptions are `load_test` and `pull`:** a file that does not mention
-`load_test` does not measure, and one that does not mention `pull` does not pull, because whether
-either question is reached at all depends on the machine the file is run on -- its daemon, and what
-the daemon already holds -- not on the file. An answer of the wrong shape (`pull = "yes"`) is still
+exit `3`. **The three exceptions are `load_test`, `pull` and `load_test_vllm`:** a file that does
+not mention `load_test` does not measure, one that does not mention `pull` does not pull, and one
+that does not mention `load_test_vllm` does not measure a vLLM server (AP9-SV1), because whether
+any of these questions is reached at all depends on the machine the file is run on -- its daemon,
+its servers, and what they already hold -- not on the file. An answer of the wrong shape (`pull = "yes"`) is still
 an error. A `load_test = true` without `load_test_packages` is a missing answer like any other.
 Since 2026-09-27 `machine_class` is asked on every measurement of this machine, so a file that
 measures it carries the key.

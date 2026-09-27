@@ -84,7 +84,7 @@ def entered_problems(payload: dict, local: str) -> list[str]:
 
 def _run(work: Path, answers_toml: Callable[[dict], str], now: datetime) -> tuple[int, list[str], Path, Path]:
     """The isolated guided run: its own results folder, its own pointer, fixture sources only."""
-    from fixture_support import build_transport, guided_transport_mapping, offline_daemon, windows_probes
+    from fixture_support import build_transport, guided_transport_mapping, offline_daemon, offline_servers, windows_probes
 
     from modelroom.cli import main
 
@@ -105,6 +105,7 @@ def _run(work: Path, answers_toml: Callable[[dict], str], now: datetime) -> tupl
             here=results,
             out=lines.append,
             daemon=offline_daemon(),
+            servers=offline_servers(),
         )
     return code, lines + captured.getvalue().splitlines(), results, pointer
 

@@ -68,6 +68,7 @@ same thing in the same way:
 |---|---|---|
 | `latest`, `legacy` (with its `successor`), `unknown`; `computed` (`*`) where the family's version numbers decided | where a model stands in its family | `older`, `newer`, `outdated` |
 | `measured`, `entered`, `computed` | where a value came from | "detected", "estimated", "real" |
+| `stated` | what a local server says about itself, the model it serves: never measured, ranked or provenance | "detected", "reported" |
 | `publisher`, `listed packager`, `other` | who owns a repository | `untrusted`, `trustworthy`, or any other verdict on a packager; only the class is stated |
 | `unknown` | a fact with no evidence behind it | an empty cell, `n/a`, or a plausible guess |
 | `–` | the same fact in a **column of a list or a table**, where the word would read as a statement about the row (decided 2026-09-25) | an empty cell, `n/a`, `-` where the console can encode `–` |
@@ -156,7 +157,9 @@ genre folder carries a `README.md` index with one line per entry. `docs/README.m
 ## Security, definition of done
 
 Attack surface of this tool: outbound HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`,
-HTTP to the Ollama daemon on `127.0.0.1:11434` -- five read and generate calls, and one `POST
+HTTP to a vLLM server on `127.0.0.1:8000` -- `GET /v1/models`, `GET /metrics` and `POST
+/v1/chat/completions`, never a key (a `401` is said, not answered) -- and HTTP to the Ollama
+daemon on `127.0.0.1:11434` -- five read and generate calls, and one `POST
 /api/pull` that only the pull question of guided step 5 sends, for the first row of this machine
 and only on a yes (decided 2026-09-25: the README promised the install from step 5); its limit is
 60 s per read on the socket and none for the whole pull; never `/api/delete` -- subprocess calls to
@@ -176,7 +179,10 @@ broken input each:
   strings, and a missing or too old `llmfit` ends with exit `2` and an install hint;
 - the daemon transport refuses every origin but `http://127.0.0.1:11434` and every call outside
   its six, carries no proxy handler and follows no redirect; `/api/pull` is a `POST` only, named
-  by the transport alone and used by the install step alone, and no module names `/api/delete`.
+  by the transport alone and used by the install step alone, and no module names `/api/delete`;
+- the vLLM transport refuses every origin but `http://127.0.0.1:8000` (a path, query, fragment or
+  user info included) and every call outside its three, carries no proxy handler, follows no
+  redirect, sends no key and refuses an answer above 4 MiB.
 
 ## Versioning and releases
 

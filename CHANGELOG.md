@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **A local vLLM server, read per run** (`modelroom/local_servers.py`, `vllm_server.py`,
+  `loadtest_vllm.py`, `fit_vllm.py`, `guided_vllm.py`; CONTRACTS.md, "Local servers and the vLLM
+  load test"; ADR 0008; decided 2026-09-27). The local servers are a list, `LOCAL_SERVERS`, and
+  Ollama is its first entry, unchanged. A vLLM server on `127.0.0.1:8000` that answers gets a
+  `server` row on the start screen with the model it states it serves; step 4 offers a load test of
+  n requests at once (`load_test_vllm`, three batches, `/metrics` before and after each), reports the
+  total and the per-request speed, and computes how many requests of the ranking's context one card
+  holds (`0.92 x card - weights - 1.50 GiB` for the KV cache; 1.50 from the A100 recording, 1.31 from
+  the L4 one). The card of step 5 carries a `server` row. Three calls only, no key, no proxy, no
+  redirect. **Nothing is persisted**: no schema changes, and a run with a reachable, measured and matched
+  vLLM server writes the same bytes to results and home as the same run without one. The fixtures are recordings of vLLM 0.30.0 on two rented cards (2026-09-27).
 - **Every graphics card, and a fit spread over them** (`modelroom/measure.py`, `modelroom/fit.py`;
   CONTRACTS.md, "Hardware measurement", "Several graphics cards"; ADR 0004 and 0005; decided
   2026-09-26). `hardware` reads every line of `nvidia-smi`: one card is `measured` as before, two

@@ -42,6 +42,7 @@ from fixture_support import (
     json_response,
     loadtest_daemon,
     offline_daemon,
+    offline_servers,
     ps_answer,
     windows_probes,
     v2_profile,
@@ -118,6 +119,7 @@ def _run(tmp_path: Path, answers: dict | None = None, *, here: Path | None = Non
         transport=kwargs.pop("transport", None) or build_transport(guided_transport_mapping()),
         probes=kwargs.pop("probes", None) or windows_probes(),
         daemon=kwargs.pop("daemon", None) or offline_daemon(),
+        servers=kwargs.pop("servers", None) or offline_servers(),
         now=now,
         out=lines.append,
         **kwargs,
@@ -293,6 +295,7 @@ def test_the_fetch_runs_before_the_context_question(tmp_path: Path):
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lambda line: order.append(line) or lines.append(line),
     )
@@ -319,6 +322,7 @@ def test_the_scale_is_asked_with_the_packages_of_this_runs_own_fetch(tmp_path: P
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lambda _line: None,
     )
@@ -541,6 +545,7 @@ def _recorded_machines(tmp_path: Path, now, answers: dict) -> list:
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=now,
         out=lambda _line: None,
     )
@@ -588,6 +593,7 @@ def test_every_profile_in_the_folder_is_listed_grouped_and_not_selectable(tmp_pa
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=lines.append,
     )
@@ -622,6 +628,7 @@ def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=[].append,
     )
@@ -754,6 +761,7 @@ def test_a_change_made_during_the_dialog_is_not_written_over(tmp_path: Path):
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=[].append,
     )
@@ -802,6 +810,7 @@ def test_a_change_made_during_any_question_is_not_written_over(tmp_path: Path, w
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=[].append,
     )
@@ -812,6 +821,7 @@ def test_a_change_made_during_any_question_is_not_written_over(tmp_path: Path, w
 
 def _guided_run_for(tmp_path: Path, out: list[str]):
     from modelroom.catalog import load_catalog
+    from modelroom.local_servers import ServerRun
     from modelroom.guided import GuidedRun
 
     return GuidedRun(
@@ -821,6 +831,7 @@ def _guided_run_for(tmp_path: Path, out: list[str]):
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=ServerRun(offline_servers()),
         now=RUN2,
         catalog=load_catalog(),
         out=out.append,
@@ -893,6 +904,7 @@ def test_two_runs_that_create_the_configuration_at_once_keep_the_first_ones_file
         transport=build_transport(guided_transport_mapping()),
         probes=probes,
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -950,6 +962,7 @@ def test_an_ollama_pair_of_the_configuration_stands_in_the_list(tmp_path: Path):
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=lines.append,
     )
@@ -1104,6 +1117,7 @@ def test_a_full_account_page_invites_a_more_specific_word(tmp_path: Path):
         transport=build_transport(mapping),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1125,6 +1139,7 @@ def test_an_empty_search_answer_asks_the_catalog_pages_and_says_what_it_did(tmp_
         transport=build_transport(mapping),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1151,6 +1166,7 @@ def test_an_empty_search_answer_offers_the_models_those_pages_resolved(tmp_path:
         transport=build_transport(mapping),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1213,6 +1229,7 @@ def test_a_typo_ends_in_a_list_of_candidates_and_the_search_they_lead_to(tmp_pat
         transport=build_transport(mapping),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1242,6 +1259,7 @@ def test_none_of_these_keeps_the_word_and_the_step_stays_empty(tmp_path: Path):
         transport=build_transport(mapping),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1284,6 +1302,7 @@ def test_the_list_shows_one_line_per_model_with_its_fit_and_its_packagers(tmp_pa
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1318,6 +1337,7 @@ def test_the_hint_of_the_list_is_its_instruction_line_and_names_the_context_of_t
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1370,6 +1390,7 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
         transport=build_transport(mapping),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -1497,6 +1518,7 @@ def test_the_second_run_offers_the_kept_context_as_the_default(tmp_path: Path):
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=lambda _line: None,
     )
@@ -1550,6 +1572,7 @@ def test_the_answer_is_compared_with_the_file_not_with_this_runs_own_copy(tmp_pa
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=lambda _line: None,
     )
@@ -1651,6 +1674,7 @@ def _pointed_at_in_a_second_run(tmp_path: Path, answers: dict) -> dict[str, str]
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=lambda _line: None,
     )
@@ -1667,6 +1691,7 @@ def test_the_head_count_is_asked_before_the_scale(tmp_path: Path):
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lambda _line: None,
     )
@@ -1773,6 +1798,7 @@ def test_a_change_another_process_writes_while_the_head_count_is_asked_is_kept(t
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=lambda _line: None,
     )
@@ -1800,6 +1826,7 @@ def test_an_answer_file_without_the_head_count_is_exit_2_and_names_it(tmp_path: 
         probes=windows_probes(),
         pointer_path=_pointer(tmp_path),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         here=_results(tmp_path),
         out=[].append,
@@ -1836,6 +1863,7 @@ def _run_with(tmp_path: Path, asker: FileAsker, now=RUN2) -> int:
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=now,
         out=lambda _line: None,
     )
@@ -2015,6 +2043,7 @@ def test_the_selection_list_shows_every_candidate_unchecked_with_its_four_facts(
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=loadtest_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -2381,6 +2410,7 @@ def _watched(tmp_path: Path, answers: dict, probes=None) -> _WatchingAsker:
         transport=build_transport(guided_transport_mapping()),
         probes=probes if probes is not None else windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
     )
@@ -2474,6 +2504,7 @@ def test_the_answer_file_names_the_question_of_the_machine_entered_by_hand_it_ha
         here=_results(tmp_path),
         out=[].append,
         daemon=offline_daemon(),
+        servers=offline_servers(),
     )
 
     assert code == 2
@@ -2489,6 +2520,7 @@ def test_an_answer_file_from_before_the_machine_entered_by_hand_runs_unchanged(t
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN1,
         out=[].append,
     )
@@ -2655,6 +2687,7 @@ def test_a_lock_another_process_holds_stops_the_entry_before_the_profile_is_writ
                 transport=build_transport(guided_transport_mapping()),
                 probes=windows_probes(),
                 daemon=offline_daemon(),
+                servers=offline_servers(),
                 now=RUN1,
                 out=[].append,
             )
@@ -2755,6 +2788,7 @@ def _bound_by_hand_to_an_entered_profile(tmp_path: Path) -> tuple[_WatchingAsker
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=offline_daemon(),
+        servers=offline_servers(),
         now=RUN2,
         out=lines.append,
     )

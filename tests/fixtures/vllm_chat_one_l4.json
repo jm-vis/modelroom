@@ -1,0 +1,59 @@
+{
+  "index": 0,
+  "request": {
+    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "max_tokens": 128,
+    "temperature": 0.0,
+    "seed": 42,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Describe how a public library shelves a new book. Request 0."
+      }
+    ]
+  },
+  "started_unix": 1790507466.45703,
+  "status": 200,
+  "response": {
+    "id": "chatcmpl-a15fc1ba5ef7ac73",
+    "object": "chat.completion",
+    "created": 1790507466,
+    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "A public library's shelves are designed to be accessible and organized for patrons to find books they need or enjoy reading. Here\u2019s a step-by-step description of how a typical shelf might look:\n\n1. **Title Identification**: The first thing you see on the shelf is the title of the book. This helps patrons quickly identify what they want.\n\n2. **Book Cover**: Next to the title, there will typically be a cover of the book. This covers protect the pages from damage during transport and storage.\n\n3. **Page Count**: Below the cover, you'll find the page count. This number indicates how many pages the book has.\n\n",
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "reasoning": null
+        },
+        "logprobs": null,
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.30.0-a5237c21",
+    "usage": {
+      "prompt_tokens": 43,
+      "total_tokens": 171,
+      "completion_tokens": 128,
+      "prompt_tokens_details": null,
+      "completion_tokens_details": null
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  },
+  "finished_unix": 1790507467.3599432,
+  "wall_seconds": 0.9029130935668945
+}

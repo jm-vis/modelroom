@@ -44,6 +44,7 @@ from fixture_support import (
     guided_transport_mapping,
     json_response,
     offline_daemon,
+    offline_servers,
     pull_daemon,
     tags_with,
     windows_probes,
@@ -93,6 +94,7 @@ def _run(tmp_path: Path, answers: dict, daemon) -> tuple[int, list[str], FileAsk
         transport=build_transport(guided_transport_mapping()),
         probes=windows_probes(),
         daemon=daemon,
+        servers=offline_servers(),
         now=RUN1,
         out=lines.append,
         colored=False,
@@ -298,6 +300,7 @@ def test_ctrl_c_during_a_pull_says_it_resumes_and_goes_up_as_it_came(tmp_path: P
             transport=build_transport(guided_transport_mapping()),
             probes=windows_probes(),
             daemon=stopped,
+            servers=offline_servers(),
             now=RUN1,
             out=lines.append,
             colored=False,
@@ -325,6 +328,7 @@ def _first_row_of(tmp_path: Path) -> FirstRow:
 def _bare_run(tmp_path: Path, daemon, answers: dict, lines: list[str], asker: Asker | None = None):
     from modelroom.catalog import load_catalog
     from modelroom.guided import GuidedRun
+    from modelroom.local_servers import ServerRun
     from modelroom.screen import Screen
 
     return GuidedRun(
@@ -336,6 +340,7 @@ def _bare_run(tmp_path: Path, daemon, answers: dict, lines: list[str], asker: As
         now=RUN1,
         catalog=load_catalog(),
         daemon=daemon,
+        servers=ServerRun(offline_servers()),
         out=lines.append,
         screen=Screen(lines.append, colored=False),
     )

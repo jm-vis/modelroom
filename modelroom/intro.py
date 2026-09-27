@@ -11,7 +11,9 @@ without any color at all.
 
 The start screen shows the mark, the version, and the three facts that are known before the
 first question: the results folder (when a `--config` or the pointer file already names one),
-the local Ollama daemon, and this machine. See CONTRACTS.md, "Guided mode", "The start screen".
+the local Ollama daemon, and this machine -- with a row under the daemon's for every other local
+server that answers (`modelroom/local_servers.py`). See CONTRACTS.md, "Guided mode", "The start
+screen".
 """
 
 from __future__ import annotations
@@ -178,6 +180,8 @@ class Intro:
     # Whether `/api/version` answered with a value, from the same call the daemon row is read from:
     # step 5 offers a pull only to a daemon this screen knew (decided 2026-09-25).
     daemon_reachable: bool = False
+    # One row per other registered server that answered (a vLLM server), under the daemon's row.
+    servers: tuple[Fact, ...] = ()
 
 
 def intro_lines(intro: Intro, stream=None, colored: bool = False) -> list[list[tuple[str, str]]]:
@@ -197,7 +201,7 @@ def intro_lines(intro: Intro, stream=None, colored: bool = False) -> list[list[t
     ]
     lines = _mark_lines(marks, colored, right)
     lines.append([])
-    lines += [fact_line(fact) for fact in intro.facts]
+    lines += [fact_line(fact) for fact in (*intro.facts[:2], *intro.servers, *intro.facts[2:])]
     lines.append([])
     lines += [[("class:note", text)] for text in CLOSING_LINES]
     return lines
@@ -312,19 +316,23 @@ def fact_line(fact: Fact) -> list[tuple[str, str]]:
 # --- reading the three facts ---------------------------------------------------------------------
 
 
-def collect_intro(daemon: Daemon, probes: Probes, pointer_path: Path, config_file: Path | None) -> Intro:
+def collect_intro(daemon: Daemon, probes: Probes, pointer_path: Path, config_file: Path | None, servers=None) -> Intro:
     """Read what the start screen shows. Every fact that cannot be read says so; nothing raises.
 
     `config_file` is the configuration this run already knows about -- from `--config` or from
     the pointer file -- or `None`, in which case the first question is still to come and the
-    folder row says so.
+    folder row says so. `servers` is the run's `local_servers.ServerRun`: the rows come from that
+    module's list, the daemon's first, and what each server said is kept there for step 4.
     """
-    daemon_fact, reachable = _daemon_fact(daemon)
+    from .local_servers import ServerRun, start_rows  # imported here: that module imports this one
+
+    rows, reachable = start_rows(daemon, servers if servers is not None else ServerRun({}))
     return Intro(
         version=modelroom.__version__,
         source=source_url(),
-        facts=(_folder_fact(config_file), daemon_fact, _machine_fact(probes, pointer_path, config_file)),
+        facts=(_folder_fact(config_file), rows[0], _machine_fact(probes, pointer_path, config_file)),
         daemon_reachable=reachable,
+        servers=rows[1:],
     )
 
 
@@ -419,7 +427,7 @@ def models_note(models: list) -> str:
     return counted if local == len(models) else f"{counted}, {local} of them local"
 
 
-def _daemon_fact(daemon: Daemon) -> tuple[Fact, bool]:
+def daemon_fact(daemon: Daemon) -> tuple[Fact, bool]:
     """The local Ollama daemon: its version, how many models it has, and whether it answered.
 
     Read here and not through `loadtest.py`: the start screen must never end a run, and the load
@@ -478,6 +486,7 @@ __all__ = [
     "Glyphs",
     "Intro",
     "collect_intro",
+    "daemon_fact",
     "fact_line",
     "glyphs",
     "hardware_words",

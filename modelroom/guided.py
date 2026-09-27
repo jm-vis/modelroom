@@ -44,7 +44,7 @@ from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES, enter
 from .guided_install import QUESTIONS as PULL_QUESTIONS, FirstRow, first_row, pull_step
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
-from .guided_loadtest import load_test_step
+from .local_servers import QUESTIONS as SERVER_QUESTIONS, ServerRun, card_facts, default_transports, load_tests
 from .guided_models import (
     ModelChoice,
     ask_models,
@@ -133,7 +133,7 @@ QUESTIONS: dict[str, str] = {
     # Step 3 asks it before the scale: `N` people, or `N requests` named outright.
     USERS_KEY: USERS_QUESTION,
     # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`).
-    **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS,
+    **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS, **SERVER_QUESTIONS,
 }
 
 
@@ -153,6 +153,7 @@ class GuidedRun:
     now: datetime
     catalog: Catalog
     daemon: Daemon = field(default_factory=LocalDaemon)
+    servers: ServerRun = field(default_factory=lambda: ServerRun(default_transports()))  # `local_servers.py`
     out: Callable[[str], None] = print
     # Every line with a pattern goes through the screen (`modelroom/screen.py`); `out` stays for the
     # fault sentences and for the blocks of the result view, which bring their own layout.
@@ -735,9 +736,9 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
 
     code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen)
     if not written:
-        show_nothing(run.screen, config, config_file.parent, scenario, run.now)
+        show_nothing(run.screen, config, config_file.parent, scenario, run.now, card_facts(run))
         return code, None
-    show_result(run.screen, *written[0][:2], config, config_file.parent, run.now, here)
+    show_result(run.screen, *written[0][:2], config, config_file.parent, run.now, here, card_facts(run))
     return code, written[0][2]
 
 
@@ -754,15 +755,16 @@ def run_guided(
     catalog: Catalog | None = None,
     daemon: Daemon | None = None,
     colored: bool | None = None,
+    servers: dict | None = None,
 ) -> int:
     """Run the whole guided mode; returns the exit code (`0` when a document was written).
 
     `here` is the folder "this folder" means -- the caller passes it in, this package never
     resolves a path against the working directory on its own. Everything else is the usual
-    dependency injection: the transport, the daemon of this machine, the probes of this machine,
-    the clock, the pointer file and the shipped catalog. `colored` says whether the start screen
-    may carry color; `modelroom --answers <file>` passes `False`, `None` asks the stream
-    (`intro.use_color`).
+    dependency injection: the transport, the daemon and the other local servers of this machine by
+    key (`local_servers.py`), its probes, the clock, the pointer file and the shipped catalog.
+    `colored` says whether the start screen may carry color; `modelroom --answers <file>` passes
+    `False`, `None` asks the stream (`intro.use_color`).
     """
     run = GuidedRun(
         asker=asker,
@@ -773,10 +775,11 @@ def run_guided(
         now=(now or datetime.now(timezone.utc)).replace(microsecond=0),
         catalog=catalog if catalog is not None else load_catalog(),
         daemon=daemon if daemon is not None else LocalDaemon(),
+        servers=ServerRun(servers if servers is not None else default_transports()),
         out=out,
         screen=Screen(out, colored=colored),
     )
-    intro = collect_intro(run.daemon, run.probes, run.pointer_path, _known_config(run, config_arg))
+    intro = collect_intro(run.daemon, run.probes, run.pointer_path, _known_config(run, config_arg), run.servers)
     print_intro(intro, run.out, colored=colored)
     config_file, config = _configuration_step(run, config_arg)
     config, packages, chose = _packages_step(run, config_file, config)
@@ -784,10 +787,7 @@ def run_guided(
     scenario, config = context_step(run, config_file, config)
     # `views.context_short` names a context the way the scale of step 3 does: `L 32k`, or the number.
     run.screen.done(3, context_short(scenario.context_requested))
-    # A measurement runs one request (protocol v1): the load test gets a copy of the scenario at one
-    # request and the same context, the render the whole scenario (decided 2026-09-26).
-    one_request = scenario.model_copy(update={"requests": 1})
-    measured = load_test_step(run, config, one_request, config_file.parent, ranking_requests=scenario.requests)
+    measured = load_tests(run, config, scenario, config_file.parent)
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
     code, first = _render_step(run, config_file, config, scenario)
     pull_step(run, first, intro.daemon_reachable)
