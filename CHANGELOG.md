@@ -138,6 +138,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **The self-test on a machine whose chassis names no class** (`scripts/selftest.py`, criterion 2;
+  decided 2026-09-27). A rented guest machine reports chassis type 1 or 2, so the guided run asks
+  for the class; the self-test's answer file now answers `server`, and criterion 2 accepts that
+  answered class next to one the chassis names. Before, the run stopped at the missing answer.
+  README "Status" says that `main` runs ahead of the release on PyPI.
 - **Hardware profile schema 4 and render document schema 3** (ADR 0004, ADR 0005; decided
   2026-09-26). A profile carries `gpus`, `machine_class` and `machine_class_source`; a schema-2 or
   schema-3 profile reads as schema 4 everywhere (one card from its state, the class `unknown`), and

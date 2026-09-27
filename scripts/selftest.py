@@ -14,7 +14,9 @@ Criteria (the plan's own numbering):
 1. the first start writes `modelroom.toml` with this device as the writer, and remembers the
    results folder in the pointer file;
 2. this machine is measured: `gpu_state: measured` with one card or `multi_gpu` with the sum of
-   two and more, the machine class read from the chassis, llmfit cross-check `confirmed`;
+   two and more, the machine class read from the chassis or, on a machine whose chassis names
+   none (a guest machine at a provider, chassis type 1 or 2), the answered class `server`, and
+   llmfit cross-check `confirmed`;
 3. the search resolves at least one publisher model, `<state>/search.json` names every page it
    asked with its class, every reason a repository cannot be picked with its number and every
    resolved model with its release, and the screen says where it asked and how much of the answer
@@ -84,9 +86,14 @@ DEEPSEEK_OLLAMA_NAME = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
 # The scale's level `S`, 8192 tokens, `8k` in the scenario sentence: criteria 4 and 5 keep the numbers
 # they were pinned with, and the answer file shows that a level is a valid answer (CONTRACTS.md).
 ANSWERED_LEVEL, ANSWERED_CONTEXT, ANSWERED_SHOWN = "S", 8192, "8k"
+# The class the run answers when the chassis names none (`guided._asked_class` asks only then, so
+# the answer file is read only then; an answer nobody asks for is no error). A rented guest
+# machine reports chassis type 1 or 2 and is a server; a laptop or workstation never asks.
+ANSWERED_CLASS = "server"
 ANSWERS_FIRST = {
     "results": "here",
     "machines": ["this-machine"],
+    "machine_class": ANSWERED_CLASS,
     "search": SEARCH_NAME,
     "filter_owners": True,
     "select": [UNSLOTH_GGUF, DEEPSEEK_GGUF],
@@ -151,13 +158,21 @@ def first_start_problems(config_text: str, pointer: dict, results: Path, machine
 
 def measurement_problems(profile: dict) -> list[str]:
     """Criterion 2: this machine was really measured -- one graphics card, or two and more with their
-    sum -- its class read from the chassis, and llmfit confirmed both readings."""
+    sum -- its class read from the chassis, or the answered class where the chassis names none,
+    and llmfit confirmed both readings."""
     problems, state, cards = [], profile.get("gpu_state"), profile.get("gpus") or []
     total = sum(card.get("vram_gib") or 0 for card in cards)
     if not ((state, len(cards)) == ("measured", 1) or (state == "multi_gpu" and len(cards) > 1 and abs(total - (profile.get("vram_gib") or 0)) <= 0.01)):
         problems.append(f"gpu_state {state!r} with {len(cards)} card(s), expected 'measured' with one or 'multi_gpu' with their sum")
-    if profile.get("machine_class_source") != "chassis" or profile.get("machine_class") in (None, "unknown"):
-        problems.append(f"machine class is {profile.get('machine_class')!r} ({profile.get('machine_class_source')!r}), expected one the chassis names")
+    machine_class, source = profile.get("machine_class"), profile.get("machine_class_source")
+    # The guided run asks for the class only when the chassis names none, so `entered` here means
+    # the chassis was silent and the run answered; any other class than the answered one was not ours.
+    read = source == "chassis" and machine_class not in (None, "unknown")
+    answered = source == "entered" and machine_class == ANSWERED_CLASS
+    if not (read or answered):
+        problems.append(
+            f"machine class is {machine_class!r} ({source!r}), expected one the chassis names or the answered {ANSWERED_CLASS!r}"
+        )
     if profile.get("origin") != "measured":
         problems.append(f"origin is {profile.get('origin')!r}, expected 'measured'")
     for field in ("ram_physical", "vram"):
@@ -532,11 +547,12 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             or f"[machines.{machine}].writer = true, pointer current = {results}",
         ),
         Step(
-            "(2) this machine is measured, its class read, llmfit confirms both readings",
+            "(2) this machine is measured, its class read or answered, llmfit confirms both readings",
             len(profiles) == 1 and not measurement_problems(profile),
             "\n".join(measurement_problems(profile))
             or f"{profiles[0].name}: gpu {profile['gpu_state']}, {len(profile['gpus'])} card{'s' * (len(profile['gpus']) != 1)}, class "
-            f"{profile['machine_class']}, vram {profile['vram_gib']} GiB ({profile['vram_source']}), ram {profile['ram_physical_gib']} GiB ({profile['ram_physical_source']})",
+            f"{profile['machine_class']} ({profile['machine_class_source']}), vram {profile['vram_gib']} GiB ({profile['vram_source']}), "
+            f"ram {profile['ram_physical_gib']} GiB ({profile['ram_physical_source']})",
         ),
         Step(
             "(3) the search resolves a publisher model and its log groups the reasons of the rest",

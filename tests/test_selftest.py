@@ -302,12 +302,20 @@ def test_criterion_two_passes_on_a_machine_with_two_cards_and_their_sum():
         {"gpu_state": "measured", "gpus": TWO_CARDS, "vram_gib": 80.0},
         {"gpus": []},
         {"machine_class": "unknown", "machine_class_source": "unknown"},
-        {"machine_class": "server", "machine_class_source": "entered"},
+        {"machine_class": "laptop", "machine_class_source": "entered"},
+        {"machine_class": "server", "machine_class_source": "unknown"},
     ],
-    ids=["sum-differs", "multi-one-card", "measured-two-cards", "no-card", "class-unknown", "class-entered"],
+    ids=["sum-differs", "multi-one-card", "measured-two-cards", "no-card", "class-unknown", "class-entered-other", "class-not-read"],
 )
 def test_criterion_two_names_cards_or_a_class_that_were_not_measured(change):
     assert st.measurement_problems(_profile(**change))
+
+
+def test_criterion_two_accepts_the_answered_class_where_the_chassis_names_none():
+    # A guest machine at a provider reports chassis type 1 or 2: the run answers `server`, the
+    # profile says `entered`, and that is the class the criterion expects there.
+    assert st.ANSWERS_FIRST["machine_class"] == st.ANSWERED_CLASS == "server"
+    assert st.measurement_problems(_profile(machine_class="server", machine_class_source="entered")) == []
 
 
 def test_criterion_two_names_a_cross_check_that_is_not_confirmed():
