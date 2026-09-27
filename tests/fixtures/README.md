@@ -210,18 +210,12 @@ paths, no serial numbers. Written 2026-09-23. Each is one machine class from the
   --format=csv,noheader,nounits` on a laptop with one NVIDIA adapter: index `0`, `12282` MiB
   (11.99 GiB). The adapter name is the one `llmfit_system_laptop.json` also reports, so the two
   fixtures describe the same machine class.
-- `nvidia_smi_two_gpus.csv` -- the same command on a two-adapter server: `gpu_state`
-  `multi_gpu` with 80.00 GiB, the sum of the two cards (until 2026-09-26 `multi_gpu_not_covered`,
-  no VRAM). Synthetic until a rented GPU machine supplies a recorded list.
-- `llmfit_system_two_gpus.json` -- **synthetic**, written 2026-09-26 from `llmfit_system_laptop.json`
-  with only the GPU fields changed: one `gpus[]` entry of backend `CUDA`, `NVIDIA A100-SXM4-40GB`,
-  `vram_gb` 40.0 and `count` 2, `gpu_vram_gb` 40.0, `gpu_count` 2. It proves that the cross-check
-  of several cards counts `vram_gb x count` (80.00 GiB); the laptop recording cannot, both of its
-  entries have `count` 1 (and its `SYCL` Intel graphics is not counted).
+- `nvidia_smi_two_gpus.csv`, `llmfit_system_two_gpus.json` -- synthetic until 2026-09-27 (2 x
+  `NVIDIA A100-SXM4-40GB`, 40 GiB each), **recorded** since; see the next section.
 - The chassis type has no fixture file: `Win32_SystemEnclosure.ChassisTypes` and
   `/sys/class/dmi/id/chassis_type` answer one number each, written in the tests that use them --
   `10` (Notebook, the laptop of `fixture_support.windows_runner`) on Windows and `3` (Desktop) in
-  every Linux file layer.
+  every Linux file layer; the recorded `1` of the two rented machines is in the next section.
 - `profiles_v2/workstation.json`, `profiles_v3/workstation.json` -- one measured profile exactly as
   version 0.1.0 wrote it, as schema 2 and as schema 3 (no card list, no class), for the readers
   and `modelroom migrate`; `export_v1_profile_v3.json` is `export_v1.json` with that profile as
@@ -242,6 +236,51 @@ The Windows sources have no fixture files: `Win32_VideoController.PNPDeviceID` v
 `reg query MachineGuid` output, `sysctl hw.memsize` and `ioreg`'s `IOPlatformUUID` are one line
 each and are written in the tests that use them (`tests/test_measure.py`), with a fictitious
 GUID and UUID.
+
+## Two rented GPU machines (AP9-F)
+
+Recorded on **2026-09-27** by the maintainer on two rented Linux instances with two NVIDIA cards
+each, with the exact argument lists of `modelroom/measure.py` and `modelroom/llmfit.py` (llmfit
+1.1.16). Whole files, nothing shortened; no host name, address or machine identifier is in them.
+The two instances: one at Verda (Helsinki), one at Scaleway (Paris).
+
+- `nvidia_smi_two_gpus.csv` -- recorded 2026-09-27 on Verda, 2 x NVIDIA A100-SXM4-80GB: two lines
+  of `81920` MiB, `gpu_state` `multi_gpu` with 160.00 GiB. Replaces the synthetic two-card list of
+  2026-09-23.
+- `llmfit_system_two_gpus.json` -- recorded 2026-09-27 on Verda, 2 x NVIDIA A100-SXM4-80GB:
+  `llmfit system --json`, one `gpus[]` entry of backend `CUDA` with `vram_gb` 80.0 and `count` 2
+  (160.00 GiB counted), `total_ram_gb` 235.92. Replaces the synthetic file of 2026-09-26. It proves
+  that the cross-check of several cards counts `vram_gb x count`; the laptop recording cannot, both
+  of its entries have `count` 1 (and its `SYCL` Intel graphics is not counted).
+- `nvidia_smi_two_l4.csv` -- recorded 2026-09-27 on Scaleway, 2 x NVIDIA L4: two lines of `23034`
+  MiB (22.49 GiB each), `multi_gpu` with 44.98 GiB.
+- `llmfit_system_two_l4.json` -- recorded 2026-09-27 on Scaleway, 2 x NVIDIA L4: `vram_gb` 22.49,
+  `count` 2, `total_ram_gb` 94.29. `tests/test_measure_cards.py` holds it against
+  `nvidia_smi_two_l4.csv` and that machine's `MemTotal` (98870364 kB, written in the test): both
+  checks `confirmed`.
+- `lspci_nn_two_a100_server.txt` -- recorded 2026-09-27 on Verda, 2 x NVIDIA A100-SXM4-80GB: the
+  two cards as `3D controller [0302]` `[10de:20b2]`, two NVSwitch bridges of class `0680`, and the
+  QEMU/Bochs display controller `[1234:1111]` of class `0380`, a vendor of the positive list in
+  `measure.DISPLAY_ONLY_VENDORS`. `lspci` is read only when `nvidia-smi` does not answer; then this
+  machine is `present_unmeasured`, naming vendor `10de`.
+- `lspci_nn_two_l4_server.txt` -- recorded 2026-09-27 on Scaleway, 2 x NVIDIA L4: the two cards as
+  `3D controller [0302]` `[10de:27b8]`, and no other class-03 device.
+- `profiles_v4/two_a100_server.json`, `profiles_v4/two_l4_server.json` -- recorded 2026-09-27 on
+  Verda (2 x NVIDIA A100-SXM4-80GB) and on Scaleway (2 x NVIDIA L4): the schema-4 profile
+  `hardware` wrote there, unchanged but for two values. `display_name` is `server` (the recorded
+  one was the host name), and `os_fingerprint` is a fixed literal of the same length and shape (the
+  recorded one is a digest of the machine id and does not travel). Both carry `machine_class`
+  `unknown` (chassis type `1`) and two `confirmed` cross-checks, and end without a newline, as
+  `state.atomic_write_json` writes every profile.
+- Chassis type `1` -- recorded 2026-09-27 on both instances in `/sys/class/dmi/id/chassis_type`.
+  Like every chassis type it has no fixture file and is written in the test that reads it
+  (`tests/test_measure_cards.py`, Linux file layer), where it names no class. The evidence of what
+  stands behind it: `sys_vendor` `QEMU` and `product_name` `Ubuntu 24.04 PC (Q35 + ICH9, 2009)` on
+  Verda, `sys_vendor` `Scaleway` and `product_name` `SCW-L4-2-24G` on Scaleway.
+
+Still synthetic: `nvidia_smi_one_gpu.csv` and the other `lspci_nn_*` and `proc_meminfo_linux.txt`
+files of the section above, and every list of three cards or more or of mixed sizes, which the
+tests write inline (`tests/test_measure_cards.py`, `tests/test_profile_v4.py`).
 
 ## Schema 2 and migration (AP9-K)
 

@@ -16,7 +16,18 @@ All notable changes to this project are documented in this file. The format foll
   Ollama loads a model -- then all cards together, the new mode `gpu_split` (each card keeps its
   own reserve, `reserve_vram_gib` now means "on each graphics card", not capped), then the system
   memory. With one card no number of a fit changes. llmfit's check of several cards compares the
-  sum with its own CUDA cards (`vram_gb x count`). The two-card fixtures are synthetic.
+  sum with its own CUDA cards (`vram_gb x count`). The two-card fixtures are recorded on two rented
+  machines (next entry); three cards and more, and mixed sizes, are synthetic.
+- **Recorded two-card fixtures from two rented machines** (`tests/fixtures/README.md`, "Two rented
+  GPU machines"; recorded 2026-09-27). `nvidia_smi_two_gpus.csv` and `llmfit_system_two_gpus.json`
+  are now the recording of 2 x NVIDIA A100-SXM4-80GB at Verda instead of a synthetic list; new are
+  the same pair for 2 x NVIDIA L4 at Scaleway (`nvidia_smi_two_l4.csv`, `llmfit_system_two_l4.json`),
+  the `lspci -nn` of both GPU servers and the schema-4 profile each machine wrote
+  (`profiles_v4/two_a100_server.json`, `profiles_v4/two_l4_server.json`, with the host name and the
+  fingerprint replaced). The chassis type `1` both machines answer on Linux is a recorded test case:
+  it names no class. No number of the measurement or the fit changes.
+- **README: the two rented machines in "Tested on"**, and a column `Load test` with the speed of the
+  self-test's example package on each machine.
 - **The machine class: laptop, workstation or server** (`measure.read_machine_class`; CONTRACTS.md,
   "The machine class"). Read from the SMBIOS chassis type (Windows `Win32_SystemEnclosure`, Linux
   DMI), also under `--cpu-only`; a chassis that names no class is `unknown` with a note. New
