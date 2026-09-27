@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Callable, Iterable, Sequence
 
 from .dialog import QUESTION_RULES
-from .intro import STEP_NAMES, Fact, Glyphs, fact_line, glyphs, hardware_words, style_rules, use_color
+from .intro import STEP_NAMES, Fact, Glyphs, class_words, fact_line, glyphs, hardware_words, style_rules, use_color
 from .intro import GAP, LABEL_WIDTH
 from .profile import HardwareProfile
 
@@ -274,11 +274,14 @@ def entered_note(profile: HardwareProfile) -> str:
     """
     if profile.gpu_state == "entered":
         graphics = f"graphics card {gib_words(profile.vram_gib or 0.0)}"
+    elif profile.gpu_state == "multi_gpu":
+        graphics = f"{len(profile.gpus)} graphics cards {gib_words(profile.gpus[0].vram_gib)} each"
     elif profile.gpu_state == "unified_memory":
         graphics = "shared memory"
     else:
         graphics = "no graphics card"
-    return f"entered {profile.display_name}: {gib_words(profile.ram_physical_gib or 0.0)} memory, {graphics}"
+    memory = gib_words(profile.ram_physical_gib or 0.0)
+    return f"entered {profile.display_name}: {class_words(profile)}{memory} memory, {graphics}"
 
 
 def imported_note(display_name: str, profile: HardwareProfile) -> str:
@@ -378,15 +381,18 @@ MEASURE_HINT = "say Yes in step 4 to measure an installed package"
 
 
 def short_hardware(profile: HardwareProfile) -> str:
-    """One machine's hardware in the short form the card has room for: `12 GB graphics, 127 GB memory`."""
-    if profile.gpu_state == "measured" and profile.vram_gib is not None:
-        card = f"{profile.vram_gib:.0f} GB graphics"
+    """One machine's hardware in the short form the card has room for: `laptop, 12 GB graphics, 127
+    GB memory`, `server, 2 x 40 GB graphics, 512 GB memory`."""
+    sizes = [gpu.vram_gib for gpu in profile.gpus]
+    if profile.gpu_state in ("measured", "multi_gpu") and sizes:
+        same = len(sizes) > 1 and len(set(sizes)) == 1
+        card = f"{len(sizes)} x {sizes[0]:.0f} GB graphics" if same else f"{' + '.join(f'{size:.0f}' for size in sizes)} GB graphics"
     elif profile.gpu_state == "none":
         card = "no graphics card"
     else:
         card = "graphics memory not measured"
     memory = "system memory unknown" if profile.ram_physical_gib is None else f"{profile.ram_physical_gib:.0f} GB memory"
-    return f"{card}, {memory}"
+    return f"{class_words(profile)}{card}, {memory}"
 
 
 def measured_when(profile: HardwareProfile, now: datetime) -> str:
@@ -403,9 +409,12 @@ def entered_hardware(profile: HardwareProfile) -> str:
     """
     memory = f"{entered_number(profile.ram_physical_gib or 0.0)} GB"
     if profile.gpu_state == "unified_memory":
-        return f"shared memory {memory}, entered"
-    card = f"graphics card {entered_number(profile.vram_gib or 0.0)} GB" if profile.gpu_state == "entered" else "no graphics card"
-    return f"{card}, {memory} memory, entered"
+        return f"{class_words(profile)}shared memory {memory}, entered"
+    if profile.gpu_state == "multi_gpu":
+        card = f"{len(profile.gpus)} graphics cards {entered_number(profile.gpus[0].vram_gib)} GB each"
+    else:
+        card = f"graphics card {entered_number(profile.vram_gib or 0.0)} GB" if profile.gpu_state == "entered" else "no graphics card"
+    return f"{class_words(profile)}{card}, {memory} memory, entered"
 
 
 def machine_fact(label: str, profile: HardwareProfile | None, now: datetime, reason: str) -> Fact:

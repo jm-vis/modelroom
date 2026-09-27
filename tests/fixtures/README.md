@@ -211,7 +211,21 @@ paths, no serial numbers. Written 2026-09-23. Each is one machine class from the
   (11.99 GiB). The adapter name is the one `llmfit_system_laptop.json` also reports, so the two
   fixtures describe the same machine class.
 - `nvidia_smi_two_gpus.csv` -- the same command on a two-adapter server: `gpu_state`
-  `multi_gpu_not_covered`, no VRAM.
+  `multi_gpu` with 80.00 GiB, the sum of the two cards (until 2026-09-26 `multi_gpu_not_covered`,
+  no VRAM). Synthetic until a rented GPU machine supplies a recorded list.
+- `llmfit_system_two_gpus.json` -- **synthetic**, written 2026-09-26 from `llmfit_system_laptop.json`
+  with only the GPU fields changed: one `gpus[]` entry of backend `CUDA`, `NVIDIA A100-SXM4-40GB`,
+  `vram_gb` 40.0 and `count` 2, `gpu_vram_gb` 40.0, `gpu_count` 2. It proves that the cross-check
+  of several cards counts `vram_gb x count` (80.00 GiB); the laptop recording cannot, both of its
+  entries have `count` 1 (and its `SYCL` Intel graphics is not counted).
+- The chassis type has no fixture file: `Win32_SystemEnclosure.ChassisTypes` and
+  `/sys/class/dmi/id/chassis_type` answer one number each, written in the tests that use them --
+  `10` (Notebook, the laptop of `fixture_support.windows_runner`) on Windows and `3` (Desktop) in
+  every Linux file layer.
+- `profiles_v2/workstation.json`, `profiles_v3/workstation.json` -- one measured profile exactly as
+  version 0.1.0 wrote it, as schema 2 and as schema 3 (no card list, no class), for the readers
+  and `modelroom migrate`; `export_v1_profile_v3.json` is `export_v1.json` with that profile as
+  schema 3.
 - `lspci_nn_cpu_server.txt` -- `lspci -nn` on a CPU-only virtual server: the only class-`0300`
   device is the QEMU/Bochs display adapter `[1234:1111]`, so this is a CPU machine with the note
   `display adapter only`.

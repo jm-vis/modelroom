@@ -68,7 +68,7 @@ from .importer import (
 from .llmfit import LlmfitReference, read_llmfit_reference
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware
 from .migrate import MigrationError, migrate
-from .profile import HardwareProfile, fit_block_reason, os_fingerprint, read_profile_document
+from .profile import MACHINE_CLASSES, HardwareProfile, MachineClass, fit_block_reason, os_fingerprint, read_profile_document
 from .render_cmd import render_with_config
 from .state import (
     LockHeldError,
@@ -117,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     hardware_parser.add_argument(
         "--cpu-only", action="store_true", help="Judge this machine as a CPU machine; no GPU source is read"
     )
+    hardware_parser.add_argument("--machine-class", choices=MACHINE_CLASSES, help="The machine class, not the chassis's")
     hardware_parser.add_argument(
         "--new-identity", action="store_true", help="Write a new profile for this machine instead of the bound one"
     )
@@ -361,6 +362,7 @@ def _cmd_hardware(
         new_identity=args.new_identity,
         same_machine=args.same_machine,
         results_dir=args.config.resolve().parent,
+        machine_class=args.machine_class,
     )
 
 
@@ -379,6 +381,7 @@ def hardware_with_config(
     *,
     same_machine: bool = False,
     summary: bool = True,
+    machine_class: MachineClass | None = None,
 ) -> int:
     """Run `hardware` against an already-loaded `Configuration` -- the programmatic entry point.
 
@@ -394,7 +397,9 @@ def hardware_with_config(
     are mutually exclusive: refused here with exit `2`, before anything is measured or written.
     `summary` prints the one line with the readings of the profile; the guided mode passes `False`
     and says in its own note what was measured (`modelroom render --config` and `modelroom
-    hardware` are unchanged).
+    hardware` are unchanged). `machine_class` is the user's own word for the class (`hardware
+    --machine-class`, or the guided mode's question when the chassis says nothing); without it the
+    chassis type decides.
     """
     if new_identity and same_machine:
         print(
@@ -417,7 +422,9 @@ def hardware_with_config(
     recorded_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     pointer_file = pointer_path if pointer_path is not None else default_pointer_path()
 
-    measured = measure_hardware(active.platform, active.runner, active.read_text, active.memory_bytes, cpu_only)
+    measured = measure_hardware(
+        active.platform, active.runner, active.read_text, active.memory_bytes, cpu_only, machine_class
+    )
     reference = read_llmfit_reference(active.runner, config.llmfit.min_version)
 
     try:
@@ -597,11 +604,13 @@ def _print_hardware_summary(
     notes are printed either way -- they are what a reader has to act on.
     """
     checks = profile.llmfit_crosscheck
+    cards = f", {len(profile.gpus)} cards" if len(profile.gpus) > 1 else ""
     if summary:
         print(
             f"{profile.display_name} ({profile.profile_id}): "
             f"ram {_gib(profile.ram_physical_gib)} ({profile.ram_physical_source}), "
-            f"vram {_gib(profile.vram_gib)} ({profile.vram_source}), gpu {profile.gpu_state}, "
+            f"vram {_gib(profile.vram_gib)} ({profile.vram_source}{cards}), gpu {profile.gpu_state}, "
+            f"class {profile.machine_class} ({profile.machine_class_source}), "
             f"llmfit ram {checks.ram_physical.status} / vram {checks.vram.status}"
         )
     for note in measured.notes:

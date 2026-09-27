@@ -6,7 +6,7 @@ Steps, each reported with its exit code and output: build the wheel; create a fr
 the system temp directory (outside any git repository) and `pip install` the wheel there (not
 editable, not from the tree; pip fetches `pydantic` from the package index); write a customer
 configuration derived from `modelroom.example.toml` (one machine `kunde`, reserves 0, no rating
-source); `modelroom hardware`, which must write exactly one schema-2 profile; name that profile
+source); `modelroom hardware`, which must write exactly one schema-4 profile; name that profile
 in `[machines.<name>].profile`, the one write the guided mode would do; place a snapshot
 built from the recorded fixtures in `tests/`
 (no live data); `modelroom fetch` with the network blocked through an unreachable proxy (the
@@ -137,8 +137,8 @@ def render_problems(text: str, machine: str) -> list[str]:
 def json_problems(payload: dict, text: str, machine: str) -> list[str]:
     """The JSON view and the Markdown one come from one document, so they cannot disagree."""
     problems = []
-    if payload.get("schema_version") != 2:
-        problems.append(f"JSON view schema_version is {payload.get('schema_version')!r}, expected 2")
+    if payload.get("schema_version") != 3:
+        problems.append(f"JSON view schema_version is {payload.get('schema_version')!r}, expected 3")
     if [block.get("machine") for block in payload.get("machines", [])] != [machine]:
         problems.append(f"JSON view machines are {[b.get('machine') for b in payload.get('machines', [])]}")
     rule = payload.get("ranking_rule", "")
@@ -270,9 +270,9 @@ def modelroom(python: Path, *args: str, env: dict[str, str] | None = None) -> tu
 
 
 def step_hardware(python: Path, config: Path) -> Step:
-    """`modelroom hardware` on this machine: exactly one schema-2 profile must be written.
+    """`modelroom hardware` on this machine: exactly one schema-4 profile must be written.
 
-    The file is named after the random `profile_id`, so the check is "one new schema-2 profile
+    The file is named after the random `profile_id`, so the check is "one new schema-4 profile
     in the folder", not a file name (CONTRACTS.md, "Hardware measurement").
     """
     # The pointer file lives in the user's home folder, so the run gets a home of its own inside
@@ -281,10 +281,10 @@ def step_hardware(python: Path, config: Path) -> Step:
     code, output = modelroom(python, "hardware", "--config", str(config), "--machine", MACHINE,
                              env=clean_env(USERPROFILE=home, HOME=home))
     written = [path for path in sorted((config.parent / "state" / "hardware").glob("*.json"))
-               if json.loads(path.read_text(encoding="utf-8")).get("schema_version") == 3]
+               if json.loads(path.read_text(encoding="utf-8")).get("schema_version") == 4]
     ok = code == 0 and len(written) == 1
     return Step("modelroom hardware", code, 0 if ok else 1,
-                f"{tail(output)}\nschema-3 profiles written: {[path.name for path in written]}")
+                f"{tail(output)}\nschema-4 profiles written: {[path.name for path in written]}")
 
 
 def bind_profile_in_config(text: str, machine: str, profile_id: str) -> str:
@@ -308,11 +308,11 @@ def step_bind_profile(config: Path) -> Step:
     """Name the profile `modelroom hardware` just wrote in `[machines.<machine>].profile`."""
     written = sorted((config.parent / "state" / "hardware").glob("*.json"))
     profiles = [json.loads(path.read_text(encoding="utf-8")) for path in written]
-    schema_three = [profile for profile in profiles if profile.get("schema_version") == 3]
-    if len(schema_three) != 1:
+    schema_four = [profile for profile in profiles if profile.get("schema_version") == 4]
+    if len(schema_four) != 1:
         return Step("bind the profile in the configuration", None, 1,
-                    f"expected exactly one schema-3 profile, found {len(schema_three)}")
-    profile = schema_three[0]
+                    f"expected exactly one schema-4 profile, found {len(schema_four)}")
+    profile = schema_four[0]
     config.write_text(
         bind_profile_in_config(config.read_text(encoding="utf-8"), MACHINE, profile["profile_id"]),
         encoding="utf-8",

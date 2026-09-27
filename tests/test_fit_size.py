@@ -34,6 +34,8 @@ KV_AT_8192 = 8192 * KV_PER_TOKEN_SIZE_BASIS / GIB
 def _profile(**changes) -> HardwareProfile:
     payload = copy.deepcopy(EXAMPLES["HardwareProfile"])
     payload.update(changes)
+    if payload["gpu_state"] != "measured":
+        payload["gpus"] = []  # schema 4: the example's one card belongs to its measured state
     return HardwareProfile.model_validate(payload)
 
 

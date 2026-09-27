@@ -140,7 +140,7 @@ def test_a_run_that_stopped_after_the_profile_converges_to_the_same_result(tmp_p
 
 def test_a_schema_4_profile_stops_before_anything_is_written(tmp_path):
     config_path = _deployment(tmp_path)
-    (tmp_path / "state" / "hardware" / "future.json").write_text(json.dumps({"schema_version": 4}), encoding="utf-8")
+    (tmp_path / "state" / "hardware" / "future.json").write_text(json.dumps({"schema_version": 5}), encoding="utf-8")
     before = _tree(tmp_path)
     with pytest.raises(SchemaVersionError):
         migrate(config_path, NOW, fresh_id=_ids())

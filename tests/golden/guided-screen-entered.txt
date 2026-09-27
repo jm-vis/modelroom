@@ -12,11 +12,12 @@
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
  ? Which machines should the result cover?  this machine, a machine entered by hand
-   measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
+   measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ? What is the machine called?  studio
+ ? What kind of machine is it?  workstation
  ? How much memory does it have, in GiB?  32 GiB
  ? What runs the model?  unified memory (system and graphics share one pool)
-   entered studio: 32 GiB memory, shared memory
+   entered studio: workstation, 32 GiB memory, shared memory
  ✓ Configuration   <results>, 2 machines
 
  ── Step 2 of 5  Packages ───────────────────────────────────────────────
@@ -40,8 +41,8 @@
  ── Step 5 of 5  Results ────────────────────────────────────────────────
 
  folder    <results>
- machine   workstation             12 GB graphics, 128 GB memory, measured today
- machine   studio (entered)        shared memory 32 GB, entered
+ machine   workstation             laptop, 12 GB graphics, 128 GB memory, measured today
+ machine   studio (entered)        workstation, shared memory 32 GB, entered
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
  context   32k (entered), KV cache f16 (assumed), 1 request (from 1 user)
  speed     not measured            say Yes in step 4 to measure an installed package

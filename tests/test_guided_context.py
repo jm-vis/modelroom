@@ -67,6 +67,7 @@ def _profile(vram_gib: float = 11.94) -> HardwareProfile:
     """The example profile with a graphics card of `vram_gib`; llmfit confirms the same number."""
     payload = copy.deepcopy(EXAMPLES["HardwareProfile"])
     payload["vram_gib"] = vram_gib
+    payload["gpus"][0]["vram_gib"] = vram_gib  # schema 4: the one card carries the same number
     payload["llmfit_crosscheck"]["vram"] = {"status": "confirmed", "own_gib": vram_gib, "llmfit_gib": vram_gib}
     return HardwareProfile.model_validate(payload)
 
@@ -259,7 +260,8 @@ def test_without_a_binding_the_scale_says_there_is_no_measured_machine(tmp_path)
 
 
 def test_a_profile_the_fit_may_not_compute_for_gets_no_column_either(tmp_path):
-    blocked = _profile().model_copy(update={"gpu_state": "multi_gpu_not_covered"})
+    # A file of 0.1.0 with two cards: the state no path writes any more, and no card list (schema 4).
+    blocked = _profile().model_copy(update={"gpu_state": "multi_gpu_not_covered", "gpus": []})
     pointer, config = _folder(tmp_path, blocked, {"writer": True, "profile": blocked.profile_id})
 
     checked = machine_checked(pointer, config, tmp_path / "results")

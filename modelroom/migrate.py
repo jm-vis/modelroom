@@ -4,9 +4,10 @@ Every schema-1 profile `<state>/hardware/<name>.json` becomes `<profile_id>.json
 random `profile_id`; its embedded measurements become measurement files (`protocol: none`); the
 old file is kept as `<name>.json.v1.bak`. A schema-1 `modelroom.toml` gets
 `[machines.<name>].profile` set, the old file kept as `modelroom.toml.v1.bak`. A schema-2
-profile or configuration is rewritten in place under the same name, the old file kept as
-`<name>.v2.bak` (decided 2026-09-25): every backup is named after the version it left, so a
-folder that went from 1 to 2 and then to 3 keeps both. Idempotent: a second run finds nothing to
+profile or configuration, or a schema-3 profile, is rewritten in place under the same name, the
+old file kept as `<name>.v2.bak` or `<name>.v3.bak` (decided 2026-09-25 and 2026-09-26): every
+backup is named after the version it left, so a folder that went from 1 to 2, to 3 and then to 4
+keeps each of them. Idempotent: a second run finds nothing to
 do. The whole run is planned and checked -- versions, conversions, existing targets and backups
 -- before the lock is taken, and again under the lock with the same new ids and a freshly read
 configuration, before anything is written (CONTRACTS.md, "Migration to schema 2").
@@ -64,8 +65,9 @@ class MigrationError(Exception):
 class _ProfileScan:
     legacy: dict[Path, HardwareSnapshot] = field(default_factory=dict)
     current: dict[Path, HardwareProfile] = field(default_factory=dict)
-    # Stored as schema 2 and read as schema 3: rewritten in place under the same name.
-    stale: dict[Path, HardwareProfile] = field(default_factory=dict)
+    # Stored as schema 2 or 3 and read as the current one: rewritten in place under the same name,
+    # with the version it was stored as for the name of its backup.
+    stale: dict[Path, tuple[int, HardwareProfile]] = field(default_factory=dict)
 
 
 @dataclass
@@ -80,7 +82,8 @@ class _ProfileStep:
 
 @dataclass
 class _RewriteStep:
-    """A schema-2 profile rewritten as schema 3 under its own name, with its `.v2.bak`."""
+    """A schema-2 or schema-3 profile rewritten as the current one under its own name, with its
+    `.v2.bak` or `.v3.bak`."""
 
     path: Path
     backup: Path
@@ -96,10 +99,11 @@ class _Plan:
 
 
 def _scan_profiles(hardware_dir: Path) -> _ProfileScan:
-    """Read every `*.json` in the hardware folder; `SchemaVersionError` for schema 4 or later.
+    """Read every `*.json` in the hardware folder; `SchemaVersionError` for schema 5 or later.
 
-    A schema-2 file reads as schema 3 (`read_profile_document`), so its stored version is taken
-    from the raw file: it is `current` for everything that reads it, and `stale` for the rewrite.
+    A schema-2 or schema-3 file reads as the current schema (`read_profile_document`), so its
+    stored version is taken from the raw file: it is `current` for everything that reads it, and
+    `stale`, with that version, for the rewrite.
     """
     scan = _ProfileScan()
     if not hardware_dir.is_dir():
@@ -120,7 +124,7 @@ def _scan_profiles(hardware_dir: Path) -> _ProfileScan:
             continue
         scan.current[path] = document
         if stored < PROFILE_SCHEMA_VERSION:
-            scan.stale[path] = document
+            scan.stale[path] = (stored, document)
     return scan
 
 
@@ -179,15 +183,16 @@ def _plan(config_path: Path, config: Configuration, id_for: Callable[[str], str]
         profile_id = ids_by_name.get(legacy.machine) or id_for(legacy.machine)
         ids_by_name[legacy.machine] = profile_id
         steps.append(_plan_profile(config.paths.state, path, legacy, profile_id))
-    rewrites = [_plan_rewrite(path, profile) for path, profile in scan.stale.items()]
+    rewrites = [_plan_rewrite(path, stored, profile) for path, (stored, profile) in scan.stale.items()]
     stale_config = version < CONFIG_SCHEMA_VERSION
     config_text = _plan_config(config_path, raw, ids_by_name if version == 1 else {}, version) if stale_config else None
     return _Plan(steps, config_text, rewrites, version)
 
 
-def _plan_rewrite(path: Path, profile: HardwareProfile) -> _RewriteStep:
-    """A schema-2 profile rewritten in place; a backup of another content stops the run."""
-    backup = path.with_name(path.name + backup_suffix(2))
+def _plan_rewrite(path: Path, stored: int, profile: HardwareProfile) -> _RewriteStep:
+    """A profile of an earlier schema rewritten in place, its backup named after the version it
+    left; a backup of another content stops the run."""
+    backup = _backup_path(path, stored)
     _require_backup_absent_or_same(backup, path)
     return _RewriteStep(path, backup, profile)
 
@@ -200,10 +205,9 @@ def _plan_profile(state_dir: Path, path: Path, legacy: HardwareSnapshot, profile
     except ValidationError as exc:
         raise MigrationError(f"{path}: cannot convert to schema {PROFILE_SCHEMA_VERSION}: {exc}") from exc
     target = path.with_name(f"{profile_id}.json")
-    content = profile.model_dump(mode="json")
-    # A run of an earlier version that stopped halfway left the same profile as schema 2; the
-    # rewrite step of this run takes it on to schema 3 (`_plan_rewrite`).
-    _require_absent_or_same(target, content, {**content, "schema_version": 2})
+    # A run of an earlier version that stopped halfway left the same profile as schema 2 or 3; the
+    # rewrite step of this run takes it on to the current one (`_plan_rewrite`).
+    _require_profile_absent_or_same(target, profile)
     for record in records:
         _require_absent_or_same(measurement_path(state_dir, profile_id, record.measurement_id), record.model_dump(mode="json"))
     backup = _backup_path(path)
@@ -211,19 +215,37 @@ def _plan_profile(state_dir: Path, path: Path, legacy: HardwareSnapshot, profile
     return _ProfileStep(path, target, backup, legacy.machine, profile, records)
 
 
-def _require_absent_or_same(path: Path, content: dict, earlier: dict | None = None) -> None:
-    """`path` is absent, or holds `content` -- or `earlier`, the same content as an earlier schema."""
+def _require_absent_or_same(path: Path, content: dict) -> None:
+    """`path` is absent, or holds `content` exactly."""
+    stored = _existing_json(path)
+    if stored is not None and stored != content:
+        raise MigrationError(f"{path}: exists with other content; move it away and run again")
+
+
+def _require_profile_absent_or_same(path: Path, profile: HardwareProfile) -> None:
+    """`path` is absent, or holds `profile` in any schema the reader takes -- compared after reading."""
+    stored = _existing_json(path)
+    if stored is None:
+        return
+    try:
+        same = read_profile_document(stored).model_dump(mode="json") == profile.model_dump(mode="json")
+    except (SchemaVersionError, ValueError, AttributeError):  # not a profile of a readable schema
+        same = False
+    if not same:
+        raise MigrationError(f"{path}: exists with other content; move it away and run again")
+
+
+def _existing_json(path: Path) -> object | None:
+    """The JSON a file already holds, or `None` when there is none; a file below a file stops the run."""
     blocked = next((parent for parent in path.parents if parent.exists() and not parent.is_dir()), None)
     if blocked is not None:
         raise MigrationError(f"{blocked}: is not a folder, but {path} would be written below it")
     if not path.exists():
-        return
+        return None
     try:
-        stored = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:  # ValueError covers bad UTF-8, bad JSON and over-long integers
         raise MigrationError(f"{path}: cannot read existing file: {exc}") from exc
-    if stored != content and stored != earlier:
-        raise MigrationError(f"{path}: exists with other content; move it away and run again")
 
 
 def _backup_path(path: Path, version: int = 1) -> Path:

@@ -12,7 +12,7 @@
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
  ? Which machines should the result cover?  this machine
-   measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
+   measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ✓ Configuration   <results>, 1 machine
 
  ── Step 2 of 5  Packages ───────────────────────────────────────────────
@@ -35,7 +35,7 @@
  ── Step 5 of 5  Results ────────────────────────────────────────────────
 
  folder    <results>
- machine   workstation             12 GB graphics, 128 GB memory, measured today
+ machine   workstation             laptop, 12 GB graphics, 128 GB memory, measured today
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
  context   32k (entered), KV cache f16 (assumed), 1 request (from 1 user)
  speed     not measured            say Yes in step 4 to measure an installed package

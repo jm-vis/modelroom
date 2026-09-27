@@ -108,18 +108,8 @@ _SET_ASIDE_COLUMNS = (
     "Note",
 )
 _MACHINE_COLUMNS = (
-    "Machine",
-    "Profile",
-    "Origin",
-    "RAM GiB",
-    "RAM source",
-    "VRAM GiB",
-    "VRAM source",
-    "GPU state",
-    "Reserve RAM GiB",
-    "Reserve VRAM GiB",
-    "Recorded at",
-    "Profile age (days)",
+    "Machine", "Profile", "Origin", "RAM GiB", "RAM source", "VRAM GiB", "VRAM source", "GPU state", "GPUs", "Class",
+    "Reserve RAM GiB", "Reserve VRAM GiB", "Recorded at", "Profile age (days)",
 )
 _AREA_COLUMNS = ("Source", "Base model", "Packager", "Status", "Last success", "Error")
 
@@ -154,7 +144,7 @@ def _machine_row(block: MachineRanking, rendered_at: datetime) -> list[str]:
         return [
             _cell(block.machine),
             _cell(block.label),
-            *([block.status] * 6),
+            *([block.status] * 8),
             *reserves,
             block.status,
             block.status,
@@ -169,6 +159,8 @@ def _machine_row(block: MachineRanking, rendered_at: datetime) -> list[str]:
         _number(profile.vram_gib),
         profile.vram_source,
         profile.gpu_state,
+        _cell("; ".join(f"{gpu.index} {gpu.name or 'graphics card'} {gpu.vram_gib:.2f}" for gpu in profile.gpus) or _DASH),
+        f"{profile.machine_class} ({profile.machine_class_source})",
         *reserves,
         profile.recorded_at.isoformat(),
         str((rendered_at - profile.recorded_at).days),
@@ -313,10 +305,11 @@ _NAMED_PER_REASON = 3
 # the note's own sentence back apart (decided 2026-09-24).
 _POOL_WORDS = {
     "gpu": ("fit into graphics memory", "fits into graphics memory"),
+    "gpu_split": ("fit into graphics memory, spread over the cards", "fits into graphics memory, spread over the cards"),
     "cpu_gpu": ("need system memory, the graphics card helps", "needs system memory, the graphics card helps"),
     "cpu": ("need system memory, no graphics card", "needs system memory, no graphics card"),
 }
-_POOL_ORDER = ("gpu", "cpu_gpu", "cpu")
+_POOL_ORDER = tuple(_POOL_WORDS)
 # Under the `speed` label, so the word "speed" is not said twice -- but still "the rows shown", not
 # "this machine": the ranking rule sorts by fit class first, so a measured package can stand behind
 # eleven unmeasured ones and be in no `RankedEntry` of this document at all. The card of the same
@@ -439,8 +432,9 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
         if shared and mode == "gpu":
             plural, singular = "fit into shared memory", "fits into shared memory"
         text = f"{ranks_text([entry.rank for entry in entries], dash)} {singular if len(entries) == 1 else plural}"
-        if mode == "gpu":
-            text += f", {entries[0].fit.pool_gib:.1f} GB free after {'both reserves' if shared else 'the reserve'}"
+        if mode in ("gpu", "gpu_split"):
+            after = "both reserves" if shared else "the reserve on each card" if mode == "gpu_split" else "the reserve"
+            text += f", {entries[0].fit.pool_gib:.1f} GB free after {after}"
         pieces.append(text)
     return pieces
 

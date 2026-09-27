@@ -342,15 +342,44 @@ def source_url() -> str | None:
 
 
 def hardware_words(profile: HardwareProfile) -> str:
-    """One machine's hardware in plain words: the graphics card, and the system memory."""
-    if profile.gpu_state == "measured" and profile.vram_gib is not None:
-        card = f"one graphics card, {profile.vram_gib:.0f} GB"
+    """One machine's hardware in plain words: its class, the graphics cards, the system memory."""
+    if profile.gpu_state in ("measured", "multi_gpu") and profile.gpus:
+        card = cards_words(profile)
     elif profile.gpu_state == "none":
         card = "no graphics card"
     else:
         card = "the graphics memory was not measured"
     memory = "system memory unknown" if profile.ram_physical_gib is None else f"{profile.ram_physical_gib:.0f} GB memory"
-    return f"{card}, {memory}"
+    return f"{class_words(profile)}{card}, {memory}"
+
+
+def class_words(profile: HardwareProfile) -> str:
+    """The machine class in front of a machine's hardware -- `laptop, ` -- or nothing when unknown."""
+    return "" if profile.machine_class == "unknown" else f"{profile.machine_class}, "
+
+
+def cards_words(profile: HardwareProfile) -> str:
+    """The graphics cards in plain words: one, up to four one by one, five and more as one size or a sum."""
+    sizes = [gpu.vram_gib for gpu in profile.gpus]
+    if len(sizes) == 1:
+        return f"one graphics card, {sizes[0]:.0f} GB"
+    if len(sizes) <= 4:
+        return f"{len(sizes)} graphics cards, {' + '.join(f'{size:.0f}' for size in sizes)} GB"
+    if len(set(sizes)) == 1:
+        return f"{len(sizes)} graphics cards, {sizes[0]:.0f} GB each"
+    return f"{len(sizes)} graphics cards, {sum(sizes):.0f} GB in all"
+
+
+def card_names(profile: HardwareProfile) -> str:
+    """The names of the cards: `2 x NVIDIA A100-SXM4-40GB` for one kind, else each with a comma.
+
+    A card without a name -- entered by hand, or read from a profile that had none -- is a
+    "graphics card".
+    """
+    names = [gpu.name or "graphics card" for gpu in profile.gpus]
+    if len(set(names)) == 1:
+        return names[0] if len(names) == 1 else f"{len(names)} x {names[0]}"
+    return ", ".join(names)
 
 
 def _folder_fact(config_file: Path | None) -> Fact:

@@ -35,8 +35,9 @@ def _document(**overrides) -> dict:
 
 
 def test_the_document_is_schema_2():
-    assert DOCUMENT_SCHEMA_VERSION == 2
-    assert EXAMPLES["RenderDocument"]["schema_version"] == 2
+    """Schema 3 since 2026-09-26 (`tests/test_fit_v4.py`): a fit may be spread over the cards."""
+    assert DOCUMENT_SCHEMA_VERSION == 3
+    assert EXAMPLES["RenderDocument"]["schema_version"] == 3
 
 
 def test_the_example_carries_the_requests_and_their_origin():
@@ -104,7 +105,7 @@ def test_the_origin_comes_from_the_configuration_when_no_scenario_is_passed(tmp_
     assert render_with_config(config, now=RUN2) == 0
 
     payload = _payload(tmp_path)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert (payload["scenario"]["requests"], payload["users"], payload["requests_origin"]) == (3, 25, "from_users")
     fits = [entry["fit"] for block in payload["machines"] for entry in block["ranked"]]
     assert fits and all(fit["requests"] == 3 for fit in fits)
@@ -145,6 +146,9 @@ def _unified_profile() -> dict:
         vram_source="none",
         gpu_state="unified_memory",
         gpu_name=None,
+        gpus=[],  # schema 4: no card of its own, and no chassis for a machine entered by hand
+        machine_class="unknown",
+        machine_class_source="unknown",
         llmfit_crosscheck={"ram_physical": {"status": "absent"}, "vram": {"status": "absent"}},
         llmfit_version=None,
     )

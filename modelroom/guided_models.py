@@ -98,7 +98,7 @@ _CLASS_ORDER = ("perfect", "good", "marginal", "too_tight", "unknown")
 # graphics memory stands above one in system memory, whatever its class (decided 2026-09-24).
 _RAM_MODES = ("cpu_gpu", "cpu")
 _RAM_SUFFIX = " (RAM)"
-_MODE_ORDER = ("gpu", "cpu_gpu", "cpu", None)
+_MODE_ORDER = ("gpu", "gpu_split", "cpu_gpu", "cpu", None)
 _SETTLED = ("too_tight", "unknown")
 
 # A stated age is positive evidence about one model; a computed one compares the version numbers of
@@ -405,22 +405,20 @@ def model_fit(parameters_b: float | None, checked: Checked, context: int, reques
     the profile this folder binds this machine to, with the reserves of its own
     `[machines.<name>]`. Without such a profile, and without a parameter count, the fit is
     `unknown` with that reason -- the list never shows a number nobody computed. The memory is
-    read the way the ranking reads it (`fit.profile_memory`): a graphics card measured or entered
-    by hand counts, unified memory is one pool of its own.
+    read the way the ranking reads it (`fit.profile_memory`): every graphics card measured or
+    entered by hand counts, unified memory is one pool of its own.
     """
     if checked.profile is None or checked.machine_config is None:
         return unknown_fit(MACHINE_NOT_MEASURED)
     if parameters_b is None:
         return unknown_fit(PARAMETER_COUNT_UNKNOWN)
-    vram_gib, shared_memory = profile_memory(checked.profile)
     return fit_from_parameters(
         parameters_b,
-        vram_gib,
+        profile_memory(checked.profile),
         checked.profile.ram_physical_gib,
         checked.machine_config,
         context,
         requests=requests,
-        shared_memory=shared_memory,
     )
 
 

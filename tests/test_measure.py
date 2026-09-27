@@ -20,6 +20,7 @@ from modelroom.llmfit import FixtureRunner, LlmfitReference
 from modelroom.measure import (
     DISPLAY_ONLY_VENDORS,
     INTEL_VENDOR,
+    LINUX_CHASSIS_FILE,
     LINUX_MACHINE_ID_FILE,
     LSPCI_ARGS,
     MACOS_MEMSIZE_ARGS,
@@ -28,6 +29,7 @@ from modelroom.measure import (
     PROC_MEMINFO_FILE,
     PROC_SELF_CGROUP_FILE,
     WINDOWS_ADAPTER_ARGS,
+    WINDOWS_CHASSIS_ARGS,
     WINDOWS_MACHINE_GUID_ARGS,
     FixtureFiles,
     build_crosscheck,
@@ -61,8 +63,14 @@ def _done(args: tuple[str, ...], stdout: str = "", returncode: int = 0, stderr: 
 
 
 def _runner(**responses) -> FixtureRunner:
-    """A `FixtureRunner` keyed by the argument lists `measure.py` uses, by short name."""
+    """A `FixtureRunner` keyed by the argument lists `measure.py` uses, by short name.
+
+    The chassis answers `10` (Notebook) unless a test gives a `chassis` response of its own: every
+    Windows measurement reads it, the way it reads the machine identifier.
+    """
+    responses.setdefault("chassis", _done(WINDOWS_CHASSIS_ARGS, stdout="10\n"))
     known = {
+        "chassis": WINDOWS_CHASSIS_ARGS,
         "nvidia_smi": NVIDIA_SMI_ARGS,
         "lspci": LSPCI_ARGS,
         "adapters": WINDOWS_ADAPTER_ARGS,
@@ -93,6 +101,7 @@ def _linux_files(**extra: str) -> FixtureFiles:
     files = {
         PROC_MEMINFO_FILE: _fixture("proc_meminfo_linux.txt"),
         LINUX_MACHINE_ID_FILE: "7c9e6679a1b04f0e8c2d3b5a6f7e8d90\n",
+        LINUX_CHASSIS_FILE: "3\n",
     }
     files.update(extra)
     return FixtureFiles(files)
@@ -224,11 +233,12 @@ def test_one_nvidia_adapter_is_measured_vram_from_nvidia_smi():
     assert gpu.note is None
 
 
-def test_two_adapters_are_not_covered_and_carry_no_vram():
+def test_two_adapters_are_multi_gpu_with_their_sum():
+    """`multi_gpu_not_covered` until 2026-09-26; every card is read since (`tests/test_measure_cards.py`)."""
     runner = _runner(nvidia_smi=_done(NVIDIA_SMI_ARGS, stdout=_fixture("nvidia_smi_two_gpus.csv")))
     gpu = measure_gpu("linux", runner)
-    assert gpu.gpu_state == "multi_gpu_not_covered"
-    assert gpu.vram_gib is None and gpu.vram_source == "unknown"
+    assert gpu.gpu_state == "multi_gpu"
+    assert gpu.vram_gib == 80.0 and gpu.vram_source == "nvidia-smi"
     assert "2" in gpu.note
 
 
@@ -551,10 +561,10 @@ def test_an_intel_laptop_measures_present_unmeasured_and_keeps_the_note():
     assert any("Intel graphics" in line for line in measured.notes)
 
 
-def test_a_multi_gpu_machine_measures_as_not_covered():
+def test_a_multi_gpu_machine_measures_every_card():
     runner = _runner(nvidia_smi=_done(NVIDIA_SMI_ARGS, stdout=_fixture("nvidia_smi_two_gpus.csv")))
     measured = measure_hardware("linux", runner, _linux_files(), lambda: 0)
-    assert measured.gpu.gpu_state == "multi_gpu_not_covered"
+    assert measured.gpu.gpu_state == "multi_gpu" and len(measured.gpu.adapters) == 2
     assert measured.notes != ()
 
 

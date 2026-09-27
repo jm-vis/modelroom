@@ -55,6 +55,7 @@ ENTERED = {
     **CHOSEN,
     "machines": ["this-machine", "enter"],
     "entered_name": "studio",
+    "entered_class": "workstation",
     "entered_ram": 32,
     "entered_gpu": "unified",
 }

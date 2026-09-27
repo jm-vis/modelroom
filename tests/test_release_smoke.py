@@ -112,6 +112,22 @@ def test_json_checks_name_a_view_that_disagrees_with_the_markdown_one(tmp_path):
     assert rs.json_problems({**payload, "machines": []}, text, "workstation")
 
 
+def test_the_smoke_expects_document_schema_3_and_profile_schema_4(tmp_path):
+    """Document 3 and profile 4 since 2026-09-26: a view of schema 2 is a problem, and so is a profile of schema 3."""
+    text, payload = rendered(tmp_path, with_profile=True)
+    assert payload["schema_version"] == 3
+    assert rs.json_problems({**payload, "schema_version": 2}, text, "workstation")
+    config = tmp_path / "smoke" / "modelroom.toml"
+    hardware = config.parent / "state" / "hardware"
+    hardware.mkdir(parents=True)
+    config.write_text(rs.customer_config(EXAMPLE, {"Qwen/Qwen3.5-9B"}), encoding="utf-8")
+    old = {"schema_version": 3, "profile_id": "3f9a0c21d4e6b870", "gpu_state": "measured"}
+    (hardware / "old.json").write_text(json.dumps(old), encoding="utf-8")
+    assert rs.step_bind_profile(config).severity == 1
+    (hardware / "new.json").write_text(json.dumps({**old, "schema_version": 4, "profile_id": "0123456789abcdef"}), encoding="utf-8")
+    assert rs.step_bind_profile(config).severity == 0
+
+
 def test_binding_the_profile_writes_it_into_the_machine_table():
     text = rs.customer_config(EXAMPLE, {"Qwen/Qwen3.5-9B"})
     bound = rs.bind_profile_in_config(text, "kunde", "3f9a0c21d4e6b870")

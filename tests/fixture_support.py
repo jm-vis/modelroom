@@ -18,7 +18,7 @@ from pathlib import Path
 
 from modelroom.config import Configuration
 from modelroom.http import FixtureTransport, Response
-from modelroom.profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck
+from modelroom.profile import PROFILE_SCHEMA_VERSION, CrossCheck, GpuAdapter, HardwareProfile, LlmfitCrosscheck
 from modelroom.state import atomic_write_json
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -81,9 +81,22 @@ def v2_profile(
         vram_source="nvidia-smi" if vram_gib else "none",
         gpu_state="measured" if vram_gib else "none",
         gpu_name="Nova GPU" if vram_gib else None,
+        gpus=[GpuAdapter(index=0, name="Nova GPU", vram_gib=vram_gib, vram_source="nvidia-smi")] if vram_gib else [],
+        machine_class="unknown",
+        machine_class_source="unknown",
         llmfit_crosscheck=LlmfitCrosscheck(ram_physical=absent, vram=absent),
         llmfit_version=None,
     )
+
+
+def v3_profile(schema_version: int = 3, **changes) -> dict:
+    """A profile file exactly as version 0.1.0 wrote it: schema 3 (or 2), no card list, no class.
+
+    Read from `tests/fixtures/profiles_v3/workstation.json`, a measured machine with one card; the
+    changes are applied on top, the version last.
+    """
+    data = json.loads((FIXTURES / "profiles_v3" / "workstation.json").read_text(encoding="utf-8"))
+    return {**data, **changes, "schema_version": schema_version}
 
 
 def place_v2_profile(hardware_dir: Path, **kwargs) -> HardwareProfile:
@@ -95,6 +108,8 @@ def place_v2_profile(hardware_dir: Path, **kwargs) -> HardwareProfile:
 
 MACHINE_GUID = "4f2c1a68-9b03-4d5e-8a77-0c1de2f34567"
 LAPTOP_RAM_BYTES = 137_112_547_328  # 127.70 GiB
+# The SMBIOS chassis type `Win32_SystemEnclosure` reports for the fixture laptop: 10, Notebook.
+NOTEBOOK_CHASSIS = 10
 
 
 def windows_runner(overrides: dict | None = None):
@@ -103,7 +118,7 @@ def windows_runner(overrides: dict | None = None):
 
     from modelroom.llmfit import FixtureRunner
     from modelroom.loadtest import GPU_UTILIZATION_ARGS
-    from modelroom.measure import NVIDIA_SMI_ARGS, WINDOWS_MACHINE_GUID_ARGS
+    from modelroom.measure import NVIDIA_SMI_ARGS, WINDOWS_CHASSIS_ARGS, WINDOWS_MACHINE_GUID_ARGS
 
     def completed(args, stdout=""):
         return subprocess.CompletedProcess(list(args), 0, stdout=stdout, stderr="")
@@ -113,6 +128,7 @@ def windows_runner(overrides: dict | None = None):
         NVIDIA_SMI_ARGS: completed(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_one_gpu.csv").read_text(encoding="utf-8")),
         GPU_UTILIZATION_ARGS: completed(GPU_UTILIZATION_ARGS, "3\n"),
         WINDOWS_MACHINE_GUID_ARGS: completed(WINDOWS_MACHINE_GUID_ARGS, guid),
+        WINDOWS_CHASSIS_ARGS: completed(WINDOWS_CHASSIS_ARGS, f"{NOTEBOOK_CHASSIS}\n"),
         ("llmfit", "--version"): completed(("llmfit", "--version"), "llmfit 1.1.16\n"),
         ("llmfit", "system", "--json"): completed(
             ("llmfit", "system", "--json"), (FIXTURES / "llmfit_system_laptop.json").read_text(encoding="utf-8")

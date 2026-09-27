@@ -752,7 +752,7 @@ class Fit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fit_class: Literal["perfect", "good", "marginal", "too_tight", "unknown"]
-    mode: Literal["gpu", "cpu_gpu", "cpu"] | None
+    mode: Literal["gpu", "gpu_split", "cpu_gpu", "cpu"] | None
     need_gib: float = Field(ge=0)
     weights_gib: float = Field(ge=0)
     kv_gib: float = Field(ge=0)

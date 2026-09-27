@@ -1,4 +1,5 @@
-"""This machine's own hardware measurement: physical RAM, VRAM, the graphics adapter, a limit.
+"""This machine's own hardware measurement: physical RAM, VRAM, the graphics cards, a limit, the
+machine class.
 
 modelroom measures the machine itself and asks `llmfit` only for a second opinion
 (CONTRACTS.md, "Hardware measurement"). Every source here is a pure function over two injected
@@ -26,9 +27,11 @@ from .llmfit import LlmfitReference, Runner, SubprocessRunner
 from .profile import (
     PROFILE_SCHEMA_VERSION,
     CrossCheck,
+    GpuAdapter,
     GpuState,
     HardwareProfile,
     LlmfitCrosscheck,
+    MachineClass,
     crosscheck,
     new_profile_id,
     os_fingerprint,
@@ -54,6 +57,13 @@ WINDOWS_ADAPTER_ARGS = (
     "-Command",
     "Get-CimInstance Win32_VideoController | ForEach-Object { $_.PNPDeviceID }",
 )
+WINDOWS_CHASSIS_ARGS = (
+    "powershell",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "(Get-CimInstance Win32_SystemEnclosure).ChassisTypes",
+)
 WINDOWS_MACHINE_GUID_ARGS = ("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid")
 MACOS_MEMSIZE_ARGS = ("sysctl", "-n", "hw.memsize")
 MACOS_PLATFORM_UUID_ARGS = ("ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
@@ -61,7 +71,19 @@ MACOS_PLATFORM_UUID_ARGS = ("ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 PROC_MEMINFO_FILE = "/proc/meminfo"
 PROC_SELF_CGROUP_FILE = "/proc/self/cgroup"
 LINUX_MACHINE_ID_FILE = "/etc/machine-id"
+LINUX_CHASSIS_FILE = "/sys/class/dmi/id/chassis_type"
 CGROUP_ROOT = "/sys/fs/cgroup"
+
+# The SMBIOS chassis types (System Enclosure, type 3) of each machine class, a positive list per
+# class; every other number -- 1 Other, 2 Unknown, anything a guest machine without a chassis reports -- is
+# `unknown` (decided 2026-09-26). The class changes no number of the fit.
+CHASSIS_CLASSES: dict[int, MachineClass] = {
+    **dict.fromkeys((8, 9, 10, 11, 14, 30, 31, 32), "laptop"),
+    **dict.fromkeys((3, 4, 5, 6, 7, 13, 15, 16, 24, 34, 35, 36), "workstation"),
+    **dict.fromkeys((17, 23, 25, 28, 29), "server"),
+}
+# The chassis type is the first word of the answer, a whole number of ASCII digits and nothing else.
+_CHASSIS_NUMBER_RE = re.compile(r"[0-9]+")
 
 # PCI vendors whose class-03 devices are pure display or virtual adapters: they never run a
 # model, so a machine that has only these is a CPU machine, not a machine with an unmeasured
@@ -165,13 +187,24 @@ class Reading:
 
 @dataclass(frozen=True)
 class GpuReading:
-    """The GPU verdict: the state the fit gates on, the VRAM with its source, and a note."""
+    """The GPU verdict: the state the fit gates on, the VRAM with its source, a note, and every
+    card `nvidia-smi` measured (none for every state but `measured` and `multi_gpu`)."""
 
     gpu_state: GpuState
     vram_gib: float | None
     vram_source: Literal["nvidia-smi", "none", "unknown"]
     gpu_name: str | None = None
     note: str | None = None
+    adapters: tuple[GpuAdapter, ...] = ()
+
+
+@dataclass(frozen=True)
+class MachineClassReading:
+    """The machine class with its source: the chassis type, the user's own word, or unknown and why."""
+
+    machine_class: MachineClass
+    source: Literal["chassis", "entered", "unknown"]
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +234,7 @@ class MeasuredHardware:
     identity: OsIdentity
     notes: tuple[str, ...]
     cpu_only: bool
+    machine_class: MachineClassReading = MachineClassReading("unknown", "unknown")
 
 
 _CPU_ONLY_GPU = GpuReading(gpu_state="none", vram_gib=0.0, vram_source="none", gpu_name=None, note=CPU_ONLY_NOTE)
@@ -344,7 +378,8 @@ def _gib_reading(total: object, label: str) -> Reading:
 
 
 def measure_gpu(platform: str, runner: Runner) -> GpuReading:
-    """The GPU state and, for exactly one NVIDIA adapter, its measured VRAM.
+    """The GPU state and the measured VRAM of every NVIDIA adapter: one is `measured`, two or more
+    `multi_gpu` with their sum (decided 2026-09-26).
 
     `nvidia-smi` first; when it is not there or cannot answer, the adapter rule decides between
     "no GPU at all" and "an adapter is present but unmeasured" -- a graphics adapter's own
@@ -367,27 +402,51 @@ def _nvidia_smi_gpu(runner: Runner) -> GpuReading | None:
     rows = [line for line in stdout.splitlines() if line.strip()]
     if not rows:
         return None
-    if len(rows) > 1:
-        note = f"nvidia-smi lists {len(rows)} adapters; fit v1 covers one"
-        return GpuReading("multi_gpu_not_covered", None, "unknown", None, note)
-    return _one_nvidia_adapter(rows[0])
+    adapters = []
+    for row in rows:
+        adapter = _nvidia_adapter(row)
+        if isinstance(adapter, GpuReading):
+            return adapter  # a card without a number is no half measurement: the whole reading is unmeasured
+        adapters.append(adapter)
+    indexes = [adapter.index for adapter in adapters]
+    if len(adapters) == 1 and indexes != [0]:
+        note = f"nvidia-smi reports this adapter at index {indexes[0]}, not index 0"
+        return GpuReading("present_unmeasured", None, "unknown", adapters[0].name, note)
+    if indexes != list(range(len(adapters))):
+        note = f"nvidia-smi reports the adapters at indexes {', '.join(map(str, indexes))}, not 0 to {len(adapters) - 1}"
+        return GpuReading("present_unmeasured", None, "unknown", None, note)
+    return _nvidia_cards(tuple(adapters))
 
 
-def _one_nvidia_adapter(row: str) -> GpuReading:
+def _nvidia_adapter(row: str) -> GpuAdapter | GpuReading:
+    """One row of `nvidia-smi` as a card, or the unmeasured reading that says why it is none."""
     fields = [field.strip() for field in row.split(",")]
     index = _whole_number(fields[0]) if fields else None
     mib = _whole_number(fields[2]) if len(fields) == 3 else None
     if len(fields) != 3 or index is None or mib is None:
         return GpuReading("present_unmeasured", None, "unknown", None, f"nvidia-smi output could not be read: {row.strip()[:120]!r}")
-    name = fields[1]
-    if index != 0:
-        note = f"nvidia-smi reports this adapter at index {index}, not index 0"
-        return GpuReading("present_unmeasured", None, "unknown", name, note)
+    if index < 0:
+        return GpuReading("present_unmeasured", None, "unknown", fields[1], f"nvidia-smi reports this adapter at index {index}, not index 0")
     vram_gib = _gib(mib * MIB)
     if vram_gib is None:
         note = f"nvidia-smi reports no usable memory for this adapter: {str(mib)[:40]} MiB"
-        return GpuReading("present_unmeasured", None, "unknown", name, note)
-    return GpuReading("measured", vram_gib, "nvidia-smi", name)
+        return GpuReading("present_unmeasured", None, "unknown", fields[1], note)
+    return GpuAdapter(index=index, name=fields[1], vram_gib=vram_gib, vram_source="nvidia-smi")
+
+
+def _nvidia_cards(adapters: tuple[GpuAdapter, ...]) -> GpuReading:
+    """One card is `measured` as before; two or more are `multi_gpu` with their sum and a note."""
+    first = adapters[0]
+    if len(adapters) == 1:
+        return GpuReading("measured", first.vram_gib, "nvidia-smi", first.name, adapters=adapters)
+    names = {adapter.name for adapter in adapters}
+    if len(names) == 1:
+        listed = f"{len(adapters)} x {first.name or 'graphics card'}"
+    else:
+        listed = ", ".join(f"{adapter.name or 'graphics card'} {adapter.vram_gib:.2f} GiB" for adapter in adapters)
+    total = round(sum(adapter.vram_gib for adapter in adapters), 2)
+    note = f"nvidia-smi lists {len(adapters)} adapters: {listed}"
+    return GpuReading("multi_gpu", total, "nvidia-smi", first.name if len(names) == 1 else None, note, adapters)
 
 
 def _adapter_rule(platform: str, runner: Runner) -> GpuReading:
@@ -546,6 +605,44 @@ def _macos_identity(runner: Runner) -> OsIdentity:
     return OsIdentity(match.group(1).strip(), "macos_platform_uuid")
 
 
+# --- the machine class ----------------------------------------------------------------------------
+
+
+def read_machine_class(platform: str, runner: Runner, read_text: FileText) -> MachineClassReading:
+    """This machine's class from its chassis type: Windows `Win32_SystemEnclosure`, Linux DMI.
+
+    No GPU source, so `--cpu-only` reads it too. A chassis that cannot be read, or a type no class
+    names, is `unknown` with the reason; macOS and every other platform have no source here.
+    """
+    if platform == "win32":
+        text, reason = _run(runner, WINDOWS_CHASSIS_ARGS)
+    elif platform == "linux":
+        text, reason = _linux_chassis(read_text)
+    else:
+        return _unknown_class(f"the machine class is not read on {platform}")
+    if text is None:
+        return _unknown_class(f"the machine class is unknown: the chassis type could not be read ({reason})")
+    first = (text.split() or [""])[0]
+    number = _whole_number(first) if _CHASSIS_NUMBER_RE.fullmatch(first) else None
+    if number is None:
+        return _unknown_class(f"the machine class is unknown: the chassis type is not a number: {text.strip()[:40]!r}")
+    machine_class = CHASSIS_CLASSES.get(number)
+    if machine_class is None:
+        return _unknown_class(f"the machine class is unknown: chassis type {number} names no machine class")
+    return MachineClassReading(machine_class, "chassis")
+
+
+def _linux_chassis(read_text: FileText) -> tuple[str | None, str | None]:
+    try:
+        return read_text(LINUX_CHASSIS_FILE), None
+    except OSError as exc:
+        return None, f"cannot read {LINUX_CHASSIS_FILE} ({exc})"
+
+
+def _unknown_class(reason: str) -> MachineClassReading:
+    return MachineClassReading("unknown", "unknown", reason)
+
+
 # --- one whole measurement -------------------------------------------------------------------------
 
 
@@ -555,8 +652,12 @@ def measure_hardware(
     read_text: FileText | None = None,
     memory_bytes: MemoryBytes | None = None,
     cpu_only: bool = False,
+    machine_class: MachineClass | None = None,
 ) -> MeasuredHardware:
     """Every source of this machine at once, plus the notes a user has to read.
+
+    `machine_class` (`hardware --machine-class`) is the user's own word for the class: it is taken
+    with the source `entered` and the chassis is not read.
 
     `cpu_only` (`hardware --cpu-only`) is the user's own statement that this machine runs on the
     CPU: no GPU source is asked at all, and the profile becomes an `entered` one, which carries
@@ -577,7 +678,12 @@ def measure_hardware(
         if cpu_only
         else read_os_identity(platform, active_runner, active_read)
     )
-    return MeasuredHardware(ram, gpu, ram_limit, identity, _notes(ram, gpu, ram_limit, identity, cpu_only), cpu_only)
+    if machine_class is not None:
+        chassis = MachineClassReading(machine_class, "entered")
+    else:
+        chassis = read_machine_class(platform, active_runner, active_read)
+    notes = _notes(ram, gpu, ram_limit, identity, cpu_only) + ((chassis.reason,) if chassis.reason else ())
+    return MeasuredHardware(ram, gpu, ram_limit, identity, notes, cpu_only, chassis)
 
 
 def _notes(
@@ -621,6 +727,9 @@ def build_crosscheck(measured: MeasuredHardware, reference: LlmfitReference) -> 
         # Skipped on purpose, whatever llmfit did: `absent` says "never asked", `error` would say
         # the comparison was attempted and llmfit let it down.
         vram = CrossCheck(status="absent", own_gib=measured.gpu.vram_gib)
+    elif measured.gpu.gpu_state == "multi_gpu":
+        # Every card against the sum of llmfit's CUDA cards, the way llmfit counts them itself.
+        vram = _one_check(measured.gpu.vram_gib, reference.cuda_vram_gib, reference.status)
     else:
         vram = _one_check(measured.gpu.vram_gib, reference.vram_gib, reference.status)
     return LlmfitCrosscheck(
@@ -642,7 +751,7 @@ def build_profile(
     display_name: str,
     recorded_at: datetime,
 ) -> HardwareProfile:
-    """The schema-2 profile of one measurement (CONTRACTS.md, "Hardware profile v2").
+    """The current profile of one measurement (CONTRACTS.md, "Hardware profile v2").
 
     The raw OS identifier never reaches the file: only `os_fingerprint`'s salted digest does.
     A `cpu_only` measurement is an `entered` profile, which the contract keeps without a
@@ -665,6 +774,9 @@ def build_profile(
         vram_source=measured.gpu.vram_source,
         gpu_state=measured.gpu.gpu_state,
         gpu_name=measured.gpu.gpu_name,
+        gpus=list(measured.gpu.adapters),
+        machine_class=measured.machine_class.machine_class,
+        machine_class_source=measured.machine_class.source,
         llmfit_crosscheck=build_crosscheck(measured, reference),
         llmfit_version=reference.version,
     )
