@@ -616,6 +616,30 @@ def test_write_snapshot_then_load_existing_snapshot_round_trips(tmp_path: Path):
     assert list((tmp_path).rglob("*.tmp")) == []
 
 
+def test_write_snapshot_writes_from_metadata_for_a_0_1_0_metadata_ok_package(tmp_path: Path):
+    from modelroom.config import Configuration
+    from modelroom.examples import EXAMPLES
+
+    config = Configuration.from_dict(
+        {
+            "schema_version": 1,
+            "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-7B", "repo_aliases": []}]}],
+            "packagers": ["packager"],
+            "publishers": ["acme"],
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
+        }
+    )
+    payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    for package in payload["packages"]:
+        package["provenance"] = "metadata_ok"
+
+    write_snapshot(config, payload)
+
+    written = json.loads(config.paths.snapshot_file.read_text(encoding="utf-8"))
+    assert [package["provenance"] for package in written["packages"]] == ["from_metadata"] * len(payload["packages"])
+    assert written["schema_version"] == 1
+
+
 def test_load_existing_snapshot_returns_none_when_no_file_exists(tmp_path: Path):
     from modelroom.config import Configuration
 

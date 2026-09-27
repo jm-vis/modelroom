@@ -257,7 +257,7 @@ def _machine_sections(block: MachineRanking, document: RenderDocument) -> list[s
         ]
     else:
         sections += ["No package of the configured base models is ranked on this machine.", ""]
-    for heading, items in (("Not covered", block.not_covered), (NO_FIT.capitalize(), block.too_tight)):
+    for heading, items in (("Not covered", block.not_covered), (NO_FIT.capitalize(), block.no_fit)):
         if not items:
             continue
         sections += [
@@ -506,7 +506,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | N
     """Everything under one machine's table, in the order a reader reads it, each line labeled."""
     shown = [f"{len(block.ranked)} of {block.ranked_total} packages"]
     shown += _set_aside_pieces("not covered", block.not_covered)
-    shown += _set_aside_pieces(NO_FIT, block.too_tight)
+    shown += _set_aside_pieces(NO_FIT, block.no_fit)
     lines = _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
     lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash))
@@ -631,7 +631,7 @@ def _set_aside_counts(block: MachineRanking | None) -> list[tuple[str, int]]:
     """How many packages this machine set aside, by the word that says why, where there are any."""
     if block is None:
         return []
-    counted = ((NO_FIT, len(block.too_tight)), ("not covered", len(block.not_covered)))
+    counted = ((NO_FIT, len(block.no_fit)), ("not covered", len(block.not_covered)))
     return [pair for pair in counted if pair[1]]
 
 

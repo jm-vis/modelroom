@@ -297,7 +297,7 @@ def test_fetch_hf_area_assembles_one_package_per_quantization_from_the_tree():
         assert pkg.repo == "unsloth/Qwen3.5-9B-GGUF"
         assert pkg.revision == UNSLOTH_SHA
         assert pkg.complete is True
-        assert pkg.provenance == "metadata_ok"
+        assert pkg.provenance == "from_metadata"
         assert pkg.observed_at == RUN_AT
         assert pkg.last_seen == RUN_AT
         assert pkg.active is True
@@ -491,7 +491,7 @@ def test_fetch_hf_area_finds_a_package_only_under_its_alias_repo():
     assert len(outcome.packages) == 1
     package = outcome.packages[0]
     assert package.repo == "packager/Nova-7B-Legacy-GGUF"
-    assert package.provenance == "metadata_ok"
+    assert package.provenance == "from_metadata"
 
 
 # --- fetch_hf_area: malformed metadata reaches the relation check unchanged ---------------

@@ -209,11 +209,11 @@ def test_fetch_ollama_area_inherits_quantization_from_a_digest_sibling():
     assert by_name["qwen3.5:9b"].quantization == "Q4_K_M"
 
 
-def test_fetch_ollama_area_gguf_package_with_matching_tags_is_metadata_ok():
+def test_fetch_ollama_area_gguf_package_with_matching_tags_is_from_metadata():
     outcome = fetch_ollama_area(_happy_path_transport(), _qwen35_9b(), RUN_AT)
 
     by_name = {pkg.ollama_name: pkg for pkg in outcome.packages}
-    assert by_name["qwen3.5:9b"].provenance == "metadata_ok"
+    assert by_name["qwen3.5:9b"].provenance == "from_metadata"
 
 
 # --- manifest digest: sha256 of the GET body, no HEAD request at all (F5) ------------------
@@ -487,7 +487,7 @@ def _approved_ollama_package(tag: str, content: str, manifest_digest: str) -> Pa
         complete=True,
         quantization="Q4_K_M",
         default_context=None,
-        provenance="approved" if content == manifest_digest else "metadata_ok",
+        provenance="approved" if content == manifest_digest else "from_metadata",
         unresolved_reason=None,
         approval=Approval(date=date(2026, 9, 1), content=content, by="acme-ai-team"),
         observed_at=RUN_AT,

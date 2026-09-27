@@ -56,7 +56,7 @@ def _gguf_package(
         complete=complete if files else False,
         quantization="Q4_K_M" if format == "gguf" else None,
         default_context=default_context,
-        provenance="metadata_ok" if format == "gguf" else "unresolved",
+        provenance="from_metadata" if format == "gguf" else "unresolved",
         unresolved_reason=None if format == "gguf" else "format",
         approval=None,
         observed_at=NOW,

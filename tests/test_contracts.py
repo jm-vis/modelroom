@@ -540,7 +540,7 @@ def test_shards_complete_qwen_split_shard_missing_one_is_incomplete():
 def test_non_gguf_package_must_be_unresolved_format():
     payload = dict(EXAMPLES["Package"])
     payload["format"] = "tensor"
-    # provenance/unresolved_reason still say metadata_ok/None from the gguf example -> rejected
+    # provenance/unresolved_reason still say from_metadata/None from the gguf example -> rejected
     with pytest.raises(ValidationError):
         Package.model_validate(payload)
 
@@ -744,6 +744,31 @@ def test_load_snapshot_accepts_a_valid_snapshot():
     snapshot = load_snapshot(payload)
     assert isinstance(snapshot, Snapshot)
     assert snapshot.schema_version == SNAPSHOT_SCHEMA_VERSION
+
+
+def _snapshot_of_0_1_0() -> dict:
+    """The Snapshot example as 0.1.0 wrote it: schema 1, provenance spelled `metadata_ok`."""
+    payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    for package in payload["packages"]:
+        package["provenance"] = "metadata_ok"
+    return payload
+
+
+def test_load_snapshot_reads_the_0_1_0_provenance_metadata_ok_as_from_metadata():
+    payload = _snapshot_of_0_1_0()
+    before = json.loads(json.dumps(payload))
+
+    snapshot = load_snapshot(payload)
+
+    assert snapshot.schema_version == 1
+    assert [package.provenance for package in snapshot.packages] == ["from_metadata"] * len(payload["packages"])
+    assert payload == before
+
+
+def test_a_snapshot_built_directly_with_metadata_ok_is_still_refused():
+    payload = _snapshot_of_0_1_0()
+    with pytest.raises(ValidationError):
+        Snapshot.model_validate(payload)
 
 
 def test_check_schema_version_message_states_the_half_open_range_explicitly():

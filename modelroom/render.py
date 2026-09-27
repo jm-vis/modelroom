@@ -43,7 +43,7 @@ RatingSource = Callable[[str], Rating | None]
 _HEADER_RE = re.compile(
     r"^<!-- modelroom render: snapshot_run_at=(?P<snapshot_run_at>\S+) rendered_at=(?P<rendered_at>\S+) -->$"
 )
-_ELIGIBLE_PROVENANCE = ("metadata_ok", "approved")
+_ELIGIBLE_PROVENANCE = ("from_metadata", "approved")
 _WEIGHT_ROLES = ("weights", "weights_shard")
 _UNKNOWN = "unknown"
 _NOTE_LIMIT = 240
@@ -272,7 +272,7 @@ _MODE_NOTES = {
         ["fit.mode", "fit.fit_class"],
     ),
     "cpu": (
-        "cpu_caps_at_good",
+        "cpu_caps_at_fits",
         "Runs in system memory only, so the best possible rating on this machine is 'fits'.",
         ["fit.mode", "fit.fit_class"],
     ),
@@ -317,14 +317,13 @@ def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = Fa
         )
     # Not "more than the machine has": fit v1 already calls a package `no_fit` above 98 % of
     # the pool, so the need can be below the pool and the note must not claim an overrun
-    # (probe: need 7.125 GiB against a pool of 7.2 GiB is `no_fit`). The note code `too_tight` stays:
-    # it is an identifier of the data contract, not a word a reader is shown (decided 2026-09-27).
+    # (probe: need 7.125 GiB against a pool of 7.2 GiB is `no_fit`).
     fit = set_aside.fit
     # A package set aside on the size basis says on what basis: the number that put it there was
     # computed from its size, not from its architecture (second-model round, 2026-09-24).
     from_size = _FROM_SIZE_SENTENCE if fit.basis == "size" else ""
     return Note(
-        code="too_tight",
+        code="no_fit",
         subject="package",
         origin="computed",
         text=_clip(
@@ -413,7 +412,7 @@ def _machine_block(
         ranked=_ranked_entries(ranking, shared_memory=shared, cards=len(found.profile.gpus)),
         ranked_total=len(ranking.ranked),
         not_covered=_set_aside_entries(ranking.not_covered, covered=False),
-        too_tight=_set_aside_entries(ranking.too_tight, covered=True, shared_memory=shared),
+        no_fit=_set_aside_entries(ranking.no_fit, covered=True, shared_memory=shared),
         **reserves,
     )
 
@@ -422,7 +421,7 @@ def _repos_with_rows(blocks: list[MachineRanking]) -> list[str]:
     """Every base model that has at least one row anywhere, in the order the rows name it."""
     seen: list[str] = []
     for block in blocks:
-        for entry in [*block.ranked, *block.not_covered, *block.too_tight]:
+        for entry in [*block.ranked, *block.not_covered, *block.no_fit]:
             if entry.base_model_hf_repo not in seen:
                 seen.append(entry.base_model_hf_repo)
     return seen

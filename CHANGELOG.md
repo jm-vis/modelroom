@@ -154,9 +154,18 @@ All notable changes to this project are documented in this file. The format foll
   `marginal`, `too_tight`; the thresholds and the cap are unchanged, the cap is called `fits`. A
   cell prints the value itself, `no_fit` included, and the list of step 2 no longer renames a class;
   prose and headings say `no fit` (`## No fit: <machine>`, `2 no fit` on the card, `0 no fit` where
-  there is none). The field names `too_tight` and `perfect_reachable` and the note codes `too_tight`
-  and `cpu_caps_at_good` stay. **Honest limit:** a tool that reads `docs/models.json` has to learn
+  there is none). The field names and note codes that carried the old words are renamed in the
+  next entry (ADR 0007). **Honest limit:** a tool that reads `docs/models.json` has to learn
   the new words; nothing is migrated, since the package never reads a render document back.
+- **The identifiers follow the words** (ADR 0007; decided 2026-09-27). `metadata_ok` becomes
+  `from_metadata` (the value of `Package.provenance`), `too_tight` becomes `no_fit` (the field of
+  `MachineRanking` and `ranking.Ranking`, the JSON key of `docs/models.json`, and the note code),
+  `perfect_reachable` becomes `ample_reachable` (`Requirement`), `cpu_caps_at_good` becomes
+  `cpu_caps_at_fits` (the note code). Render document schema stays 3, which is not released.
+  Snapshot schema 1 accepts `metadata_ok` as `from_metadata` on read and writes only
+  `from_metadata` (ADR 0007). Nothing to migrate by hand. The released 0.1.0 reader cannot read
+  a rewritten snapshot: every machine that shares the results folder updates before the next
+  `fetch` writes.
 - **A hint line under every table with words of its own** (decided 2026-09-27). The fit hint
   (`Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · ...`)
   stands under the Markdown ranking, under the terminal table of step 5 (label `key`, with `Speed is

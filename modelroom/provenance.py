@@ -6,7 +6,7 @@ proves the link on its own: on Hugging Face, the repository has to be one of the
 package targets *and* declare itself a `quantized` build of exactly that base model
 (`relation.check_relation`, the one relation check search and fetch share); in the Ollama
 library, a name/tag convention. Anything else is left `unresolved`, never guessed, and no
-automatic rule ever reaches further than `metadata_ok` -- `approved` needs a human `Approval`.
+automatic rule ever reaches further than `from_metadata` -- `approved` needs a human `Approval`.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def decide_provenance(
     1. A non-GGUF package (`tensor`/`unknown` format) is always `("unresolved", "format")`.
     2. An approval whose `content` equals the package's *current* revision or manifest digest
        makes it `("approved", None)`. An approval bound to older content is void: it never
-       falls back to `metadata_ok` by itself, the metadata rules below decide instead.
+       falls back to `from_metadata` by itself, the metadata rules below decide instead.
     3. Otherwise the metadata rules for the package's source decide.
 
     `hf_card_data` and `hf_targets` belong to the Hugging Face path only: the repository's
@@ -102,7 +102,7 @@ def _decide_huggingface(
         if match_base_prefix(basename, base_name) is None:
             return "unresolved", "file_stem"
 
-    return "metadata_ok", None
+    return "from_metadata", None
 
 
 # A declared size token is accepted when it is within this fraction *of the declared value*
@@ -167,4 +167,4 @@ def _decide_ollama(package: "Package", base_model: "BaseModelSpec") -> tuple[str
     if tag != base_model.ollama_tag and not tag.startswith(f"{base_model.ollama_tag}-"):
         return "unresolved", "ollama_tag"
 
-    return "metadata_ok", None
+    return "from_metadata", None

@@ -237,7 +237,7 @@ def fetch_hf_area(
         # passed on **exactly as the registry sent them**, never cleaned up: `check_relation` is
         # what judges a shape the Hub does not publish, and turning a malformed `tags` into `[]`
         # or a malformed `cardData` into `None` here would hide that judgement -- a repository the
-        # search shows as `metadata_conflict` would reach `metadata_ok` in the fetch.
+        # search shows as `metadata_conflict` would reach `from_metadata` in the fetch.
         tags = info.get("tags")
         card_data = info.get("cardData")
 

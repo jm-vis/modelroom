@@ -115,7 +115,7 @@ _RANKED_ENTRY = {
     "format": "gguf",
     "weights_gib": 5.0,
     "package_context": None,
-    "provenance": "metadata_ok",
+    "provenance": "from_metadata",
     "note": {
         "code": "measured_here",
         "subject": "package",
@@ -137,7 +137,7 @@ _SET_ASIDE_ENTRY = {
     "format": "gguf",
     "weights_gib": 6.4,
     "package_context": 4096,
-    "provenance": "metadata_ok",
+    "provenance": "from_metadata",
     "note": {
         "code": "not_covered",
         "subject": "package",
@@ -159,7 +159,7 @@ _MACHINE_RANKING = {
     "ranked": [deepcopy(_RANKED_ENTRY)],
     "ranked_total": 1,
     "not_covered": [deepcopy(_SET_ASIDE_ENTRY)],
-    "too_tight": [],
+    "no_fit": [],
 }
 _CATALOG_MODEL = {
     "hf_repo": "acme/Nova-7B",
@@ -269,7 +269,7 @@ EXAMPLES: dict[str, dict] = {
         "complete": True,
         "quantization": "Q4_K_M",
         "default_context": None,
-        "provenance": "metadata_ok",
+        "provenance": "from_metadata",
         "unresolved_reason": None,
         "approval": None,
         "observed_at": "2026-09-22T09:00:00Z",
@@ -335,7 +335,7 @@ EXAMPLES: dict[str, dict] = {
                 "complete": True,
                 "quantization": "Q4_K_M",
                 "default_context": None,
-                "provenance": "metadata_ok",
+                "provenance": "from_metadata",
                 "unresolved_reason": None,
                 "approval": None,
                 "observed_at": "2026-09-22T09:00:00Z",
@@ -518,10 +518,10 @@ EXAMPLES: dict[str, dict] = {
         "kv_gib_total": 4.0,
         "reserve_gib": 1.0,
         "need_gib": 9.45,
-        "perfect_reachable": True,
+        "ample_reachable": True,
     },
     "Note": {
-        "code": "cpu_caps_at_good",
+        "code": "cpu_caps_at_fits",
         "subject": "package",
         "origin": "computed",
         "text": "Runs in system memory only, so the best possible rating on this machine is 'fits'.",

@@ -372,7 +372,7 @@ class Package(BaseModel):
     complete: bool
     quantization: str | None = None
     default_context: int | None = Field(default=None, gt=0)
-    provenance: Literal["metadata_ok", "approved", "unresolved"]
+    provenance: Literal["from_metadata", "approved", "unresolved"]
     unresolved_reason: str | None = None
     approval: Approval | None = None
     observed_at: datetime
@@ -562,7 +562,26 @@ def load_snapshot(data: dict) -> Snapshot:
     if not isinstance(version, int) or isinstance(version, bool):
         raise SchemaVersionError(f"snapshot: schema_version is missing or not an integer: {version!r}")
     check_schema_version(version, SNAPSHOT_SCHEMA_RANGE, "snapshot")
-    return Snapshot.model_validate(data)
+    return Snapshot.model_validate(_read_provenance_of_0_1_0(data))
+
+
+def _read_provenance_of_0_1_0(data: dict) -> dict:
+    """The snapshot dict with the provenance `metadata_ok` read as `from_metadata`; `data` is left unchanged.
+
+    Snapshot schema 1 written by 0.1.0 spells the provenance `metadata_ok`; ADR 0007
+    (2026-09-27) renamed it `from_metadata` and kept schema 1, so the reader takes the old
+    spelling once and every write spells the new one. No other field is touched.
+    """
+    packages = data.get("packages")
+    if not isinstance(packages, list):
+        return data
+    renamed = [
+        {**package, "provenance": "from_metadata"}
+        if isinstance(package, dict) and package.get("provenance") == "metadata_ok"
+        else package
+        for package in packages
+    ]
+    return {**data, "packages": renamed}
 
 
 # --- hardware profile (AP4) -----------------------------------------------------------------

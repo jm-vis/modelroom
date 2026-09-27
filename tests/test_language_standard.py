@@ -27,8 +27,7 @@ Five classes of finding:
 5. **A fit rated as a judgement** (decided 2026-09-27). A fit class says only what was computed:
    `ample`, `fits`, `tight`, `no_fit`. `perfect`, `marginal` and `too tight` are banned in prose
    outright; `good`, `safe` and `comfortable` only next to `fit`, because "good enough" and a
-   "crash-safe rename" are ordinary English. The literal `too_tight` stays a field name and a note
-   code of the data contract, so the rule reads the words with a space, never the identifier.
+   "crash-safe rename" are ordinary English.
 
 Two deliberate limits, both the price of a guard that nobody has to argue with:
 
@@ -280,7 +279,6 @@ def test_ordinary_english_is_not_a_finding():
         "the process may die before the lock is released",
         "a crash-safe rename and a perfectly good measurement",
         "good enough for these tests",
-        "the fields `perfect_reachable` and `too_tight` are names",
     ]
     for line in clean:
         for name, _pattern, _context, _hint in RULES:

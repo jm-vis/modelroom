@@ -1,7 +1,7 @@
 """Tests for modelroom.provenance.decide_provenance.
 
 Real Hugging Face metadata (the Unsloth Qwen3.5-9B GGUF repo, which the real base model tags
-correctly) covers the ordinary metadata_ok path; the remaining branches (aliases, wrong file
+correctly) covers the ordinary from_metadata path; the remaining branches (aliases, wrong file
 stems, void approvals, tensor format) are exercised with small synthetic fixtures, since they
 need to plant a specific defect that no single real repo happens to have.
 """
@@ -72,7 +72,7 @@ def _hf_package(*, repo: str, weight_filename: str, revision: str = _HF_REVISION
         complete=True,
         quantization=None,
         default_context=None,
-        provenance="unresolved" if format_ != "gguf" else "metadata_ok",
+        provenance="unresolved" if format_ != "gguf" else "from_metadata",
         unresolved_reason="format" if format_ != "gguf" else None,
         approval=None,
         observed_at=_NOW,
@@ -83,7 +83,7 @@ def _hf_package(*, repo: str, weight_filename: str, revision: str = _HF_REVISION
 
 def _ollama_package(*, ollama_name: str, manifest_digest: str = _OLLAMA_DIGEST_NEW) -> Package:
     # Same scaffolding note as `_hf_package`: this helper only ever builds gguf-format packages,
-    # so the placeholder provenance is always 'metadata_ok'/None.
+    # so the placeholder provenance is always 'from_metadata'/None.
     return Package(
         source="ollama",
         ollama_name=ollama_name,
@@ -94,7 +94,7 @@ def _ollama_package(*, ollama_name: str, manifest_digest: str = _OLLAMA_DIGEST_N
         complete=True,
         quantization=None,
         default_context=None,
-        provenance="metadata_ok",
+        provenance="from_metadata",
         unresolved_reason=None,
         approval=None,
         observed_at=_NOW,
@@ -122,7 +122,7 @@ def _unsloth_gguf_model() -> dict:
     return json.loads((FIXTURES / "hf_unsloth_qwen35_9b_gguf_model.json").read_text(encoding="utf-8"))
 
 
-def test_real_unsloth_repo_is_metadata_ok():
+def test_real_unsloth_repo_is_from_metadata():
     model = _unsloth_gguf_model()
     package = Package(
         source="huggingface",
@@ -136,7 +136,7 @@ def test_real_unsloth_repo_is_metadata_ok():
         complete=True,
         quantization="Q4_K_M",
         default_context=None,
-        provenance="metadata_ok",
+        provenance="from_metadata",
         unresolved_reason=None,
         approval=None,
         observed_at=_NOW,
@@ -151,10 +151,10 @@ def test_real_unsloth_repo_is_metadata_ok():
         hf_card_data=model["cardData"],
         hf_targets=[model["id"]],
     )
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
-def test_real_unsloth_repo_ud_quant_file_stem_is_metadata_ok():
+def test_real_unsloth_repo_ud_quant_file_stem_is_from_metadata():
     # UD-Q4_K_XL contains a '-' itself; the file-stem rule must still recognize it.
     model = _unsloth_gguf_model()
     package = Package(
@@ -169,7 +169,7 @@ def test_real_unsloth_repo_ud_quant_file_stem_is_metadata_ok():
         complete=True,
         quantization="UD-Q4_K_XL",
         default_context=None,
-        provenance="metadata_ok",
+        provenance="from_metadata",
         unresolved_reason=None,
         approval=None,
         observed_at=_NOW,
@@ -184,7 +184,7 @@ def test_real_unsloth_repo_ud_quant_file_stem_is_metadata_ok():
         hf_card_data=model["cardData"],
         hf_targets=[model["id"]],
     )
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 # --- format gate takes priority over everything else -------------------------------------
@@ -203,13 +203,13 @@ def test_tensor_format_is_always_unresolved_format():
 # --- alias repo names ----------------------------------------------------------------------
 
 
-def test_alias_repo_name_is_metadata_ok():
+def test_alias_repo_name_is_from_metadata():
     package = _hf_package(repo="packager/Nova-7B-Legacy-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
         package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 # --- fine-tune: correct base_model tag, wrong file stem -----------------------------------
@@ -253,14 +253,14 @@ def test_approval_matching_current_revision_is_approved():
     assert (provenance, reason) == ("approved", None)
 
 
-def test_stale_approval_falls_back_to_metadata_ok_when_metadata_still_fits():
+def test_stale_approval_falls_back_to_from_metadata_when_metadata_still_fits():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf", revision=_HF_REVISION_NEW)
     base_model = _nova_base_model()
     stale_approval = Approval(date=date(2026, 1, 1), content=_HF_REVISION_OLD, by="acme-ai-team")
     provenance, reason = decide_provenance(
         package, base_model, hf_tags=_quantized_tags(), approvals=[stale_approval], hf_targets=_NOVA_TARGETS
     )
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 def test_stale_approval_with_missing_tag_now_is_unresolved():
@@ -286,17 +286,17 @@ def test_stale_ollama_approval_falls_back_to_metadata_rule():
     base_model = _nova_base_model()
     stale_approval = Approval(date=date(2026, 1, 1), content=_OLLAMA_DIGEST_OLD, by="acme-ai-team")
     provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[stale_approval])
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 # --- Ollama library metadata rule -----------------------------------------------------------
 
 
-def test_ollama_library_tag_is_metadata_ok():
+def test_ollama_library_tag_is_from_metadata():
     package = _ollama_package(ollama_name="nova:7b-q4_K_M")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 def test_ollama_wrong_base_name_is_unresolved():
@@ -336,7 +336,7 @@ def test_ollama_tag_with_descriptive_middle_token_still_matches_the_base_tag():
     package = _ollama_package(ollama_name="nova:7b-instruct-q4_K_M")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 def test_ollama_tag_with_size_match_but_divergent_base_tag_is_unresolved():
@@ -379,7 +379,7 @@ def test_mmproj_only_package_is_unresolved_no_weights():
         complete=False,
         quantization=None,
         default_context=None,
-        provenance="metadata_ok",
+        provenance="from_metadata",
         unresolved_reason=None,
         approval=None,
         observed_at=_NOW,
@@ -433,7 +433,7 @@ def _package_from_ollama_manifest(*, tag: str, fixture_name: str) -> Package:
         complete=True,
         quantization=None,
         default_context=None,
-        provenance="unresolved" if format_ != "gguf" else "metadata_ok",
+        provenance="unresolved" if format_ != "gguf" else "from_metadata",
         unresolved_reason="format" if format_ != "gguf" else None,
         approval=None,
         observed_at=_NOW,
@@ -448,17 +448,17 @@ def test_real_ollama_mlx_tensor_build_is_unresolved_format():
     assert (provenance, reason) == ("unresolved", "format")
 
 
-def test_real_ollama_gguf_quant_tag_is_metadata_ok():
+def test_real_ollama_gguf_quant_tag_is_from_metadata():
     package = _package_from_ollama_manifest(tag="9b-q4_K_M", fixture_name="ollama_qwen35_9b-q4_K_M.json")
     provenance, reason = decide_provenance(package, _qwen35_ollama_base_model(), hf_tags=None, approvals=[])
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 # --- AP3 acceptance findings ----------------------------------------------------------------
 # --- F1: unsloth per-quant subfolders; the file-stem prefix must ignore the folder ----------
 
 
-def test_unsloth_per_quant_subfolder_file_stem_is_metadata_ok():
+def test_unsloth_per_quant_subfolder_file_stem_is_from_metadata():
     # Real layout observed 2026-09-22: unsloth ships one subfolder per quantization
     # (`BF16/`, `UD-Q2_K_XL/`, ...); the folder segment must never defeat the base-name prefix
     # match on the file's own basename.
@@ -467,7 +467,7 @@ def test_unsloth_per_quant_subfolder_file_stem_is_metadata_ok():
     provenance, reason = decide_provenance(
         package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 def test_draft_model_in_a_foreign_subfolder_stays_unresolved_file_stem():
@@ -485,13 +485,13 @@ def test_draft_model_in_a_foreign_subfolder_stays_unresolved_file_stem():
 # --- F2: mradermacher's `<base>.<QUANT>.gguf` (dot separator) convention -------------------
 
 
-def test_mradermacher_dot_convention_file_stem_is_metadata_ok():
+def test_mradermacher_dot_convention_file_stem_is_from_metadata():
     package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B.Q4_K_M.gguf")
     base_model = _nova_base_model()
     provenance, reason = decide_provenance(
         package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TARGETS
     )
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 # --- F3: Qwen's own "-split-NNNNN-of-NNNNN" shard suffix; a real, documented mismatch -------
@@ -543,28 +543,28 @@ def test_qwen_split_shard_stem_mismatch_stays_unresolved_file_stem():
 # --- F6: Ollama size token accepted within 15% of the measured parameters_b ----------------
 
 
-def test_ollama_size_token_within_tolerance_of_measured_parameters_is_metadata_ok():
+def test_ollama_size_token_within_tolerance_of_measured_parameters_is_from_metadata():
     # Real measurement 2026-09-22: Qwen/Qwen3.5-9B's safetensors.total gives
     # parameters_b = 9.653104368 (it counts embeddings), but the library tag is "9b" --
     # exact equality can never match this, only a tolerance can.
     package = _ollama_package(ollama_name="nova:9b-q4_K_M")
     base_model = _nova_base_model(parameters_b=9.653104368, ollama_tag="9b")
     provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 def test_ollama_size_token_30b_matches_measured_30_5b():
     package = _ollama_package(ollama_name="nova:30b-q4_K_M")
     base_model = _nova_base_model(parameters_b=30.5, ollama_tag="30b")
     provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 def test_ollama_size_token_1_5b_matches_measured_1_54b():
     package = _ollama_package(ollama_name="nova:1.5b-q4_K_M")
     base_model = _nova_base_model(parameters_b=1.54, ollama_tag="1.5b")
     provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
-    assert (provenance, reason) == ("metadata_ok", None)
+    assert (provenance, reason) == ("from_metadata", None)
 
 
 def test_ollama_base_model_with_no_measured_parameters_is_unresolved_parameters_unknown():
@@ -603,7 +603,7 @@ def test_a_repo_outside_the_target_set_is_unresolved_repo_name():
     assert verdict == ("unresolved", "repo_name")
 
 
-def test_an_owner_bound_target_the_name_rules_never_generate_is_metadata_ok():
+def test_an_owner_bound_target_the_name_rules_never_generate_is_from_metadata():
     # The search finds repos under accounts the packager list does not name; they reach the
     # fetch as `repos` entries, so provenance has to accept exactly the same target set.
     package = _hf_package(repo="community-user/Nova-7B-Q4-GGUF", weight_filename="Nova-7B-Q4_K_M.gguf")
@@ -616,7 +616,7 @@ def test_an_owner_bound_target_the_name_rules_never_generate_is_metadata_ok():
         hf_targets=(*_NOVA_TARGETS, "community-user/Nova-7B-Q4-GGUF"),
     )
 
-    assert verdict == ("metadata_ok", None)
+    assert verdict == ("from_metadata", None)
 
 
 def test_a_base_model_tag_without_a_relation_is_unresolved_relation_unknown():
@@ -674,7 +674,7 @@ def test_the_relation_may_come_from_the_card_alone():
         hf_targets=_NOVA_TARGETS,
     )
 
-    assert verdict == ("metadata_ok", None)
+    assert verdict == ("from_metadata", None)
 
 
 def test_a_human_approval_still_outranks_a_missing_relation():

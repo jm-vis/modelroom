@@ -113,7 +113,7 @@ class MachineRanking(BaseModel):
     # of them, so a reader can see that the list is a top ten and not the whole result.
     ranked_total: int = Field(default=0, ge=0)
     not_covered: list[SetAsideEntry] = Field(default_factory=list)
-    too_tight: list[SetAsideEntry] = Field(default_factory=list)
+    no_fit: list[SetAsideEntry] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_status(self) -> "MachineRanking":
@@ -123,7 +123,7 @@ class MachineRanking(BaseModel):
             return self
         if self.profile is not None or not self.reason:
             raise ValueError(f"status {self.status!r} carries a reason and no profile")
-        if self.ranked or self.not_covered or self.too_tight or self.ranked_total:
+        if self.ranked or self.not_covered or self.no_fit or self.ranked_total:
             raise ValueError(f"status {self.status!r} carries no entries -- there is no fit to show")
         return self
 
@@ -174,7 +174,7 @@ class RenderDocument(BaseModel):
         else:
             check_requests_origin(self.requests_origin, self.scenario.requests, self.users)
         for block in self.machines:
-            for entry in [*block.ranked, *block.too_tight]:
+            for entry in [*block.ranked, *block.no_fit]:
                 if entry.fit.requests != self.scenario.requests:
                     raise ValueError(f"a fit for {entry.fit.requests} requests in a document of {self.scenario.requests}")
         return self

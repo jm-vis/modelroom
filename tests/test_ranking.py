@@ -102,7 +102,7 @@ def test_fit_class_before_speed_before_quantization():
         ("packager", "Q8_0", 1),  # tight
     ]
     assert [r.rank for r in ranking.ranked] == [1, 2, 3, 4, 5]
-    assert [s.package.quantization for s in ranking.too_tight] == ["F16"]
+    assert [s.package.quantization for s in ranking.no_fit] == ["F16"]
 
 
 def test_ranking_is_the_same_for_every_input_order():

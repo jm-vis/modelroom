@@ -239,7 +239,7 @@ def ranking_problems(text: str, machine: str, block: dict) -> list[str]:
             problems.append(f"the document has no line starting with {expected!r}")
     judged = [
         entry
-        for entry in block["ranked"] + block["too_tight"]
+        for entry in block["ranked"] + block["no_fit"]
         if entry["base_model_hf_repo"] == QWEN_BASE
     ]
     if not judged:
@@ -535,7 +535,7 @@ def _measurement_records(results: Path) -> list[dict]:
 
 def _ranked_row(block: dict, repo: str) -> dict | None:
     """The row of one packaging repository in a machine's block, wherever it was sorted to."""
-    rows = block["ranked"] + block["too_tight"]
+    rows = block["ranked"] + block["no_fit"]
     return next((row for row in rows if row["package_identity"][1] == repo), None)
 
 
@@ -591,9 +591,9 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             "(4) the ranking carries rule and context, Qwen3.5 is judged from its size",
             not ranking_problems(text, machine, block),
             "\n".join(ranking_problems(text, machine, block))
-            or f"{len(block['ranked'])} ranked, {len(block['too_tight'])} no fit, "
+            or f"{len(block['ranked'])} ranked, {len(block['no_fit'])} no fit, "
             f"{len(block['not_covered'])} not covered; "
-            f"{sum(1 for e in block['ranked'] + block['too_tight'] if e['fit']['basis'] == 'size')} "
+            f"{sum(1 for e in block['ranked'] + block['no_fit'] if e['fit']['basis'] == 'size')} "
             f"rows judged from the size",
         ),
     ]
