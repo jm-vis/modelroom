@@ -13,3 +13,4 @@ One line per decision; an ADR is immutable, a changed situation gets a new one t
 | [0003](0003-document-schema-2.md) | Render document schema 2: the requests of every fit and where they came from | accepted, 2026-09-25 |
 | [0004](0004-profile-schema-4.md) | Hardware profile schema 4: every graphics card, the machine class | accepted, 2026-09-26 |
 | [0005](0005-document-schema-3.md) | Render document schema 3: a fit spread over every graphics card | accepted, 2026-09-26 |
+| [0006](0006-rating-words-class-question-llmfit-safety-net.md) | Rating words, the class question on every measurement, llmfit as a safety net | accepted, 2026-09-27 |

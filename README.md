@@ -51,13 +51,14 @@ Every machine a version really ran its self-test on (`scripts/selftest.py`), one
 two-card fixtures are recorded on the two rented machines below; the fixtures of three graphics
 cards and more, and of cards of mixed sizes, are synthetic (`tests/fixtures/README.md`). The load
 test is the speed the self-test measured for `hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M`
-at context 8192, one request.
+at context 8192, one request. The Class column is what the profile says: the chassis of the two
+rented machines names no class, so the run answered `server` there.
 
 | Machine | Class | Graphics cards | Memory | Date | Self-test | Load test |
 |---|---|---|---|---|---|---|
 | a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` | 56.9 tok/s |
-| a rented instance at Verda (Helsinki) | server (answered; the chassis names no class) | 2 x NVIDIA A100-SXM4-80GB, 80.00 GiB each | 235.92 GiB | 2026-09-27 | `SELFTEST: OK` | 143.5 tok/s |
-| a rented instance at Scaleway (Paris) | server (answered; the chassis names no class) | 2 x NVIDIA L4, 22.49 GiB each | 94.29 GiB | 2026-09-27 | `SELFTEST: OK` | 48.2 tok/s |
+| a rented instance at Verda (Helsinki) | server (entered) | 2 x NVIDIA A100-SXM4-80GB, 80.00 GiB each | 235.92 GiB | 2026-09-27 | `SELFTEST: OK` | 143.5 tok/s |
+| a rented instance at Scaleway (Paris) | server (entered) | 2 x NVIDIA L4, 22.49 GiB each | 94.29 GiB | 2026-09-27 | `SELFTEST: OK` | 48.2 tok/s |
 
 ## Installation
 
@@ -116,7 +117,9 @@ of step 1 is where the results should live: the folder you are in, or another pa
 
 Which machines the result covers. **this machine** is measured right here, once the question is
 answered; the gray line under it lists the machine profiles this folder already holds, here the
-one an earlier run left, with the graphics card, its memory and the system memory. A **profile
+one an earlier run left, with the graphics card, its memory and the system memory. Measuring asks
+what kind of machine this is, laptop, workstation or server, with the class the chassis reports
+already marked: keeping it keeps the chassis as its source, another answer is `entered`. A **profile
 file** measured on another machine can be imported instead, so one folder can rank the same
 packages for a laptop and a server. A machine you do not have yet can be **entered by hand**
 from its data sheet: its name, whether it is a laptop, a workstation or a server, its memory, and
@@ -156,8 +159,9 @@ of a publisher the catalog does not know be picked as well.
 
 The list of models, one row per model that can really be picked, best fit first. The columns:
 **Fit** is what the model's size allows on this machine at the folder's context (32k for a new
-folder): `good`, `marginal`, `too tight`; `good (RAM)` means it needs system memory rather than
-the graphics card's. After the fetch the fit is computed per package from what the fetch found. **Size** is the parameter count. **Release** says `latest` when the publisher's own page
+folder): `fits`, `tight`, `no_fit`, the share of the memory it needs; `fits (RAM)` means it needs
+system memory rather than the graphics card's. The gray line under the question says what each
+word means. After the fetch the fit is computed per package from what the fetch found. **Size** is the parameter count. **Release** says `latest` when the publisher's own page
 names this model as the current one of its family, `legacy` when the publisher named a successor,
 and `–` when nothing decides it. A **`*`** behind the word (`latest*`, `legacy*`) means the status
 is computed from the version numbers of the family, not stated by the publisher: where the catalog
@@ -215,10 +219,10 @@ says nothing about throughput. The
 folder here already held a configuration from an earlier run naming `Qwen3.5-9B`; the run added
 `Qwen3.5-4B` to it. Under the card, the ranking for this machine at the chosen context: rank,
 model, package (packager and quantization), fit, measured speed, memory need. The notes under the
-table say what is **shown** (ten of 45, one too tight), which rows fit into graphics **memory** and
+table say what is **shown** (ten of 45, one no fit), which rows fit into graphics **memory** and
 which need system memory, which rows have their fit computed from the package size as its
 **basis** rather than from the architecture (the line appears only when there are such rows) and
-what was measured for **speed**. The **install** line is the command for the first row, ready to
+what was measured for **speed**; the **key** says what the fit words mean. The **install** line is the command for the first row, ready to
 paste. Where the local Ollama daemon answered and does not have that row yet, the run then asks
 **Pull #1 into Ollama now?** with the size of the package: **Yes** pulls it into the daemon and
 shows the progress, **No** leaves it at the line to paste; step 4 of the next run measures it. A
@@ -232,7 +236,7 @@ row the daemon already has gets a note instead of the question. The ranking, the
 
 Press Enter on an empty search word and the run looks up the current models of the shipped
 catalog, one page each, and lists them best fit first: what fits into the graphics card, then what
-is marginal there, then what needs system memory. This is the answer to "I have no model in mind,
+is tight there, then what needs system memory. This is the answer to "I have no model in mind,
 show me what fits this machine".
 
 ### Without a terminal
@@ -279,7 +283,7 @@ cat docs/models.md
    provenance are shown, and every one of them is ranked per machine: best fit first, a
    measured package ahead of an unmeasured one of the same fit class, with the rule and the
    scenario printed in the header. Packages fit v1 cannot judge stand under "not covered"
-   with the reason, ones that do not fit under "too tight". Every computed number says
+   with the reason, ones that do not fit under "No fit". Every computed number says
    `(computed)`, the measured speed says `(measured)`.
 
 `--config` is required by every subcommand; there is no default path.
@@ -332,8 +336,9 @@ run (the level the guided mode chose for the folder; 8192 for a configuration no
 chosen one in), plus 0.5 GiB. The result is compared with the VRAM of one graphics card minus
 its reserve -- the largest card, the way Ollama loads a model -- then, on a machine with several
 cards, with all of them together, each minus its own reserve (`gpu_split`), and with the RAM minus
-its reserve when it fits no graphics memory. `perfect` needs at most 60 % of that pool, `good`
-85 %, `marginal` 98 %; anything above is `too_tight`. Off the GPU the class is capped at `good`. The full rule is in `CONTRACTS.md`,
+its reserve when it fits no graphics memory. `ample` needs at most 60 % of that pool, `fits`
+85 %, `tight` 98 %; anything above is `no_fit`. Off the GPU the class is capped at `fits`. Each
+word says only what was computed, and a table carries a line under it that says so. The full rule is in `CONTRACTS.md`,
 "Fit contract v1".
 
 What it does not say: the class is arithmetic, not a measurement. It makes no statement about
@@ -344,10 +349,10 @@ labeled "fit (computed, v1)" in the output for that reason.
 
 - Only a dense transformer architecture is judged from its own layers and heads. A hybrid or
   mixture-of-experts architecture is judged **from the size of the package** instead: the same
-  formula with the KV cache taken from a constant, shown as `good (from size)` and never as
-  `perfect`. The KV cache in that formula is one fixed assumption, not a bound: a mixture
-  architecture usually needs less, a dense model with many layers more, so a `good (from size)`
-  is coarser than a `good` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
+  formula with the KV cache taken from a constant, shown as `fits (from size)` and never as
+  `ample`. The KV cache in that formula is one fixed assumption, not a bound: a mixture
+  architecture usually needs less, a dense model with many layers more, so a `fits (from size)`
+  is coarser than a `fits` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
 - Only complete GGUF packages are judged; other formats are `unknown`.
 - A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
 - Unified memory is computed as one pool -- the memory minus both reserves, since the system and

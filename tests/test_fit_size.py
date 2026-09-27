@@ -73,15 +73,15 @@ def test_an_architecture_v1_cannot_read_is_computed_from_the_size():
     assert fit.kv_gib == pytest.approx(1.125)
     assert fit.need_gib == pytest.approx(3.0 * 1.10 + 1.125 + 0.50)
     assert fit.pool_gib == pytest.approx(7.0)
-    assert (fit.fit_class, fit.mode) == ("good", "gpu")
+    assert (fit.fit_class, fit.mode) == ("fits", "gpu")
 
 
-def test_the_size_basis_never_reaches_perfect():
-    """`perfect` stays reserved for a package a read architecture proves comfortable."""
+def test_the_size_basis_never_reaches_ample():
+    """`ample` stays reserved for a package whose architecture was read."""
     fit = compute_fit_v2(_profile(), _package(1.0), _base_model("unknown"), default_scenario(), MACHINE)
 
-    assert fit.need_gib / fit.pool_gib < 0.60  # this ratio is `perfect` on the architecture basis
-    assert (fit.fit_class, fit.basis) == ("good", "size")
+    assert fit.need_gib / fit.pool_gib < 0.60  # this ratio is `ample` on the architecture basis
+    assert (fit.fit_class, fit.basis) == ("fits", "size")
 
 
 def test_the_architecture_basis_is_the_default_and_says_so():
@@ -94,7 +94,7 @@ def test_the_size_basis_is_one_assumption_and_no_bound_in_either_direction():
     """36 layers x 8 KV heads x 128 wide: more than a 32-layer model needs, less than a 42-layer one.
 
     The claim that it is an upper bound was wrong and is corrected here (second-model round,
-    2026-09-24): it is one fixed number, which is why the class is capped at `good`.
+    2026-09-24): it is one fixed number, which is why the class is capped at `fits`.
     """
     package = _package()
     smaller = _base_model(num_hidden_layers=32, num_key_value_heads=8, head_dim=128)
@@ -183,13 +183,13 @@ def test_nine_billion_parameters_are_about_five_gibibytes_of_weights():
     assert fit.weights_gib == pytest.approx(5.03, abs=0.01)
     assert fit.need_gib == pytest.approx(fit.weights_gib * 1.10 + 1.125 + 0.50)
     assert (fit.basis, fit.reason, fit.context) == ("size", None, 8192)
-    assert fit.fit_class != "perfect"
+    assert fit.fit_class != "ample"
 
 
-def test_a_model_too_large_for_both_pools_is_too_tight():
+def test_a_model_too_large_for_both_pools_is_no_fit():
     fit = fit_from_parameters(400.0, 8.0, 31.7, MACHINE, 8192)
 
-    assert fit.fit_class == "too_tight"
+    assert fit.fit_class == "no_fit"
     assert fit.mode == "cpu_gpu"
 
 
@@ -198,4 +198,4 @@ def test_a_machine_without_a_graphics_card_computes_against_its_memory():
 
     assert fit.mode == "cpu"
     assert fit.kv_gib == pytest.approx(32768 * KV_PER_TOKEN_SIZE_BASIS / GIB)
-    assert fit.fit_class == "good"
+    assert fit.fit_class == "fits"

@@ -131,12 +131,12 @@ def test_more_requests_multiply_the_kv_cache_on_the_size_basis():
 
     assert fit.basis == "size" and fit.requests == 2
     assert fit.kv_gib == pytest.approx(2 * KV_AT_8192_SIZE)
-    assert fit.fit_class in ("good", "marginal", "too_tight")
+    assert fit.fit_class in ("fits", "tight", "no_fit")
 
 
-def test_the_size_basis_never_reaches_perfect_with_one_request_either():
+def test_the_size_basis_never_reaches_ample_with_one_request_either():
     fit = fit_from_size(_package(1.0), 0.0, 128.0, MACHINE, 8192)
-    assert (fit.fit_class, fit.requests) == ("good", 1)
+    assert (fit.fit_class, fit.requests) == ("fits", 1)
 
 
 def test_fit_from_parameters_takes_the_requests():
@@ -176,23 +176,23 @@ def test_unified_memory_is_one_pool_of_ram_minus_both_reserves_in_mode_gpu():
     assert fit.mode == "gpu"
     assert fit.pool_gib == pytest.approx(23.0)
     assert fit.reserve_gib == pytest.approx(9.0)
-    assert fit.fit_class == "perfect"  # 5.9 of 23 GiB, read from the architecture
+    assert fit.fit_class == "ample"  # 5.9 of 23 GiB, read from the architecture
 
 
-def test_unified_memory_on_the_size_basis_stays_at_good():
+def test_unified_memory_on_the_size_basis_stays_at_fits():
     fit = compute_fit_v2(_hand(ram=32.0), _package(), _base_model("unknown"), _scenario(), MACHINE)
-    assert (fit.mode, fit.fit_class, fit.basis) == ("gpu", "good", "size")
+    assert (fit.mode, fit.fit_class, fit.basis) == ("gpu", "fits", "size")
 
 
 def test_unified_memory_has_no_fallback_onto_the_same_ram():
     fit = compute_fit_v2(_hand(ram=32.0), _package(20.0), _base_model(), _scenario(), MACHINE)
-    assert (fit.mode, fit.fit_class, fit.pool_gib) == ("gpu", "too_tight", pytest.approx(23.0))
+    assert (fit.mode, fit.fit_class, fit.pool_gib) == ("gpu", "no_fit", pytest.approx(23.0))
 
 
-def test_unified_memory_below_both_reserves_is_too_tight():
+def test_unified_memory_below_both_reserves_is_no_fit():
     fit = compute_fit_v2(_hand(ram=8.5), _package(0.5), _base_model(), _scenario(), MACHINE)
     assert fit.pool_gib == pytest.approx(-0.5)
-    assert fit.fit_class == "too_tight"
+    assert fit.fit_class == "no_fit"
 
 
 def test_unified_memory_multiplies_the_kv_cache_too():

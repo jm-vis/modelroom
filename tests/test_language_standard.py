@@ -4,7 +4,7 @@ The rule and the word list live in `AGENTS.md`, section "Language standard". Sco
 module under `modelroom/`, plus the prose files `README.md`, `CONTRACTS.md`, `CHANGELOG.md`,
 `AGENTS.md` and everything under `docs/`.
 
-Four classes of finding:
+Five classes of finding:
 
 1. **British spellings**, from a fixed list. A suffix rule would be wrong: `otherwise`,
    `promise`, `premise`, `exercised` and `disguise` are ordinary English, `programmer` contains
@@ -24,6 +24,11 @@ Four classes of finding:
    package: the three umlauts, the sharp s, and a list of words that exist in no English
    sentence. `die` is the one word on the list that is also English ("the process may die"), so
    it counts only when a second German word stands on the same line.
+5. **A fit rated as a judgement** (decided 2026-09-27). A fit class says only what was computed:
+   `ample`, `fits`, `tight`, `no_fit`. `perfect`, `marginal` and `too tight` are banned in prose
+   outright; `good`, `safe` and `comfortable` only next to `fit`, because "good enough" and a
+   "crash-safe rename" are ordinary English. The literal `too_tight` stays a field name and a note
+   code of the data contract, so the rule reads the words with a space, never the identifier.
 
 Two deliberate limits, both the price of a guard that nobody has to argue with:
 
@@ -92,6 +97,13 @@ AGE_COMPARISON = (
     r"(?:much\s+|slightly\s+)?(?:older|newer)\b"
 )
 
+# The fit rated as a judgement: the old class words, and a judging adjective next to `fit`.
+FIT_JUDGEMENT = (
+    r"(?i)\b(?:perfect|marginal|too tight)\b"
+    r"|\b(?:good|safe|comfortable)\s+fit\b"
+    r"|\bfit\s+(?:is\s+|was\s+)?(?:good|safe|comfortable)\b"
+)
+
 RULES = (
     # (rule name, pattern, pattern the same line must also match, what to write instead)
     (
@@ -117,6 +129,12 @@ RULES = (
         re.compile(r"(?i)\b(?:untrusted|untrustworthy|trustworthy)\b"),
         None,
         "state the owner class (`publisher`, `listed packager`, `other`), never a verdict",
+    ),
+    (
+        "fit rating as a judgement",
+        re.compile(FIT_JUDGEMENT),
+        None,
+        "say what was computed: `ample`, `fits`, `tight`, `no fit` (`no_fit` in a cell)",
     ),
     ("German", re.compile(GERMAN), None, "write it in English"),
     (
@@ -235,6 +253,14 @@ def test_the_guard_reports_a_planted_violation():
         "packager valuation": ["the packager is untrusted", "nothing here is trustworthy"],
         "German": ["Fehler beim Laden", "die Datei wurde nicht gefunden", "ein Rechner"],
         "German, with a word that is also English": ["die Datei wurde nicht gefunden"],
+        "fit rating as a judgement": [
+            "the package is a perfect fit",
+            "a marginal package ranks last",
+            "two packages are too tight here",
+            "a good fit on the card",
+            "the fit is safe",
+            "a comfortable fit in VRAM",
+        ],
     }
     for rule_name, lines in planted.items():
         for line in lines:
@@ -252,6 +278,9 @@ def test_ordinary_english_is_not_a_finding():
         "the run is not newer than the stored snapshot's run_at",
         "the sha is only ever trusted when it matches the pinned revision",
         "the process may die before the lock is released",
+        "a crash-safe rename and a perfectly good measurement",
+        "good enough for these tests",
+        "the fields `perfect_reachable` and `too_tight` are names",
     ]
     for line in clean:
         for name, _pattern, _context, _hint in RULES:

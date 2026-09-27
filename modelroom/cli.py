@@ -398,7 +398,7 @@ def hardware_with_config(
     `summary` prints the one line with the readings of the profile; the guided mode passes `False`
     and says in its own note what was measured (`modelroom render --config` and `modelroom
     hardware` are unchanged). `machine_class` is the user's own word for the class (`hardware
-    --machine-class`, or the guided mode's question when the chassis says nothing); without it the
+    --machine-class`, or the guided mode's answer where it differs from the chassis); without it the
     chassis type decides.
     """
     if new_identity and same_machine:

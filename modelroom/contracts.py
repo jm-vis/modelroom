@@ -746,12 +746,12 @@ class Fit(BaseModel):
     `basis` says what the KV cache was computed from: the base model's own `architecture`, or
     the `size` of the package alone, for a package whose architecture fit v1 cannot read
     (decided 2026-09-24). The provenance of both is `computed`; `size` is the coarser of the two
-    and never reaches `perfect` (CONTRACTS.md, "Fit from size (basis `size`)").
+    and never reaches `ample` (CONTRACTS.md, "Fit from size (basis `size`)").
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    fit_class: Literal["perfect", "good", "marginal", "too_tight", "unknown"]
+    fit_class: Literal["ample", "fits", "tight", "no_fit", "unknown"]
     mode: Literal["gpu", "gpu_split", "cpu_gpu", "cpu"] | None
     need_gib: float = Field(ge=0)
     weights_gib: float = Field(ge=0)

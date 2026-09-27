@@ -198,17 +198,17 @@ def test_a_measured_machine_gets_a_fit_from_the_size():
     model = _models([_hit("unsloth/Qwen3.5-9B-GGUF")])[0]
 
     assert model.fit.basis == "size"
-    assert model.fit.fit_class == "good"
+    assert model.fit.fit_class == "fits"
     assert model.fit.reason is None
-    assert model.fit_word == "good"
+    assert model.fit_word == "fits"
 
 
-def test_a_model_too_large_for_this_machine_is_too_tight():
+def test_a_model_too_large_for_this_machine_is_no_fit():
     hits = [_hit("unsloth/Nova-400B-GGUF", base="acme/Nova-400B")]
     model = _models(hits, checked=_measured(ram_gib=31.7))[0]
 
-    assert model.fit.fit_class == "too_tight"
-    assert model.fit_word == "too tight"
+    assert model.fit.fit_class == "no_fit"
+    assert model.fit_word == "no_fit"
 
 
 def test_without_a_measured_machine_the_fit_is_unknown_with_that_reason():
@@ -233,23 +233,23 @@ def test_the_context_of_the_folder_is_the_context_of_the_fit():
 
 
 def test_a_model_the_graphics_memory_cannot_hold_says_ram_behind_its_fit():
-    """Live on 2026-09-24 a 122B model stood as `good` above a 9B `marginal`: fit v1 caps the
-    system-memory pool at `good`, and the list said nothing about the pool. Now it does."""
+    """Live on 2026-09-24 a 122B model stood as `fits` above a 9B `tight`: fit v1 caps the
+    system-memory pool at `fits`, and the list said nothing about the pool. Now it does."""
     hits = [_hit("unsloth/Nova-27B-GGUF", base="acme/Nova-27B"), _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B")]
 
     models = {model.name: model for model in _models(hits, context=32768)}
 
     assert models["Nova-27B"].fit.mode == "cpu_gpu"
-    assert models["Nova-27B"].fit_word == "good (RAM)"
+    assert models["Nova-27B"].fit_word == "fits (RAM)"
     assert models["Nova-9B"].fit.mode == "gpu"
-    assert models["Nova-9B"].fit_word == "marginal"
+    assert models["Nova-9B"].fit_word == "tight"
 
 
-def test_too_tight_and_unknown_carry_no_pool():
+def test_no_fit_and_unknown_carry_no_pool():
     too_large = _models([_hit("unsloth/Nova-400B-GGUF", base="acme/Nova-400B")], checked=_measured(ram_gib=31.7))[0]
     unknown = _models([_hit("unsloth/Nova-GGUF", base="acme/Nova")])[0]
 
-    assert (too_large.fit_word, unknown.fit_word) == ("too tight", "unknown")
+    assert (too_large.fit_word, unknown.fit_word) == ("no_fit", "unknown")
 
 
 def test_a_fit_in_graphics_memory_stands_above_a_fit_in_ram_whatever_the_class():
@@ -261,7 +261,7 @@ def test_a_fit_in_graphics_memory_stands_above_a_fit_in_ram_whatever_the_class()
 
     models = _models(hits, context=32768)
 
-    assert [model.fit_word for model in models] == ["good", "marginal", "good (RAM)"]
+    assert [model.fit_word for model in models] == ["fits", "tight", "fits (RAM)"]
 
 
 # --- the list itself ------------------------------------------------------------------------------
@@ -280,7 +280,7 @@ def test_the_list_shows_name_fit_size_release_packagers_downloads_and_ollama():
     label = _labels(_models(hits))[0]
 
     assert label.startswith("Qwen3.5-9B")
-    assert "good" in label
+    assert "fits" in label
     assert "9B" in label
     assert "legacy" in label
     # `Qwen, unsloth` is 13 characters and the column 12: the first account and a count.
@@ -304,7 +304,7 @@ def test_the_head_is_indented_so_its_columns_stand_over_the_cells():
     row = _labels(_models([_hit("unsloth/Qwen3.5-9B-GGUF")]))[0]
 
     assert head.label.index("Model") == 2
-    assert head.label.index("Fit") - 2 == row.index("good")
+    assert head.label.index("Fit") - 2 == row.index("fits")
 
 
 def test_a_model_without_an_ollama_name_says_a_dash():
@@ -556,7 +556,7 @@ def test_a_size_and_a_download_count_of_any_length_keep_their_columns():
 
 def test_the_order_is_the_fit_class_then_the_downloads_then_the_name():
     hits = [
-        _hit("unsloth/Nova-400B-GGUF", base="acme/Nova-400B", downloads=9_000_000),  # too tight
+        _hit("unsloth/Nova-400B-GGUF", base="acme/Nova-400B", downloads=9_000_000),  # no fit
         _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", downloads=1_000),
         _hit("unsloth/Nova-8B-GGUF", base="acme/Nova-8B", downloads=2_000),
         _hit("unsloth/Nova-One-GGUF", base="acme/Nova-One"),  # no parameter count: unknown
@@ -645,7 +645,9 @@ def test_the_hint_line_explains_the_release_words_and_names_the_context():
     assert line == (
         "latest: the publisher's current release of its family · legacy: a successor is named · "
         "*: computed from the version numbers of the family, not stated by the publisher · "
-        "fit from the size at 32k context, exact after the fetch"
+        "Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · "
+        "fits: up to 85 % · tight: up to 98 % · no fit: more · (RAM): the pool is the system memory · "
+        "fit from the size at 32k context, the best is fits, exact after the fetch"
     )
     assert "nothing marked" not in line
 

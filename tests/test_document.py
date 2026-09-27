@@ -52,7 +52,7 @@ def test_group_one_carries_no_measurement():
         RankedEntry.model_validate(_ranked(measurement_group=1))
 
 
-def test_a_ranked_entry_is_never_unknown_or_too_tight():
+def test_a_ranked_entry_is_never_unknown_or_no_fit():
     fit = {**EXAMPLES["RankedEntry"]["fit"], "fit_class": "unknown", "reason": "not covered"}
     with pytest.raises(ValidationError):
         RankedEntry.model_validate(_ranked(fit=fit))

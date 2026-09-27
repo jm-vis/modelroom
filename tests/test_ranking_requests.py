@@ -24,7 +24,7 @@ def _scenario(requests: int = 1, context: int = 8192) -> Scenario:
     )
 
 
-def _fit_for(requests: int, fit_class: str = "perfect", context: int = 8192) -> Fit:
+def _fit_for(requests: int, fit_class: str = "ample", context: int = 8192) -> Fit:
     return _fit(fit_class, context).model_copy(update={"requests": requests})
 
 

@@ -219,11 +219,22 @@ def test_fit_gate_open_for_unified_memory_since_schema_3():
     assert fit_block_reason(HardwareProfile.model_validate(_profile(gpu_state="unified_memory"))) is None
 
 
-def test_fit_gate_closed_on_a_llmfit_deviation():
+def test_a_llmfit_deviation_is_detected_and_never_blocks_the_fit():
+    """The own reading is the authority; llmfit is a safety net that is shown (decided 2026-09-27)."""
     block = copy.deepcopy(EXAMPLES["HardwareProfile"]["llmfit_crosscheck"])
     block["ram_physical"] = {"status": "deviation", "own_gib": 31.7, "llmfit_gib": 24.0}
     profile = HardwareProfile.model_validate(_profile(llmfit_crosscheck=block))
-    assert "RAM differs" in fit_block_reason(profile)
+    assert profile.llmfit_crosscheck.ram_physical.status == "deviation"
+    assert fit_block_reason(profile) is None
+
+
+def test_not_comparable_carries_the_own_reading_and_llmfit_s_where_there_is_one():
+    from modelroom.profile import CrossCheck
+
+    assert CrossCheck(status="not_comparable", own_gib=64.0, llmfit_gib=96.0).llmfit_gib == 96.0
+    assert CrossCheck(status="not_comparable", own_gib=64.0).llmfit_gib is None
+    with pytest.raises(ValidationError):
+        CrossCheck.model_validate({"status": "not_comparable"})
 
 
 # --- reading schema 1 and 3 -------------------------------------------------------------------

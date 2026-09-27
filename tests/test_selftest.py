@@ -314,8 +314,21 @@ def test_criterion_two_names_cards_or_a_class_that_were_not_measured(change):
 def test_criterion_two_accepts_the_answered_class_where_the_chassis_names_none():
     # A guest machine at a provider reports chassis type 1 or 2: the run answers `server`, the
     # profile says `entered`, and that is the class the criterion expects there.
-    assert st.ANSWERS_FIRST["machine_class"] == st.ANSWERED_CLASS == "server"
+    assert st.ANSWERED_CLASS == "server"
     assert st.measurement_problems(_profile(machine_class="server", machine_class_source="entered")) == []
+
+
+def test_the_run_answers_the_class_the_chassis_reads_else_the_answered_one():
+    """The class is asked on every measurement (decided 2026-09-27): an answer equal to the chassis
+    keeps the source `chassis`, so the run answers what the chassis reads wherever it reads one."""
+    from modelroom.measure import MachineClassReading
+
+    assert st.answered_class(MachineClassReading("workstation", "chassis")) == "workstation"
+    assert st.answered_class(MachineClassReading("unknown", "unknown", "chassis type 1")) == st.ANSWERED_CLASS
+
+
+def test_both_answer_files_carry_the_class():
+    assert "machine_class" in st.ANSWERS_FIRST and "machine_class" in st.ANSWERS_SECOND
 
 
 def test_criterion_two_names_a_cross_check_that_is_not_confirmed():
@@ -419,7 +432,7 @@ def test_criterion_three_names_a_screen_that_says_nothing_about_the_search():
 GOOD_DOCUMENT = "\n".join(
     [
         "Scenario: context 8k (entered), KV cache f16 (assumed), 1 request",
-        "Ranking rule: fit class (perfect, good, marginal), then measured group",
+        "Ranking rule: fit class (ample, fits, tight), then measured group",
         "## Ranking: workstation",
     ]
 )
@@ -646,11 +659,11 @@ GOOD_DIALOG = [
     " models    Qwen3.5-9B              25 packages from unsloth and Ollama",
     " context   L 32k                   24,000 words, a report or a long contract",
     " speed     not measured            say Yes in step 4 to measure an installed package",
-    " result    docs/models.md          25 packages ranked, none too tight",
+    " result    docs/models.md          25 packages ranked, 0 no fit",
     "",
     " workstation - context L 32k",
     " #    Model                     Package                 Fit                   Speed         Memory",
-    " 1    Qwen3.5-9B                unsloth - UD-IQ2_XXS    good                  -             8.3 GB",
+    " 1    Qwen3.5-9B                unsloth - UD-IQ2_XXS    fits                  -             8.3 GB",
     " shown     1 of 25 packages",
     " memory    #1 fits into graphics memory, 11.0 GB free after the reserve",
     " speed     nothing measured in the rows shown - say Yes in step 4 to measure an installed package",
@@ -660,8 +673,8 @@ GOOD_DIALOG = [
     " ok Results         docs/models.md",
 ]
 GOOD_MODELS = [
-    "Qwen3.5-9B              good          9B     legacy   Qwen, unsloth   13.6M   qwen3.5:9b",
-    "DeepSeek-R1-0528-Qwen3-  good          8B     –        unsloth         68k     –",
+    "Qwen3.5-9B              fits          9B     legacy   Qwen, unsloth   13.6M   qwen3.5:9b",
+    "DeepSeek-R1-0528-Qwen3-  fits          8B     –        unsloth         68k     –",
 ]
 
 
@@ -754,10 +767,23 @@ def test_criterion_seven_names_a_result_view_that_repeats_one_note_per_row():
     assert any("notes about the memory pool" in problem for problem in problems)
 
 
+def test_criterion_seven_reads_the_key_block_as_no_note_about_the_pool():
+    """The `key` block under the table names the pools (2026-09-27); it is a hint, not a note with a rank."""
+    with_key = [
+        *GOOD_DIALOG[:-4],
+        " key       Fit is memory only: the package's need against a pool - ample: up to 60 % of the pool",
+        "           gpu_split: all cards together - cpu_gpu, cpu (RAM): the system memory",
+        "           Speed is measured, see its column.",
+        *GOOD_DIALOG[-4:],
+    ]
+
+    assert not [problem for problem in st.result_table_problems(with_key) if "memory pool" in problem]
+
+
 def test_criterion_seven_names_a_row_that_still_says_unknown():
     with_unknown = [
         *GOOD_DIALOG,
-        " 1    Qwen3.5-9B                unsloth - Q4_K_M        good                  unknown       8.3 GB",
+        " 1    Qwen3.5-9B                unsloth - Q4_K_M        fits                  unknown       8.3 GB",
     ]
 
     assert any("says `unknown`" in problem for problem in st.result_table_problems(with_unknown))

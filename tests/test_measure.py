@@ -753,10 +753,10 @@ def test_a_cpu_only_vram_stays_absent_even_when_llmfit_failed():
 
 
 def test_an_entered_cpu_only_vram_is_never_held_against_llmfits_gpu_reading():
-    """The whole point of `--cpu-only` is a CPU fit; llmfit's VRAM must not block it.
+    """The whole point of `--cpu-only` is a CPU fit; llmfit's VRAM says nothing about it.
 
     On a machine that does have a card, comparing the entered `0` with llmfit's reading was a
-    `deviation`, and a deviation blocks the fit (`fit_block_reason`).
+    `deviation`, which blocked the fit until 2026-09-27 and would be shown as one since.
     """
     measured = measure_hardware("linux", _runner(), _linux_files(), lambda: 0, cpu_only=True)
     check = build_crosscheck(measured, _available(ram_gib=31.2, vram_gib=11.94))

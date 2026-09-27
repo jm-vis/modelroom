@@ -155,6 +155,26 @@ def test_several_cards_are_checked_against_the_sum_of_llmfits_cards(llmfit_sum, 
     assert build_crosscheck(measured, reference).vram.status == status
 
 
+@pytest.mark.parametrize(("status", "llmfit_sum"), [("available", 96.0), ("available", None), ("absent", None), ("error", None)])
+def test_cards_of_different_sizes_are_not_comparable_with_llmfits_sum(status, llmfit_sum):
+    """llmfit multiplies one card's size by the count, so its sum says nothing about mixed cards
+    (decided 2026-09-27): never `absent` for that case, and llmfit's number is kept where it said one."""
+    runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, "0, NVIDIA A6000, 49152\n1, NVIDIA A4000, 16384\n")})
+    measured = measure_hardware("win32", runner, FixtureFiles({}), lambda: LAPTOP_RAM_BYTES)
+    reference = LlmfitReference(status, "1.1.16", 127.46, 48.0, None, cuda_vram_gib=llmfit_sum)
+    vram = build_crosscheck(measured, reference).vram
+    assert (vram.status, vram.own_gib, vram.llmfit_gib) == ("not_comparable", 64.0, llmfit_sum)
+
+
+def test_a_profile_of_mixed_cards_writes_not_comparable_and_computes():
+    runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, "0, NVIDIA A6000, 49152\n1, NVIDIA A4000, 16384\n")})
+    measured = measure_hardware("win32", runner, FixtureFiles({}), lambda: LAPTOP_RAM_BYTES)
+    reference = LlmfitReference("available", "1.1.16", 127.46, 48.0, None, cuda_vram_gib=96.0)
+    profile = build_profile(measured, reference, "0123456789abcdef", "server", NOW)
+    assert profile.llmfit_crosscheck.vram.status == "not_comparable"
+    assert fit_block_reason(profile) is None
+
+
 def test_the_recorded_two_l4_machine_is_confirmed_by_its_own_llmfit_answer():
     """Both answers from the same rented machine: `nvidia-smi` and `llmfit system --json` agree.
 

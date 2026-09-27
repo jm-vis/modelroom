@@ -83,7 +83,7 @@ def test_markdown_table_reads_the_rendered_ranking(tmp_path):
     rows = rs.markdown_table(text, "Ranking: workstation")
     assert {row["Packager"] for row in rows} == {"unsloth"}  # the first ten of them
     assert all(row["Stars"] == "–" for row in rows)
-    assert all(row["Fit (computed)"].startswith(("good", "marginal")) for row in rows)
+    assert all(row["Fit (computed)"].startswith(("fits", "tight")) for row in rows)
     assert rs.markdown_table(text, "Not covered: workstation") == []
 
 

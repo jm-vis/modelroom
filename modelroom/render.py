@@ -268,12 +268,12 @@ _MODE_NOTES = {
     "cpu_gpu": (
         "shared_between_memories",
         "Too large for graphics memory alone, so it runs in system memory with the graphics "
-        "card helping; the best rating it can reach here is 'good'.",
+        "card helping; the best rating it can reach here is 'fits'.",
         ["fit.mode", "fit.fit_class"],
     ),
     "cpu": (
         "cpu_caps_at_good",
-        "Runs in system memory only, so the best possible rating on this machine is 'good'.",
+        "Runs in system memory only, so the best possible rating on this machine is 'fits'.",
         ["fit.mode", "fit.fit_class"],
     ),
 }
@@ -315,9 +315,10 @@ def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = Fa
             text=_clip(f"Fit contract v1 cannot judge this package here: {set_aside.reason}."),
             facts=["fit.fit_class", "fit.reason"],
         )
-    # Not "more than the machine has": fit v1 already calls a package `too_tight` above 98 % of
+    # Not "more than the machine has": fit v1 already calls a package `no_fit` above 98 % of
     # the pool, so the need can be below the pool and the note must not claim an overrun
-    # (probe: need 7.125 GiB against a pool of 7.2 GiB is `too_tight`).
+    # (probe: need 7.125 GiB against a pool of 7.2 GiB is `no_fit`). The note code `too_tight` stays:
+    # it is an identifier of the data contract, not a word a reader is shown (decided 2026-09-27).
     fit = set_aside.fit
     # A package set aside on the size basis says on what basis: the number that put it there was
     # computed from its size, not from its architecture (second-model round, 2026-09-24).
