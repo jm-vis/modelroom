@@ -1,0 +1,1192 @@
+{
+  "concurrent": 20,
+  "started_unix": 1790507467.412245,
+  "finished_unix": 1790507468.1325111,
+  "total_wall_seconds": 0.7202661037445068,
+  "ok": 20,
+  "wall_seconds_min": 0.6912813186645508,
+  "wall_seconds_max": 0.7135756015777588,
+  "wall_seconds_median": 0.7074074745178223,
+  "requests": [
+    {
+      "index": 1,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 1."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4126656,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-9ea0546311d46a9c",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be accessible and functional for patrons of all ages. Here\u2019s a step-by-step description of how a typical shelf might look:\n\n1. **Selection of Books**: The first step is selecting books that align with the interests of the patrons. This involves choosing titles based on genres, themes, or specific topics.\n\n2. **Arrangement**: Once the selection is made, the books are arranged in a way that makes them easy to find. This often includes using different sections within the shelves to organize books by genre (e.g., fiction, non-fiction), author, or subject matter.\n\n3. **Label",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.103947,
+      "wall_seconds": 0.6912813186645508
+    },
+    {
+      "index": 2,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 2."
+          }
+        ]
+      },
+      "started_unix": 1790507467.413017,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-ae143b456ae441e7",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian or staff member will identify the new book they wish to add. This could involve scanning the ISBN number on the book or using a barcode scanner.\n\n2. **Sorting**: Once identified, the librarian or staff member will sort the books into categories based on their subject matter, genre, or other criteria relevant to the collection. For example, fiction books would go on one",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1114092,
+      "wall_seconds": 0.6983921527862549
+    },
+    {
+      "index": 3,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 3."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4134147,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-8fe9ed19cf0589c1",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Initial Preparation**: Before placing any new book on the shelves, the librarian checks if there is enough space available on the shelves. If not, they may need to move existing books or adjust the layout.\n\n2. **Labeling**: The librarian labels each shelf with the title of the book being added. This helps patrons quickly identify which book belongs where.\n\n3. **Sorting**: Once all",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.112082,
+      "wall_seconds": 0.6986672878265381
+    },
+    {
+      "index": 4,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 4."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4138067,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-a4a419d6b314b42c",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian or staff member will first identify the new book they wish to add. This could involve scanning the ISBN number on the book or using a barcode scanner.\n\n2. **Sorting**: Once identified, the librarian or staff member will sort the books into categories based on their subject matter, genre, or other criteria relevant to the collection. For example, fiction books would go on",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1116765,
+      "wall_seconds": 0.6978697776794434
+    },
+    {
+      "index": 5,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 5."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4142547,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-99b50b66dbb1cba2",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian or staff member will identify the new book they wish to add. This could involve scanning the ISBN number on the book or using a barcode scanner.\n\n2. **Sorting**: Once identified, the librarian or staff member will sort the books into categories based on their subject matter, genre, or other criteria relevant to the collection. For example, fiction books would go on one",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1110861,
+      "wall_seconds": 0.696831464767456
+    },
+    {
+      "index": 6,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 6."
+          }
+        ]
+      },
+      "started_unix": 1790507467.414964,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-a628b84ae9853fad",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian checks the title, author, and subject of the new book to ensure it is appropriate for the collection.\n\n2. **Shelf Placement**: The librarian locates the shelf where the new book will be placed. This could be on the left side or right side of the library, depending on the layout of the shelves.\n\n3. **Labeling**: The librarian labels",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.111873,
+      "wall_seconds": 0.6969089508056641
+    },
+    {
+      "index": 7,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 7."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4153426,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-ab6ee244e5e25a18",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian checks the title, author, and subject of the new book to ensure it is appropriate for the collection.\n\n2. **Shelf Placement**: The librarian locates the shelf where the new book will be placed. This could be on the left side or right side of the library, depending on the layout of the shelves.\n\n3. **Labeling**: The librarian labels",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1119986,
+      "wall_seconds": 0.6966559886932373
+    },
+    {
+      "index": 8,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 8."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4157012,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-881e61cfc2c7aeed",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian checks the title, author, and subject of the new book to ensure it is appropriate for the collection.\n\n2. **Shelf Placement**: The librarian places the book on a designated shelf based on its title or category. For example:\n   - If the book is about science fiction, it would typically go on the \"Science Fiction\" shelf.\n   - If it",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.110681,
+      "wall_seconds": 0.6949799060821533
+    },
+    {
+      "index": 9,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 9."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4163241,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-b1781f2667614b72",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian or staff member will identify the new book they wish to add to the collection.\n\n2. **Sorting**: The book is sorted into categories based on its subject matter, genre, or other criteria relevant to the library's collections. This sorting helps in organizing the book within the library's system.\n\n3. **Labeling**: Each shelf is labeled with the title of the",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 43,
+          "total_tokens": 171,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1119268,
+      "wall_seconds": 0.6956026554107666
+    },
+    {
+      "index": 10,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 10."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4167151,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-8a235da1ed5eea88",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary items are prepared on the shelf. This includes the book itself, any required binding materials (if applicable), and any other relevant documents or information.\n\n### Step 2: Book Placement\n- **Labeling**: Each book is labeled with its title, author, publisher, and any other identifying details",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.124428,
+      "wall_seconds": 0.7077128887176514
+    },
+    {
+      "index": 11,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 11."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4170794,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-8b73976d5651dd3d",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary items are prepared, including the new book, any required materials (such as bookmarks or labels), and any other relevant documents.\n- **Labeling**: The librarian will label each shelf with the title of the book, its author, publication date, and any other pertinent information.\n\n### Step 2",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.124487,
+      "wall_seconds": 0.7074074745178223
+    },
+    {
+      "index": 12,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 12."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4174647,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-94de87774ce3330b",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian checks the title, author, and subject of the new book to ensure it is appropriate for the collection.\n\n2. **Shelf Placement**: The librarian places the book on a designated shelf based on its title or category. For example:\n   - If the book is about science fiction, it would typically go on the \"Science Fiction\" shelf.\n   - If it",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1310403,
+      "wall_seconds": 0.7135756015777588
+    },
+    {
+      "index": 13,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 13."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4179285,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-8f7e463714688c42",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary equipment is prepared, including shelves, hooks, and any other tools needed for shelving.\n- **Book Placement**: Books will be placed on the shelves according to their title or author.\n\n### Step 2: Book Selection\n- **Title Search**: The librarian will guide patrons through a search function",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.124375,
+      "wall_seconds": 0.706446647644043
+    },
+    {
+      "index": 14,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 14."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4182725,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-92b4c67acd1518fa",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary items are prepared on the shelf. This includes the book itself, any required binding materials (if applicable), and any other relevant documents or information.\n\n### Step 2: Book Placement\n- **Labeling**: Each book is labeled with its title, author, publisher, and any other identifying details",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.131369,
+      "wall_seconds": 0.7130966186523438
+    },
+    {
+      "index": 15,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 15."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4186237,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-8f8900ff9a5ba38b",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary items are prepared, including the new book, any required materials (such as bookmarks or labels), and any other relevant documents.\n- **Labeling**: The librarian will label each shelf with the title of the book, its author, and the date it was added.\n\n### Step 2: Initial",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1301792,
+      "wall_seconds": 0.7115554809570312
+    },
+    {
+      "index": 16,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 16."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4190376,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-b0dd715269b22d95",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary items are prepared on the shelf. This includes the book itself, any required binding materials (if applicable), and any other relevant documents or information.\n\n### Step 2: Book Placement\n- **Labeling**: Each book is labeled with its title, author, publisher, and any other identifying details",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1308877,
+      "wall_seconds": 0.7118501663208008
+    },
+    {
+      "index": 17,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 17."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4192832,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-bb404e31e2f60186",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary items are prepared on the shelf. This includes the book itself, any required accessories (like bookmarks or pens), and any other materials needed for the book.\n\n### Step 2: Book Placement\n- **Labeling**: Each book is labeled with its title, author, publisher, and any other",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1308258,
+      "wall_seconds": 0.7115426063537598
+    },
+    {
+      "index": 18,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 18."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4197083,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-b16df6147208dc1a",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary items are prepared on the shelf. This includes the book itself, any required binding materials (if applicable), and any other relevant documents or information.\n\n### Step 2: Book Placement\n- **Labeling**: Each book is labeled with its title, author, publisher, and any other identifying details",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1312487,
+      "wall_seconds": 0.7115404605865479
+    },
+    {
+      "index": 19,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 19."
+          }
+        ]
+      },
+      "started_unix": 1790507467.4201179,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-a2760ac9b2a0bb0a",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n### Step 1: Preparation\n- **Shelf Setup**: The librarian will first ensure that all necessary tools and materials are prepared. This includes books, folders, labels, and any other supplies needed for the new book.\n\n### Step 2: Book Selection\n- **Identification**: The librarian will carefully examine each book to determine its suitability for the library's collection. They may also ask about the",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.1303854,
+      "wall_seconds": 0.7102675437927246
+    },
+    {
+      "index": 20,
+      "request": {
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "max_tokens": 128,
+        "temperature": 0.0,
+        "seed": 42,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Describe how a public library shelves a new book. Request 20."
+          }
+        ]
+      },
+      "started_unix": 1790507467.420436,
+      "status": 200,
+      "response": {
+        "id": "chatcmpl-baebf81c53624c00",
+        "object": "chat.completion",
+        "created": 1790507467,
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "A public library's shelves are designed to be functional and accessible for patrons, ensuring that books are shelved in an orderly manner. Here\u2019s a step-by-step description of how a public library might handle the process of adding a new book:\n\n1. **Identification**: The librarian or staff member will identify the new book they wish to add to the collection.\n\n2. **Sorting**: The book is sorted into categories based on its subject matter, genre, or other criteria relevant to the library's collections. This sorting helps in organizing the book within the library's system.\n\n3. **Labeling**: Each shelf is labeled with the title of the",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-a5237c21",
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 172,
+          "completion_tokens": 128,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      },
+      "finished_unix": 1790507468.131303,
+      "wall_seconds": 0.710867166519165
+    }
+  ]
+}

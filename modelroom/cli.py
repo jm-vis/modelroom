@@ -163,11 +163,12 @@ def main(
     here: Path | None = None,
     out: Callable[[str], None] | None = None,
     daemon: "Daemon | None" = None,
+    servers: dict | None = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon)
+        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon, servers)
     if args.answers is not None:
         print(f"--answers belongs to the guided mode; {args.command} never asks a question", file=sys.stderr)
         return 2
@@ -198,16 +199,15 @@ def _cmd_guided(
     here: Path | None,
     out: Callable[[str], None] | None,
     daemon: "Daemon | None" = None,
+    servers: dict | None = None,
 ) -> int:
     """`modelroom` with no subcommand: the guided mode (`modelroom/guided.py`).
 
     Exit codes: `0` a document was written, `1` another process holds the lock or a step reported
     it, `2` without a terminal and without `--answers` (the help goes to stderr), at an end of
     input, at a missing or unusable answer, or when a step cannot go on, `3` a stored file's
-    `schema_version` is unsupported or it does not read, `130` at Ctrl-C. Every failure of a
-    stored file keeps the exit code that command would give it on its own -- the guided mode does
-    not flatten them into one. Ctrl-C and an end of input leave no half-written file: every write
-    of this mode is atomic and happens after the last question of its step.
+    `schema_version` is unsupported or it does not read, `130` at Ctrl-C (a stored file keeps its own
+    command's exit code; every write is atomic and follows the last question of its step).
     """
     try:
         chosen = asker if asker is not None else _asker_for(args, parser)
@@ -223,6 +223,7 @@ def _cmd_guided(
             now=now,
             out=out if out is not None else print,
             daemon=daemon,
+            servers=servers,
             # A run that answers from a file is read from a log: no color, whatever the
             # terminal it was started in (CONTRACTS.md, "Guided mode", the start screen).
             colored=None if args.answers is None else False,

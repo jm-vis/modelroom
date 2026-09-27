@@ -613,3 +613,110 @@ def granite_ollama_package(**overrides):
         "active": True,
     }
     return Package(**{**fields, **overrides})
+
+
+# --- local servers (AP9-SV1): a vLLM server, recorded from vLLM 0.30.0 on one L4 ----------------
+
+QWEN25_REPO = "Qwen/Qwen2.5-0.5B-Instruct"
+QWEN25_SHA = "7ae557604adf67be50417f59c2c2f167def9a775"
+QWEN25_WEIGHTS_BYTES = 988_097_824
+QWEN25_WEIGHTS_DIGEST = "sha256:fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
+VLLM_UNREACHABLE = "http://127.0.0.1:8000/v1/models: the vLLM server did not answer (refused)"
+
+
+def offline_servers() -> dict:
+    """A machine with no vLLM server: every call fails, so the start screen has no row for one."""
+    from modelroom.vllm_server import FixtureVllmServer
+
+    return {"vllm": FixtureVllmServer({}, unreachable=VLLM_UNREACHABLE)}
+
+
+def qwen25_tensor_package(**overrides):
+    """The `tensor` package the recorded vLLM server serves, as the fetch records it from the Hub."""
+    from modelroom.contracts import Package, PackageFile
+
+    fields = {
+        "source": "huggingface",
+        "repo": QWEN25_REPO,
+        "revision": QWEN25_SHA,
+        "base_model_hf_repo": QWEN25_REPO,
+        "format": "tensor",
+        "files": [
+            PackageFile(
+                name="model.safetensors", role="weights", size_bytes=QWEN25_WEIGHTS_BYTES, digest=QWEN25_WEIGHTS_DIGEST
+            )
+        ],
+        "complete": True,
+        "quantization": None,
+        "provenance": "unresolved",
+        "unresolved_reason": "format",
+        "observed_at": DAEMON_OBSERVED_AT,
+        "last_seen": DAEMON_OBSERVED_AT,
+        "active": True,
+    }
+    return Package(**{**fields, **overrides})
+
+
+def vllm_metrics(generated: float, running: float = 0.0, waiting: float = 0.0) -> Response:
+    """The recorded metrics page with the three numbers the load test reads set to these."""
+    import re
+
+    text = (FIXTURES / "vllm_metrics_before_l4.txt").read_text(encoding="utf-8")
+    for name, value in (("generation_tokens_total", generated), ("num_requests_running", running), ("num_requests_waiting", waiting)):
+        text = re.sub(rf"^(vllm:{name}\{{[^}}]*\}}) \S+$", rf"\g<1> {value}", text, flags=re.M)
+    return Response(status=200, body=text.encode("utf-8"))
+
+
+def vllm_metrics_pages(n: int) -> list[Response]:
+    """Six metrics pages, before and after each of three batches, each adding n x 128 tokens."""
+    pages = []
+    for batch in range(3):
+        before = 128.0 + batch * n * 128
+        pages += [vllm_metrics(before), vllm_metrics(before + n * 128)]
+    return pages
+
+
+def vllm_chat_answer(finish: str | None = None):
+    """A chat answer function: the recorded answer for `Request <i>.` (the warm-up for `0`)."""
+    import copy
+    import re
+
+    warm_up = json.loads((FIXTURES / "vllm_chat_one_l4.json").read_text(encoding="utf-8"))
+    recorded = json.loads((FIXTURES / "vllm_chat_concurrent_l4.json").read_text(encoding="utf-8"))["requests"]
+    by_index = {record["index"]: record for record in recorded}
+
+    def answer(body: dict) -> Response:
+        index = int(re.search(r"Request (\d+)\.", body["messages"][0]["content"]).group(1))
+        response = copy.deepcopy((warm_up if index == 0 else by_index[(index - 1) % 20 + 1])["response"])
+        if finish is not None and index != 0:
+            response["choices"][0]["finish_reason"] = finish
+        return Response(status=200, body=json.dumps(response).encode("utf-8"))
+
+    return answer
+
+
+def vllm_servers(requests: int = 20, models: str = "vllm_v1_models_l4.json", finish: str | None = None) -> dict:
+    """A machine with a vLLM server that answers every call of the start screen and one load test."""
+    from modelroom.vllm_server import CHAT_PATH, METRICS_PATH, MODELS_PATH, FixtureVllmServer
+
+    answers = {
+        ("GET", MODELS_PATH): json_response(models),
+        ("GET", METRICS_PATH): vllm_metrics_pages(min(requests, 64)),
+        ("POST", CHAT_PATH): vllm_chat_answer(finish),
+    }
+    return {"vllm": FixtureVllmServer(answers)}
+
+
+def qwen25_transport_mapping() -> dict[tuple[str, str], Response]:
+    """The Hub answers a fetch of `Qwen/Qwen2.5-0.5B-Instruct` with that repository in `repos` needs."""
+    api = "https://huggingface.co/api/models"
+    return {
+        ("GET", f"{api}/{QWEN25_REPO}"): json_response("hf_qwen25_05b_instruct_model.json"),
+        ("GET", f"https://huggingface.co/{QWEN25_REPO}/resolve/{QWEN25_SHA}/config.json"): json_response(
+            "hf_qwen25_05b_instruct_config.json"
+        ),
+        ("GET", f"{api}/{QWEN25_REPO}/tree/{QWEN25_SHA}?recursive=true"): json_response(
+            "hf_qwen25_05b_instruct_tree.json"
+        ),
+        ("GET", f"{api}/{QWEN25_REPO}-GGUF"): envelope_response("hf_unsloth_does_not_exist_model.json"),
+    }
