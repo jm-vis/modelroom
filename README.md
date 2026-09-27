@@ -48,11 +48,16 @@ package an installer fetches.
 ## Tested on
 
 Every machine a version really ran its self-test on (`scripts/selftest.py`), one line each. The
-fixtures of machines not in this table -- two graphics cards and more among them -- are synthetic.
+two-card fixtures are recorded on the two rented machines below; the fixtures of three graphics
+cards and more, and of cards of mixed sizes, are synthetic (`tests/fixtures/README.md`). The load
+test is the speed the self-test measured for `hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M`
+at context 8192, one request.
 
-| Machine | Class | Graphics cards | Memory | Date | Self-test |
-|---|---|---|---|---|---|
-| a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` |
+| Machine | Class | Graphics cards | Memory | Date | Self-test | Load test |
+|---|---|---|---|---|---|---|
+| a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` | 56.9 tok/s |
+| a rented instance at Verda (Helsinki) | server (answered; the chassis names no class) | 2 x NVIDIA A100-SXM4-80GB, 80.00 GiB each | 235.92 GiB | 2026-09-27 | `SELFTEST: OK` | 143.5 tok/s |
+| a rented instance at Scaleway (Paris) | server (answered; the chassis names no class) | 2 x NVIDIA L4, 22.49 GiB each | 94.29 GiB | 2026-09-27 | `SELFTEST: OK` | 48.2 tok/s |
 
 ## Installation
 

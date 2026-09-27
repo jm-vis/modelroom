@@ -36,7 +36,9 @@ from fixture_support import LAPTOP_RAM_BYTES, windows_runner
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NOW = datetime(2026, 9, 26, 8, 0, 0, tzinfo=timezone.utc)
-A100 = "NVIDIA A100-SXM4-40GB"
+# The cards of the two rented machines of 2026-09-27 (`tests/fixtures/README.md`, recorded).
+A100 = "NVIDIA A100-SXM4-80GB"
+L4 = "NVIDIA L4"
 
 
 def _done(args, stdout: str = "", returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess:
@@ -56,9 +58,16 @@ def _chassis(response) -> FixtureRunner:
 
 def test_two_cards_are_multi_gpu_with_their_sum_the_common_name_and_a_note():
     reading = measure_gpu("win32", _smi((FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8")))
-    assert (reading.gpu_state, reading.vram_gib, reading.vram_source, reading.gpu_name) == ("multi_gpu", 80.0, "nvidia-smi", A100)
-    assert [(card.index, card.name, card.vram_gib) for card in reading.adapters] == [(0, A100, 40.0), (1, A100, 40.0)]
+    assert (reading.gpu_state, reading.vram_gib, reading.vram_source, reading.gpu_name) == ("multi_gpu", 160.0, "nvidia-smi", A100)
+    assert [(card.index, card.name, card.vram_gib) for card in reading.adapters] == [(0, A100, 80.0), (1, A100, 80.0)]
     assert reading.note == f"nvidia-smi lists 2 adapters: 2 x {A100}"
+
+
+def test_the_recorded_two_l4_list_is_multi_gpu_with_its_sum():
+    reading = measure_gpu("linux", _smi((FIXTURES / "nvidia_smi_two_l4.csv").read_text(encoding="utf-8")))
+    assert (reading.gpu_state, reading.vram_gib, reading.vram_source, reading.gpu_name) == ("multi_gpu", 44.98, "nvidia-smi", L4)
+    assert [(card.index, card.name, card.vram_gib) for card in reading.adapters] == [(0, L4, 22.49), (1, L4, 22.49)]
+    assert reading.note == f"nvidia-smi lists 2 adapters: 2 x {L4}"
 
 
 def test_three_mixed_cards_carry_no_common_name_and_name_each_card():
@@ -74,14 +83,14 @@ def test_one_card_stays_measured_with_its_one_adapter():
 
 
 def test_indexes_other_than_0_to_n_minus_1_are_present_unmeasured():
-    reading = measure_gpu("win32", _smi(f"0, {A100}, 40960\n2, {A100}, 40960\n"))
+    reading = measure_gpu("win32", _smi(f"0, {A100}, 81920\n2, {A100}, 81920\n"))
     assert (reading.gpu_state, reading.vram_gib, reading.adapters) == ("present_unmeasured", None, ())
     assert reading.note == "nvidia-smi reports the adapters at indexes 0, 2, not 0 to 1"
 
 
 @pytest.mark.parametrize("second", [f"1, {A100}", f"1, {A100}, 0", f"1, {A100}, lots"])
 def test_one_unreadable_card_makes_the_whole_reading_present_unmeasured(second):
-    reading = measure_gpu("win32", _smi(f"0, {A100}, 40960\n{second}\n"))
+    reading = measure_gpu("win32", _smi(f"0, {A100}, 81920\n{second}\n"))
     assert (reading.gpu_state, reading.vram_gib, reading.adapters) == ("present_unmeasured", None, ())
 
 
@@ -93,9 +102,9 @@ def test_no_path_writes_multi_gpu_not_covered_any_more():
 def test_a_two_card_measurement_writes_a_valid_profile_the_fit_computes_for():
     runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8"))})
     measured = measure_hardware("win32", runner, FixtureFiles({}), lambda: LAPTOP_RAM_BYTES)
-    reference = LlmfitReference("available", "1.1.16", 127.46, 40.0, None, cuda_vram_gib=80.0)
+    reference = LlmfitReference("available", "1.1.16", 127.46, 80.0, None, cuda_vram_gib=160.0)
     profile = build_profile(measured, reference, "0123456789abcdef", "server", NOW)
-    assert profile.gpu_state == "multi_gpu" and profile.vram_gib == 80.0 and len(profile.gpus) == 2
+    assert profile.gpu_state == "multi_gpu" and profile.vram_gib == 160.0 and len(profile.gpus) == 2
     assert profile.llmfit_crosscheck.vram.status == "confirmed"
     assert fit_block_reason(profile) is None
 
@@ -108,7 +117,11 @@ def _system(name: str) -> dict:
 
 
 def test_llmfit_counts_its_cuda_cards_times_their_count():
-    assert cuda_vram_gib(_system("llmfit_system_two_gpus.json")) == 80.0
+    assert cuda_vram_gib(_system("llmfit_system_two_gpus.json")) == 160.0
+
+
+def test_llmfit_counts_the_recorded_two_l4_cards():
+    assert cuda_vram_gib(_system("llmfit_system_two_l4.json")) == 44.98
 
 
 def test_the_intel_graphics_of_the_laptop_recording_is_not_counted():
@@ -131,15 +144,31 @@ def test_a_card_list_that_does_not_read_gives_no_sum(gpus):
 def test_read_llmfit_reference_carries_the_sum():
     runner = windows_runner({("llmfit", "system", "--json"): _done(("llmfit", "system", "--json"), (FIXTURES / "llmfit_system_two_gpus.json").read_text(encoding="utf-8"))})
     reference = read_llmfit_reference(runner, "1.1.16")
-    assert (reference.status, reference.vram_gib, reference.cuda_vram_gib) == ("available", 40.0, 80.0)
+    assert (reference.status, reference.ram_gib, reference.vram_gib, reference.cuda_vram_gib) == ("available", 235.92, 80.0, 160.0)
 
 
-@pytest.mark.parametrize(("llmfit_sum", "status"), [(80.0, "confirmed"), (40.0, "deviation"), (None, "absent")])
+@pytest.mark.parametrize(("llmfit_sum", "status"), [(160.0, "confirmed"), (80.0, "deviation"), (None, "absent")])
 def test_several_cards_are_checked_against_the_sum_of_llmfits_cards(llmfit_sum, status):
     runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8"))})
     measured = measure_hardware("win32", runner, FixtureFiles({}), lambda: LAPTOP_RAM_BYTES)
-    reference = LlmfitReference("available", "1.1.16", 127.46, 40.0, None, cuda_vram_gib=llmfit_sum)
+    reference = LlmfitReference("available", "1.1.16", 127.46, 80.0, None, cuda_vram_gib=llmfit_sum)
     assert build_crosscheck(measured, reference).vram.status == status
+
+
+def test_the_recorded_two_l4_machine_is_confirmed_by_its_own_llmfit_answer():
+    """Both answers from the same rented machine: `nvidia-smi` and `llmfit system --json` agree.
+
+    `MemTotal` is the first line of that machine's `/proc/meminfo`, 98870364 kB (94.29 GiB).
+    """
+    smi = _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_l4.csv").read_text(encoding="utf-8"))
+    files = FixtureFiles({PROC_MEMINFO_FILE: "MemTotal:       98870364 kB\n", LINUX_CHASSIS_FILE: "1\n"})
+    measured = measure_hardware("linux", FixtureRunner({NVIDIA_SMI_ARGS: smi}), files, lambda: 0)
+    llmfit = _done(("llmfit", "system", "--json"), (FIXTURES / "llmfit_system_two_l4.json").read_text(encoding="utf-8"))
+    version = _done(("llmfit", "--version"), (FIXTURES / "llmfit_version.txt").read_text(encoding="utf-8"))
+    reference = read_llmfit_reference(FixtureRunner({("llmfit", "--version"): version, ("llmfit", "system", "--json"): llmfit}), "1.1.16")
+    check = build_crosscheck(measured, reference)
+    assert (measured.gpu.vram_gib, measured.ram.value, reference.cuda_vram_gib) == (44.98, 94.29, 44.98)
+    assert (check.vram.status, check.ram_physical.status) == ("confirmed", "confirmed")
 
 
 # --- the chassis ------------------------------------------------------------------------------------
@@ -180,6 +209,13 @@ def test_a_windows_chassis_that_says_nothing_is_unknown_with_a_note(response, wo
 def test_the_linux_chassis_file_names_the_class():
     reading = read_machine_class("linux", FixtureRunner({}), FixtureFiles({LINUX_CHASSIS_FILE: "3\n"}))
     assert (reading.machine_class, reading.source) == ("workstation", "chassis")
+
+
+def test_the_recorded_linux_chassis_type_1_names_no_class():
+    """Recorded 2026-09-27: both rented GPU machines answer `1` (Other) in the DMI file."""
+    reading = read_machine_class("linux", FixtureRunner({}), FixtureFiles({LINUX_CHASSIS_FILE: "1\n"}))
+    assert (reading.machine_class, reading.source) == ("unknown", "unknown")
+    assert reading.reason == "the machine class is unknown: chassis type 1 names no machine class"
 
 
 class _BrokenFiles:
@@ -279,7 +315,7 @@ def test_the_summary_line_names_the_cards_and_the_class(tmp_path: Path, capsys):
     two = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8"))})
     assert hardware_with_config(config, "workstation", _probes(two), NOW, tmp_path / "pointer.json") == 0
     out = capsys.readouterr().out
-    assert "vram 80.00 GiB (nvidia-smi, 2 cards), gpu multi_gpu, class laptop (chassis)" in out
+    assert "vram 160.00 GiB (nvidia-smi, 2 cards), gpu multi_gpu, class laptop (chassis)" in out
 
 
 def test_the_summary_line_of_one_card_only_adds_the_class(tmp_path: Path, capsys):

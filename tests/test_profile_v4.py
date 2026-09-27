@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from modelroom.contracts import HardwareSnapshot, SchemaVersionError
 from modelroom.examples import EXAMPLES
+from modelroom.fit import GpuPool, profile_memory
 from modelroom.measurements import load_export
 from modelroom.profile import (
     ENTERED_GPU_STATES,
@@ -203,6 +204,22 @@ def _measured_cards(sizes: tuple[float, ...] = (40.0, 40.0), **changes) -> dict:
 def test_the_shapes_of_schema_4_are_valid_and_compute(payload):
     profile = HardwareProfile.model_validate(payload)
     assert fit_block_reason(profile) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "card", "size", "ram"),
+    [("two_a100_server.json", "NVIDIA A100-SXM4-80GB", 80.0, 235.92), ("two_l4_server.json", "NVIDIA L4", 22.49, 94.29)],
+    ids=["two-a100", "two-l4"],
+)
+def test_a_recorded_two_card_profile_reads_as_schema_4_and_computes(name, card, size, ram):
+    """Written by `hardware` on the two rented machines of 2026-09-27 (`tests/fixtures/README.md`)."""
+    profile = read_profile_document(json.loads((FIXTURES / "profiles_v4" / name).read_text(encoding="utf-8")))
+    assert isinstance(profile, HardwareProfile) and profile.schema_version == 4
+    assert fit_block_reason(profile) is None
+    assert profile_memory(profile) == GpuPool((size, size))
+    assert [(gpu.index, gpu.name, gpu.vram_gib) for gpu in profile.gpus] == [(0, card, size), (1, card, size)]
+    assert (profile.gpu_state, profile.vram_gib, profile.ram_physical_gib) == ("multi_gpu", round(2 * size, 2), ram)
+    assert (profile.machine_class, profile.machine_class_source) == ("unknown", "unknown")
 
 
 def test_a_cpu_only_profile_may_carry_a_class_read_from_the_chassis():

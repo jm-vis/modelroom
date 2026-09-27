@@ -9,24 +9,24 @@
     }
   },
   "system": {
-    "available_ram_gb": 76.64,
+    "available_ram_gb": 230.53,
     "backend": "CUDA",
-    "cpu_cores": 14,
-    "cpu_name": "Intel(R) Core(TM) Ultra 5 245HX",
+    "cpu_cores": 44,
+    "cpu_name": "AMD EPYC 7643 48-Core Processor",
     "gpu_count": 2,
-    "gpu_name": "NVIDIA A100-SXM4-40GB",
-    "gpu_vram_gb": 40.0,
+    "gpu_name": "NVIDIA A100-SXM4-80GB",
+    "gpu_vram_gb": 80.0,
     "gpus": [
       {
         "backend": "CUDA",
         "count": 2,
-        "name": "NVIDIA A100-SXM4-40GB",
+        "name": "NVIDIA A100-SXM4-80GB",
         "unified_memory": false,
-        "vram_gb": 40.0
+        "vram_gb": 80.0
       }
     ],
     "has_gpu": true,
-    "total_ram_gb": 127.46,
+    "total_ram_gb": 235.92,
     "unified_memory": false
   }
 }

@@ -42,6 +42,7 @@ from modelroom.measure import (
     read_os_identity,
     windows_physical_memory_bytes,
 )
+from modelroom.measure import _lspci_vendors
 from modelroom.profile import fit_block_reason, os_fingerprint
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -238,7 +239,7 @@ def test_two_adapters_are_multi_gpu_with_their_sum():
     runner = _runner(nvidia_smi=_done(NVIDIA_SMI_ARGS, stdout=_fixture("nvidia_smi_two_gpus.csv")))
     gpu = measure_gpu("linux", runner)
     assert gpu.gpu_state == "multi_gpu"
-    assert gpu.vram_gib == 80.0 and gpu.vram_source == "nvidia-smi"
+    assert gpu.vram_gib == 160.0 and gpu.vram_source == "nvidia-smi"
     assert "2" in gpu.note
 
 
@@ -315,6 +316,32 @@ def test_an_nvidia_adapter_without_nvidia_smi_is_present_unmeasured():
     # The same machine also has Intel graphics, but a discrete card is present: the CPU advice
     # that belongs to an Intel-only machine must not be given here.
     assert "Ollama uses the CPU" not in gpu.note
+
+
+# Recorded 2026-09-27 on the two rented GPU machines; `lspci` is read only when `nvidia-smi` does
+# not answer. The server with the two A100 cards also carries the QEMU/Bochs display controller
+# `[1234:1111]` of class `0380`, a vendor of the positive list; the L4 server has no other
+# class-03 device. Every other line (bridges, virtio, the NVSwitch of class `0680`) is not class 03.
+RECORDED_GPU_SERVERS = [
+    ("lspci_nn_two_a100_server.txt", ["1234", "10de", "10de"]),
+    ("lspci_nn_two_l4_server.txt", ["10de", "10de"]),
+]
+
+
+@pytest.mark.parametrize(("name", "vendors"), RECORDED_GPU_SERVERS, ids=["two-a100", "two-l4"])
+def test_a_recorded_gpu_server_lists_its_display_class_adapters_by_vendor(name, vendors):
+    assert _lspci_vendors(_fixture(name)) == vendors
+
+
+@pytest.mark.parametrize(("name", "vendors"), RECORDED_GPU_SERVERS, ids=["two-a100", "two-l4"])
+def test_a_recorded_gpu_server_without_nvidia_smi_is_present_unmeasured(name, vendors):
+    runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_done(LSPCI_ARGS, stdout=_fixture(name)))
+    gpu = measure_gpu("linux", runner)
+    assert (gpu.gpu_state, gpu.vram_gib, gpu.vram_source) == ("present_unmeasured", None, "unknown")
+    assert gpu.note == (
+        "a graphics adapter is present (PCI vendor 10de), but its memory was not measured; "
+        "run `hardware --cpu-only` for the CPU fit"
+    )
 
 
 def test_an_adapter_list_that_cannot_be_read_is_present_unmeasured_not_no_gpu():
