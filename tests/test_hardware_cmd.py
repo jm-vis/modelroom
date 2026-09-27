@@ -24,6 +24,7 @@ from modelroom.config import Configuration
 from modelroom.examples import EXAMPLES
 from modelroom.llmfit import FixtureRunner
 from modelroom.measure import (
+    LINUX_CHASSIS_FILE,
     LINUX_MACHINE_ID_FILE,
     LSPCI_ARGS,
     MACOS_MEMSIZE_ARGS,
@@ -31,6 +32,7 @@ from modelroom.measure import (
     PROC_MEMINFO_FILE,
     PROC_SELF_CGROUP_FILE,
     WINDOWS_ADAPTER_ARGS,
+    WINDOWS_CHASSIS_ARGS,
     WINDOWS_MACHINE_GUID_ARGS,
     FixtureFiles,
     Probes,
@@ -64,6 +66,7 @@ def _runner(llmfit_system: str | None = None, llmfit_missing: bool = False, over
     responses = {
         NVIDIA_SMI_ARGS: _completed(NVIDIA_SMI_ARGS, stdout=(FIXTURES / "nvidia_smi_one_gpu.csv").read_text(encoding="utf-8")),
         WINDOWS_MACHINE_GUID_ARGS: _completed(WINDOWS_MACHINE_GUID_ARGS, stdout=guid_stdout),
+        WINDOWS_CHASSIS_ARGS: _completed(WINDOWS_CHASSIS_ARGS, stdout="10\n"),
         ("llmfit", "--version"): _completed(("llmfit", "--version"), stdout="llmfit 1.1.16\n"),
         ("llmfit", "system", "--json"): _completed(("llmfit", "system", "--json"), stdout=llmfit_system or _llmfit_system()),
     }
@@ -133,7 +136,7 @@ def test_a_measured_run_writes_one_profile_v2_with_every_source(tmp_path: Path, 
     assert _run(config, tmp_path, machine="workstation") == 0
 
     profile = _written(config)
-    assert profile.schema_version == 3 and profile.profile_id == ID_ONE
+    assert profile.schema_version == 4 and profile.profile_id == ID_ONE
     assert profile.origin == "measured" and profile.recorded_at == RUN1
     assert profile.gpu_state == "measured" and profile.vram_source == "nvidia-smi"
     assert profile.vram_gib == pytest.approx(11.99, abs=0.01)
@@ -477,7 +480,7 @@ def test_a_schema_1_profile_beside_the_new_one_is_left_untouched(tmp_path: Path)
 def test_a_profile_file_of_a_future_schema_is_exit_3_and_writes_nothing(tmp_path: Path, capsys):
     config = _config(tmp_path)
     broken = config.paths.hardware_dir / "future.json"
-    atomic_write_json(broken, {**EXAMPLES["HardwareProfile"], "schema_version": 4})
+    atomic_write_json(broken, {**EXAMPLES["HardwareProfile"], "schema_version": 5})
 
     assert _run(config, tmp_path) == 3
 
@@ -779,6 +782,7 @@ def test_a_linux_cpu_server_writes_a_profile_the_fit_can_compute(tmp_path: Path)
         {
             PROC_MEMINFO_FILE: (FIXTURES / "proc_meminfo_linux.txt").read_text(encoding="utf-8"),
             LINUX_MACHINE_ID_FILE: "7c9e6679a1b04f0e8c2d3b5a6f7e8d90\n",
+            LINUX_CHASSIS_FILE: "3\n",
             PROC_SELF_CGROUP_FILE: "0::/payload.scope\n",
             "/sys/fs/cgroup/payload.scope/memory.max": "8589934592\n",
         }

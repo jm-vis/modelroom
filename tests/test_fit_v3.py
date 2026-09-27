@@ -80,6 +80,10 @@ def _hand(ram: float = 32.0, vram: float = 0.0, state: str = "unified_memory") -
         vram_source="entered" if state == "entered" else "none",
         gpu_state=state,
         gpu_name=None,
+        # Schema 4: an entered card is the one entry of the card list; a hand machine has no chassis.
+        gpus=[{"index": 0, "name": None, "vram_gib": vram, "vram_source": "entered"}] if state == "entered" else [],
+        machine_class="unknown",
+        machine_class_source="unknown",
         llmfit_crosscheck={"ram_physical": ABSENT, "vram": ABSENT},
         llmfit_version=None,
     )

@@ -310,7 +310,9 @@ class LlmfitReference:
     `available` carries both readings (`vram_gib` is `0.0` on a machine llmfit reports without
     a GPU); `absent` means llmfit was never asked (not installed, or below the minimum
     version); `error` means it was asked and failed. `reason` says which, in the tool's own
-    words, for the note the command prints.
+    words, for the note the command prints. `cuda_vram_gib` is the sum over llmfit's `gpus[]`
+    entries of backend `CUDA`, `vram_gb x count` each, the way llmfit counts them itself; `None`
+    when that list is missing or an entry does not read (decided 2026-09-26).
     """
 
     status: Literal["available", "absent", "error"]
@@ -318,6 +320,7 @@ class LlmfitReference:
     ram_gib: float | None
     vram_gib: float | None
     reason: str | None
+    cuda_vram_gib: float | None = None
 
 
 def read_llmfit_reference(runner: Runner, min_version: str) -> LlmfitReference:
@@ -336,9 +339,40 @@ def read_llmfit_reference(runner: Runner, min_version: str) -> LlmfitReference:
         return LlmfitReference(status="error", version=None, ram_gib=None, vram_gib=None, reason=str(exc))
 
     try:
-        fields = hardware_fields_from_llmfit_system(fetch_llmfit_system(runner))
+        data = fetch_llmfit_system(runner)
+        fields = hardware_fields_from_llmfit_system(data)
     except LlmfitError as exc:
         return LlmfitReference(status="error", version=version, ram_gib=None, vram_gib=None, reason=str(exc))
     return LlmfitReference(
-        status="available", version=version, ram_gib=fields["ram_gib"], vram_gib=fields["vram_gib"], reason=None
+        status="available",
+        version=version,
+        ram_gib=fields["ram_gib"],
+        vram_gib=fields["vram_gib"],
+        reason=None,
+        cuda_vram_gib=cuda_vram_gib(data["system"]),
     )
+
+
+def cuda_vram_gib(system: dict) -> float | None:
+    """The graphics memory of llmfit's CUDA cards, `vram_gb x count` summed, or `None` when unread.
+
+    Another backend (an Intel card next to the NVIDIA one reads as `SYCL`) is not counted: the
+    card list of the profile is `nvidia-smi`'s. A list that is missing, not a list, or has an entry
+    whose fields do not read gives `None` -- llmfit answered, only not about this.
+    """
+    gpus = system.get("gpus")
+    if not isinstance(gpus, list):
+        return None
+    total = 0.0
+    for entry in gpus:
+        if not isinstance(entry, dict) or not isinstance(entry.get("backend"), str):
+            return None
+        vram, count = entry.get("vram_gb"), entry.get("count")
+        if not (_is_finite_number(vram) and vram >= 0 and _is_finite_number(count) and isinstance(count, int) and count >= 1):
+            return None
+        if entry["backend"] == "CUDA":
+            try:
+                total += float(vram) * count
+            except OverflowError:  # a product no float holds is no reading either
+                return None
+    return round(total, 2) if math.isfinite(total) else None

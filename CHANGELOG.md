@@ -7,6 +7,27 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **Every graphics card, and a fit spread over them** (`modelroom/measure.py`, `modelroom/fit.py`;
+  CONTRACTS.md, "Hardware measurement", "Several graphics cards"; ADR 0004 and 0005; decided
+  2026-09-26). `hardware` reads every line of `nvidia-smi`: one card is `measured` as before, two
+  or more are the new `gpu_state` `multi_gpu` with their sum, each card in the profile's new list
+  `gpus` (index, name, size), and a note that lists them. Before, a second line threw the machine
+  out (`multi_gpu_not_covered`, no fit). The fit tries one card first -- the largest, the way
+  Ollama loads a model -- then all cards together, the new mode `gpu_split` (each card keeps its
+  own reserve, `reserve_vram_gib` now means "on each graphics card", not capped), then the system
+  memory. With one card no number of a fit changes. llmfit's check of several cards compares the
+  sum with its own CUDA cards (`vram_gb x count`). The two-card fixtures are synthetic.
+- **The machine class: laptop, workstation or server** (`measure.read_machine_class`; CONTRACTS.md,
+  "The machine class"). Read from the SMBIOS chassis type (Windows `Win32_SystemEnclosure`, Linux
+  DMI), also under `--cpu-only`; a chassis that names no class is `unknown` with a note. New
+  `hardware --machine-class laptop|workstation|server` states it instead. The guided mode asks
+  `machine_class` only when the chassis says nothing. Every view names the class first: `laptop,
+  one graphics card, 12 GB, 128 GB memory`; the Markdown machine table gains `GPUs` and `Class`.
+  The class changes no number of the fit.
+- **A machine entered by hand has a class and may have several cards** (`modelroom/guided_entered.py`).
+  New questions `entered_class` (always) and, after the new answer `cards`, `entered_cards`; the
+  size is then asked per card. `server, 2 graphics cards 24 GB each, 128 GB memory, entered`.
+- **README: "Tested on"**, one line per machine a release really ran its self-test on.
 - **A computed release in the list of models: `latest*` and `legacy*`** (`modelroom/search_release.py`,
   new; CONTRACTS.md, "Latest and legacy evidence", "Computed release"; decided 2026-09-25). The
   `Release` column showed `–` for almost every row, because only a stated successor made a model
@@ -117,6 +138,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **Hardware profile schema 4 and render document schema 3** (ADR 0004, ADR 0005; decided
+  2026-09-26). A profile carries `gpus`, `machine_class` and `machine_class_source`; a schema-2 or
+  schema-3 profile reads as schema 4 everywhere (one card from its state, the class `unknown`), and
+  `modelroom migrate` writes it back in place with a backup named after the version it left
+  (`.v2.bak`, `.v3.bak`). `Fit.mode` gains `gpu_split`, so `docs/models.json` is schema 3. The
+  configuration stays schema 3, the export file schema 1. **Honest limits:** an answer file written
+  for 0.1.0 that enters a machine by hand needs the new key `entered_class` (without it the run ends
+  with exit 2 and names the key); and a results folder shared between machines needs this version
+  on every machine once one of them has written a schema-4 profile -- 0.1.0 refuses it.
 - **`modelroom migrate` takes schema 2 on to schema 3, in place** (CONTRACTS.md, "Migration to
   schema 2"). A schema-2 profile keeps its name and id, a schema-2 configuration its machines;
   the originals are kept as `<file>.v2.bak`, next to the `.v1.bak` files of an earlier step. The

@@ -71,7 +71,7 @@ def test_a_measured_profile_is_adopted_as_before():
 def _hand_profile(profile_id: str) -> dict:
     data = copy.deepcopy(EXAMPLES["HardwareProfile"])
     data.update(
-        schema_version=3,
+        schema_version=4,
         profile_id=profile_id,
         display_name="office box",
         os_fingerprint="none",
@@ -83,6 +83,9 @@ def _hand_profile(profile_id: str) -> dict:
         vram_source="none",
         gpu_state="unified_memory",
         gpu_name=None,
+        gpus=[],
+        machine_class="unknown",
+        machine_class_source="unknown",
         llmfit_crosscheck={"ram_physical": {"status": "absent"}, "vram": {"status": "absent"}},
         llmfit_version=None,
     )

@@ -37,11 +37,20 @@ release. `CHANGELOG.md` lists what has landed.
   uses `llmfit` only to cross-check the physical RAM and the VRAM. Without it the profile
   records both checks as `absent` and the command still succeeds. The minimum version is set
   in the configuration (`[llmfit] min_version`).
-- `nvidia-smi` on `PATH` for a machine with an NVIDIA card; without it the profile records
-  that an adapter is present but unmeasured, and no fit is computed for it.
+- `nvidia-smi` on `PATH` for a machine with NVIDIA cards, one or several; without it the profile
+  records that an adapter is present but unmeasured, and no fit is computed for it.
 - An Ollama daemon on `http://127.0.0.1:11434` for the load test only. Without one the guided
   mode says so in one line and goes on; nothing else in the tool needs it.
 - Internet access for the search and the fetch.
+
+## Tested on
+
+Every machine a version really ran its self-test on (`scripts/selftest.py`), one line each. The
+fixtures of machines not in this table -- two graphics cards and more among them -- are synthetic.
+
+| Machine | Class | Graphics cards | Memory | Date | Self-test |
+|---|---|---|---|---|---|
+| a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` |
 
 ## Installation
 
@@ -103,8 +112,9 @@ answered; the gray line under it lists the machine profiles this folder already 
 one an earlier run left, with the graphics card, its memory and the system memory. A **profile
 file** measured on another machine can be imported instead, so one folder can rank the same
 packages for a laptop and a server. A machine you do not have yet can be **entered by hand**
-from its data sheet: its name, its memory, and whether a graphics card with its own memory, no
-graphics card or unified memory runs the model. It gets a profile and a place in the result of
+from its data sheet: its name, whether it is a laptop, a workstation or a server, its memory, and
+whether a graphics card with its own memory, several graphics cards of one size, no graphics card
+or unified memory runs the model. It gets a profile and a place in the result of
 its own, next to the machines you measured, and says `(entered)` wherever its name stands --
 every number of such a machine is computed, none measured. The measurement is cross-checked with
 [llmfit](https://github.com/AlexsJones/llmfit) when it is installed.
@@ -312,10 +322,11 @@ and takes a new family with its evidence.
 For a judged fit, the cell reads `<class> (<mode>, need <n> / pool <n> GiB)`. The class is
 computed from a memory formula: weights plus 10 %, plus a 16-bit KV cache for the context of the
 run (the level the guided mode chose for the folder; 8192 for a configuration no guided run has
-chosen one in), plus 0.5 GiB. The result is compared with the machine's
-VRAM minus its reserve, or with its RAM minus its reserve when it does not fit the GPU.
-`perfect` needs at most 60 % of that pool, `good` 85 %, `marginal` 98 %; anything above is
-`too_tight`. Off the GPU the class is capped at `good`. The full rule is in `CONTRACTS.md`,
+chosen one in), plus 0.5 GiB. The result is compared with the VRAM of one graphics card minus
+its reserve -- the largest card, the way Ollama loads a model -- then, on a machine with several
+cards, with all of them together, each minus its own reserve (`gpu_split`), and with the RAM minus
+its reserve when it fits no graphics memory. `perfect` needs at most 60 % of that pool, `good`
+85 %, `marginal` 98 %; anything above is `too_tight`. Off the GPU the class is capped at `good`. The full rule is in `CONTRACTS.md`,
 "Fit contract v1".
 
 What it does not say: the class is arithmetic, not a measurement. It makes no statement about

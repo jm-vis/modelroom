@@ -16,9 +16,9 @@ Ranking rule: fit class (perfect, good, marginal), then measured group (valid co
 
 ## Machines
 
-| Machine | Profile | Origin | RAM GiB | RAM source | VRAM GiB | VRAM source | GPU state | Reserve RAM GiB | Reserve VRAM GiB | Recorded at | Profile age (days) |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| workstation | workstation (3f9a0c21d4e6b870) | measured | 127.46 | os | 11.94 | nvidia-smi | measured | 16.00 | 1.00 | 2026-09-22T09:00:00+00:00 | 0 |
+| Machine | Profile | Origin | RAM GiB | RAM source | VRAM GiB | VRAM source | GPU state | GPUs | Class | Reserve RAM GiB | Reserve VRAM GiB | Recorded at | Profile age (days) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| workstation | workstation (3f9a0c21d4e6b870) | measured | 127.46 | os | 11.94 | nvidia-smi | measured | 0 Nova GPU 11.94 | workstation (chassis) | 16.00 | 1.00 | 2026-09-22T09:00:00+00:00 | 0 |
 
 ## Ranking: workstation
 

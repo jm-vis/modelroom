@@ -39,6 +39,12 @@ def _package(weights_gib: float = 4.0, default_context: int | None = 4096) -> Pa
 def _profile(**changes) -> HardwareProfile:
     payload = copy.deepcopy(EXAMPLES["HardwareProfile"])
     payload.update(changes)
+    # Schema 4: the card list follows the state, and a machine entered by hand has no chassis.
+    one_card = payload["gpu_state"] in ("measured", "entered")
+    card = {"index": 0, "name": payload["gpu_name"], "vram_gib": payload["vram_gib"], "vram_source": payload["vram_source"]}
+    payload["gpus"] = changes.get("gpus", [card] if one_card else [])
+    if payload["ram_physical_source"] == "entered":
+        payload.update(machine_class="unknown", machine_class_source="unknown")
     return HardwareProfile.model_validate(payload)
 
 
@@ -157,6 +163,9 @@ def _profile_in_state(state: str) -> HardwareProfile:
             vram_source="llmfit",
             ram_physical_source="llmfit",
         )
+    if state == "multi_gpu":  # two cards of 4 GiB, measured (schema 4)
+        cards = [{"index": i, "name": "Nova GPU", "vram_gib": 4.0, "vram_source": "nvidia-smi"} for i in range(2)]
+        return _profile(gpu_state=state, gpus=cards)
     return _profile(gpu_state=state)
 
 

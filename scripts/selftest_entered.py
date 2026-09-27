@@ -26,6 +26,7 @@ ENTERED_ANSWERS = {
     "results": "here",
     "machines": ["enter"],
     "entered_name": "studio",
+    "entered_class": "workstation",
     "entered_ram": 32,
     "entered_gpu": "unified",
     "search": "qwen",

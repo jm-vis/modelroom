@@ -56,6 +56,10 @@ def _profile(**changes) -> dict:
     data = {
         "gpu_state": "measured",
         "origin": "measured",
+        "vram_gib": 11.99,
+        "gpus": [{"index": 0, "name": "Nova GPU", "vram_gib": 11.99, "vram_source": "nvidia-smi"}],
+        "machine_class": "laptop",
+        "machine_class_source": "chassis",
         "llmfit_crosscheck": {"ram_physical": {"status": "confirmed"}, "vram": {"status": "confirmed"}},
     }
     data.update(changes)
@@ -280,6 +284,29 @@ def test_criterion_two_passes_on_a_measured_profile():
 
 @pytest.mark.parametrize("change", [{"gpu_state": "present_unmeasured"}, {"origin": "entered"}])
 def test_criterion_two_names_a_profile_that_was_not_measured(change):
+    assert st.measurement_problems(_profile(**change))
+
+
+TWO_CARDS = [{"index": i, "name": "A100", "vram_gib": 40.0, "vram_source": "nvidia-smi"} for i in range(2)]
+
+
+def test_criterion_two_passes_on_a_machine_with_two_cards_and_their_sum():
+    assert st.measurement_problems(_profile(gpu_state="multi_gpu", vram_gib=80.0, gpus=TWO_CARDS, machine_class="server")) == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"gpu_state": "multi_gpu", "vram_gib": 70.0, "gpus": TWO_CARDS},
+        {"gpu_state": "multi_gpu", "vram_gib": 40.0, "gpus": TWO_CARDS[:1]},
+        {"gpu_state": "measured", "gpus": TWO_CARDS, "vram_gib": 80.0},
+        {"gpus": []},
+        {"machine_class": "unknown", "machine_class_source": "unknown"},
+        {"machine_class": "server", "machine_class_source": "entered"},
+    ],
+    ids=["sum-differs", "multi-one-card", "measured-two-cards", "no-card", "class-unknown", "class-entered"],
+)
+def test_criterion_two_names_cards_or_a_class_that_were_not_measured(change):
     assert st.measurement_problems(_profile(**change))
 
 

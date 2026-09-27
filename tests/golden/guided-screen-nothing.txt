@@ -12,7 +12,7 @@
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
  ? Which machines should the result cover?  this machine
-   measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
+   measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ✓ Configuration   <results>, 1 machine
 
  ── Step 2 of 5  Packages ───────────────────────────────────────────────
@@ -37,7 +37,7 @@
    nothing to rank: no package in this folder yet
 
  folder    <results>
- machine   workstation             12 GB graphics, 128 GB memory, measured today
+ machine   workstation             laptop, 12 GB graphics, 128 GB memory, measured today
  models    none                    0 packages from no account
  context   L 32k                   24,000 words, a report or a long contract
  speed     not measured            say Yes in step 4 to measure an installed package

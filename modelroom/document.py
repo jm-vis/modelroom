@@ -24,8 +24,9 @@ from .measurements import Scenario
 from .profile import HardwareProfile
 
 # Schema 2 (decided 2026-09-25): every fit carries `requests`, the document carries `users` and
-# `requests_origin`.
-DOCUMENT_SCHEMA_VERSION = 2
+# `requests_origin`. Schema 3 (decided 2026-09-26): a fit may be spread over every graphics card
+# (`Fit.mode` `gpu_split`), and the embedded profile is hardware profile schema 4.
+DOCUMENT_SCHEMA_VERSION = 3
 
 # What a machine's block says about itself: a profile (schema 2 or later) that the fit could use
 # (`ranked`), a schema-1 file that has to be migrated and measured again (`legacy`), or no

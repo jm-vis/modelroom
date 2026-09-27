@@ -31,6 +31,7 @@ from modelroom.measurements import MeasurementRecord, PackageRef, RunCounters, S
 from modelroom.profile import (
     PROFILE_SCHEMA_VERSION,
     CrossCheck,
+    GpuAdapter,
     HardwareProfile,
     LlmfitCrosscheck,
     fit_block_reason,
@@ -145,6 +146,9 @@ def _profile(*, vram_gib: float = 11.94, ram_gib: float = 127.46, profile_id: st
         vram_source="nvidia-smi" if vram_gib else "none",
         gpu_state="measured" if vram_gib else "none",
         gpu_name="Nova GPU" if vram_gib else None,
+        gpus=[GpuAdapter(index=0, name="Nova GPU", vram_gib=vram_gib, vram_source="nvidia-smi")] if vram_gib else [],
+        machine_class="workstation",
+        machine_class_source="chassis",
         llmfit_crosscheck=LlmfitCrosscheck(ram_physical=absent, vram=absent),
         llmfit_version=None,
     )

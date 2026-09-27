@@ -2,11 +2,10 @@
 
     uv run --frozen python scripts/selftest.py
 
-It runs the guided mode twice with `--answers` in a temporary results folder, against the
-pinned search answers from `tests/fixture_support.py` -- one page per account since 2026-09-24
-(criteria 3 and 4 must not depend on
-whichever repositories the live Hub answers with today) -- and reports each criterion with the
-evidence it read. Two things in the run are real, and they are the two gates: this machine is
+It runs the guided mode twice with `--answers` in a temporary results folder, against the pinned
+search answers from `tests/fixture_support.py` -- one page per account since 2026-09-24 (criteria
+3 and 4 must not depend on whichever repositories the live Hub answers with today) -- and reports
+each criterion with the evidence it read. Two things in the run are real, and they are the two gates: this machine is
 measured with its own sources (criterion 2), and the load test runs against the Ollama daemon
 of this machine (criterion 5). Everything else answers from the fixtures.
 
@@ -14,7 +13,8 @@ Criteria (the plan's own numbering):
 
 1. the first start writes `modelroom.toml` with this device as the writer, and remembers the
    results folder in the pointer file;
-2. this machine is measured: `gpu_state: measured`, llmfit cross-check `confirmed`;
+2. this machine is measured: `gpu_state: measured` with one card or `multi_gpu` with the sum of
+   two and more, the machine class read from the chassis, llmfit cross-check `confirmed`;
 3. the search resolves at least one publisher model, `<state>/search.json` names every page it
    asked with its class, every reason a repository cannot be picked with its number and every
    resolved model with its release, and the screen says where it asked and how much of the answer
@@ -150,10 +150,14 @@ def first_start_problems(config_text: str, pointer: dict, results: Path, machine
 
 
 def measurement_problems(profile: dict) -> list[str]:
-    """Criterion 2: this machine was really measured, and llmfit confirmed both readings."""
-    problems = []
-    if profile.get("gpu_state") != "measured":
-        problems.append(f"gpu_state is {profile.get('gpu_state')!r}, expected 'measured'")
+    """Criterion 2: this machine was really measured -- one graphics card, or two and more with their
+    sum -- its class read from the chassis, and llmfit confirmed both readings."""
+    problems, state, cards = [], profile.get("gpu_state"), profile.get("gpus") or []
+    total = sum(card.get("vram_gib") or 0 for card in cards)
+    if not ((state, len(cards)) == ("measured", 1) or (state == "multi_gpu" and len(cards) > 1 and abs(total - (profile.get("vram_gib") or 0)) <= 0.01)):
+        problems.append(f"gpu_state {state!r} with {len(cards)} card(s), expected 'measured' with one or 'multi_gpu' with their sum")
+    if profile.get("machine_class_source") != "chassis" or profile.get("machine_class") in (None, "unknown"):
+        problems.append(f"machine class is {profile.get('machine_class')!r} ({profile.get('machine_class_source')!r}), expected one the chassis names")
     if profile.get("origin") != "measured":
         problems.append(f"origin is {profile.get('origin')!r}, expected 'measured'")
     for field in ("ram_physical", "vram"):
@@ -528,11 +532,11 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             or f"[machines.{machine}].writer = true, pointer current = {results}",
         ),
         Step(
-            "(2) this machine is measured, llmfit confirms both readings",
+            "(2) this machine is measured, its class read, llmfit confirms both readings",
             len(profiles) == 1 and not measurement_problems(profile),
             "\n".join(measurement_problems(profile))
-            or f"{profiles[0].name}: gpu_state {profile['gpu_state']}, vram {profile['vram_gib']} GiB "
-            f"({profile['vram_source']}), ram {profile['ram_physical_gib']} GiB ({profile['ram_physical_source']})",
+            or f"{profiles[0].name}: gpu {profile['gpu_state']}, {len(profile['gpus'])} card{'s' * (len(profile['gpus']) != 1)}, class "
+            f"{profile['machine_class']}, vram {profile['vram_gib']} GiB ({profile['vram_source']}), ram {profile['ram_physical_gib']} GiB ({profile['ram_physical_source']})",
         ),
         Step(
             "(3) the search resolves a publisher model and its log groups the reasons of the rest",
@@ -568,12 +572,8 @@ def _load_test_step(results: Path, machine: str) -> Step:
     if problems:
         return Step("(5) the prepared package is measured and ranked", False, "\n".join(problems))
     record = records[0]
-    detail = (
-        f"{record['ollama_name']}: {record['tps_mean']:.1f} tok/s "
-        f"({record['tps_min']:.1f}-{record['tps_max']:.1f}), context "
-        f"{record['scenario']['context_requested']}, daemon {record['daemon_version']}, "
-        f"rank {row['rank']} in measurement group {row['measurement_group']}"
-    )
+    detail = (f"{record['ollama_name']}: {record['tps_mean']:.1f} tok/s ({record['tps_min']:.1f}-{record['tps_max']:.1f}), context "
+              f"{record['scenario']['context_requested']}, daemon {record['daemon_version']}, rank {row['rank']} in measurement group {row['measurement_group']}")
     return Step("(5) the prepared package is measured and ranked", True, detail)
 
 
@@ -587,7 +587,6 @@ def _offered_context(config_file: Path) -> int:
 
 def _offered_level(config_file: Path) -> str:
     """Which line of the scale carries the pointer for that context -- the level, not the number."""
-    from modelroom.config import load_config
     from modelroom.guided_context import LEVELS, scale_choices
 
     choices = scale_choices(LEVELS, _offered_context(config_file), {}, None)

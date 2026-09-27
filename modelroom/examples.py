@@ -12,7 +12,7 @@ from copy import deepcopy
 # Shared by more than one example below (e.g. `ExportObject` carries a profile and a
 # measurement); each use is a deep copy, so a test that edits one example never edits another.
 _HARDWARE_PROFILE = {
-    "schema_version": 3,
+    "schema_version": 4,
     "profile_id": "3f9a0c21d4e6b870",
     "display_name": "workstation",
     "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -27,6 +27,9 @@ _HARDWARE_PROFILE = {
     "vram_source": "nvidia-smi",
     "gpu_state": "measured",
     "gpu_name": "Nova GPU",
+    "gpus": [{"index": 0, "name": "Nova GPU", "vram_gib": 8.0, "vram_source": "nvidia-smi"}],
+    "machine_class": "workstation",
+    "machine_class_source": "chassis",
     "llmfit_crosscheck": {
         "ram_physical": {"status": "confirmed", "own_gib": 31.7, "llmfit_gib": 31.9},
         "vram": {"status": "confirmed", "own_gib": 8.0, "llmfit_gib": 8.0},
@@ -528,7 +531,7 @@ EXAMPLES: dict[str, dict] = {
     "SetAsideEntry": deepcopy(_SET_ASIDE_ENTRY),
     "MachineRanking": deepcopy(_MACHINE_RANKING),
     "RenderDocument": {
-        "schema_version": 2,
+        "schema_version": 3,
         "snapshot_run_at": "2026-09-22T09:00:00Z",
         "rendered_at": "2026-09-23T09:00:00Z",
         "base_model_count": 2,

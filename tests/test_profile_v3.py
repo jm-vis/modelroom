@@ -32,6 +32,8 @@ from modelroom.profile import (
     read_profile_document,
 )
 
+from fixture_support import v3_profile
+
 FIXTURES = Path(__file__).parent / "fixtures"
 ABSENT = {"status": "absent"}
 
@@ -51,10 +53,16 @@ def _entered(**changes) -> dict:
         vram_source="entered",
         gpu_state="entered",
         gpu_name=None,
+        machine_class="unknown",
+        machine_class_source="unknown",
         llmfit_crosscheck={"ram_physical": ABSENT, "vram": ABSENT},
         llmfit_version=None,
     )
     data.update(changes)
+    # Schema 4: the card list follows the state, so each case below fails on the rule it names.
+    one_card = data["gpu_state"] in ("entered", "measured") and data["vram_gib"]
+    card = {"index": 0, "name": None, "vram_gib": data["vram_gib"], "vram_source": data["vram_source"]}
+    data["gpus"] = changes.get("gpus", [card] if one_card else [])
     return data
 
 
@@ -67,8 +75,9 @@ def _unified(**changes) -> dict:
 
 
 def test_the_profile_is_schema_3_and_readers_accept_1_to_3():
-    assert PROFILE_SCHEMA_VERSION == 3
-    assert PROFILE_SCHEMA_RANGE == (1, 4)
+    """Schema 4 since 2026-09-26 (`tests/test_profile_v4.py`); schema 3 files read on."""
+    assert PROFILE_SCHEMA_VERSION == 4
+    assert PROFILE_SCHEMA_RANGE == (1, 5)
 
 
 # --- the three hand-entered shapes ----------------------------------------------------------------
@@ -129,13 +138,13 @@ def test_a_cpu_only_profile_keeps_its_measured_sources():
 
 
 def test_the_fit_computes_for_entered_and_unified_memory():
-    assert FIT_GPU_STATES == frozenset({"none", "measured", "entered", "unified_memory"})
+    assert FIT_GPU_STATES == frozenset({"none", "measured", "entered", "multi_gpu", "unified_memory"})
 
 
 def test_a_unified_memory_profile_from_schema_1_is_still_measured_again_first():
     legacy = HardwareSnapshot.model_validate(json.loads((FIXTURES / "profiles_v1" / "unified-memory.json").read_text(encoding="utf-8")))
     profile = normalize_profile_v1(legacy, "0123456789abcdef")
-    assert profile.gpu_state == "unified_memory" and profile.schema_version == 3
+    assert profile.gpu_state == "unified_memory" and profile.schema_version == 4
     reason = fit_block_reason(profile)
     assert reason is not None and "measure again" in reason and "unified_memory" in reason
 
@@ -144,14 +153,16 @@ def test_a_unified_memory_profile_from_schema_1_is_still_measured_again_first():
 
 
 def _v2() -> dict:
-    return {**copy.deepcopy(EXAMPLES["HardwareProfile"]), "schema_version": 2}
+    """A schema-2 file as 0.1.0 wrote it (the current example carries fields schema 2 refuses)."""
+    return v3_profile(schema_version=2)
 
 
 def test_a_schema_2_profile_file_reads_as_schema_3_with_every_value_kept():
     data = _v2()
     profile = read_profile_document(data)
-    assert isinstance(profile, HardwareProfile) and profile.schema_version == 3
-    assert profile.model_dump(mode="json", exclude={"schema_version"}) == {k: v for k, v in _v2().items() if k != "schema_version"}
+    assert isinstance(profile, HardwareProfile) and profile.schema_version == 4
+    added = {"schema_version", "gpus", "machine_class", "machine_class_source"}
+    assert profile.model_dump(mode="json", exclude=added) == {k: v for k, v in _v2().items() if k != "schema_version"}
     assert data["schema_version"] == 2  # the caller's dict is left as it was
 
 
@@ -160,7 +171,7 @@ def test_a_schema_2_profile_cannot_carry_a_value_of_schema_3():
         read_profile_document({**_entered(), "schema_version": 2})
 
 
-@pytest.mark.parametrize("version", [4, 0, None, "3", True])
+@pytest.mark.parametrize("version", [5, 0, None, "3", True])
 def test_read_profile_document_refuses_versions_outside_1_to_3(version):
     with pytest.raises(SchemaVersionError):
         read_profile_document({"schema_version": version, "garbage": True})
@@ -171,7 +182,7 @@ def test_an_export_file_with_an_embedded_schema_2_profile_still_loads():
     assert data["profile"]["schema_version"] == 2
     export = load_export(data)
     assert export.schema_version == 1
-    assert export.profile.schema_version == 3
+    assert export.profile.schema_version == 4
     assert data["profile"]["schema_version"] == 2
 
 

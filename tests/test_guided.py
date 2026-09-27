@@ -509,7 +509,7 @@ def test_the_measured_machine_is_written_into_the_configuration(tmp_path: Path):
     # One note instead of the readings and the profile id: what was measured, and who confirmed it.
     assert not any(profile.profile_id in line for line in lines)
     note = next(line.strip() for line in lines if line.strip().startswith("measured"))
-    assert note == "measured: one graphics card, 12 GB, 128 GB memory, confirmed by llmfit"
+    assert note == "measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit"
 
 
 def test_no_machine_chosen_measures_nothing(tmp_path: Path):
@@ -2339,6 +2339,7 @@ ENTERED_UNIFIED = {
     **FULL_ANSWERS,
     "machines": ["enter"],
     "entered_name": "studio",
+    "entered_class": "workstation",
     "entered_ram": 32,
     "entered_gpu": "unified",
 }
@@ -2390,9 +2391,9 @@ def test_the_machine_list_offers_entering_a_machine_by_hand_after_measuring_and_
 @pytest.mark.parametrize(
     ("answers", "asked"),
     [
-        (ENTERED_CARD, ["entered_name", "entered_ram", "entered_gpu", "entered_vram"]),
-        (ENTERED_NONE, ["entered_name", "entered_ram", "entered_gpu"]),
-        (ENTERED_UNIFIED, ["entered_name", "entered_ram", "entered_gpu"]),
+        (ENTERED_CARD, ["entered_name", "entered_class", "entered_ram", "entered_gpu", "entered_vram"]),
+        (ENTERED_NONE, ["entered_name", "entered_class", "entered_ram", "entered_gpu"]),
+        (ENTERED_UNIFIED, ["entered_name", "entered_class", "entered_ram", "entered_gpu"]),
     ],
 )
 def test_entering_asks_its_questions_in_order_and_graphics_memory_only_for_a_card(tmp_path: Path, answers, asked):
@@ -2470,7 +2471,7 @@ def test_the_answer_file_names_the_question_of_the_machine_entered_by_hand_it_ha
     )
 
     assert code == 2
-    assert "no answer for 'entered_ram'" in capsys.readouterr().err
+    assert "no answer for 'entered_class'" in capsys.readouterr().err
 
 
 def test_an_answer_file_from_before_the_machine_entered_by_hand_runs_unchanged(tmp_path: Path):
@@ -2532,7 +2533,7 @@ def test_a_machine_entered_by_hand_is_a_profile_file_and_an_entry_of_its_own_and
         config.defaults.reserve_ram_gib,
         config.defaults.reserve_vram_gib,
     )
-    assert "entered tower: 64 GiB memory, graphics card 24 GiB" in [line.strip() for line in lines]
+    assert "entered tower: workstation, 64 GiB memory, graphics card 24 GiB" in [line.strip() for line in lines]
     # Step 1's balance counts it: this machine's own entry and the one entered by hand.
     assert any(line.endswith(", 2 machines") for line in _summaries(lines))
 
@@ -2540,8 +2541,8 @@ def test_a_machine_entered_by_hand_is_a_profile_file_and_an_entry_of_its_own_and
 @pytest.mark.parametrize(
     ("answers", "note"),
     [
-        (ENTERED_NONE, "entered box: 64 GiB memory, no graphics card"),
-        (ENTERED_UNIFIED, "entered studio: 32 GiB memory, shared memory"),
+        (ENTERED_NONE, "entered box: workstation, 64 GiB memory, no graphics card"),
+        (ENTERED_UNIFIED, "entered studio: workstation, 32 GiB memory, shared memory"),
     ],
 )
 def test_the_note_of_a_machine_entered_by_hand_says_what_it_is(tmp_path: Path, answers, note):

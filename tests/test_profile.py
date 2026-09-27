@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from modelroom.contracts import HardwareSnapshot, SchemaVersionError
 from modelroom.examples import EXAMPLES
 from modelroom.profile import (
+    CARD_GPU_STATES,
     HardwareProfile,
     crosscheck,
     fit_block_reason,
@@ -27,6 +28,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "profiles_v1"
 def _profile(**changes) -> dict:
     payload = copy.deepcopy(EXAMPLES["HardwareProfile"])
     payload.update(changes)
+    if payload["gpu_state"] not in CARD_GPU_STATES and "gpus" not in changes:
+        payload["gpus"] = []  # schema 4: only a state with a card of its own lists one
     return payload
 
 
@@ -238,7 +241,7 @@ def test_read_profile_document_reads_schema_2_as_hardware_profile():
     assert isinstance(read_profile_document(copy.deepcopy(EXAMPLES["HardwareProfile"])), HardwareProfile)
 
 
-@pytest.mark.parametrize("version", [4, 0, None, "2", True])
+@pytest.mark.parametrize("version", [5, 0, None, "2", True])
 def test_read_profile_document_refuses_other_versions_before_field_validation(version):
     with pytest.raises(SchemaVersionError):
         read_profile_document({"schema_version": version, "garbage": True})

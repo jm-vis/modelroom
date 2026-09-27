@@ -40,7 +40,7 @@ from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import USERS_KEY, USERS_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
-from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, enter_step, entered_class
+from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES, enter_step, entered_class
 from .guided_install import QUESTIONS as PULL_QUESTIONS, FirstRow, first_row, pull_step
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
@@ -72,8 +72,8 @@ from .importer import (
     import_profile,
     scan_profiles,
 )
-from .intro import STEP_COUNT, collect_intro, print_intro
-from .measure import Probes, read_os_identity
+from .intro import STEP_COUNT, card_names, class_words, collect_intro, print_intro
+from .measure import Probes, read_machine_class, read_os_identity
 from .measurements import Scenario
 from .migrate import MigrationError, backup_suffix, migrate
 from .profile import HardwareProfile, os_fingerprint
@@ -120,6 +120,7 @@ QUESTIONS: dict[str, str] = {
     "machines": "Which machines should the result cover?",
     "import_file": "Path to the profile file to import",
     "clone": "Is this the same machine or a clone?",
+    "machine_class": "What kind of machine is this?",  # only when the chassis says nothing (decided 2026-09-26)
     **ENTERED_QUESTIONS,  # step 1's machine entered by hand (`modelroom/guided_entered.py`)
     # Step 2's two search questions live with the search (`modelroom/guided_search.py`).
     "search": SEARCH_QUESTION,
@@ -383,11 +384,11 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path) -> Configuratio
 
 
 def _hardware_class(profile: HardwareProfile) -> str:
-    """What makes two machines the same to the user: the GPU, its memory and the system memory."""
+    """What makes two machines the same to the user: the class, the cards, their memory, the system memory."""
     if profile.ram_physical_source == "entered":
         return entered_class(profile)
-    gpu = profile.gpu_name or profile.gpu_state
-    return f"{gpu} {_gib(profile.vram_gib)} VRAM / {_gib(profile.ram_physical_gib)} RAM"
+    gpu = card_names(profile) if profile.gpus else profile.gpu_name or profile.gpu_state
+    return f"{class_words(profile)}{gpu} {_gib(profile.vram_gib)} VRAM / {_gib(profile.ram_physical_gib)} RAM"
 
 
 def _gib(value: float | None) -> str:
@@ -513,6 +514,7 @@ def _measure_this_machine(
         new_identity=mode == MODE_NEW_IDENTITY,
         same_machine=mode == MODE_SAME_MACHINE,
         results_dir=results_dir,
+        machine_class=_asked_class(run),
         # The readings are the profile file's business; this step says in one note what was measured.
         summary=False,
     )
@@ -524,6 +526,16 @@ def _measure_this_machine(
     config = _record_profile(run, config_file, config, name, results_dir)
     _measured(run, config, results_dir, again=measured_before or mode == MODE_SAME_MACHINE)
     return config
+
+
+def _asked_class(run: GuidedRun) -> str | None:
+    """The class the user names when the chassis says nothing, read anew on every measurement;
+    `None` leaves it to the chassis (decided 2026-09-26)."""
+    if read_machine_class(run.probes.platform, run.probes.runner, run.probes.read_text).source != "unknown":
+        return None
+    answer = run.asker.select("machine_class", QUESTIONS["machine_class"], [Choice(v, w) for v, w in CLASS_CHOICES.items()])
+    run.screen.answer(QUESTIONS["machine_class"], CLASS_CHOICES[answer])
+    return None if answer == "unknown" else answer
 
 
 def _measured(run: GuidedRun, config: Configuration, results_dir: Path, *, again: bool) -> None:

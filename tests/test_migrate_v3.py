@@ -24,8 +24,9 @@ from modelroom.config import load_config
 from modelroom.contracts import HardwareSnapshot
 from modelroom.examples import EXAMPLES
 from modelroom.migrate import NOTHING_TO_DO, migrate
-from modelroom.profile import HardwareProfile, normalize_profile_v1
+from modelroom.profile import HardwareProfile, normalize_profile_v1, read_profile_document
 
+from fixture_support import v3_profile
 from test_guided import _config_file, _results, _run
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -35,10 +36,14 @@ V2_PROFILE_ID = "c0ffee0000000001"
 
 
 def _v2_profile(profile_id: str = V2_PROFILE_ID) -> dict:
-    """A schema-2 profile file exactly as version 0.1.0 wrote it."""
-    data = copy.deepcopy(EXAMPLES["HardwareProfile"])
-    data.update(schema_version=2, profile_id=profile_id, display_name="laptop")
-    return data
+    """A schema-2 profile file exactly as version 0.1.0 wrote it (a fixture, not the schema-4 example)."""
+    return v3_profile(schema_version=2, profile_id=profile_id, display_name="laptop")
+
+
+def _as_schema_2(profile: HardwareProfile) -> dict:
+    """A profile as a file of schema 2: without what schema 4 added."""
+    added = ("gpus", "machine_class", "machine_class_source")
+    return {**{k: v for k, v in profile.model_dump(mode="json").items() if k not in added}, "schema_version": 2}
 
 
 def _v2_folder(root: Path) -> Path:
@@ -72,14 +77,12 @@ def test_migrate_rewrites_a_schema_2_configuration_and_profile_in_place_with_bac
 
     lines = migrate(config, NOW)
 
-    assert _schema(config) == 3 and _schema(profile) == 3
+    assert _schema(config) == 3 and _schema(profile) == 4
     assert (tmp_path / "modelroom.toml.v2.bak").read_bytes() == config_before
     assert (profile.parent / f"{V2_PROFILE_ID}.json.v2.bak").read_bytes() == profile_before
     assert sorted(p.name for p in profile.parent.iterdir()) == [f"{V2_PROFILE_ID}.json", f"{V2_PROFILE_ID}.json.v2.bak"]
     stored = HardwareProfile.model_validate_json(profile.read_text(encoding="utf-8"))
-    assert stored.model_dump(exclude={"schema_version"}) == HardwareProfile.model_validate(
-        {**_v2_profile(), "schema_version": 3}
-    ).model_dump(exclude={"schema_version"})
+    assert stored == read_profile_document(_v2_profile())
     migrated = load_config(config)
     assert migrated.machines["laptop"].profile == V2_PROFILE_ID
     assert (migrated.defaults.reserve_ram_gib, migrated.defaults.reserve_vram_gib) == (6.0, 0.5)
@@ -133,7 +136,7 @@ def test_v1_to_v2_to_v3_in_the_same_folder_keeps_both_backups(tmp_path):
     assert (hardware / "laptop.json.v1.bak").read_bytes() == v1_profile
     assert (tmp_path / "modelroom.toml.v2.bak").is_file()
     assert (hardware / f"{V2_PROFILE_ID}.json.v2.bak").is_file()
-    assert _schema(config) == 3 and _schema(hardware / f"{V2_PROFILE_ID}.json") == 3
+    assert _schema(config) == 3 and _schema(hardware / f"{V2_PROFILE_ID}.json") == 4
     assert migrate(config, NOW) == [NOTHING_TO_DO]
 
 
@@ -146,7 +149,7 @@ def test_a_schema_1_folder_lands_on_schema_3_in_one_run(tmp_path):
     migrate(tmp_path / "modelroom.toml", NOW, fresh_id=lambda: "aaaaaaaaaaaaaaa1")
 
     assert _schema(tmp_path / "modelroom.toml") == 3
-    assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 3
+    assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
     assert (tmp_path / "modelroom.toml.v1.bak").is_file()
     assert not (tmp_path / "modelroom.toml.v2.bak").exists()
     assert migrate(tmp_path / "modelroom.toml", NOW) == [NOTHING_TO_DO]
@@ -159,7 +162,7 @@ def test_a_run_of_an_earlier_version_that_stopped_halfway_converges_on_schema_3(
     hardware.mkdir(parents=True)
     shutil.copy(FIXTURES / "profiles_v1" / "windows-nvidia-laptop.json", hardware / "laptop.json")
     legacy = HardwareSnapshot.model_validate_json((hardware / "laptop.json").read_text(encoding="utf-8"))
-    left = {**normalize_profile_v1(legacy, "aaaaaaaaaaaaaaa1").model_dump(mode="json"), "schema_version": 2}
+    left = _as_schema_2(normalize_profile_v1(legacy, "aaaaaaaaaaaaaaa1"))
     (hardware / "aaaaaaaaaaaaaaa1.json").write_text(json.dumps(left), encoding="utf-8", newline="\n")
 
     migrate(tmp_path / "modelroom.toml", NOW, fresh_id=lambda: "bbbbbbbbbbbbbbb1")
@@ -169,7 +172,7 @@ def test_a_run_of_an_earlier_version_that_stopped_halfway_converges_on_schema_3(
         "aaaaaaaaaaaaaaa1.json.v2.bak",
         "laptop.json.v1.bak",
     ]
-    assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 3
+    assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
     assert load_config(tmp_path / "modelroom.toml").machines["laptop"].profile == "aaaaaaaaaaaaaaa1"
     assert migrate(tmp_path / "modelroom.toml", NOW) == [NOTHING_TO_DO]
 
@@ -265,7 +268,7 @@ def test_import_rewrites_a_schema_2_configuration_when_it_adds_a_machine(tmp_pat
     assert _schema(config) == 3
     assert (config.parent / "modelroom.toml.bak").read_bytes() == before
     stored = config.parent / "state" / "hardware" / f"{EXPORT['profile']['profile_id']}.json"
-    assert _schema(stored) == 3
+    assert _schema(stored) == 4
 
 
 def test_import_keeps_the_schema_2_bytes_even_when_its_own_backup_is_already_there(tmp_path, capsys):

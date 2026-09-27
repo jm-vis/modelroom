@@ -18,10 +18,10 @@ The commands:
 | `modelroom` | the guided mode: asks, writes `modelroom.toml`, then runs the three commands below, between the fetch and the render offers the load test of the packages this machine already has, and after the render offers to pull the first row into the local Ollama daemon (`CONTRACTS.md`, "Guided mode", "Load test (stage 1)") |
 | `modelroom --answers <file>` | the same run with the dialog's answers from a TOML file, for a self-test or CI |
 | `modelroom --config <file>` | the guided mode on that configuration, rather than the folder it last used |
-| `modelroom hardware --config <file> [--machine <name>] [--cpu-only] [--new-identity \| --same-machine]` | measure this machine and write its schema-2 profile; `--new-identity` writes a new one, `--same-machine` writes the bound profile again under its own id (`CONTRACTS.md`, "Profile binding") |
+| `modelroom hardware --config <file> [--machine <name>] [--cpu-only] [--machine-class laptop\|workstation\|server] [--new-identity \| --same-machine]` | measure this machine and write its profile (schema 4: every graphics card, the machine class); `--machine-class` states the class instead of reading the chassis; `--new-identity` writes a new one, `--same-machine` writes the bound profile again under its own id (`CONTRACTS.md`, "Profile binding") |
 | `modelroom fetch --config <file> --machine <name>` | fetch package metadata for every configured base model |
 | `modelroom render --config <file>` | write the ranking per machine: Markdown, and the JSON view next to it |
-| `modelroom migrate --config <file>` | move schema-1 profiles and configuration to schema 2 |
+| `modelroom migrate --config <file>` | move profiles and configuration of an earlier schema to the current one, a backup named after the version each file left |
 | `modelroom export-profile --config <file> [--profile <id>] --out <file>` | write one machine's profile and measurements to a file |
 | `modelroom import-profile <file> --config <file>` | read such a file into this results folder |
 

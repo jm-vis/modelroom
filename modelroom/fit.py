@@ -15,10 +15,14 @@ measured, both cap at `good`, and both say `from size` in every view
 
 Every entry point takes the parallel requests the daemon is assumed to keep: the weights are
 loaded once, the KV cache once per request (decided 2026-09-25). A graphics card entered by hand
-counts like a measured one, and unified memory is one pool of its own (`_choose_pool`).
+counts like a measured one, and unified memory is one pool of its own (`_choose_pool`). Several
+graphics cards are tried one card first, then all of them together (`gpu_split`, decided
+2026-09-26), then the system memory.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from .config import MachineConfig
 from .contracts import Architecture, BaseModelSpec, Fit, HardwareSnapshot, Package
@@ -60,8 +64,24 @@ OLLAMA_REQUEST_HINT_TEXT = (
     f"beyond {OLLAMA_REQUEST_HINT} requests at once this fit says nothing about throughput: measure under "
     "load, or look at a serving stack (rule of thumb, not measured)"
 )
-# The GPU states whose graphics memory is a pool of its own: measured, or entered by hand.
-_OWN_VRAM_STATES = ("measured", "entered")
+# The GPU states whose graphics memory is a pool of its own: measured, entered by hand, or cards.
+_OWN_VRAM_STATES = ("measured", "entered", "multi_gpu")
+
+
+@dataclass(frozen=True)
+class GpuPool:
+    """The memory a fit is judged against besides the system memory: the graphics memory of each
+    card, and whether the machine has unified memory (one pool of the system's own)."""
+
+    cards: tuple[float, ...]
+    shared: bool = False
+
+
+def gpu_pool(memory: GpuPool | float, shared_memory: bool = False) -> GpuPool:
+    """A pool as it is, or one graphics memory given as a number: one card above 0, else none."""
+    if isinstance(memory, GpuPool):
+        return memory
+    return GpuPool((memory,) if memory > 0 else (), shared_memory)
 
 PERFECT_RATIO = 0.60
 GOOD_RATIO = 0.85
@@ -84,7 +104,7 @@ def compute_fit(
     return _fit_for_memory(
         package,
         base_model,
-        hardware.vram_gib,
+        gpu_pool(hardware.vram_gib),
         hardware.ram_gib,
         machine_config,
         context=package.default_context or DEFAULT_CONTEXT,
@@ -112,7 +132,7 @@ def compute_fit_v2(
     blocked = fit_block_reason(profile)
     if blocked is not None:
         return unknown_fit(blocked)
-    vram_gib, shared_memory = profile_memory(profile)
+    pool = profile_memory(profile)
     package_reason = _package_reason(package)
     if package_reason is not None:
         return unknown_fit(package_reason)
@@ -120,36 +140,29 @@ def compute_fit_v2(
         # The architecture is no reason to say nothing any more: the size of the package
         # answers instead, on its own basis (decided 2026-09-24).
         return fit_from_size(
-            package,
-            vram_gib,
-            profile.ram_physical_gib,
-            machine_config,
-            scenario.context_requested,
-            requests=scenario.requests,
-            shared_memory=shared_memory,
+            package, pool, profile.ram_physical_gib, machine_config, scenario.context_requested, requests=scenario.requests
         )
     return _fit_for_memory(
         package,
         base_model,
-        vram_gib,
+        pool,
         profile.ram_physical_gib,
         machine_config,
         context=scenario.context_requested,
         context_assumed=False,
         requests=scenario.requests,
-        shared_memory=shared_memory,
     )
 
 
-def profile_memory(profile: HardwareProfile) -> tuple[float, bool]:
-    """The graphics memory the fit counts for `profile`, and whether it is unified memory.
+def profile_memory(profile: HardwareProfile) -> GpuPool:
+    """The graphics memory the fit counts for `profile`: each card's, and whether it is unified memory.
 
-    A graphics memory of its own counts when it was measured or entered by hand; every other
-    state computes with 0. Unified memory has none of its own: the fit takes the one pool from
-    the RAM instead (`_choose_pool`).
+    A graphics memory of its own counts when it was measured or entered by hand, one card or
+    several (`gpus`); every other state computes with none. Unified memory has none of its own:
+    the fit takes the one pool from the RAM instead (`_choose_pool`).
     """
-    vram_gib = (profile.vram_gib or 0.0) if profile.gpu_state in _OWN_VRAM_STATES else 0.0
-    return vram_gib, profile.gpu_state == "unified_memory"
+    own = profile.gpu_state in _OWN_VRAM_STATES
+    return GpuPool(tuple(gpu.vram_gib for gpu in profile.gpus) if own else (), profile.gpu_state == "unified_memory")
 
 
 def count_fitting(
@@ -209,7 +222,7 @@ def _package_reason(package: Package) -> str | None:
 
 def fit_from_size(
     package: Package,
-    vram_gib: float,
+    vram_gib: GpuPool | float,
     ram_gib: float | None,
     machine_config: MachineConfig,
     context: int,
@@ -223,16 +236,17 @@ def fit_from_size(
     KV_PER_TOKEN_SIZE_BASIS x requests` instead of the architecture's own layers and heads -- one
     fixed assumption, which is why the class is capped at `good`: `perfect` stays reserved for a
     package a read architecture proves comfortable (decided 2026-09-24). Multiplying by the
-    requests does not make the assumption any more exact. `shared_memory` is unified memory
-    (`_choose_pool`).
+    requests does not make the assumption any more exact. `vram_gib` is the card pool
+    (`profile_memory`), or one graphics memory as a number with `shared_memory` for unified
+    memory (`gpu_pool`).
     """
     weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
-    return _size_fit(weights_gib, ram_gib, vram_gib, machine_config, context, requests, shared_memory)
+    return _size_fit(weights_gib, ram_gib, gpu_pool(vram_gib, shared_memory), machine_config, context, requests)
 
 
 def fit_from_parameters(
     parameters_b: float,
-    vram_gib: float,
+    vram_gib: GpuPool | float,
     ram_gib: float | None,
     machine_config: MachineConfig,
     context: int,
@@ -247,17 +261,16 @@ def fit_from_parameters(
     `fit_from_size`'s (CONTRACTS.md, "Fit from size (basis `size`)").
     """
     weights_gib = parameters_b * 1e9 * BYTES_PER_PARAMETER_Q4 / GIB
-    return _size_fit(weights_gib, ram_gib, vram_gib, machine_config, context, requests, shared_memory)
+    return _size_fit(weights_gib, ram_gib, gpu_pool(vram_gib, shared_memory), machine_config, context, requests)
 
 
 def _size_fit(
     weights_gib: float,
     ram_gib: float | None,
-    vram_gib: float,
+    pool: GpuPool,
     machine_config: MachineConfig,
     context: int,
     requests: int,
-    shared_memory: bool,
 ) -> Fit:
     """The shared tail of the two size-basis entry points; `ram_gib` unknown is a `0` pool."""
     try:
@@ -265,7 +278,7 @@ def _size_fit(
         need_gib = weights_gib * WEIGHTS_OVERHEAD_RATIO + kv_gib + FIXED_OVERHEAD_GIB
     except OverflowError:  # the same second line of defense as `_fit_for_memory`
         return unknown_fit("size values out of range")
-    mode, pool_gib, reserve_gib, _cap = _choose_pool(need_gib, vram_gib, ram_gib or 0.0, machine_config, shared_memory)
+    mode, pool_gib, reserve_gib, _cap = _choose_pool(need_gib, pool, ram_gib or 0.0, machine_config)
     return Fit(
         fit_class=_classify(need_gib, pool_gib, cap_at_good=True),
         mode=mode,
@@ -285,13 +298,12 @@ def _size_fit(
 def _fit_for_memory(
     package: Package,
     base_model: BaseModelSpec,
-    vram_gib: float,
+    pool: GpuPool,
     ram_gib: float,
     machine_config: MachineConfig,
     context: int,
     context_assumed: bool,
     requests: int = 1,
-    shared_memory: bool = False,
 ) -> Fit:
     """Fit contract v1's formula and classes for given memory and context (no gate here).
 
@@ -317,7 +329,7 @@ def _fit_for_memory(
     except OverflowError:
         return unknown_fit("architecture values out of range")
 
-    mode, pool_gib, reserve_gib, cap_at_good = _choose_pool(need_gib, vram_gib, ram_gib, machine_config, shared_memory)
+    mode, pool_gib, reserve_gib, cap_at_good = _choose_pool(need_gib, pool, ram_gib, machine_config)
     fit_class = _classify(need_gib, pool_gib, cap_at_good)
 
     return Fit(
@@ -343,30 +355,37 @@ def _architecture_kv_gib(arch: Architecture, context: int, requests: int) -> flo
 
 
 def _choose_pool(
-    need_gib: float, vram_gib: float, ram_gib: float, machine_config: MachineConfig, shared_memory: bool = False
+    need_gib: float, pool: GpuPool, ram_gib: float, machine_config: MachineConfig
 ) -> tuple[str, float, float, bool]:
     """The memory pool `need_gib` is judged against, and whether the class is capped at "good".
 
-    The package fits the GPU when `need_gib` is at most the VRAM left after
-    `reserve_vram_gib`; otherwise it falls back to the RAM pool (minus `reserve_ram_gib`),
+    One card first, the way Ollama loads a model: the package fits the GPU when `need_gib` is at
+    most the largest card's VRAM left after `reserve_vram_gib` (mode `gpu`). With two cards or
+    more it is then spread over all of them (mode `gpu_split`, decided 2026-09-26): each card
+    keeps its own reserve, so the pool is the sum of `card - reserve_vram_gib` and the reserve the
+    fit reports is the reserve of all cards together; nothing is capped, the package lies in
+    graphics memory whole. Otherwise it falls back to the RAM pool (minus `reserve_ram_gib`),
     mode `cpu_gpu` when there is some VRAM at all, `cpu` when there is none -- and the class is
     capped at "good" off the GPU, since "perfect" only ever describes a package that fits
     comfortably in VRAM.
 
-    Unified memory (`shared_memory`) is its own case (decided 2026-09-25): the system and the
+    Unified memory (`pool.shared`) is its own case (decided 2026-09-25): the system and the
     model share one memory, so the pool is the RAM minus **both** reserves, the mode is `gpu`
     and nothing is capped -- and there is no fallback, since the RAM is that same memory. A pool
     of 0 or less is `too_tight` (`_classify`).
     """
-    if shared_memory:
-        reserve_gib = machine_config.reserve_ram_gib + machine_config.reserve_vram_gib
+    reserve = machine_config.reserve_vram_gib
+    if pool.shared:
+        reserve_gib = machine_config.reserve_ram_gib + reserve
         return "gpu", ram_gib - reserve_gib, reserve_gib, False
-    available_vram = vram_gib - machine_config.reserve_vram_gib
-    if need_gib <= available_vram:
-        return "gpu", available_vram, machine_config.reserve_vram_gib, False
+    if pool.cards and need_gib <= max(pool.cards) - reserve:
+        return "gpu", max(pool.cards) - reserve, reserve, False
+    spread = sum(card - reserve for card in pool.cards)
+    if len(pool.cards) > 1 and need_gib <= spread:
+        return "gpu_split", spread, len(pool.cards) * reserve, False
 
     pool_gib = ram_gib - machine_config.reserve_ram_gib
-    mode = "cpu_gpu" if vram_gib > 0 else "cpu"
+    mode = "cpu_gpu" if pool.cards else "cpu"
     return mode, pool_gib, machine_config.reserve_ram_gib, True
 
 

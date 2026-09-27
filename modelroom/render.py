@@ -143,6 +143,9 @@ def _legacy_fit_reason() -> str:
         vram_source="llmfit",
         gpu_state="legacy_unknown",
         gpu_name=None,
+        gpus=[],
+        machine_class="unknown",
+        machine_class_source="unknown",
         llmfit_crosscheck=LlmfitCrosscheck(ram_physical=absent, vram=absent),
         llmfit_version=None,
     )
@@ -255,6 +258,13 @@ _MODE_NOTES = {
         "after the reserve.",
         ["fit.mode", "fit.need_gib", "fit.pool_gib"],
     ),
+    # Two graphics cards or more, when no single one holds the package (decided 2026-09-26).
+    "gpu_split": (
+        "spread_over_graphics_cards",
+        "Fits into graphics memory spread over {cards} cards: it needs about {need:.1f} GiB of the "
+        "{pool:.1f} GiB left after the reserve of {per_card:.1f} GiB on each card.",
+        ["fit.mode", "fit.need_gib", "fit.pool_gib", "fit.reserve_gib", "profile.gpus"],
+    ),
     "cpu_gpu": (
         "shared_between_memories",
         "Too large for graphics memory alone, so it runs in system memory with the graphics "
@@ -284,11 +294,12 @@ _SHARED_MEMORY_NOTE = (
 _FROM_SIZE_SENTENCE = " From the size of the package, not its architecture."
 
 
-def _computed_note(fit: Fit, shared_memory: bool = False) -> Note:
-    """The row note of a computed fit; `shared_memory` names a `gpu` row of unified memory so."""
+def _computed_note(fit: Fit, shared_memory: bool = False, cards: int = 1) -> Note:
+    """The row note of a computed fit; `shared_memory` names a `gpu` row of unified memory so, and
+    `cards` is the number of graphics cards a `gpu_split` row is spread over."""
     shared = shared_memory and fit.mode == "gpu"
     code, template, facts = _SHARED_MEMORY_NOTE if shared else _MODE_NOTES[str(fit.mode)]
-    text = template.format(need=fit.need_gib, pool=fit.pool_gib)
+    text = template.format(need=fit.need_gib, pool=fit.pool_gib, cards=cards, per_card=fit.reserve_gib / max(cards, 1))
     if fit.basis == "size":
         text += _FROM_SIZE_SENTENCE
         facts = [*facts, "fit.basis"]
@@ -326,7 +337,7 @@ def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = Fa
 # --- building the document ----------------------------------------------------------------------
 
 
-def _row_note(ranked: RankedPackage, shared_memory: bool) -> Note:
+def _row_note(ranked: RankedPackage, shared_memory: bool, cards: int = 1) -> Note:
     """What one ranked row says: its measurement, why a measurement did not count, or its fit.
 
     A measurement that counts but for `requests` alone is named in the row, so a reader does not
@@ -340,13 +351,13 @@ def _row_note(ranked: RankedPackage, shared_memory: bool) -> Note:
         if ranked.fit.basis == "size":
             text, facts = f"{text}.{_FROM_SIZE_SENTENCE}", [*facts, "fit.basis"]
         return Note(code="measured_with_one_request", subject="package", origin="computed", text=_clip(text), facts=facts)
-    return _computed_note(ranked.fit, shared_memory)
+    return _computed_note(ranked.fit, shared_memory, cards)
 
 
-def _ranked_entries(ranking: Ranking, shared_memory: bool = False) -> list[RankedEntry]:
+def _ranked_entries(ranking: Ranking, shared_memory: bool = False, cards: int = 1) -> list[RankedEntry]:
     entries = []
     for ranked in ranking.top:
-        note = _row_note(ranked, shared_memory)
+        note = _row_note(ranked, shared_memory, cards)
         entries.append(
             RankedEntry(
                 rank=ranked.rank,
@@ -398,7 +409,7 @@ def _machine_block(
         status="ranked",
         label=found.label,
         profile=found.profile,
-        ranked=_ranked_entries(ranking, shared_memory=shared),
+        ranked=_ranked_entries(ranking, shared_memory=shared, cards=len(found.profile.gpus)),
         ranked_total=len(ranking.ranked),
         not_covered=_set_aside_entries(ranking.not_covered, covered=False),
         too_tight=_set_aside_entries(ranking.too_tight, covered=True, shared_memory=shared),

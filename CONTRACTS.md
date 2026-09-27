@@ -61,8 +61,8 @@ documented decision (`docs/adr/`), never a side effect.
 | Form | Writes | Reads | Earlier versions | Decision |
 |---|---|---|---|---|
 | Configuration (`modelroom.toml`) | 3 | `[1, 4)` | 1 and 2 read as 3 in memory; `migrate` and the guided mode write 1 and 2 back, `import-profile` writes 2 back (1 needs `migrate`) | ADR 0002, 2026-09-25 |
-| Hardware profile | 3 | `[1, 4)` | 1 read as `HardwareSnapshot`; 2 read as 3 everywhere, `migrate` writes it back | ADR 0001, 2026-09-25 |
-| Render document (`docs/models.json`) | 2 | not read back by this package | -- | ADR 0003, 2026-09-25 |
+| Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26 |
+| Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26 |
 | Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
 | Measurement file | 2 | 2 | -- | -- |
 
@@ -591,7 +591,7 @@ renderer must use.
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
 | `fit_class` | `"perfect" \| "good" \| "marginal" \| "too_tight" \| "unknown"` | -- | the fit verdict |
-| `mode` | `"gpu" \| "cpu_gpu" \| "cpu" \| None` | `None` only when `fit_class == "unknown"` | where the package would run |
+| `mode` | `"gpu" \| "gpu_split" \| "cpu_gpu" \| "cpu" \| None` | `None` only when `fit_class == "unknown"`; `gpu_split` since document schema 3 (2026-09-26) | where the package would run: one graphics card, spread over every card, system memory with a card helping, system memory only |
 | `need_gib` | `float` | `>= 0` | the memory needed, computed |
 | `weights_gib` | `float` | `>= 0` | the package's weight files, summed |
 | `kv_gib` | `float` | `>= 0` | the KV-cache size at `context`, computed |
@@ -720,7 +720,7 @@ there (`^[a-z0-9][a-z0-9-]*$`) against every key at once.
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
 | `reserve_ram_gib` | `float` | `>= 0` | system RAM to leave unused when judging fit |
-| `reserve_vram_gib` | `float` | `>= 0` | GPU VRAM to leave unused when judging fit |
+| `reserve_vram_gib` | `float` | `>= 0` | GPU VRAM to leave unused on each graphics card when judging fit |
 | `writer` | `bool` | -- | whether this machine runs `fetch` and writes the shared state |
 | `profile` | `str \| None` | schema 2; 16 lowercase hex characters; default `None` | the `profile_id` of this machine's hardware profile (`<state>/hardware/<profile_id>.json`), set by `modelroom migrate` or a guided run |
 
@@ -747,7 +747,7 @@ example uses for a workstation.
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
 | `reserve_ram_gib` | `float` | `>= 0`, default `8.0` | system RAM to leave unused |
-| `reserve_vram_gib` | `float` | `>= 0`, default `1.0` | GPU VRAM to leave unused |
+| `reserve_vram_gib` | `float` | `>= 0`, default `1.0` | GPU VRAM to leave unused on each graphics card |
 
 ```json
 {
@@ -1621,6 +1621,26 @@ available_vram`, `reserve_gib = reserve_vram_gib`. Otherwise it falls back to th
 reserve_ram_gib`, `mode="cpu_gpu"` when `hardware.vram_gib > 0` (some GPU exists, just not
 enough) else `mode="cpu"`.
 
+**Several graphics cards (decided 2026-09-26).** A profile's memory is a pool of cards
+(`fit.GpuPool`: each card's `vram_gib` from `gpus`, and whether it is unified memory); schema 1's
+one `vram_gib` is one card above 0, else none. The rule, in order:
+
+1. Unified memory, as below.
+2. One card first, the way Ollama loads a model, and only with at least one card:
+   `available_one = max(cards) - reserve_vram_gib`; when `need_gib <= available_one`, `mode="gpu"`,
+   `pool_gib = available_one`, `reserve_gib = reserve_vram_gib`, not capped. With one card this
+   is the rule above, and no value of a fit changes.
+3. All cards, with two or more: `available_all = sum(card - reserve_vram_gib)` -- each card keeps
+   its own reserve; when `need_gib <= available_all`, `mode="gpu_split"`, `pool_gib =
+   available_all`, `reserve_gib = n x reserve_vram_gib` (the reserve of all cards), **not capped**:
+   the package lies in graphics memory whole, and what the spread costs is speed, which the load
+   test measures.
+4. The system memory as above: `mode="cpu_gpu"` with cards, `"cpu"` without, capped at `good`.
+
+The size basis keeps its cap at `good` on every pool. `OLLAMA_SCHED_SPREAD=1` makes the daemon
+spread a model although one card holds it: the fit then says `gpu` and the daemon spreads all the
+same.
+
 **Parallel requests (decided 2026-09-25).** `requests` are the parallel slots the Ollama daemon
 is assumed to keep (`OLLAMA_NUM_PARALLEL`), not the number of HTTP requests waiting; the context
 holds per slot. The weights are loaded once, the KV cache once per slot, so on both bases
@@ -1895,8 +1915,9 @@ must not be compared are `not comparable`.
 
 ### Hardware profile v2
 
-One machine's hardware, `<state>/hardware/<profile_id>.json`, schema 2 and, since 2026-09-25,
-schema 3 (the same fields, the value `entered` added; see below and ADR 0001). `profile_id` is 16
+One machine's hardware, `<state>/hardware/<profile_id>.json`, schema 2, since 2026-09-25
+schema 3 (the same fields, the value `entered` added; see below and ADR 0001), and since
+2026-09-26 schema 4 (every graphics card and the machine class; see below and ADR 0004). `profile_id` is 16
 random lowercase hex characters (`new_profile_id`), never derived from the machine: it stays
 the same when the machine is renamed, and two machines can never collide on it. `display_name`
 is what the user reads; the machine name in the configuration points to the profile through
@@ -1921,44 +1942,77 @@ graphics adapter's own reported memory is never taken as VRAM.
 | `none` | no GPU; `vram_source` `none`, `vram_gib` `0` | computes, CPU mode |
 | `measured` | one GPU, VRAM measured (`> 0`) | computes |
 | `entered` | schema 3: one GPU whose memory was entered by hand (`> 0`) | computes, like `measured` |
+| `multi_gpu` | schema 4: two graphics cards or more, measured or entered by hand; `vram_gib` their sum | computes: one card first, then all cards ("Several graphics cards") |
 | `present_unmeasured` | an adapter is present, its memory was not measured | `unknown` |
-| `multi_gpu_not_covered` | more than one GPU | `unknown` |
+| `multi_gpu_not_covered` | more than one GPU, measured before schema 4 covered it; no path writes it any more, a file of 0.1.0 still reads | `unknown` until measured again |
 | `unified_memory` | CPU and GPU share memory | computes since schema 3: one pool, RAM minus both reserves, mode `gpu` ("Fit contract v1", "Unified memory"); a profile migrated from schema 1 stays `unknown` until measured again |
 | `unsupported_platform` | this platform is not measured yet | `unknown` |
 | `legacy_unknown` | migrated from schema 1, GPU layout not recorded | `unknown` until measured again |
 
 **A machine entered by hand (schema 3, decided 2026-09-25, ADR 0001).** A profile whose memory
 was entered (`ram_physical_source` `entered`) has `origin` `entered`, no fingerprint (source
-`none`), both cross-checks `absent`, and exactly one of three shapes:
+`none`), both cross-checks `absent`, and exactly one of four shapes (the fourth since schema 4):
 
-| Entered as | `gpu_state` | `vram_source` | `vram_gib` | `ram_physical_*` |
-|---|---|---|---|---|
-| its own graphics card of N GiB | `entered` | `entered` | N > 0 | `entered`, > 0 |
-| no graphics card | `none` | `none` | 0 | `entered`, > 0 |
-| unified memory | `unified_memory` | `none` | 0 | `entered`, > 0 |
+| Entered as | `gpu_state` | `vram_source` | `vram_gib` | `gpus` | `ram_physical_*` |
+|---|---|---|---|---|---|
+| its own graphics card of N GiB | `entered` | `entered` | N > 0 | one card of N, `name` `None` | `entered`, > 0 |
+| several graphics cards of N GiB each | `multi_gpu` | `entered` | n x N | n cards of N, `name` `None` | `entered`, > 0 |
+| no graphics card | `none` | `none` | 0 | empty | `entered`, > 0 |
+| unified memory | `unified_memory` | `none` | 0 | empty | `entered`, > 0 |
 
 The coupled rules behind it: an `entered` memory or graphics memory requires `origin` `entered`;
-`gpu_state` `entered` and `vram_source` `entered` only come together, so a measured GPU never
-carries an entered size. `gpu_name` is free or `None`. A `hardware --cpu-only` profile
+`vram_source` `entered` comes exactly with `gpu_state` `entered` or with `multi_gpu` of origin
+`entered`, so a measured GPU never carries an entered size; the cards of a machine entered by hand
+have one size (the dialog asks for one), measured cards may differ. `gpu_name` is free or `None`.
+A `hardware --cpu-only` profile
 (`origin` `entered`, `ram_physical_source` `os`) is no hand-entered machine and stays valid as it
 is. No fit on such a machine is ever `measured`: every number there is `computed`. Such a profile
 is entered by the guided mode, step 1 (`enter a machine by hand`, "Guided mode").
 
+**The card list and the machine class (schema 4, decided 2026-09-26, ADR 0004).**
+
+| Field | Type | Rule |
+|---|---|---|
+| `gpus` | `list[GpuAdapter]` | not empty exactly for `gpu_state` `measured`, `entered` and `multi_gpu`; `measured`/`entered`: one card, index 0, with the profile's `vram_gib` and `gpu_name`; `multi_gpu`: two or more, indexes `0 ... n-1`, their sizes adding up to `vram_gib` (within 0.01); every card has the profile's `vram_source`. An empty list says nothing about `vram_gib`: a profile migrated from schema 1 keeps llmfit's VRAM next to an empty list |
+| `GpuAdapter.index` | `int` | `>= 0`, the card's place in `nvidia-smi`'s list |
+| `GpuAdapter.name` | `str \| None` | no length rule, like `gpu_name`; `None` for a card entered by hand and for a card read from schema 3 without a name; a view says "graphics card" for `None` or an empty name |
+| `GpuAdapter.vram_gib` | `float` | `> 0`, MiB / 1024, two decimals |
+| `GpuAdapter.vram_source` | `nvidia-smi \| llmfit \| entered` | the profile's `vram_source` (`llmfit` only from a profile of an earlier schema) |
+| `machine_class` | `laptop \| workstation \| server \| unknown` | `unknown` exactly when `machine_class_source` is `unknown`; changes no number of the fit |
+| `machine_class_source` | `chassis \| entered \| unknown` | `chassis` requires a memory not entered by hand (measured, or `--cpu-only`); `entered` from `hardware --machine-class` or a guided question |
+
+A measured `multi_gpu` has `vram_source` `nvidia-smi`; one entered by hand has `entered`, an
+entered memory and no llmfit check, like `entered`. `binding.KnownProfile` still tells a machine
+entered by hand by `origin` and `ram_physical_source`, which schema 4 does not change.
+
+**What the card list does not know.** It lists what `nvidia-smi` lists. A card of another vendor
+next to an NVIDIA card is not in it (`nvidia-smi` answers, so the adapter rule is not asked);
+`CUDA_VISIBLE_DEVICES` can hide cards from a daemon the list still shows; MIG instances are not
+cards of their own here. Each of these is a stated limit, not a measurement.
+
 **Cross-check with llmfit.** Only like with like: physical RAM against llmfit `total_ram_gb`,
-VRAM against llmfit `gpu_vram_gb`. `crosscheck(own, llmfit)` is `confirmed` when
+VRAM against llmfit `gpu_vram_gb` -- and, for `multi_gpu`, the sum of the cards against the sum of
+llmfit's own `system.gpus[]` entries of backend `CUDA`, `vram_gb x count` each, the way llmfit
+counts them (`LlmfitReference.cuda_vram_gib`; a missing or unreadable list is `absent`). `crosscheck(own, llmfit)` is `confirmed` when
 `|own - llmfit| / max(own, llmfit) <= 0.05` (both zero is `confirmed`), `deviation` otherwise,
 `absent` when llmfit gave no reading, `error` when llmfit failed. The own reading is the
 authority; a `deviation` blocks the fit until the user measures again or enters the value.
 `fit_block_reason(profile)` returns the reason the fit must not compute (GPU state, a profile
 migrated from schema 1, unknown RAM, a deviation), or `None`.
 
-**Reading schema 1 and 2.** `read_profile_document` validates schema 1 as `HardwareSnapshot`
-and schema 2 and 3 as `HardwareProfile`; 4 and above raise `SchemaVersionError` (exit 3) before
-any field is looked at. A schema-2 dict is read as schema 3 by `normalize_profile_v2`: the same
-fields, every value kept, `schema_version` 3; a file that says schema 2 but carries a value of
-schema 3 (`entered`) is refused. The same normalization runs for the profile inside an export
-file (`measurements.load_export`) and for the probe profile `render` builds when it is imported.
-Reading never changes a file; `modelroom migrate` rewrites a schema-2 profile in place (see
+**Reading schema 1, 2 and 3.** `read_profile_document` validates schema 1 as `HardwareSnapshot`
+and schema 2 to 4 as `HardwareProfile`; 5 and above raise `SchemaVersionError` (exit 3) before
+any field is looked at. Two steps with a fixed target each: a schema-2 dict is read as schema 3
+by `normalize_profile_v2` (the same fields, every value kept, `schema_version` 3), a schema-3
+dict as schema 4 by `normalize_profile_v3` (`gpus` from the state -- one card of the profile's
+`vram_gib`, `gpu_name` and `vram_source` for `measured` and `entered`, none otherwise -- and the
+class `unknown`/`unknown`). A file that says schema 2 but carries a value of schema 3 (`entered`)
+is refused, and so is a file that says schema 2 or 3 but carries `gpus`, `machine_class`,
+`machine_class_source` or `gpu_state` `multi_gpu`. The caller's dict is never changed. The same
+chain (`normalize_stored_profile`) runs for the profile inside an export file
+(`measurements.load_export`); the probe profile `render` builds and `normalize_profile_v1` set the
+new fields themselves. Reading never changes a file; `modelroom migrate` rewrites a schema-2 or
+schema-3 profile in place (see
 "Migration"). `normalize_profile_v1(legacy, profile_id)` converts without guessing:
 `display_name` is the old machine key, fingerprint source `legacy`, RAM and VRAM keep their
 llmfit values with source `llmfit`, `gpu_state` is `unified_memory` when the old file said so and
@@ -1968,8 +2022,9 @@ point-in-time observation the next measurement records again.
 
 ### Hardware measurement
 
-`modelroom hardware --config <toml> [--machine <name>] [--cpu-only] [--new-identity]` measures
-the machine it runs on and writes one profile of the current schema (3),
+`modelroom hardware --config <toml> [--machine <name>] [--cpu-only] [--machine-class
+laptop|workstation|server] [--new-identity]` measures the machine it runs on and writes one
+profile of the current schema (4),
 `<state>/hardware/<profile_id>.json`
 (`modelroom/measure.py`, `modelroom/cli.py`). modelroom measures the machine itself; `llmfit` is
 a cross-check of two quantities, never the source and never a requirement -- a machine without
@@ -1993,7 +2048,9 @@ reaches a command line, and `AdapterRAM`/`adapter memory` is never read as VRAM.
 | physical RAM | Windows | `GlobalMemoryStatusEx().ullTotalPhys` (ctypes, `kernel32`) | bytes | `ram_physical_gib`, source `os` |
 | physical RAM | Linux | `/proc/meminfo`, `MemTotal` | kB | `ram_physical_gib`, source `os` |
 | physical RAM | macOS | `sysctl -n hw.memsize` | bytes | `ram_physical_gib`, source `os` (display only: macOS has no fit) |
-| VRAM | Windows, Linux | `nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits` | MiB | `vram_gib`, source `nvidia-smi`, `gpu_name` |
+| VRAM | Windows, Linux | `nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits`, every line | MiB | `gpus` (one card per line), `vram_gib` (their sum), source `nvidia-smi`, `gpu_name` |
+| chassis type | Windows | `powershell -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_SystemEnclosure).ChassisTypes"`, the first number | SMBIOS type | `machine_class`, source `chassis` |
+| chassis type | Linux | `/sys/class/dmi/id/chassis_type` | SMBIOS type | `machine_class`, source `chassis` |
 | display adapters | Linux | `lspci -nn`, PCI class `03xx` | vendor id | `gpu_state` (adapter rule below) |
 | display adapters | Windows | `Win32_VideoController.PNPDeviceID` (`VEN_xxxx`), read with `powershell -NoProfile -NonInteractive -Command` | vendor id | `gpu_state` (adapter rule below) |
 | memory limit | Linux | cgroup v2: `/proc/self/cgroup`, then `memory.max` from this cgroup up to the root; the effective limit is the smallest numeric value | bytes | `ram_limit_gib` + `ram_limit_scope` `cgroup` -- a note, never a fit input |
@@ -2019,8 +2076,8 @@ adapter rule does.
 | Observation | `gpu_state` | VRAM |
 |---|---|---|
 | `nvidia-smi` lists exactly one adapter at index 0 with memory above 0 | `measured` | MiB / 1024, source `nvidia-smi` |
-| `nvidia-smi` lists more than one adapter | `multi_gpu_not_covered` | `unknown` |
-| `nvidia-smi` lists one adapter that is not index 0, reports no memory, or output that cannot be read | `present_unmeasured` | `unknown` |
+| `nvidia-smi` lists two adapters or more at indexes `0 ... n-1`, each with memory above 0 (since 2026-09-26) | `multi_gpu` | the sum, source `nvidia-smi`; `gpu_name` the name all cards carry, else `None`; a note lists the cards (`nvidia-smi lists 2 adapters: 2 x NVIDIA A100-SXM4-40GB`) |
+| `nvidia-smi` lists adapters that are not at indexes `0 ... n-1`, one without memory, or a line that cannot be read -- a card without a number makes the whole reading unmeasured | `present_unmeasured` | `unknown` |
 | no `nvidia-smi`, and no PCI class-03 device at all | `none` | `0`, source `none` |
 | no `nvidia-smi`, and every class-03 device is from the display-only list below | `none` | `0`, source `none`, note `display adapter only` |
 | no `nvidia-smi`, and at least one class-03 device is from any other vendor | `present_unmeasured` | `unknown` |
@@ -2028,6 +2085,22 @@ adapter rule does.
 | macOS, or any platform that is not Windows or Linux | `unsupported_platform` | `unknown` (no unified-memory statement is invented) |
 | `--cpu-only` on Windows or Linux | `none` | `0`, source `none`, profile `origin` `entered` |
 | `--cpu-only` on any other platform | `unsupported_platform` | `unknown`: the flag speaks about the GPU, not about the platform, and the RAM there is display only |
+
+**The machine class (since 2026-09-26).** The SMBIOS chassis type, mapped by a positive list per
+class; every other number is `unknown`:
+
+| Class | Chassis types |
+|---|---|
+| `laptop` | 8 Portable, 9 Laptop, 10 Notebook, 11 Hand Held, 14 Sub Notebook, 30 Tablet, 31 Convertible, 32 Detachable |
+| `workstation` | 3 Desktop, 4 Low Profile Desktop, 5 Pizza Box, 6 Mini Tower, 7 Tower, 13 All in One, 15 Space-saving, 16 Lunch Box, 24 Sealed-case PC, 34 Embedded PC, 35 Mini PC, 36 Stick PC |
+| `server` | 17 Main Server Chassis, 23 Rack Mount Chassis, 25 Multi-system Chassis, 28 Blade, 29 Blade Enclosure |
+| `unknown` | 1 Other, 2 Unknown, any other number, no answer, no DMI (WSL2, a guest machine without a chassis), macOS |
+
+The chassis fails like every other source: no answer, a non-zero exit, a file that cannot be read,
+or text without a number is `unknown` with a note naming why (`the machine class is unknown:
+...`); macOS has no source (`the machine class is not read on darwin`). It is no GPU source, so
+`--cpu-only` reads it too. `--machine-class laptop|workstation|server` is the user's own word for
+the class: source `entered`, and the chassis is not read. The class changes no number of the fit.
 
 **The display-only vendor list.** A positive list, so an unknown vendor is never declared
 harmless: QEMU/Bochs `1234`, virtio `1af4`, VMware `15ad`, Red Hat `1b36`, VirtualBox `80ee`,
@@ -2156,7 +2229,7 @@ The two cross-checked quantities of one profile.
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "profile_id": "3f9a0c21d4e6b870",
   "display_name": "workstation",
   "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -2171,6 +2244,16 @@ The two cross-checked quantities of one profile.
   "vram_source": "nvidia-smi",
   "gpu_state": "measured",
   "gpu_name": "Nova GPU",
+  "gpus": [
+    {
+      "index": 0,
+      "name": "Nova GPU",
+      "vram_gib": 8.0,
+      "vram_source": "nvidia-smi"
+    }
+  ],
+  "machine_class": "workstation",
+  "machine_class_source": "chassis",
   "llmfit_crosscheck": {
     "ram_physical": {
       "status": "confirmed",
@@ -2376,14 +2459,14 @@ What one machine hands to another: its profile and all of its measurements, sche
 `measurement_id` is unique within the export and every measurement belongs to the exported
 profile. `load_export` checks `schema_version` first (`SchemaVersionError`, exit 3). The export
 stays schema 1 when the profile schema moves: the profile inside it is read like a profile file,
-schema 2 as schema 3 and 4 and above refused (decided 2026-09-25), so an export file an earlier
-version wrote still imports.
+schema 2 and 3 as schema 4 and 5 and above refused (decided 2026-09-25 and 2026-09-26), so an
+export file an earlier version wrote still imports.
 
 ```json
 {
   "schema_version": 1,
   "profile": {
-    "schema_version": 3,
+    "schema_version": 4,
     "profile_id": "3f9a0c21d4e6b870",
     "display_name": "workstation",
     "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -2398,6 +2481,16 @@ version wrote still imports.
     "vram_source": "nvidia-smi",
     "gpu_state": "measured",
     "gpu_name": "Nova GPU",
+    "gpus": [
+      {
+        "index": 0,
+        "name": "Nova GPU",
+        "vram_gib": 8.0,
+        "vram_source": "nvidia-smi"
+      }
+    ],
+    "machine_class": "workstation",
+    "machine_class_source": "chassis",
     "llmfit_crosscheck": {
       "ram_physical": {
         "status": "confirmed",
@@ -2563,12 +2656,18 @@ on to the current schemas, in place:
 - a schema-2 `modelroom.toml` is rewritten as schema 3 (`normalize_config_v2`), the original
   bytes kept as `modelroom.toml.v2.bak`; the machines keep their `profile`.
 
-Every backup is named after the version the file left, so a folder that went from schema 1 to 2
-with an earlier version and now to 3 keeps its `.v1.bak` files next to the new `.v2.bak` ones; a
-schema-1 folder goes to schema 3 in one run and gets `.v1.bak` only. The guided mode starts the
+**Profile schema 3 to 4 (decided 2026-09-26, ADR 0004).** The same run takes every schema-3
+profile on to schema 4 in place (`normalize_profile_v3`: one card from the state, the class
+`unknown`), the original bytes kept as `<profile_id>.json.v3.bak`; a schema-2 profile goes through
+both steps in the same run and keeps `.v2.bak` only. The configuration stays schema 3.
+
+Every backup is named after the version the file left, so a folder that went from schema 1 to 2,
+to 3 and now to 4 keeps its `.v1.bak` and `.v2.bak` files next to the new `.v3.bak` ones; a
+schema-1 folder goes to the current schemas in one run and gets `.v1.bak` only. The guided mode starts the
 same run when the configuration it finds is below schema 3 and says so in one note
 (`... backup kept: modelroom.toml.v2.bak`). Reading never writes: `render`, `hardware` and the
-guided mode read a schema-2 file as schema 3 and leave it as it is. Profiles are written back by
+guided mode read a schema-2 configuration as schema 3, and a schema-2 or schema-3 profile as
+schema 4, and leave the files as they are. Profiles are written back by
 `modelroom migrate` alone (directly, or through the guided mode's trigger, which looks at the
 configuration's version): a folder whose configuration `import-profile` already took to schema 3
 keeps its schema-2 profiles, readable, until `modelroom migrate` runs. A file the run cannot read
@@ -2581,15 +2680,16 @@ converted, and every file the run would write -- the new profile, each measureme
 backup -- must be absent or identical, and no existing part of its folder path may be a file. The new `profile_id`s are drawn once, before the first
 check, so both checks look at the paths the run writes. Under the lock the configuration is read
 again; if its `[paths]` changed meanwhile, the run stops (exit 3) without writing anything but
-the lock file. A file of a schema above the current one (profile or configuration 4 or later) is
-exit 3; a conversion that fails, a target or backup that exists with other content or cannot be
+the lock file. A file of a schema above the current one (profile 5 or later, configuration 4 or
+later) is exit 3; a conversion that fails, a target or backup that exists with other content or cannot be
 read (a folder at a backup path, for instance), or two schema-1 files for the same
 machine is exit 3 as well; in every case nothing is written and no lock file is created. A run
 that finds everything at the current schema prints `nothing to do` and exits 0. A run that
 stopped halfway converges on the next run: a converted profile with fingerprint source `legacy`
-and the same `display_name` keeps its `profile_id`, and files that are already there (identical,
-as checked, or the same profile as schema 2 that an earlier version left) are left as they are
-or rewritten in place. A configuration that is already schema 2 or 3 never gets
+and the same `display_name` keeps its `profile_id`, and files that are already there are left as
+they are or rewritten in place: a measurement file with the same JSON content, a profile the same
+after reading -- whatever schema an earlier version left it in, compared through
+`read_profile_document` (decided 2026-09-26). A configuration that is already schema 2 or 3 never gets
 `[machines.<name>].profile` from this run: when it sits next to schema-1 profiles, the profiles
 are migrated and the entries are left to the guided mode.
 
@@ -3467,11 +3567,16 @@ counts only in measured group 0, and only then are `measurement_id` and `speed_t
 **Provenance per value.** Every computed number carries `(computed)` in its column name
 (`Weights GiB`, `Fit`, `Need GiB`, `Pool GiB`), the measured one carries `(measured)`
 (`Speed tok/s`), and a profile's own readings carry their source in the Machines table
-(`Origin`, `RAM source`, `VRAM source`). Nothing computed is ever labeled as a measurement.
+(`Origin`, `RAM source`, `VRAM source`; since 2026-09-26 also `GPUs` -- `index name vram_gib` per
+card, joined by `; ` -- and `Class`, `laptop (chassis)`). Nothing computed is ever labeled as a
+measurement.
 
 **One note per package**, built from named facts only (`Note`, "Note" above): a measured entry
 gets `measured_here` with `origin: measured`; an entry without a measurement gets the note for
-its fit mode (`fits_in_graphics_memory`, `shared_between_memories`, `cpu_caps_at_good`); a
+its fit mode (`fits_in_graphics_memory`, `spread_over_graphics_cards` -- "Fits into graphics
+memory spread over 2 cards: it needs about N GiB of the M GiB left after the reserve of R GiB on
+each card.", the card count from the profile's `gpus`, since document schema 3 --,
+`shared_between_memories`, `cpu_caps_at_good`); a
 set-aside package gets `not_covered` or `too_tight`. `facts` names the fields the text was
 derived from, so a reader can check it.
 
@@ -3532,7 +3637,8 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    one, then none; the count and the reason never do, and no name is cut in the middle (a piece of 137
    characters was measured in the second-model round of 2026-09-24).
 2. `memory` -- the fit of the ranked rows **bundled by memory pool**, with their rank ranges and
-   **one pool per line**: `#1–2 fit into graphics memory, 10.9 GB free after the reserve`, `#3–5 need
+   **one pool per line**: `#1–2 fit into graphics memory, 10.9 GB free after the reserve`, `#3 fits
+   into graphics memory, spread over the cards, 44.0 GB free after the reserve on each card`, `#4–5 need
    system memory, the graphics card helps`, `#6 needs system memory, no graphics card`. Two
    statements about two memories joined by a `·` read as one. The numbers come from the fields of
    `Fit`, never from parsing a note's own sentence back apart.
@@ -3680,7 +3786,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
   "status": "ranked",
   "label": "workstation",
   "profile": {
-    "schema_version": 3,
+    "schema_version": 4,
     "profile_id": "3f9a0c21d4e6b870",
     "display_name": "workstation",
     "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -3695,6 +3801,16 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
     "vram_source": "nvidia-smi",
     "gpu_state": "measured",
     "gpu_name": "Nova GPU",
+    "gpus": [
+      {
+        "index": 0,
+        "name": "Nova GPU",
+        "vram_gib": 8.0,
+        "vram_source": "nvidia-smi"
+      }
+    ],
+    "machine_class": "workstation",
+    "machine_class_source": "chassis",
     "llmfit_crosscheck": {
       "ram_physical": {
         "status": "confirmed",
@@ -3834,7 +3950,7 @@ card; a hint, never a limit.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "snapshot_run_at": "2026-09-22T09:00:00Z",
   "rendered_at": "2026-09-23T09:00:00Z",
   "base_model_count": 2,
@@ -3870,7 +3986,7 @@ card; a hint, never a limit.
       "status": "ranked",
       "label": "workstation",
       "profile": {
-        "schema_version": 3,
+        "schema_version": 4,
         "profile_id": "3f9a0c21d4e6b870",
         "display_name": "workstation",
         "os_fingerprint": "9d2f4b6a8c0e1357",
@@ -3885,6 +4001,16 @@ card; a hint, never a limit.
         "vram_source": "nvidia-smi",
         "gpu_state": "measured",
         "gpu_name": "Nova GPU",
+        "gpus": [
+          {
+            "index": 0,
+            "name": "Nova GPU",
+            "vram_gib": 8.0,
+            "vram_source": "nvidia-smi"
+          }
+        ],
+        "machine_class": "workstation",
+        "machine_class_source": "chassis",
         "llmfit_crosscheck": {
           "ram_physical": {
             "status": "confirmed",
@@ -4322,10 +4448,13 @@ matter, so the move is invisible to it.
 | 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `enter` |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
 | 1 | `entered_name` | What is the machine called? | text, 1 to 128 characters after trimming (only after `enter`) |
+| 1 | `entered_class` | What kind of machine is it? | `laptop`, `workstation`, `server` or `unknown` ("not sure") (only after `enter`, always; since 2026-09-26) |
 | 1 | `entered_ram` | How much memory does it have, in GiB? | a number above 0: `16` … `256` from the list, or any other, decimals allowed as text (`"31.5"`); a TOML float is no answer (only after `enter`) |
-| 1 | `entered_gpu` | What runs the model? | `card`, `none` or `unified` -- the value, not the words of the list (only after `enter`) |
-| 1 | `entered_vram` | How much graphics memory, in GiB? | a number above 0, as `entered_ram` (only after `card`) |
+| 1 | `entered_gpu` | What runs the model? | `card`, `cards` (several graphics cards of one size, since 2026-09-26), `none` or `unified` -- the value, not the words of the list (only after `enter`) |
+| 1 | `entered_cards` | How many graphics cards? | a whole number of 2 to 1024: `2`, `4`, `8` from the list, or any other (only after `cards`) |
+| 1 | `entered_vram` | How much graphics memory, in GiB? | a number above 0, as `entered_ram` (only after `card`; after `cards` the question is "How much graphics memory per card, in GiB?") |
 | 1 | `clone` | Is this the same machine or a clone? | `same` or `clone` (only on `ask_clone`; both measure -- `same` under the bound profile id, `clone` under a new one) |
+| 1 | `machine_class` | What kind of machine is this? | `laptop`, `workstation`, `server` or `unknown` ("not sure"): the class of this machine, asked before each measurement only when its chassis names none (since 2026-09-26); `unknown` leaves the class `unknown` |
 | 2 | `search` | What are you looking for? | text: a word, a name with blanks, a repository id, or the empty string ("show me what fits this machine") |
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
 | 2 | `did_you_mean` | Nothing was found. Did you mean one of these? | one of the candidates, or `keep` (only when the search found no model and the catalog knows a word close to the one that was typed) |
@@ -4432,20 +4561,33 @@ binds this machine to (`--same-machine`, "Profile binding"). A folder someone em
 to measure into; the run that answered "the same machine" and then stood in front of an empty
 step 3, an empty step 4 and "nothing to render" was the hand test this rule comes from. After a
 measurement the guided mode writes `[machines.<name>].profile` -- the one configuration write
-`hardware` leaves to it. `import a profile file` runs `import-profile`, which never changes the
+`hardware` leaves to it. Before each measurement the chassis is read on its own
+(`measure.read_machine_class`); only when it names no class does the run ask `machine_class`
+and hand the answer on as `hardware_with_config(..., machine_class=)` (source `entered`; "not
+sure" leaves `unknown`, with the chassis note). A chassis that names the class asks nothing, so
+an answer file needs `machine_class` only where the question falls (decided 2026-09-26); an
+earlier answer is never taken over, the class is read again on every measurement.
+`import a profile file` runs `import-profile`, which never changes the
 binding; a file that does not import is reported and the run goes on.
 
 **`enter a machine by hand`** (decided 2026-09-26, `modelroom/guided_entered.py`) sizes a machine
 from its data sheet -- one that is not in the house yet, or one no measurement here covers (the
-automatic measurement covers NVIDIA only). Four questions, in this order: `entered_name`,
-`entered_ram`, `entered_gpu` and, only for `card`, `entered_vram` (keys in the table above). The
-sizes are GiB above 0, decimals allowed; an empty name, a name over 128 characters, a size that is
-no number, `0` or below ends the run with exit `2` and names the key, before anything is written.
-The answers make one of the three shapes of a machine entered by hand ("Hardware profile v2", the
-table under "A machine entered by hand"): `card` → `gpu_state` `entered` with its graphics memory,
-`none` → no graphics card, `unified` → `unified_memory`; always `origin` and `ram_physical_source`
+automatic measurement covers NVIDIA only). The questions, in this order: `entered_name`,
+`entered_class`, `entered_ram`, `entered_gpu`, only for `cards` `entered_cards`, and for `card`
+or `cards` `entered_vram` (keys in the table above). The sizes are GiB above 0, decimals allowed;
+an empty name, a name over 128 characters, a size that is no number, `0` or below, or a card count
+that is no whole number of 2 to 1024, or cards whose sizes add up to no number, ends the run with
+exit `2` and names the key, before anything
+is written. An answer file written before 2026-09-26 has no `entered_class` and ends with exit `2`
+naming it. The answers make one of the four shapes of a machine entered by hand ("Hardware
+profile v2", the table under "A machine entered by hand"): `card` → `gpu_state` `entered` with
+its graphics memory, `cards` → `multi_gpu` with n cards of the size per card and their sum,
+`none` → no graphics card, `unified` → `unified_memory`; the class from `entered_class` with
+source `entered` (`unknown`/`unknown` for "not sure"); always `origin` and `ram_physical_source`
 `entered`, no fingerprint (`none`), no RAM limit, both cross-checks `absent`, no `gpu_name`, no
-`llmfit_version`, `recorded_at` the time of the run. A value the profile refuses is exit `2` with
+card names, no `llmfit_version`, `recorded_at` the time of the run. Every view names the class
+first and leaves it out when it is `unknown`: `server, 2 graphics cards 24 GB each, 128 GB
+memory, entered`. A value the profile refuses is exit `2` with
 the profile's own reason, never a traceback. Then, in this order:
 
 - **The file.** `<state>/hardware/<profile_id>.json`, written with the writer `hardware` uses and

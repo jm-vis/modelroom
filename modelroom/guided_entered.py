@@ -1,10 +1,11 @@
 """Step 1's third entry of the machine list: a machine entered by hand (decided 2026-09-26).
 
-Four questions (`QUESTIONS`) size a machine from its data sheet: its name, its memory, what runs
-the model -- a graphics card with its own memory, no graphics card, or unified memory -- and, for
-a graphics card, its memory. That is exactly one of the three shapes a schema-3 profile allows for
-a machine entered by hand (`entered_profile`, CONTRACTS.md, "Hardware profile v2"), and nothing of
-it was measured: every number the ranking shows for it is computed.
+The questions (`QUESTIONS`) size a machine from its data sheet: its name, its class, its memory,
+what runs the model -- a graphics card with its own memory, several graphics cards of one size
+(then how many), no graphics card, or unified memory -- and, for cards, the memory of each. That is
+exactly one of the four shapes a profile allows for a machine entered by hand (`entered_profile`,
+CONTRACTS.md, "Hardware profile v2"), and nothing of it was measured: every number the ranking
+shows for it is computed.
 
 The profile is written as `<state>/hardware/<profile_id>.json` with the writer `hardware` uses,
 and gets a `[machines.<name>]` entry of its own (`guided_write.with_entered_machine`), so the
@@ -30,7 +31,8 @@ from .config import Configuration
 from .dialog import Choice
 from .guided_write import Said, with_entered_machine
 from .measure import DISPLAY_NAME_MAX
-from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck
+from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, GpuAdapter, HardwareProfile, LlmfitCrosscheck
+from .intro import class_words
 from .screen import entered_note, gib_words
 from .state import acquire_lock, atomic_write_json, release_lock
 
@@ -39,37 +41,50 @@ if TYPE_CHECKING:
 
 QUESTIONS: dict[str, str] = {
     "entered_name": "What is the machine called?",
+    "entered_class": "What kind of machine is it?",
     "entered_ram": "How much memory does it have, in GiB?",
     "entered_gpu": "What runs the model?",
+    "entered_cards": "How many graphics cards?",
     "entered_vram": "How much graphics memory, in GiB?",
 }
+# After `cards` the size is asked per card (decided 2026-09-26).
+PER_CARD_QUESTION = "How much graphics memory per card, in GiB?"
 # The entry of a size list that leads to a number of one's own, and the question it asks then.
 NUMBER_VALUE = "number"
 NUMBER_LABEL = "enter a number"
-_NUMBER_QUESTIONS = {"entered_ram": "Memory in GiB", "entered_vram": "Graphics memory in GiB"}
+_NUMBER_QUESTIONS = {"entered_ram": "Memory in GiB", "entered_vram": "Graphics memory in GiB", "entered_cards": "Graphics cards"}
 _SIZES = {
     "entered_ram": ("16", "32", "64", "128", "256"),
     "entered_vram": ("8", "12", "16", "24", "48", "80"),
 }
-# The three shapes: the answer file's value, the words of the list, and the profile's `gpu_state`.
+_CARD_COUNTS = ("2", "4", "8")
+# The most cards one machine entered by hand may have: a bound, so that no answer builds a card list
+# or a sum no memory holds (the same bound as the parallel requests).
+MAX_CARDS = 1024
+# The machine classes a user may name, and "not sure" for none of them.
+CLASS_CHOICES: dict[str, str] = {"laptop": "laptop", "workstation": "workstation", "server": "server", "unknown": "not sure"}
+# The four shapes: the answer file's value, the words of the list, and the profile's `gpu_state`.
 SHAPES: dict[str, str] = {
     "card": "a graphics card with its own memory",
+    "cards": "several graphics cards of one size",
     "none": "no graphics card",
     "unified": "unified memory (system and graphics share one pool)",
 }
-_GPU_STATES = {"card": "entered", "none": "none", "unified": "unified_memory"}
+_GPU_STATES = {"card": "entered", "cards": "multi_gpu", "none": "none", "unified": "unified_memory"}
 _FRESH_ID_ATTEMPTS = 8
 ENTERED_MARK = "(entered)"
 
 
 @dataclass(frozen=True)
 class EnteredMachine:
-    """The answers of the four questions: a name, the memory, the shape and a graphics memory."""
+    """The answers: a name, the class, the memory, the shape, a graphics memory per card, the cards."""
 
     name: str
     ram_gib: float
     shape: str
     vram_gib: float
+    cards: int = 1
+    machine_class: str = "unknown"
 
 
 def _guided_error(message: str) -> Exception:
@@ -99,36 +114,79 @@ def _ask_name(run: "GuidedRun") -> str:
     return name
 
 
-def _ask_gib(run: "GuidedRun", key: str) -> float:
+def _ask_gib(run: "GuidedRun", key: str, question: str | None = None) -> float:
+    asked = question or QUESTIONS[key]
     choices = [Choice(size, f"{size} GiB") for size in _SIZES[key]] + [Choice(NUMBER_VALUE, NUMBER_LABEL)]
-    answered = run.asker.select_or_text(key, QUESTIONS[key], choices, NUMBER_VALUE, _NUMBER_QUESTIONS[key])
+    answered = run.asker.select_or_text(key, asked, choices, NUMBER_VALUE, _NUMBER_QUESTIONS[key])
     value = gib_of(key, answered.strip())
-    run.screen.answer(QUESTIONS[key], gib_words(value))
+    run.screen.answer(asked, gib_words(value))
     return value
 
 
+def cards_of(answered: str) -> int:
+    """An answer as a number of graphics cards, 2 to `MAX_CARDS`; anything else ends the run (exit `2`)."""
+    digits = answered.isascii() and answered.isdigit() and len(answered) <= len(str(MAX_CARDS))
+    count = int(answered) if digits else 0
+    if not 2 <= count <= MAX_CARDS:
+        raise _guided_error(f"entered_cards: {answered!r} is not a whole number of graphics cards, 2 to {MAX_CARDS}")
+    return count
+
+
+def _ask_cards(run: "GuidedRun") -> int:
+    choices = [Choice(count, count) for count in _CARD_COUNTS] + [Choice(NUMBER_VALUE, NUMBER_LABEL)]
+    question = QUESTIONS["entered_cards"]
+    count = cards_of(run.asker.select_or_text("entered_cards", question, choices, NUMBER_VALUE, _NUMBER_QUESTIONS["entered_cards"]).strip())
+    run.screen.answer(question, str(count))
+    return count
+
+
+def _ask_class(run: "GuidedRun") -> str:
+    question = QUESTIONS["entered_class"]
+    answer = run.asker.select("entered_class", question, [Choice(value, words) for value, words in CLASS_CHOICES.items()])
+    run.screen.answer(question, CLASS_CHOICES[answer])
+    return answer
+
+
 def ask_machine(run: "GuidedRun") -> EnteredMachine:
-    """The four questions, in their order; the graphics memory only for a graphics card."""
+    """The questions, in their order; the card count only for several cards, the graphics memory
+    only for a graphics card or several."""
     name = _ask_name(run)
+    machine_class = _ask_class(run)
     ram = _ask_gib(run, "entered_ram")
     shape = run.asker.select("entered_gpu", QUESTIONS["entered_gpu"], [Choice(value, words) for value, words in SHAPES.items()])
     run.screen.answer(QUESTIONS["entered_gpu"], SHAPES[shape])
-    vram = _ask_gib(run, "entered_vram") if shape == "card" else 0.0
-    return EnteredMachine(name, ram, shape, vram)
+    cards = _ask_cards(run) if shape == "cards" else 1
+    vram = 0.0
+    if shape in ("card", "cards"):
+        vram = _ask_gib(run, "entered_vram", PER_CARD_QUESTION if shape == "cards" else None)
+    if not math.isfinite(vram * cards):
+        raise _guided_error(f"entered_vram: {cards} graphics cards of {gib_words(vram)} add up to no number")
+    return EnteredMachine(name, ram, shape, vram, cards, machine_class)
 
 
 def entered_profile(
-    name: str, ram_gib: float, shape: str, vram_gib: float, profile_id: str, now: datetime
+    name: str,
+    ram_gib: float,
+    shape: str,
+    vram_gib: float,
+    profile_id: str,
+    now: datetime,
+    *,
+    cards: int = 1,
+    machine_class: str = "unknown",
 ) -> HardwareProfile:
-    """The schema-3 profile of a machine entered by hand, in one of its three shapes.
+    """The profile of a machine entered by hand, in one of its four shapes.
 
     Nothing of it was measured or cross-checked: no fingerprint, no RAM limit, no llmfit reading,
-    no GPU name. A graphics card carries its memory as `entered`; no graphics card and unified
-    memory carry none of their own (`vram_gib` 0, source `none`).
+    no GPU name. A graphics card carries its memory as `entered`; `cards` graphics cards of
+    `vram_gib` each are `multi_gpu` with their sum; no graphics card and unified memory carry none
+    of their own (`vram_gib` 0, source `none`). `machine_class` is the answer, `unknown` for "not
+    sure".
     """
     if shape not in _GPU_STATES:
         raise ValueError(f"a machine entered by hand is one of {sorted(_GPU_STATES)}, not {shape!r}")
-    card = shape == "card"
+    count = cards if shape == "cards" else 1 if shape == "card" else 0
+    card = count > 0
     absent = CrossCheck(status="absent")
     return HardwareProfile(
         schema_version=PROFILE_SCHEMA_VERSION,
@@ -142,10 +200,13 @@ def entered_profile(
         ram_physical_source="entered",
         ram_limit_gib=None,
         ram_limit_scope="none",
-        vram_gib=vram_gib if card else 0.0,
+        vram_gib=vram_gib * count if card else 0.0,
         vram_source="entered" if card else "none",
         gpu_state=_GPU_STATES[shape],
         gpu_name=None,
+        gpus=[GpuAdapter(index=index, vram_gib=vram_gib, vram_source="entered") for index in range(count)],
+        machine_class=machine_class,
+        machine_class_source="unknown" if machine_class == "unknown" else "entered",
         llmfit_crosscheck=LlmfitCrosscheck(ram_physical=absent, vram=absent),
         llmfit_version=None,
     )
@@ -154,10 +215,14 @@ def entered_profile(
 def entered_class(profile: HardwareProfile) -> str:
     """The group of the machine list for a machine entered by hand: what it is, and that it was entered."""
     ram = f"{profile.ram_physical_gib:.2f} GiB"
+    kind = class_words(profile)
     if profile.gpu_state == "unified_memory":
-        return f"shared memory {ram} {ENTERED_MARK}"
-    card = f"graphics card {profile.vram_gib:.2f} GiB" if profile.gpu_state == "entered" else "no graphics card"
-    return f"{card} {ENTERED_MARK} / {ram} RAM"
+        return f"{kind}shared memory {ram} {ENTERED_MARK}"
+    if profile.gpu_state == "multi_gpu":
+        card = f"{len(profile.gpus)} graphics cards {profile.gpus[0].vram_gib:.2f} GiB each"
+    else:
+        card = f"graphics card {profile.vram_gib:.2f} GiB" if profile.gpu_state == "entered" else "no graphics card"
+    return f"{kind}{card} {ENTERED_MARK} / {ram} RAM"
 
 
 def taken_profile_ids(hardware_dir: Path) -> set[str]:
@@ -209,7 +274,10 @@ def _new_profile_id(run: "GuidedRun", hardware_dir: Path) -> str:
 def _built(machine: EnteredMachine, profile_id: str, now: datetime) -> HardwareProfile:
     """The profile of the answers; a value the profile refuses ends the run with its reason."""
     try:
-        return entered_profile(machine.name, machine.ram_gib, machine.shape, machine.vram_gib, profile_id, now)
+        return entered_profile(
+            machine.name, machine.ram_gib, machine.shape, machine.vram_gib, profile_id, now,
+            cards=machine.cards, machine_class=machine.machine_class,
+        )
     except ValidationError as exc:
         reasons = "; ".join(error["msg"] for error in exc.errors())
         raise _guided_error(f"this machine does not validate as a hardware profile: {reasons}") from exc
