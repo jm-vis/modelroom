@@ -24,7 +24,7 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 from .dialog import QUESTION_RULES
 from .fit import AMPLE_RATIO, FITS_RATIO, TIGHT_RATIO
-from .intro import STEP_NAMES, Fact, Glyphs, class_words, fact_line, glyphs, hardware_words, style_rules, use_color
+from .intro import STEP_NAMES, Fact, Glyphs, class_words, fact_line, glyphs, graphics_words, hardware_words, style_rules, use_color
 from .intro import GAP, LABEL_WIDTH
 from .profile import HardwareProfile
 
@@ -443,10 +443,8 @@ def short_hardware(profile: HardwareProfile) -> str:
     if profile.gpu_state in ("measured", "multi_gpu") and sizes:
         same = len(sizes) > 1 and len(set(sizes)) == 1
         card = f"{len(sizes)} x {sizes[0]:.0f} GB graphics" if same else f"{' + '.join(f'{size:.0f}' for size in sizes)} GB graphics"
-    elif profile.gpu_state == "none":
-        card = "no graphics card"
     else:
-        card = "graphics memory not measured"
+        card = graphics_words(profile)
     memory = "system memory unknown" if profile.ram_physical_gib is None else f"{profile.ram_physical_gib:.0f} GB memory"
     return f"{class_words(profile)}{card}, {memory}"
 

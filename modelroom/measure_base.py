@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 from .llmfit import Runner
-from .profile import GpuAdapter, GpuState
+from .profile import GpuAdapter, GpuState, GraphicsAdapter
 
 GIB = 1024**3
 MIB = 1024**2
@@ -89,15 +89,17 @@ class Reading:
 
 @dataclass(frozen=True)
 class GpuReading:
-    """The GPU verdict: the state the fit gates on, the VRAM with its source, a note, and every
-    card `nvidia-smi` measured (none for every state but `measured` and `multi_gpu`)."""
+    """The GPU verdict: the state the fit gates on, the VRAM with its source, a note, every counted
+    card (`adapters`, none for every state but `measured` and `multi_gpu`) and every graphics unit a
+    source named, counted or not (`graphics`, AP9-GPU)."""
 
     gpu_state: GpuState
     vram_gib: float | None
-    vram_source: Literal["nvidia-smi", "none", "unknown"]
+    vram_source: Literal["nvidia-smi", "sysfs", "sysctl", "llmfit", "none", "unknown"]
     gpu_name: str | None = None
     note: str | None = None
     adapters: tuple[GpuAdapter, ...] = ()
+    graphics: tuple[GraphicsAdapter, ...] = ()
 
 
 def _whole_number(text: str) -> int | None:

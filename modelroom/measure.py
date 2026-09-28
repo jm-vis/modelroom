@@ -24,17 +24,15 @@ from typing import Callable, Literal
 from .gpu import (  # noqa: F401 -- exported back: the tests and callers import these from here
     DISPLAY_ONLY_NOTE,
     DISPLAY_ONLY_VENDORS,
-    INTEL_NOTE,
     INTEL_VENDOR,
     MEASURED_PLATFORMS,
-    _adapter_rule,
-    _display_adapter_vendors,
-    _unmeasured_adapter_note,
     measure_gpu,
 )
-from .gpu_linux import LSPCI_ARGS, UNKNOWN_VENDOR, _lspci_vendors  # noqa: F401
-from .gpu_nvidia import NVIDIA_SMI_ARGS, _nvidia_adapter, _nvidia_cards, _nvidia_smi_gpu  # noqa: F401
-from .gpu_windows import WINDOWS_ADAPTER_ARGS, _pnp_vendors  # noqa: F401
+from .gpu_linux import LSPCI_ARGS, UNKNOWN_VENDOR, WSL_OSRELEASE_FILE, _lspci_vendors  # noqa: F401
+from .gpu_llmfit import vram_crosscheck
+from .gpu_macos import MACOS_ARM64_ARGS, MACOS_CHIP_ARGS, SYSTEM_PROFILER_ARGS  # noqa: F401
+from .gpu_nvidia import NVIDIA_CC_ARGS, NVIDIA_SMI_ARGS, _nvidia_adapter  # noqa: F401
+from .gpu_windows import WINDOWS_ADAPTER_ARGS, WINDOWS_REGISTRY_ARGS  # noqa: F401
 from .llmfit import LlmfitReference, Runner, SubprocessRunner
 from .measure_base import (  # noqa: F401
     GIB,
@@ -44,7 +42,10 @@ from .measure_base import (  # noqa: F401
     FileText,
     FixtureFiles,
     GpuReading,
+    ListDir,
     MemoryBytes,
+    list_directory,
+    no_listing,
     Reading,
     _gib,
     _gib_reading,
@@ -195,6 +196,18 @@ class Probes:
     memory_bytes: MemoryBytes = windows_physical_memory_bytes
     hostname: Callable[[], str] = socket.gethostname
     new_id: Callable[[], str] = new_profile_id
+    # The folder layer (sysfs, AP9-GPU): `None` is the real one with the real file layer, else the
+    # injected file layer's own `list_dir` where it has one, else no folder at all.
+    list_dir: ListDir | None = None
+
+
+def folder_layer(read_text: FileText | None, list_dir: ListDir | None) -> ListDir:
+    """The folder layer that belongs to a file layer: a test's files never mix with this machine's folders."""
+    if list_dir is not None:
+        return list_dir
+    if read_text is None or read_text is read_file_text:
+        return list_directory
+    return getattr(read_text, "list_dir", no_listing)
 
 
 # --- physical RAM ------------------------------------------------------------------------------
@@ -202,7 +215,7 @@ class Probes:
 
 def measure_physical_ram(platform: str, runner: Runner, read_text: FileText, memory_bytes: MemoryBytes) -> Reading:
     """Installed physical RAM in GiB: Windows `GlobalMemoryStatusEx`, Linux `/proc/meminfo`,
-    macOS `sysctl hw.memsize` (display only -- macOS has no fit, see `measure_gpu`)."""
+    macOS `sysctl hw.memsize` (the unified memory of a Mac, AP9-GPU G5)."""
     if platform == "win32":
         return _windows_ram(memory_bytes)
     if platform == "linux":
@@ -389,25 +402,32 @@ def measure_hardware(
     memory_bytes: MemoryBytes | None = None,
     cpu_only: bool = False,
     machine_class: MachineClass | None = None,
+    list_dir: ListDir | None = None,
+    reference: LlmfitReference | None = None,
 ) -> MeasuredHardware:
     """Every source of this machine at once, plus the notes a user has to read.
 
     `machine_class` (`hardware --machine-class`) is the user's own word for the class: it is taken
-    with the source `entered` and the chassis is not read.
+    with the source `entered` and the chassis is not read. `reference` is llmfit's reading of this
+    machine: the fallback where modelroom counts no card itself (AP9-GPU, mode B); without it llmfit
+    adds nothing. `list_dir` is the folder layer (`folder_layer`).
 
     `cpu_only` (`hardware --cpu-only`) is the user's own statement that this machine runs on the
-    CPU: no GPU source is asked at all, and the profile becomes an `entered` one, which carries
+    CPU: no GPU source is asked at all (F21), and the profile becomes an `entered` one, which carries
     no OS fingerprint -- so the OS identifier is not read either. It is a statement about the
     GPU, not about the platform: on a platform this does not measure, the state stays
-    `unsupported_platform` and the fit stays blocked, because the RAM reading there is display
-    only (probe: `--cpu-only` on macOS produced a computing profile before this).
+    `unsupported_platform` and the fit stays blocked.
     """
     active_runner = runner if runner is not None else SubprocessRunner(timeout=TIMEOUT_SECONDS)
     active_read = read_text if read_text is not None else read_file_text
     active_memory = memory_bytes if memory_bytes is not None else windows_physical_memory_bytes
+    active_list = folder_layer(read_text, list_dir)
 
     ram = measure_physical_ram(platform, active_runner, active_read, active_memory)
-    gpu = _CPU_ONLY_GPU if cpu_only and platform in MEASURED_PLATFORMS else measure_gpu(platform, active_runner)
+    if cpu_only and platform in MEASURED_PLATFORMS:
+        gpu = _CPU_ONLY_GPU
+    else:
+        gpu = measure_gpu(platform, active_runner, active_read, active_list, reference, ram.value)
     ram_limit = measure_ram_limit(platform, active_read)
     identity = (
         OsIdentity(None, "none", CPU_ONLY_IDENTITY_REASON)
@@ -461,25 +481,13 @@ def build_crosscheck(measured: MeasuredHardware, reference: LlmfitReference) -> 
     shown as one since a deviation is no block (2026-09-27).
 
     Cards of different sizes are `not_comparable`: llmfit multiplies one card's size by the count,
-    so its sum says nothing about them (decided 2026-09-27).
+    so its sum says nothing about them (decided 2026-09-27). The graphics memory follows the table
+    of ADR 0011 (`gpu_llmfit.vram_crosscheck`): compared only where llmfit's entries of the counted
+    backend are exactly the counted cards, never where llmfit itself gave the counted value.
     """
-    if measured.cpu_only:
-        # Skipped on purpose, whatever llmfit did: `absent` says "never asked", `error` would say
-        # the comparison was attempted and llmfit let it down.
-        vram = CrossCheck(status="absent", own_gib=measured.gpu.vram_gib)
-    elif measured.gpu.gpu_state == "multi_gpu" and len({card.vram_gib for card in measured.gpu.adapters}) > 1:
-        # llmfit multiplies one card's size by the count, so its sum says nothing about cards of
-        # different sizes (decided 2026-09-27): shown, never held against the 5 % rule.
-        llmfit_gib = reference.cuda_vram_gib if reference.status == "available" else None
-        vram = CrossCheck(status="not_comparable", own_gib=measured.gpu.vram_gib, llmfit_gib=llmfit_gib)
-    elif measured.gpu.gpu_state == "multi_gpu":
-        # Cards of one size against the sum of llmfit's CUDA cards, the way llmfit counts them itself.
-        vram = _one_check(measured.gpu.vram_gib, reference.cuda_vram_gib, reference.status)
-    else:
-        vram = _one_check(measured.gpu.vram_gib, reference.vram_gib, reference.status)
     return LlmfitCrosscheck(
         ram_physical=_one_check(measured.ram.value, reference.ram_gib, reference.status),
-        vram=vram,
+        vram=vram_crosscheck(measured.gpu, reference, measured.cpu_only),
     )
 
 
@@ -524,6 +532,7 @@ def build_profile(
         machine_class_source=measured.machine_class.source,
         llmfit_crosscheck=build_crosscheck(measured, reference),
         llmfit_version=reference.version,
+        adapters=list(measured.gpu.graphics),
     )
 
 

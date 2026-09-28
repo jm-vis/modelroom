@@ -5,7 +5,9 @@ AP9-UX2 U8 (GF F5, F6, ADR 0010). Both are read live, never persisted, and both 
 
 - **graphics memory**: `nvidia-smi --query-gpu=index,name,memory.free` (MiB), each card matched to
   the card of the profile with the same index; a count or a name that differs is `unknown`, as is a
-  machine without an NVIDIA card or with unified memory;
+  machine without an NVIDIA card or with unified memory; an AMD card counted from sysfs reads
+  `mem_info_vram_total - mem_info_vram_used` by its PCI address, cards llmfit counted are `unknown`
+  (AP9-GPU G9);
 - **disk**: the place Ollama keeps its models, as an approximation (Ollama's own setting is not
   readable from outside, CONTRACTS.md, "The pull"): `OLLAMA_MODELS` where it is set, else the user
   default `~/.ollama/models` and, on Linux, the service default `/usr/share/ollama/.ollama/models`
@@ -28,8 +30,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Callable, Mapping, Sequence
 
-from .measure import TIMEOUT_SECONDS
+from .gpu_linux import VRAM_TOTAL_FILE, VRAM_USED_FILE, drm_slots, sysfs_bytes
 from .llmfit import Runner, SubprocessRunner
+from .measure_base import TIMEOUT_SECONDS, FileText, ListDir, list_directory, read_file_text
 
 GIB = 1024**3
 MIB = 1024**2
@@ -55,6 +58,9 @@ class RoomProbes:
     disk_usage: Callable[[Path], int] = lambda path: shutil.disk_usage(path).free
     mount_of: Callable[[Path], str] = lambda path: _mount_point(path)
     runner: Runner = field(default_factory=lambda: SubprocessRunner(timeout=TIMEOUT_SECONDS))
+    # The file and folder layer of sysfs, for the free memory of an AMD card (AP9-GPU G9).
+    read_text: FileText = read_file_text
+    list_dir: ListDir = list_directory
 
 
 def default_room_probes() -> RoomProbes:
@@ -220,7 +226,39 @@ def profile_cards(profile) -> list[tuple[int, str | None]]:
 def free_pieces(room: RoomProbes, profile) -> tuple[str, str]:
     """The two pieces of this machine's `free` line, graphics and disk, each measured now; the view
     joins them and breaks between them where the line would pass 100 columns (Codex r1 m8)."""
-    return graphics_words(free_vram_mib(room, profile_cards(profile))), disk_words(free_disk(room))
+    return graphics_words(free_graphics_mib(room, profile)), disk_words(free_disk(room))
+
+
+def free_graphics_mib(room: RoomProbes, profile) -> list[float] | None:
+    """The free graphics memory of the counted cards, by the source that counted them (AP9-GPU G9, D14).
+
+    `nvidia-smi` as before; sysfs per card by its PCI address; llmfit's cards are never read here:
+    llmfit gives no free memory, so they are `unknown`.
+    """
+    source = getattr(profile, "vram_source", None)
+    if source == "llmfit":
+        return None
+    if source == "sysfs":
+        return free_sysfs_mib(room, [adapter.pci_slot for adapter in profile.adapters if adapter.counted])
+    return free_vram_mib(room, profile_cards(profile))
+
+
+def free_sysfs_mib(room: RoomProbes, slots: Sequence[str | None]) -> list[float] | None:
+    """`mem_info_vram_total - mem_info_vram_used` of each card, found by its address; all or nothing."""
+    if not slots or None in slots:
+        return None
+    cards = drm_slots(room.read_text, room.list_dir)
+    free = []
+    for slot in slots:
+        found = cards.get(slot, [])
+        if len(found) != 1:
+            return None
+        total = sysfs_bytes(room.read_text, found[0], VRAM_TOTAL_FILE)
+        used = sysfs_bytes(room.read_text, found[0], VRAM_USED_FILE, minimum=0)
+        if total is None or used is None or used > total:
+            return None
+        free.append((total - used) / MIB)
+    return free
 
 
 __all__ = [
@@ -233,6 +271,8 @@ __all__ = [
     "default_room_probes",
     "disk_words",
     "free_disk",
+    "free_graphics_mib",
+    "free_sysfs_mib",
     "free_vram_mib",
     "gb",
     "graphics_words",
