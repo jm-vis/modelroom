@@ -82,11 +82,13 @@ def adapter_label(adapter: GraphicsAdapter) -> str:
 
 
 def is_display_only(adapter: GraphicsAdapter) -> bool:
-    """A display or virtual adapter (D13), read from what it is -- shut out, no backend, and a
-    display-only PCI vendor or the Basic Display name -- never from the words of its reason."""
-    vendor_id = (adapter.pci_id or "")[:4]
-    known = vendor_id in DISPLAY_ONLY_VENDORS or (adapter.name or "").strip() == BASIC_DISPLAY_NAME
-    return adapter.usable == "no" and adapter.backend == "none" and known
+    """A display or virtual adapter (D13), read from what it is, never from the words of its reason.
+
+    Two exclusions give `no` without a backend: a display adapter and a unit of an Intel Mac, and
+    only the second comes from `system_profiler`. So the classification `is_display_adapter` made
+    holds even where no full PCI id survived (`PCI\\VEN_1414` without a device, Codex r3-15).
+    """
+    return adapter.usable == "no" and adapter.backend == "none" and adapter.source != "system_profiler"
 
 
 def recognized(adapter: GraphicsAdapter) -> bool:

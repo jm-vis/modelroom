@@ -26,8 +26,26 @@ FORBIDDEN = {
     # id names the maker's board of one device model, the processor names the machine. A recording
     # keeps what the detection needs (vendor, device id, card name, memory) and neutralizes the rest.
     "hardware subsystem id": re.compile(r"(?i)SUBSYS_(?!00000000)[0-9a-f]{8}"),
-    "processor model": re.compile(r'"cpu_name"\s*:\s*"(?!(?:' + "|".join(map(re.escape, sorted(NEUTRAL_CPU_NAMES))) + r')")'),
 }
+# The processor is a check of the whole document, not of a line: the value of `cpu_name` may stand
+# on the next line, and it is judged decoded (`"x86 CPU"` is the placeholder) -- `processor_model_lines`.
+PROCESSOR_MODEL = "processor model"
+_CPU_NAME = re.compile(r'"cpu_name"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def processor_model_lines(text: str) -> list[int]:
+    """The line of every `cpu_name` whose decoded value is no placeholder (`NEUTRAL_CPU_NAMES`)."""
+    import json
+
+    lines = []
+    for match in _CPU_NAME.finditer(text):
+        try:
+            value = json.loads(f'"{match.group(1)}"')
+        except ValueError:
+            value = None  # a value that does not decode is no placeholder either
+        if value not in NEUTRAL_CPU_NAMES:
+            lines.append(text.count("\n", 0, match.start()) + 1)
+    return lines
 # A global IPv4 address (AP9-UX): the address of a rented machine must not reach the repository.
 # No regex can say "global", so this one is a function next to the list, with a name of its own.
 # Loopback, the private ranges and the documentation ranges of RFC 5737 stay quiet -- the code, the
@@ -65,6 +83,23 @@ ALLOWED = {
     ("tests/test_public_hygiene.py", "hardware subsystem id"): "the negative list names what it forbids",
     ("tests/test_public_hygiene.py", "processor model"): "the negative list names what it forbids",
 }
+# Every check in one place, the way `scripts/release-check.py` takes them over: the checks of one line
+# (the patterns and the global address) and the checks of a whole document (the processor).
+LINE_CHECKS = {**{name: pattern.search for name, pattern in FORBIDDEN.items()}, GLOBAL_IPV4: global_ipv4}
+DOCUMENT_CHECKS = {PROCESSOR_MODEL: processor_model_lines}
+WITHHELD = "<withheld>"
+
+
+def classify(text: str, path: str = "") -> list[tuple[int, str]]:
+    """`(line, class)` of every hit in `text`, except where `ALLOWED` names the path and the class."""
+    hits = []
+    for name, found in LINE_CHECKS.items():
+        if (path, name) not in ALLOWED:
+            hits += [(line_no, name) for line_no, line in enumerate(text.split("\n"), start=1) if found(line)]
+    for name, lines_of in DOCUMENT_CHECKS.items():
+        if (path, name) not in ALLOWED:
+            hits += [(line_no, name) for line_no in lines_of(text)]
+    return sorted(set(hits))
 
 
 def tracked_files() -> list[Path]:
@@ -72,20 +107,16 @@ def tracked_files() -> list[Path]:
     return [REPO / line for line in out.splitlines() if line]
 
 
-def findings() -> list[str]:
+def findings(paths: list[Path] | None = None, root: Path = REPO) -> list[str]:
+    """Every hit by place and class only: never the line, and a path that is a hit itself withheld."""
     hits = []
-    for path in tracked_files():
+    for path in paths if paths is not None else tracked_files():
         if path.suffix in SKIP_SUFFIXES or not path.exists():
             continue
-        rel = path.relative_to(REPO).as_posix()
+        rel = path.relative_to(root).as_posix()
+        shown = WITHHELD if classify(rel) else rel
         text = path.read_text(encoding="utf-8", errors="replace")
-        checks = [(name, pattern.search) for name, pattern in FORBIDDEN.items()] + [(GLOBAL_IPV4, global_ipv4)]
-        for name, found in checks:
-            if (rel, name) in ALLOWED:
-                continue
-            for line_no, line in enumerate(text.splitlines(), start=1):
-                if found(line):
-                    hits.append(f"{rel}:{line_no}: {name}: {line.strip()[:120]}")
+        hits += [f"{shown}:{line_no}: {name}" for line_no, name in classify(text, rel)]
     return hits
 
 
@@ -120,11 +151,27 @@ def test_a_subsystem_id_other_than_zeros_is_a_finding_in_either_case():
 
 
 def test_a_processor_name_other_than_a_placeholder_is_a_finding():
-    pattern = FORBIDDEN["processor model"]
-    for leak in ('"cpu_name": "' + "AMD EPYC 7413" + '",', '"cpu_name":"' + "Intel Xeon" + '"', '"cpu_name": "x86 CPU (' + 'laptop)"'):
-        assert pattern.search(leak), leak
-    for quiet in ('"cpu_name": "x86 CPU",', '"cpu_name": "arm64 CPU"', '"cpu_name": ""', '"gpu_name": "NVIDIA L4"'):
-        assert not pattern.search(quiet), quiet
+    leaks = ('"cpu_name": "' + "AMD EPYC 7413" + '",', '"cpu_name":"' + "Intel Xeon" + '"', '"cpu_name": "x86 CPU (' + 'laptop)"',
+             '{\n  "cpu_name":\n    "' + "Intel Xeon" + '"\n}')  # the value on the next line (Codex r3-9)
+    for leak in leaks:
+        assert processor_model_lines(leak), leak
+    assert processor_model_lines('{\n  "cpu_name":\n    "' + "Intel Xeon" + '"\n}') == [2]
+    quiet = ('"cpu_name": "x86 CPU",', '"cpu_name": "arm64 CPU"', '"cpu_name": ""', '"gpu_name": "NVIDIA L4"',
+             '"cpu_name": "x86\\u0020CPU"')  # the placeholder, escaped: no false alarm
+    for text in quiet:
+        assert not processor_model_lines(text), text
+
+
+def test_a_finding_names_place_and_class_and_withholds_a_leaking_path(tmp_path):
+    """Codex r3-12: the output carries no line and no path that is a hit itself."""
+    leak = "SUBSYS_" + "1A2B3C4D"
+    named = tmp_path / f"{leak}.txt"
+    named.write_text(f"ok\nthe device {leak}\n", encoding="utf-8")
+    plain = tmp_path / "plain.json"
+    plain.write_text('{"cpu_name": "' + "Intel Xeon" + '"}\n', encoding="utf-8")
+    hits = findings([named, plain], tmp_path)
+    assert hits == [f"{WITHHELD}:2: hardware subsystem id", "plain.json:1: processor model"]
+    assert not any(leak in hit or "Xeon" in hit for hit in hits)
 
 
 if __name__ == "__main__":

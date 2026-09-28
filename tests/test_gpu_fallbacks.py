@@ -85,6 +85,18 @@ def test_on_windows_an_address_of_nvidia_smi_does_not_stop_the_name_match():
     assert (counted.source, second.name, second.reason) == ("nvidia-smi", "NVIDIA GeForce GTX 1080 Ti", NOT_LISTED_REASON)
 
 
+def test_a_hyper_v_id_without_a_device_stays_a_display_adapter():
+    """Codex r3-15: `PCI\\VEN_1414` alone and no name is still a display adapter, `none` and not unmeasured."""
+    reading = measure_gpu("win32", gpu_runner(cim=cim((None, "PCI\\VEN_1414"))))
+    assert (reading.gpu_state, reading.note) == ("none", "display adapter only")
+    assert is_display_only(reading.graphics[0])
+
+
+def test_a_unit_of_an_intel_mac_is_no_display_adapter():
+    reading = measure_gpu("darwin", gpu_runner(profiler=fixture("system_profiler_intel_mac.json.txt")), ram_gib=32.0)
+    assert reading.graphics and not any(is_display_only(adapter) for adapter in reading.graphics)
+
+
 def test_a_basic_display_adapter_with_a_registry_conflict_stays_a_display_adapter():
     """Codex r2-10: the kept diagnosis does not turn a display adapter into a graphics unit."""
     pnp, key = "PCI\\VEN_1414&DEV_008E&SUBSYS_00000000&REV_00\\X", "PCI\\VEN_1414&DEV_008E"

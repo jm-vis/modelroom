@@ -21,12 +21,18 @@ Checks, in this order:
    file `MODELROOM_RELEASE_PRIVATE_WORDS` names (outside the repository, one per line, any case,
    blank lines and `#` lines left out) are the class `private word`; they, the device subsystem
    id and the processor model are checked in HEAD, the distributions and the metadata, not in the
-   earlier file contents of the history (known and accepted, decided 2026-09-28). Without that
-   file the gate ends with a usage error after every other check has reported;
+   earlier file contents of the history (known and accepted, decided 2026-09-28), and so is a
+   global IPv4 address. Without that file the gate ends with a usage error after every other check
+   has reported, and every name that comes from the data is withheld. Every file is read as UTF-8,
+   as UTF-16 where it says so and with its JSON escapes resolved; a binary file (a skipped suffix) in
+   its printable runs, in every class. The metadata are read in their declared `encoding` (an
+   unknown one is a finding); the allowed addresses count for the class `e-mail address` only;
 3. `uv build --offline` of HEAD (exported with `git archive`, so the working tree cannot leak
    in); the wheel and the sdist are listed and checked against the negative list and against a
-   short list of file classes that must never ship. The wheel must carry `modelroom/` and the
-   `modelroom` console entry.
+   short list of file classes that must never ship, every entry name and the archives' own
+   metadata (comments, extra fields, link targets, owners, pax headers) included. The wheel must
+   carry `modelroom/` and the `modelroom` console entry. An error of any kind is reported by its
+   class name only.
 """
 
 from __future__ import annotations
@@ -75,7 +81,8 @@ PRIVATE_WORD = "private word"
 # Classes checked in the current state only -- HEAD, the distributions and the metadata -- and not
 # in the file contents of the history, whose earlier contents are known and accepted (decided
 # 2026-09-28: they are cleaned in the current state, the history is not rewritten).
-CURRENT_STATE_CLASSES = {PRIVATE_WORD, "hardware subsystem id", "processor model"}
+CURRENT_STATE_CLASSES = {PRIVATE_WORD, "hardware subsystem id", "processor model", "global IPv4 address"}
+EMAIL_CLASS = "e-mail address"
 # Single metadata findings that were read and accepted, each bound to (full commit hash, field,
 # line, class): any other line, field, commit or class stays a finding.
 ALLOWED_META_FINDINGS = {
@@ -89,9 +96,15 @@ class UsageError(Exception):
 
 
 class NegativeList(NamedTuple):
-    forbidden: dict[str, re.Pattern[str]]
+    """The checks of `tests/test_public_hygiene.py`: of one line (`forbidden`, patterns and the global
+    address) and of a whole document (`documents`, the processor). `redact_names`: every name that
+    comes from the data is withheld, because a check (the private words) could not be loaded."""
+
+    forbidden: dict[str, Callable[[str], object]]
     allowed: dict[tuple[str, str], str]
     skip_suffixes: set[str]
+    documents: dict[str, Callable[[str], list[int]]] = {}
+    redact_names: bool = False
 
 
 def load_negative_list() -> NegativeList:
@@ -99,7 +112,7 @@ def load_negative_list() -> NegativeList:
     spec = importlib.util.spec_from_file_location("public_hygiene", HYGIENE_MODULE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return NegativeList(module.FORBIDDEN, module.ALLOWED, module.SKIP_SUFFIXES)
+    return NegativeList(module.LINE_CHECKS, module.ALLOWED, module.SKIP_SUFFIXES, module.DOCUMENT_CHECKS)
 
 
 def private_words_pattern(repo: Path = REPO) -> re.Pattern[str]:
@@ -118,7 +131,7 @@ def private_words_pattern(repo: Path = REPO) -> re.Pattern[str]:
         if path.resolve().is_relative_to(repo.resolve()):
             raise UsageError(f"the file {PRIVATE_WORDS_ENV} names lies inside the repository; keep it outside")
         lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise UsageError(f"the file {PRIVATE_WORDS_ENV} names cannot be read") from exc
     words = sorted({line.strip() for line in lines if line.strip() and not line.strip().startswith("#")}, key=len, reverse=True)
     if not words:
@@ -127,12 +140,18 @@ def private_words_pattern(repo: Path = REPO) -> re.Pattern[str]:
 
 
 def with_private_words(lists: NegativeList, pattern: re.Pattern[str] | None) -> NegativeList:
-    return lists if pattern is None else lists._replace(forbidden={**lists.forbidden, PRIVATE_WORD: pattern})
+    """The list with the private words; without them (`None`) every name from the data is withheld."""
+    if pattern is None:
+        return lists._replace(redact_names=True)
+    return lists._replace(forbidden={**lists.forbidden, PRIVATE_WORD: pattern.search})
 
 
 def current_state_only(lists: NegativeList) -> NegativeList:
     """The list for the file contents of the history: without the classes of the current state."""
-    return lists._replace(forbidden={name: p for name, p in lists.forbidden.items() if name not in CURRENT_STATE_CLASSES})
+    return lists._replace(
+        forbidden={name: check for name, check in lists.forbidden.items() if name not in CURRENT_STATE_CLASSES},
+        documents={name: check for name, check in lists.documents.items() if name not in CURRENT_STATE_CLASSES},
+    )
 
 
 def git(repo: Path, *args: str, check: bool = True, stdin: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
@@ -162,53 +181,92 @@ def ensure_repository(repo: Path) -> None:
         raise UsageError("shallow clone: the full history is needed (git fetch --unshallow)")
 
 
-def leak_classes(text: str, lists: NegativeList, path: str = "") -> list[str]:
-    return [name for name, pattern in lists.forbidden.items()
-            if (path, name) not in lists.allowed and pattern.search(text)]
+EmailView = Callable[[str], str] | None
 
 
-def scan_text(place: str, path: str, text: str, lists: NegativeList) -> list[str]:
+def _line_classes(line: str, lists: NegativeList, path: str, email_view: EmailView = None) -> list[str]:
+    """The classes of one line. `email_view` (metadata only) removes the allowed addresses -- for the
+    class `e-mail address` alone; every other class reads the line as it is (Codex r3-8)."""
+    found = []
+    for name, check in lists.forbidden.items():
+        if (path, name) in lists.allowed:
+            continue
+        seen = email_view(line) if email_view is not None and name == EMAIL_CLASS else line
+        if check(seen):
+            found.append(name)
+    return found
+
+
+def _document_hits(text: str, lists: NegativeList, path: str) -> list[tuple[int, str]]:
+    return [(line_no, name) for name, lines_of in lists.documents.items()
+            if (path, name) not in lists.allowed for line_no in lines_of(text)]
+
+
+def leak_classes(text: str, lists: NegativeList, path: str = "", email_view: EmailView = None) -> list[str]:
+    """Every class `text` holds, line checks and document checks alike."""
+    names = _line_classes(text, lists, path, email_view)
+    return names + [name for _line, name in _document_hits(text, lists, path) if name not in names]
+
+
+def scan_text(place: str, path: str, text: str, lists: NegativeList, email_view: EmailView = None) -> list[str]:
     """Every line of `text` against every class; `place` prefixes the finding, never the text."""
-    findings = []
+    findings: dict[str, None] = {}
     for line_no, line in enumerate(text.split("\n"), start=1):
-        findings += [f"{place}:{line_no}: {name}" for name in leak_classes(line, lists, path)]
-    return findings
+        findings.update(dict.fromkeys(f"{place}:{line_no}: {name}" for name in _line_classes(line, lists, path, email_view)))
+    findings.update(dict.fromkeys(f"{place}:{line_no}: {name}" for line_no, name in _document_hits(text, lists, path)))
+    return list(findings)
 
 
 _JSON_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 
-def text_variants(data: bytes) -> list[str]:
-    """Every reading of `data` a word could hide in: UTF-8; UTF-16 where a byte order mark or a
-    share of NUL bytes says so; and the text with its JSON `\\uXXXX` escapes resolved."""
+def unescaped(text: str) -> list[str]:
+    """`text`, and where it holds JSON `\\uXXXX` escapes, the text with them resolved."""
+    return [text, _JSON_ESCAPE.sub(lambda m: chr(int(m[1], 16)), text)] if _JSON_ESCAPE.search(text) else [text]
+
+
+_PRINTABLE_RUN = re.compile(r"[\x20-\x7e]{6,}")
+
+
+def printable_runs(text: str) -> str:
+    """The runs of six printable characters or more, one per line -- what `strings` reads out of a
+    binary file. Random bytes between them are no text and would only make noise (an `@` and a `.`)."""
+    return "\n".join(_PRINTABLE_RUN.findall(text))
+
+
+def text_variants(data: bytes, binary: bool = False) -> list[str]:
+    """Every reading of `data` a leak could hide in: UTF-8; UTF-16 where a byte order mark or a share
+    of NUL bytes says so; each with its JSON escapes resolved. A binary file (a skipped suffix) is read
+    in its printable runs, as UTF-8, byte for byte (latin-1) and as UTF-16 both ways."""
+    if binary:
+        readings = [data.decode(encoding, "replace") for encoding in ("utf-8", "latin-1", "utf-16-le", "utf-16-be")]
+        return [reading for text in readings for reading in unescaped(printable_runs(text))]
     variants = [data.decode("utf-8", "replace")]
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         variants.append(data.decode("utf-16", "replace"))
     elif len(data) >= 4 and data.count(b"\x00") * 4 >= len(data):
         variants += [data.decode("utf-16-le", "replace"), data.decode("utf-16-be", "replace")]
-    variants += [_JSON_ESCAPE.sub(lambda m: chr(int(m[1], 16)), text) for text in list(variants) if _JSON_ESCAPE.search(text)]
-    return variants
+    return [reading for text in variants for reading in unescaped(text)]
 
 
 def scan_data(place: str, path: str, data: bytes, lists: NegativeList) -> list[str]:
-    """`scan_text` over every reading of a file (`text_variants`); a binary file (a skipped
-    suffix) is read byte for byte for the classes of the current state that are words, the private words."""
-    if skipped(path, lists):
-        words = {name: p for name, p in lists.forbidden.items() if name == PRIVATE_WORD}
-        return scan_text(place, path, data.decode("latin-1"), lists._replace(forbidden=words)) if words else []
+    """`scan_text` over every reading of a file (`text_variants`), every class, binary files included
+    (a skipped suffix is read byte for byte too, Codex r3-6)."""
     found: dict[str, None] = {}
-    for text in text_variants(data):
+    for text in text_variants(data, binary=skipped(path, lists)):
         found.update(dict.fromkeys(scan_text(place, path, text, lists)))
     return list(found)
 
 
 def shown(name: str, lists: NegativeList) -> str:
-    """A file, tag or ref name as it may be printed: withheld when it matches the negative list."""
-    return WITHHELD if leak_classes(name, lists) else name
+    """A file, tag, field or ref name as it may be printed: withheld when it matches the negative list,
+    and always where the private words could not be loaded (Codex r3-14)."""
+    return WITHHELD if lists.redact_names or any(leak_classes(text, lists) for text in unescaped(name)) else name
 
 
 def name_findings(prefix: str, name: str, lists: NegativeList, kind: str = "file") -> list[str]:
-    return [f"{prefix}:{WITHHELD}: {cls} in {kind} name" for cls in leak_classes(name, lists)]
+    classes = dict.fromkeys(cls for text in unescaped(name) for cls in leak_classes(text, lists))
+    return [f"{prefix}:{WITHHELD}: {cls} in {kind} name" for cls in classes]
 
 
 def skipped(path: str, lists: NegativeList) -> bool:
@@ -234,12 +292,14 @@ def ref_version(repo: Path, ref: str) -> str:
         raise UsageError(f"{ref}:pyproject.toml has no readable [project] version") from exc
 
 
-def printable_version(version: str) -> str:
+def printable_version(version: str, lists: NegativeList | None = None) -> str:
     match = VERSION.match(version)
+    if lists is not None and (lists.redact_names or leak_classes(version, lists)):
+        return WITHHELD
     return version if match and not match["local"] else WITHHELD
 
 
-def version_findings(repo: Path, ref: str) -> list[str]:
+def version_findings(repo: Path, ref: str, lists: NegativeList | None = None) -> list[str]:
     version = ref_version(repo, ref)
     match = VERSION.match(version)
     findings = []
@@ -250,7 +310,7 @@ def version_findings(repo: Path, ref: str) -> list[str]:
     changelog = git(repo, "show", f"{ref}:CHANGELOG.md", check=False).stdout.decode("utf-8", "replace")
     heading = re.compile(rf"^## \[?{re.escape(version)}\]?(\s|$)", re.MULTILINE)
     if not heading.search(changelog):
-        findings.append(f"ref:CHANGELOG.md: no section for version {printable_version(version)}")
+        findings.append(f"ref:CHANGELOG.md: no section for version {printable_version(version, lists)}")
     return findings
 
 
@@ -261,7 +321,7 @@ def tag_findings(repo: Path, tag: str, lists: NegativeList) -> list[str]:
         return [f"{label}: does not exist"]
     findings = []
     if tag != f"v{version}":
-        findings.append(f"{label}: name is not v{printable_version(version)}")
+        findings.append(f"{label}: name is not v{printable_version(version, lists)}")
     if kind.stdout.decode().strip() != "tag":
         findings.append(f"{label}: not an annotated tag")
     target = git(repo, "rev-parse", "--verify", "-q", f"refs/tags/{tag}^{{commit}}", check=False)
@@ -320,9 +380,10 @@ class _PatchScanner:
     def _hunk_line(self, raw: str) -> None:
         marker, content = raw[:1], raw[1:]
         if marker == "+":
-            if self.path and not skipped(self.path, self.lists):
+            if self.path:  # a skipped suffix too, in its printable runs: `--text` shows it (Codex r3-6)
                 place = f"history:{self.commit}:{shown(self.path, self.names)}:{self.line_no}"
-                for name in leak_classes(content, self.lists, self.path):
+                text = printable_runs(content) if skipped(self.path, self.lists) else content
+                for name in leak_classes(text, self.lists, self.path):
                     self.findings[f"{place}: {name}"] = None
             self.new_left -= 1
             self.line_no += 1
@@ -393,9 +454,25 @@ def read_objects(repo: Path, names: list[str]) -> list[tuple[str, str, bytes]]:
     return objects
 
 
+UNSUPPORTED_ENCODING = "unsupported encoding"
+_ENCODING_HEADER = re.compile(rb"^encoding (\S+)$", re.MULTILINE)
+
+
+def decoded_object(body: bytes) -> tuple[str, str | None]:
+    """A raw commit or tag object as text, in the encoding its `encoding` header declares (git writes
+    the message and the names in it); an encoding Python does not know is refused as a finding."""
+    declared = _ENCODING_HEADER.search(body.partition(b"\n\n")[0])
+    if declared is None:
+        return body.decode("utf-8", "replace"), None
+    try:
+        return body.decode(codecs.lookup(declared[1].decode("ascii", "replace")).name, "replace"), None
+    except LookupError:
+        return body.decode("utf-8", "replace"), UNSUPPORTED_ENCODING
+
+
 def object_fields(body: bytes) -> tuple[list[tuple[str, str]], str]:
     """The header fields of a raw commit or tag object (people split into name and email) and its message."""
-    head, _, message = body.decode("utf-8", "replace").partition("\n\n")
+    head, _, message = decoded_object(body)[0].partition("\n\n")
     fields, key = [], ""
     for line in head.split("\n"):
         if line.startswith(" "):
@@ -411,13 +488,20 @@ def object_fields(body: bytes) -> tuple[list[tuple[str, str]], str]:
 
 
 def object_findings(place: str, body: bytes, lists: NegativeList, allowed: re.Pattern[str]) -> list[str]:
+    """Every field and the message, each also with its JSON escapes resolved. The allowed addresses
+    are taken out for the class `e-mail address` only; every other class reads the original."""
+    problem = decoded_object(body)[1]
     fields, message = object_fields(body)
-    findings = []
+    view = lambda text: allowed.sub("noreply", text)  # noqa: E731
+    findings = [f"{place}: {problem}"] if problem else []
     for field, value in fields:
         findings += name_findings(place, field, lists, kind="field")
         label = f"{place}:{shown(field, lists)}"
-        findings += [f"{label}: {name}" for name in leak_classes(allowed.sub("noreply", value), lists)]
-    return findings + scan_text(f"{place}:message", "", allowed.sub("noreply", message), lists)
+        classes = dict.fromkeys(name for text in unescaped(value) for name in leak_classes(text, lists, email_view=view))
+        findings += [f"{label}: {name}" for name in classes]
+    for text in unescaped(message):
+        findings += scan_text(f"{place}:message", "", text, lists, email_view=view)
+    return list(dict.fromkeys(findings))
 
 
 def tag_objects(repo: Path, lists: NegativeList) -> list[tuple[str, bytes]]:
@@ -453,7 +537,7 @@ def meta_findings(repo: Path, lists: NegativeList,
 
 def source_checks(repo: Path, ref: str, tag: str | None, lists: NegativeList) -> list[Callable[[], list[str]]]:
     """Checks 1 and 2, everything that needs no build, in reporting order."""
-    checks = [lambda: worktree_findings(repo), lambda: version_findings(repo, ref)]
+    checks = [lambda: worktree_findings(repo), lambda: version_findings(repo, ref, lists)]
     if tag:
         checks.append(lambda: tag_findings(repo, tag, lists))
     return checks + [lambda: ref_findings(repo, ref, lists), lambda: history_findings(repo, lists),
@@ -485,18 +569,53 @@ def forbidden_file_class(name: str) -> str | None:
     return None
 
 
+class ArchiveContent(NamedTuple):
+    """A wheel or an sdist as the check reads it: its regular files, every entry name (folders and
+    links included), and its own metadata as `(kind, text)` -- comments, link targets, owners, pax headers."""
+
+    members: list[tuple[str, bytes]]
+    names: list[str]
+    metadata: list[tuple[str, bytes]]
+
+
 def archive_members(archive: Path) -> Iterator[tuple[str, bytes]]:
     """(name relative to the package root, content) for every regular file of a wheel or sdist."""
-    if archive.suffix == ".whl":
-        with zipfile.ZipFile(archive) as wheel:
-            for info in wheel.infolist():
-                if not info.is_dir():
-                    yield info.filename, wheel.read(info)
-        return
+    yield from read_archive(archive).members
+
+
+def read_archive(archive: Path) -> ArchiveContent:
+    """The whole archive; one that does not read is a usage error that names nothing of its content."""
+    try:
+        return _read_wheel(archive) if archive.suffix == ".whl" else _read_sdist(archive)
+    except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError, ValueError, KeyError) as exc:
+        raise UsageError("a built distribution could not be read") from exc
+
+
+def _read_wheel(archive: Path) -> ArchiveContent:
+    content = ArchiveContent([], [], [])
+    with zipfile.ZipFile(archive) as wheel:
+        content.metadata.append(("archive comment", wheel.comment))
+        for info in wheel.infolist():
+            content.names.append(info.filename)
+            content.metadata.extend([("entry comment", info.comment), ("entry extra field", info.extra)])
+            if not info.is_dir():
+                content.members.append((info.filename, wheel.read(info)))
+    return content
+
+
+def _read_sdist(archive: Path) -> ArchiveContent:
+    content = ArchiveContent([], [], [])
     with tarfile.open(archive, "r:gz") as sdist:
+        content.metadata.extend([("pax header", f"{key}={value}".encode("utf-8", "replace")) for key, value in sdist.pax_headers.items()])
         for info in sdist.getmembers():
+            content.names.append(info.name)
+            content.metadata.extend([("link target", info.linkname.encode("utf-8", "replace")),
+                                 ("owner", f"{info.uname}\n{info.gname}".encode("utf-8", "replace"))])
+            content.metadata.extend([("pax header", f"{key}={value}".encode("utf-8", "replace")) for key, value in info.pax_headers.items()])
             if info.isfile():
-                yield PurePosixPath(*PurePosixPath(info.name).parts[1:]).as_posix(), sdist.extractfile(info).read()
+                data = sdist.extractfile(info).read()
+                content.members.append((PurePosixPath(*PurePosixPath(info.name).parts[1:]).as_posix(), data))
+    return content
 
 
 def wheel_shape_findings(label: str, members: list[tuple[str, bytes]]) -> list[str]:
@@ -505,8 +624,11 @@ def wheel_shape_findings(label: str, members: list[tuple[str, bytes]]) -> list[s
         findings.append(f"{label}: no modelroom/ package")
     entry_files = [data for name, data in members if name.endswith(".dist-info/entry_points.txt")]
     parser = configparser.ConfigParser()
-    if entry_files:
-        parser.read_string(entry_files[0].decode("utf-8", "replace"))
+    try:
+        if entry_files:
+            parser.read_string(entry_files[0].decode("utf-8", "replace"))
+    except configparser.Error:  # its message quotes the file: never passed on
+        return findings + [f"{label}: entry_points.txt does not read"]
     if not parser.has_section("console_scripts") or parser["console_scripts"].get("modelroom") != "modelroom.cli:main":
         findings.append(f"{label}: no modelroom console entry (modelroom.cli:main)")
     return findings
@@ -515,14 +637,19 @@ def wheel_shape_findings(label: str, members: list[tuple[str, bytes]]) -> list[s
 def distribution_findings(archive: Path, lists: NegativeList) -> list[str]:
     """Every member on its own, duplicates included: a later member of the same name must not hide
     an earlier one."""
-    members = list(archive_members(archive))
+    content = read_archive(archive)
+    members = content.members
     label = f"dist:{shown(archive.name, lists)}"
     findings = name_findings("dist", archive.name, lists)
     names = [name for name, _ in members]
     for name in dict.fromkeys(n for n in names if names.count(n) > 1):
         findings.append(f"{label}:{shown(name, lists)}: duplicate member")
+    for entry in dict.fromkeys(content.names):  # every entry, folders and links included
+        findings += name_findings(label, entry, lists, kind="entry")
+    for kind, data in content.metadata:
+        if data:
+            findings += [finding for finding in scan_data(f"{label}:<{kind}>", "", data, lists) if finding not in findings]
     for name, data in members:
-        findings += name_findings(label, name, lists)
         place = f"{label}:{shown(name, lists)}"
         file_class = forbidden_file_class(name)
         if file_class:
@@ -582,12 +709,15 @@ def main(argv: list[str] | None = None) -> int:
         lists = with_private_words(load_negative_list(), words)
         for check in source_checks(args.repo, "HEAD", args.tag, lists) + [lambda: dist_findings(args.repo, "HEAD", lists)]:
             findings += check()
-        version = printable_version(ref_version(args.repo, "HEAD"))
+        version = printable_version(ref_version(args.repo, "HEAD"), lists)
         if words_error is not None:
             raise words_error
     except UsageError as exc:
         errors = [exc] + ([words_error] if words_error is not None and words_error is not exc else [])
         print("\n".join(findings + [f"RELEASE-CHECK: error: {error}" for error in errors]))
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- a parser's message may quote the data: only the class
+        print("\n".join(findings + [f"RELEASE-CHECK: error: unexpected {type(exc).__name__}; nothing of its text is shown"]))
         return 2
     print("\n".join(findings + [summary_line(findings, version)]))
     return 1 if findings else 0
