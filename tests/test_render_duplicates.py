@@ -107,7 +107,30 @@ def test_no_line_of_a_table_is_wider_than_100_columns_but_repositories_and_comma
         assert len(line) <= 100, line
 
 
-@pytest.mark.parametrize("model", ["acme/" + "Nova-" * 12 + "7B"])
+def test_render_names_the_free_line_unknown_and_says_why():
+    """Codex r1 m7: `modelroom render` reads no machine live, so its head says `unknown`, labeled."""
+    lines = _stripped(terminal_lines(document([Q4])))
+    assert "free      graphics unknown · disk unknown (modelroom render reads no machine live)" in lines
+
+
+def test_a_free_line_of_eight_cards_breaks_within_100_columns():
+    """Codex r1 m8: the `free` line breaks between its graphics and its disk piece."""
+    from modelroom.room import Disk, disk_words, graphics_words
+    from modelroom.screen import plain
+    from modelroom.views import RunView, terminal_blocks
+
+    pieces = (graphics_words([21504.0] * 8), disk_words(Disk(4 * 1024**4, "/srv/models-on-a-long-mount-point")))
+    view = RunView(install_for="workstation", free=pieces)
+    lines = [plain(line) for line in terminal_blocks(document([Q4]), "workstation", view=view)]
+
+    free = [index for index, line in enumerate(lines) if line.strip().startswith("free ")]
+    assert free and lines[free[0] + 1].strip().startswith("disk ")
+    for line in lines:
+        if not line.strip().startswith(("install", "repo")):
+            assert len(line) <= 100, line
+
+
+@pytest.mark.parametrize("model",["acme/" + "Nova-" * 12 + "7B"])
 def test_a_long_model_name_is_cut_in_its_column(model):
     doc = document([package(UNSLOTH, "Nova-7B-Q4_K_M.gguf", "Q4_K_M", base_model_hf_repo=model)])
     row = next(line for line in terminal_lines(doc, "workstation") if line.strip().startswith("1 "))

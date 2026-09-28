@@ -62,6 +62,13 @@ def test_ollama_models_set_in_the_environment_wins():
     assert disk.known and disk.drive == "/data" and measured == ["/data"]
 
 
+@pytest.mark.parametrize("value", ["~/models", "~"])
+def test_a_tilde_in_ollama_models_is_the_home_that_was_passed_in(value):
+    """Codex r1 m5: the path decision is pure -- `~` is the `home` argument, never this process's."""
+    candidates = ollama_models_candidates({"OLLAMA_MODELS": value}, Path("/srv/ada"), "linux")
+    assert [path.as_posix() for path in candidates] == [("/srv/ada/models" if value != "~" else "/srv/ada")]
+
+
 def test_the_user_default_when_only_it_exists():
     room, measured = _room({"/srv/ada/.ollama/models", "/srv/ada", "/"})
     disk = free_disk(room)
@@ -158,6 +165,8 @@ def test_a_timeout_is_unknown():
         ("0, NVIDIA L4, 21504\n", [(0, "NVIDIA L4"), (1, "NVIDIA L4")]),  # one card fewer
         ("0, NVIDIA A100, 21504\n", [(0, "NVIDIA L4")]),  # another name
         ("0, NVIDIA L4, lots\n", [(0, "NVIDIA L4")]),  # a line that does not read
+        ("0, NVIDIA L4, nan\n", [(0, "NVIDIA L4")]),  # not finite (Codex r1 m6)
+        ("0, NVIDIA L4, inf\n", [(0, "NVIDIA L4")]),
         ("0, NVIDIA L4, 21504\n", []),  # no card in the profile (unified memory, none)
     ],
 )

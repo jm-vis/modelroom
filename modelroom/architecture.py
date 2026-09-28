@@ -108,7 +108,7 @@ def _state_dtype_bytes(layer_config: dict) -> int | None:
     dtype = layer_config.get("mamba_ssm_dtype")
     if dtype is None:
         return STATE_BYTES_ASSUMED
-    return _STATE_DTYPE_BYTES.get(dtype)
+    return _STATE_DTYPE_BYTES.get(dtype) if isinstance(dtype, str) else None  # a list or a map reads as nothing
 
 
 def _full_attention_layers(arch: Architecture) -> int:

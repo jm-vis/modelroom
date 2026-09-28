@@ -19,6 +19,7 @@ refuses to run inside the test suite, where `tests/conftest.py` replaces it (Cod
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
@@ -86,7 +87,10 @@ def ollama_models_candidates(environ: Mapping[str, str], home: Path, system: str
     """Where Ollama may keep its models: `OLLAMA_MODELS` alone where it is set, else the defaults."""
     configured = environ.get("OLLAMA_MODELS")
     if configured:
-        return [Path(configured).expanduser()]
+        # `~` is the `home` passed in, never this process's own (Codex r1 m5): the decision stays pure.
+        if configured == "~" or configured.startswith(("~/", "~\\")):
+            return [home / configured[2:]] if len(configured) > 1 else [home]
+        return [Path(configured)]
     candidates = [home / ".ollama" / "models"]
     if system.startswith("linux"):
         candidates.append(_SERVICE_DEFAULT)
@@ -179,7 +183,7 @@ def _read_free(text: str) -> dict[int, tuple[str, float]] | None:
             free = float(parts[2])
         except ValueError:
             return None
-        if free < 0 or int(parts[0]) in found:
+        if not math.isfinite(free) or free < 0 or int(parts[0]) in found:
             return None
         found[int(parts[0])] = (parts[1], free)
     return found or None
@@ -211,14 +215,15 @@ def profile_cards(profile) -> list[tuple[int, str | None]]:
     return [(gpu.index, gpu.name) for gpu in profile.gpus]
 
 
-def free_words(room: RoomProbes, profile, dot: str = "·") -> str:
-    """The `free` line of this machine's table head: graphics and disk, each measured now."""
-    return f"{graphics_words(free_vram_mib(room, profile_cards(profile)))} {dot} {disk_words(free_disk(room))}"
+def free_pieces(room: RoomProbes, profile) -> tuple[str, str]:
+    """The two pieces of this machine's `free` line, graphics and disk, each measured now; the view
+    joins them and breaks between them where the line would pass 100 columns (Codex r1 m8)."""
+    return graphics_words(free_vram_mib(room, profile_cards(profile))), disk_words(free_disk(room))
 
 
 __all__ = [
     "Disk",
-    "free_words",
+    "free_pieces",
     "profile_cards",
     "NVIDIA_SMI_FREE_ARGS",
     "PULL_DISK_MARGIN_BYTES",

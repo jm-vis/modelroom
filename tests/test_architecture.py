@@ -94,6 +94,14 @@ def test_a_missing_state_dtype_assumes_four_bytes():
     assert state_bytes(architecture) == QWEN35_STATE_BYTES
 
 
+@pytest.mark.parametrize("dtype", ["int8", [], {}, 4])
+def test_a_state_dtype_that_does_not_read_stays_unknown(dtype):
+    """Codex r1 m4: an unknown string and a JSON value of another type are `unknown`, never a crash."""
+    config = _qwen35_config()
+    config["text_config"]["mamba_ssm_dtype"] = dtype
+    assert _qwen35(config).kind == "unknown"
+
+
 def test_a_mixture_config_with_linear_layers_stays_unknown():
     config = _qwen35_config()
     config["text_config"]["num_experts"] = 64

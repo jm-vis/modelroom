@@ -394,15 +394,21 @@ def _choose_pool(
     if pool.shared:
         reserve_gib = machine_config.reserve_ram_gib + reserve
         return "gpu", ram_gib - reserve_gib, reserve_gib, False
-    if pool.cards and need_gib <= TIGHT_RATIO * (max(pool.cards) - reserve):
+    if pool.cards and _holds(need_gib, max(pool.cards) - reserve):
         return "gpu", max(pool.cards) - reserve, reserve, False
     spread = sum(card - reserve for card in pool.cards)
-    if len(pool.cards) > 1 and need_gib <= TIGHT_RATIO * spread:
+    if len(pool.cards) > 1 and _holds(need_gib, spread):
         return "gpu_split", spread, len(pool.cards) * reserve, False
 
     pool_gib = ram_gib - machine_config.reserve_ram_gib
     mode = "cpu_gpu" if pool.cards else "cpu"
     return mode, pool_gib, machine_config.reserve_ram_gib, True
+
+
+def _holds(need_gib: float, pool_gib: float) -> bool:
+    """Whether a pool holds the package in the sense of `_classify`: the very same ratio, so the two
+    never disagree at a floating-point edge (4.9 / 5.0 is 0.9800000000000001; Codex r1 M2)."""
+    return pool_gib > 0 and need_gib / pool_gib <= TIGHT_RATIO
 
 
 def _classify(need_gib: float, pool_gib: float, cap_at_fits: bool = False) -> str:

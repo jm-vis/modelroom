@@ -78,7 +78,8 @@ def config_file(run: "GuidedRun", config_arg: Path | None) -> Path:
         last = Path(pointer.current).resolve()
         if (last / CONFIG_NAME).is_file():
             if last == run.here.resolve():
-                return (last / CONFIG_NAME).resolve()
+                # No question about the folder, but the home check all the same (Codex r1 M1).
+                return _allowed_folder(run, last) / CONFIG_NAME
             return ask_config_file(run, last)
         # Without the path in front of it: the answer to the question that follows says which
         # folder this run works in, and it said the same path twice (test round, 2026-09-24).

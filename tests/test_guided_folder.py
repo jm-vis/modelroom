@@ -244,6 +244,20 @@ def test_an_answer_file_without_write_home_is_a_missing_answer(tmp_path: Path):
         config_file(run, None)
 
 
+def test_a_remembered_home_folder_that_is_this_one_is_a_question_too(tmp_path: Path):
+    """Codex r1 M1: the remembered folder equal to `here` is no way around the home check."""
+    home = Path.home().resolve()
+    _remember(tmp_path, home)
+    before = _tree(home)
+    elsewhere = tmp_path / "results"
+    asker = _Asker({"write_home": [False], "results_path": [str(elsewhere)]})
+    run, lines = _run(tmp_path, asker, home)
+
+    assert config_file(run, None) == elsewhere.resolve() / CONFIG_NAME
+    assert HOME_NOTE in [line.strip() for line in lines] and "results" not in asker.asked
+    assert _tree(home) == before
+
+
 # --- `--config` ------------------------------------------------------------------------------------
 
 

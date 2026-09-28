@@ -326,6 +326,8 @@ INSTALL_LABEL = "install"
 REPO_LABEL = "repo"
 FREE_LABEL = "free"
 ANOTHER_COMPUTER_FREE = "unknown on another computer"
+# `modelroom render` reads no machine live: its head says so rather than leaving the line out (Codex r1 m7).
+RENDER_FREE = ("graphics unknown", "disk unknown (modelroom render reads no machine live)")
 OTHER_INSTALL_NOTE = "run it on that computer; this run pulls only onto this one"
 NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 # What is left of the 100 characters for the text of a labeled line: the label's own column, and
@@ -516,7 +518,7 @@ class RunView:
 
     install_for: str | None = None
     ambiguous: frozenset[str] = frozenset()
-    free: str | None = None
+    free: tuple[str, ...] | None = None
     origins: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -579,17 +581,21 @@ def _install_lines(block: MachineRanking, view: RunView) -> list[Line]:
     return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", OTHER_INSTALL_NOTE)])]
 
 
-def _free_lines(block: MachineRanking, view: RunView) -> list[Line]:
-    """The room left, under the head of a block (U8): measured now for this machine, else unknown."""
+def _free_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
+    """The room left, under the head of a block (U8): measured now for this machine, `unknown` for
+    another one, and `unknown` with its reason where no machine was read (`modelroom render`)."""
     if view.free is None:
-        return []
-    text = view.free if block.machine == view.install_for else ANOTHER_COMPUTER_FREE
-    return [label_line(FREE_LABEL, [("class:note", text)])]
+        pieces: tuple[str, ...] = RENDER_FREE
+    elif block.machine == view.install_for:
+        pieces = view.free
+    else:
+        pieces = (ANOTHER_COMPUTER_FREE,)
+    return _labeled(FREE_LABEL, list(pieces), dot)
 
 
 def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot: str, view: RunView) -> list[Line]:
     origin = view.origins.get(block.machine)
-    lines: list[Line] = [[("", _block_head(block, scenario, dot, origin))], *_free_lines(block, view)]
+    lines: list[Line] = [[("", _block_head(block, scenario, dot, origin))], *_free_lines(block, view, dot)]
     if block.reason is not None:
         lines.append([("", block.reason)])
     if not block.ranked:

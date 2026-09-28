@@ -53,7 +53,7 @@ from .guided_folder import looks_like_results_folder as _looks_like_results_fold
 from .guided_folder import remember_folder as _remember_folder
 from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, pull_step
 from .pull_choice import ambiguous_names, run_packages
-from .room import RoomProbes, free_words
+from .room import RoomProbes, free_pieces
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
 from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices, _measured_here  # noqa: F401
 from .guided_machines import chosen_machines, machine_answer_words
@@ -671,7 +671,7 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
         return code, None
     document, facts, context = written[0]
     own = next((block.profile for block in document.machines if block.machine == here), None)
-    view = RunView(ambiguous=context.ambiguous, free=free_words(run.room, own, run.screen.glyphs.dot), origins=chosen.origins)
+    view = RunView(ambiguous=context.ambiguous, free=free_pieces(run.room, own), origins=chosen.origins)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 

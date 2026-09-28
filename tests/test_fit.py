@@ -399,6 +399,14 @@ def test_unified_memory_is_one_pool_and_is_judged_as_it_is(need, expected):
     assert _judge(need, (), 52.0, shared=True, reserve_ram=1.0) == expected
 
 
+def test_the_pool_choice_and_the_class_draw_the_same_line_in_floating_point():
+    """Codex r1 M2: 4.9 on a pool of 5.0 is `0.9800000000000001` as a ratio; the card may not be
+    chosen for it and then called `no_fit` -- the system memory is tried, and holds it."""
+    assert 4.9 / 5.0 > 0.98  # the case itself
+    assert _judge(4.9, (6.0,), 128.0) == ("cpu_gpu", 120.0, "fits")
+    assert _judge(4.9, (3.5, 3.5), 128.0) == ("cpu_gpu", 120.0, "fits")
+
+
 def test_a_package_between_98_and_100_percent_of_the_card_falls_back_to_system_memory():
     """Until AP9-UX2 such a package was `no_fit` on the card, though the system memory holds it."""
     package = _gguf_package(weights_bytes=int(8.5 * GIB))

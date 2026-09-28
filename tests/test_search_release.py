@@ -592,6 +592,19 @@ def test_a_catalog_latest_gives_way_to_a_higher_version():
     assert (rebuilt.age, rebuilt.successor, rebuilt.release_basis) == ("legacy", "acme/Nova-3-7B", "computed")
 
 
+def test_a_catalog_latest_gives_way_only_to_a_strictly_higher_version():
+    """Codex r1 M3 (U5 rule 4): a later date of the same version does not overrule the catalog."""
+    catalog = _catalog(_latest_row("acme/Nova-2-7B-2409"), _row("acme/Nova-2-7B-2506"))
+    hits = [_hit("acme/Nova-2-7B-2409", age="latest")]
+    ages = {"acme/Nova-2-7B-2409": AgeVerdict("latest", None, "catalog")}
+
+    assert compute_release(hits, catalog, ages) == {}
+    higher = _catalog(_latest_row("acme/Nova-2-7B-2409"), _row("acme/Nova-2-7B-2506"), _row("acme/Nova-3-7B"))
+    assert compute_release(hits, higher, ages) == {"acme/Nova-2-7B-2409": Release("legacy", "acme/Nova-3-7B")}
+    # A computed status still reads the date: a silent catalog's 2409 is `legacy` to 2506.
+    assert _compute(["acme/Nova-2-7B-2409", "acme/Nova-2-7B-2506"])["acme/Nova-2-7B-2409"] == Release("legacy", "acme/Nova-2-7B-2506")
+
+
 def test_a_stated_legacy_is_never_recomputed():
     hits = [_hit("acme/Nova-2-7B", age="legacy", successor="acme/Nova-2.5-7B"), _hit("acme/Nova-3-7B")]
     ages = {

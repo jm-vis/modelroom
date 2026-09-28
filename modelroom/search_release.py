@@ -318,14 +318,19 @@ def _releases(
             if (verdict.age, verdict.evidence) == ("unknown", "catalog"):
                 releases[base] = Release("latest", None)
             continue
-        if verdict.age == "latest" and verdict.evidence != "catalog":
-            continue
+        if verdict.age == "latest" and (verdict.evidence != "catalog" or not _higher_version(key, tops, keys)):
+            continue  # a catalog `latest` gives way to a strictly higher version only, never to a date
         candidates = _ordered_successors(key, [(top, keys[top]) for top in tops])
         free = [name for name in candidates if not _reaches(_following(stated), name, base)]
         if not free:
             notes.append(_note(f"{_short(base)}: the successor statements around it contradict each other"))
         releases[base] = Release("legacy", (free or candidates)[0])
     return releases, notes
+
+
+def _higher_version(key: LineKey, tops: Sequence[str], keys: Mapping[str, LineKey]) -> bool:
+    """Whether a highest member of the group carries a strictly higher version number (U5 rule 4)."""
+    return any(keys[top].version > key.version for top in tops)
 
 
 def _short(repo: str) -> str:

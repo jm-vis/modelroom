@@ -3638,7 +3638,9 @@ and `search.json`, never the catalog, the configuration or the document.
   size the largest known); then the same variation before another; then the fewest variations;
   then the name.
 - **Stated against computed.** A stated `legacy` stays, always. A **catalog** `latest` gives way to a
-  computed `legacy` where a member stands over it (the catalog ages). A silent catalog's `unknown`
+  computed `legacy` only where a member carries a **strictly higher version number** (the catalog
+  ages); a later date of the same version does not overrule it, while a computed status still reads
+  the date. A silent catalog's `unknown`
   is computed. An `unknown` from a **fault** (a broken `new_version`, a budget) is computed too --
   `legacy` where a member stands over it, `unknown` otherwise -- and the fault is a note of step 2 of
   its own: `<name>: its own statement did not read (<fault>)`, cut to 97 characters.
@@ -3813,7 +3815,10 @@ of each card of this machine's profile through `nvidia-smi --query-gpu=index,nam
 Ollama keeps its models (see "The pull"). Whatever cannot be read -- no `nvidia-smi`, a timeout, a
 line that does not read, cards whose number or names differ from the profile, unified memory, no
 NVIDIA card -- is `unknown`, never `none`. A machine that is not this one says `free      unknown on
-another computer`; `modelroom render` draws no such line. A machine of the run that is not this
+another computer`; `modelroom render`, which reads no machine live, says `free      graphics unknown
+· disk unknown (modelroom render reads no machine live)`. The two pieces break onto two lines where
+they would pass 100 columns (several cards). The choice of a pool and the class compare the very
+same ratio `need / pool` with `TIGHT_RATIO`, so they never disagree at a floating-point edge. A machine of the run that is not this
 computer says so in its head too (U2): `server (a1b2c3d4) · imported · context L 32k`, or `· another
 computer` for an entered machine or another profile of the folder.
 

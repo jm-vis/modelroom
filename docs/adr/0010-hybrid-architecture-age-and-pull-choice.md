@@ -73,6 +73,7 @@ The owner decided F1 to F8 the same day (the build brief of AP9-UX2, the owner's
   every model that is not `legacy`.
 - A guided run costs one model info and the pages of one tree more per base model whose repository
   was no target yet.
-- `modelroom render` draws no `free` line and no command: it cannot know which machine it runs on.
+- `modelroom render` draws a `free` line of `unknown` with its reason, and no command: it cannot know
+  which machine it runs on.
 - The Markdown view and the document keep schema 3; origins, room and choice live in memory only.
 - Versions the search does not see (an Ollama-only release) cannot make a model `legacy`.

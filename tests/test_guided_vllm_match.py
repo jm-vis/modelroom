@@ -27,7 +27,7 @@ from fixture_support import QWEN35_4B_REPO, build_transport, packager_probes, qw
 
 RUN_AT = datetime(2026, 9, 28, 12, 0, 0, tzinfo=timezone.utc)
 SHARDS = (5_329_398_688, 3_990_429_408)  # the two safetensors shards of the public tree
-L4_CARD_GIB = 22.494
+L4_CARD_GIB = 22.49  # the card of `profiles_v4/two_l4_server.json`, as the profile records it
 
 
 def _guided_configuration(folder: Path) -> Configuration:
@@ -69,8 +69,36 @@ def test_the_served_model_is_found_through_the_guided_configuration(tmp_path: Pa
     assert weights == sum(SHARDS)
     base = next(spec for spec in snapshot.base_models if spec.hf_repo == QWEN35_4B_REPO)
     assert base.architecture.kind == "hybrid_linear"
-    # The fit of `guided_vllm._fit`, on one L4 as the recorded server profile has it.
-    fit = vllm_fit(L4_CARD_GIB, weights, context=32768, requests=1, architecture=base.architecture)
-    assert fit.basis == "architecture"
+    # The fit through its integration point `guided_vllm._fit` (Codex r1 m9): the profile this folder
+    # binds this machine to is the recorded L4 server, its largest card 22.49 GiB.
+    fit, reason, notes = _guided_fit(tmp_path.resolve(), config, matched, snapshot.base_models)
+    assert reason is None and fit.basis == "architecture" and fit.card_gib == L4_CARD_GIB
+    assert fit == vllm_fit(L4_CARD_GIB, weights, context=32768, requests=1, architecture=base.architecture)
     kv_bytes = int(fit.kv_gib * 1024**3)
     assert fit.at_once == kv_bytes // (32_768 * 32_768 + 52_690_944)
+    assert any(f"{fit.at_once} requests of context 32k at once" in note for note in notes)
+
+
+def _guided_fit(folder: Path, config: Configuration, package, base_models):
+    """`guided_vllm._fit` for `folder`, bound to the recorded L4 profile; returns fit, reason, notes."""
+    import json
+    from types import SimpleNamespace
+
+    from fixture_support import FIXTURES, TWO_L4_ID
+    from modelroom.binding import POINTER_SCHEMA_VERSION, GuidedPointer, write_pointer
+    from modelroom.guided_vllm import _fit
+    from modelroom.measurements import Scenario
+
+    profile = json.loads((FIXTURES / "profiles_v4" / "two_l4_server.json").read_text(encoding="utf-8"))
+    config.paths.hardware_dir.mkdir(parents=True, exist_ok=True)
+    (config.paths.hardware_dir / f"{TWO_L4_ID}.json").write_bytes(json.dumps(profile).encode("utf-8"))
+    data = config.model_dump(mode="json")
+    data["machines"]["workstation"]["profile"] = TWO_L4_ID
+    bound = Configuration.from_dict(data)
+    pointer = folder / "guided.json"
+    write_pointer(pointer, GuidedPointer(schema_version=POINTER_SCHEMA_VERSION, current=str(folder), bindings={str(folder): TWO_L4_ID}))
+    notes: list[str] = []
+    run = SimpleNamespace(pointer_path=pointer, screen=SimpleNamespace(note=notes.append))
+    scenario = Scenario(context_requested=32768, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1)
+    fit, reason = _fit(run, bound, folder, package, base_models, scenario)
+    return fit, reason, notes
