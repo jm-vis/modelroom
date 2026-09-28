@@ -5,6 +5,10 @@ configuration with the served model's repository in `repos`, the recorded profil
 `profiles_v4/two_l4_server.json` bound by the pointer file. The fetch of the run records the
 `tensor` package from the recorded Hub answers, the vLLM server answers from the recordings of
 vLLM 0.30.0, and the Ollama daemon is not there. Nothing outside `tmp_path` is written.
+
+The served repository stands in `repos` by hand here, so these tests prove the measurement and the
+fit, **not** the mapping of a guided run's configuration to the served model (SV1-F): that is
+`tests/test_guided_vllm_match.py` (AP9-UX2 P3).
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from fixture_support import (
     FIXTURES,
     json_response,
     QWEN25_REPO,
+    QWEN25_SHA,
     build_transport,
     guided_transport_mapping,
     offline_daemon,
@@ -617,13 +622,22 @@ def test_the_server_row_of_the_card_says_whether_the_number_counts(tmp_path: Pat
     if case == "no package":
         results = _folder(tmp_path)
         # The model of the folder is the served one, but no repository of it is configured: no package.
+        # Since AP9-UX2 (P3) the search makes the publisher's repository a target itself, so its tree
+        # answers empty here -- the one way left in which the served model has no package.
         (results / "modelroom.toml").write_bytes(CONFIG.replace(f'  repos = ["{QWEN25_REPO}"]\n', "").encode("utf-8"))
+        empty_tree = {
+            ("GET", f"https://huggingface.co/api/models/{QWEN25_REPO}/tree/{QWEN25_SHA}?recursive=true"): Response(
+                status=200, headers={}, body=b"[]"
+            )
+        }
         lines: list[str] = []
         code = run_guided(
             FileAsker(answers),
             here=results,
             pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
-            transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping(), **_choosable_qwen25()}),
+            transport=build_transport(
+                {**guided_transport_mapping(), **qwen25_transport_mapping(), **_choosable_qwen25(), **empty_tree}
+            ),
             probes=windows_probes(host="workstation"),
             daemon=offline_daemon(),
             servers=vllm_servers(),

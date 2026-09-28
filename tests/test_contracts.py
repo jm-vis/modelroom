@@ -18,6 +18,7 @@ from modelroom.guided_contracts import Note, Requirement, SearchHit
 from modelroom.guided_models import ModelChoice
 from modelroom.measurements import ExportObject, LoadState, MeasurementRecord, PackageRef, RunCounters, Scenario
 from modelroom.profile import CrossCheck, HardwareProfile, LlmfitCrosscheck
+from modelroom.architecture import architecture_from_hf_config
 from modelroom.contracts import (
     HARDWARE_SCHEMA_RANGE,
     HARDWARE_SCHEMA_VERSION,
@@ -37,7 +38,6 @@ from modelroom.contracts import (
     Rating,
     SchemaVersionError,
     Snapshot,
-    architecture_from_hf_config,
     check_schema_version,
     load_hardware_snapshot,
     validate_hf_repo,
@@ -386,13 +386,6 @@ def test_architecture_from_missing_config_is_unknown():
     architecture = architecture_from_hf_config("acme/Nova-7B", None, None)
     assert architecture.kind == "unknown"
     assert architecture.num_hidden_layers is None
-
-
-def test_architecture_from_real_qwen_hybrid_config_is_unknown():
-    config = json.loads((FIXTURES / "hf_qwen_qwen35_9b_config.json").read_text(encoding="utf-8"))
-    model = json.loads((FIXTURES / "hf_qwen_qwen35_9b_model.json").read_text(encoding="utf-8"))
-    architecture = architecture_from_hf_config("Qwen/Qwen3.5-9B", model["sha"], config)
-    assert architecture.kind == "unknown"
 
 
 def test_architecture_from_synthetic_dense_config_is_dense_classic():

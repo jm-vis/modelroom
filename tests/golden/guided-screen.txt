@@ -42,16 +42,16 @@
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
  context   32k (entered), KV cache f16 (assumed), 1 request (from 1 user)
  speed     not measured            say Yes in step 4 to measure an installed package
- result    docs\models.md          22 packages ranked, 2 no fit
+ result    docs\models.md          24 packages ranked, 0 no fit
 
  workstation · context L 32k
- #    Model                     Package                 Fit                   Speed         Memory
+ free      graphics 10.2 GB free now · disk 41.2 GB free on C: (Ollama models)
+ #    Model                   Package                 Fit           Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    DeepSeek-R1-0528-Qwen3-8  unsloth · Q4_K_M        tight                 –             10.2 GB
- 2    Qwen3.5-9B                unsloth · Q4_K_S        tight                 –             10.5 GB
- shown     2 rows of 22 packages, one row per model · 2 no fit (unsloth Q4_1, unsloth Q4_K_M)
- memory    #1–2 fit into graphics memory, 11.0 GB free after the reserve
- basis     #2 computed from the package size, not its architecture
+ 1    DeepSeek-R1-0528-Qwen3  unsloth · Q4_K_M        tight         –             10.2 GB   4.7 GB
+ 2    Qwen3.5-9B              unsloth · UD-Q6_K_XL    tight         –             10.5 GB   8.2 GB
+ shown     2 rows of 24 packages, one row per model
+ memory    #1–2 fit into graphics memory, budget 11.0 GB (card minus reserve, from the profile)
  speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
  key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
            fits: up to 85 % · tight: up to 98 % · no fit: more

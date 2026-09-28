@@ -158,7 +158,8 @@ def _unified_profile() -> dict:
 def test_the_pool_line_says_shared_memory_for_unified_memory():
     block = MachineRanking.model_validate({**copy.deepcopy(EXAMPLES["MachineRanking"]), "profile": _unified_profile()})
     pieces = _pool_pieces(block, "-")
-    assert any("shared memory" in piece and "after both reserves" in piece for piece in pieces)
+    # Since AP9-UX2 (U8): the labeled budget, broken before its bracket where the line is long.
+    assert "shared memory, budget" in " ".join(pieces) and "memory minus both reserves" in " ".join(pieces)
     assert not any("graphics memory" in piece for piece in pieces)
 
 

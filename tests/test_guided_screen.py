@@ -115,15 +115,17 @@ def test_the_screen_of_a_run_that_measured_carries_the_speed(tmp_path: Path):
 
 
 def test_the_screen_of_a_run_that_pulls_the_first_row_ends_with_the_pull(tmp_path: Path):
-    """The daemon answers, the first row is not local: the question after the card, then the pull.
+    """The daemon answers: the list of the rows shown, the command of the choice, the question, the pull.
 
     Qwen3.5-9B alone since AP9-UX: with DeepSeek chosen too, its one package -- installed on the
-    fixture daemon -- is the first row (ADR 0009), and a local first row asks nothing.
+    fixture daemon -- is the first row (ADR 0009), and a local first row asks nothing. Since AP9-UX2
+    (U6) the user chooses the package; this run takes the `Q4_K_S` build, not `#1`.
     """
-    first = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S"  # the least compression on the card at `L` (ADR 0009)
-    daemon = pull_daemon(after_pull=tags_with(first))
+    chosen = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S"
+    daemon = pull_daemon(after_pull=tags_with(chosen))
+    answers = {**CHOSEN, "select": [QWEN], "pull_package": chosen, "pull": True}
 
-    _compare("guided-screen-pull.txt", _screen(tmp_path, {**CHOSEN, "select": [QWEN], "pull": True}, daemon=daemon))
+    _compare("guided-screen-pull.txt", _screen(tmp_path, answers, daemon=daemon))
 
 
 def test_the_screen_of_a_run_with_a_machine_entered_by_hand_reads_as_the_golden_file(tmp_path: Path):
@@ -148,6 +150,8 @@ def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path
             continue  # a path, a registry's own message and a served model's id are as long as they are
         if "cannot reach the Ollama daemon" in line:
             continue  # the daemon's own reason, since AP9-UX E also as `Ollama: <reason>` before the question
+        if "ollama pull " in line or line.strip().startswith("repo ") or "hf.co/" in line:
+            continue  # a command, a repository and a pull name are as long as they are (AP9-UX2 U4, U6)
         assert len(line) <= 100, line
     # Step 4 since AP9-UX E: the reason the number will not count stands before the one question.
     assert servers is None or "the number will not count: the server serves" in screen

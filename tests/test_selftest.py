@@ -447,8 +447,8 @@ GOOD_DOCUMENT = "\n".join(
     ]
 )
 def _block(**changes) -> dict:
-    """A machine block in which Qwen3.5 is ranked from the size of its packages."""
-    entry = {"base_model_hf_repo": st.QWEN_BASE, "fit": {"basis": "size"}, "reason": None}
+    """A machine block in which Qwen3.5 is ranked on its architecture (AP9-UX2 P1)."""
+    entry = {"base_model_hf_repo": st.QWEN_BASE, "fit": {"basis": "architecture"}, "reason": None}
     data = {"ranked": [entry], "no_fit": [], "not_covered": []}
     data.update(changes)
     return data
@@ -469,8 +469,7 @@ def test_criterion_four_names_a_machine_that_judged_no_package_of_the_model():
 
 
 def test_criterion_four_names_a_package_judged_on_another_basis():
-    architecture = _block(ranked=[{"base_model_hf_repo": st.QWEN_BASE, "fit": {"basis": "architecture"}}])
-    problems = st.ranking_problems(GOOD_DOCUMENT, "workstation", architecture)
+    problems = st.ranking_problems(GOOD_DOCUMENT, "workstation", _block(ranked=[{"base_model_hf_repo": st.QWEN_BASE, "fit": {"basis": "size"}}]))
     assert any("another basis" in problem for problem in problems)
 
 
@@ -688,10 +687,11 @@ GOOD_DIALOG = [
     " result    docs/models.md          25 packages ranked, 0 no fit",
     "",
     " workstation - context L 32k",
-    " #    Model                     Package                 Fit                   Speed         Memory",
-    " 1    Qwen3.5-9B                unsloth - Q4_K_S        tight                 -             10.5 GB",
+    " free      graphics 10.2 GB free now - disk 41.2 GB free on C: (Ollama models)",
+    " #    Model                   Package                 Fit           Speed         Memory    Download",
+    " 1    Qwen3.5-9B              unsloth - Q4_K_S        tight         -             10.5 GB   5.0 GB",
     " shown     1 of 25 packages",
-    " memory    #1 fits into graphics memory, 11.0 GB free after the reserve",
+    " memory    #1 fits into graphics memory, budget 11.0 GB (card minus reserve, from the profile)",
     " speed     nothing measured in the rows shown - say Yes in step 4 to measure an installed package",
     "",
     " install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S",

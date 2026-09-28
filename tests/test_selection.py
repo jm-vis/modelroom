@@ -101,3 +101,26 @@ def test_model_facts_carry_the_lists_numbers():
     )
 
     assert model_facts(selection) == {NOVA: ModelFacts(None, False), VEGA: ModelFacts(9.15, True)}
+
+
+def test_origins_follow_their_precedence():
+    """AP9-UX2 U2 (Codex r1-14): this, then imported, then entered, then the folder -- each machine once."""
+    from modelroom.selection import machine_origins
+
+    data = _config().model_dump(mode="json")
+    machine = {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False}
+    data["machines"] = {
+        "laptop": {**machine, "writer": True, "profile": "1" * 16},
+        "server": {**machine, "profile": "2" * 16},
+        "studio": {**machine, "profile": "3" * 16},
+        "rack": {**machine, "profile": "4" * 16},
+    }
+    config = Configuration.from_dict(data)
+    machines = ("laptop", "server", "studio", "rack")
+
+    origins = machine_origins(
+        config, machines, this={"laptop"}, imported={"1" * 16, "2" * 16}, entered={"2" * 16, "3" * 16}
+    )
+
+    # `laptop` was measured here and imported: this wins; `server` imported and entered: imported wins.
+    assert origins == {"laptop": "this", "server": "imported", "studio": "entered", "rack": "folder"}

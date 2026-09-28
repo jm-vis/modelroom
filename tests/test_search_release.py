@@ -30,85 +30,86 @@ def _mmdd(value: str) -> LineDate:
     return LineDate("mmdd", None, int(value[:2]), int(value[2:]))
 
 
-# (hf_repo, family, variant, size, version, date) -- the family without its publisher.
+# (hf_repo, family, line, variant, size, version, date) -- the family without its publisher: its first
+# word (GF F3, AP9-UX2 U5); the line a word of `LINE_WORDS`/`LINE_COUNTERS`; every other word a variant.
 KEYS = [
     # --- the shipped catalog, all 62 rows ---
-    ("mistralai/Ministral-3-14B-Instruct-2512", "ministral", set(), 14, (3,), _yymm("2512")),
-    ("mistralai/Ministral-3-8B-Instruct-2512", "ministral", set(), 8, (3,), _yymm("2512")),
-    ("mistralai/Ministral-3-3B-Instruct-2512", "ministral", set(), 3, (3,), _yymm("2512")),
-    (MISTRAL_SMALL_4, "mistral-small", set(), 119, (4,), _yymm("2603")),
-    ("mistralai/Devstral-Small-2-24B-Instruct-2512", "devstral-small", set(), 24, (2,), _yymm("2512")),
-    ("mistralai/Magistral-Small-2509", "magistral-small", set(), None, (), _yymm("2509")),
-    (MISTRAL_SMALL_3, "mistral-small", set(), 24, (3, 2), _yymm("2506")),
-    ("utter-project/EuroLLM-9B-Instruct", "eurollm", set(), 9, (), None),
-    ("utter-project/EuroLLM-9B-Instruct-2512", "eurollm", set(), 9, (), _yymm("2512")),
-    ("utter-project/EuroLLM-22B-Instruct-2512", "eurollm", set(), 22, (), _yymm("2512")),
-    ("utter-project/EuroMoE-2.6B-A0.6B-Instruct-2512", "euromoe", set(), 2.6, (), _yymm("2512")),
-    ("openGPT-X/Teuken-7B-instruct-v0.6", "teuken", set(), 7, (0, 6), None),
-    ("Qwen/Qwen3.5-9B", "qwen", set(), 9, (3, 5), None),
-    ("Qwen/Qwen3.5-4B", "qwen", set(), 4, (3, 5), None),
-    ("Qwen/Qwen3.5-27B", "qwen", set(), 27, (3, 5), None),
-    ("Qwen/Qwen3.5-35B-A3B", "qwen", set(), 35, (3, 5), None),
-    ("Qwen/Qwen3.5-122B-A10B", "qwen", set(), 122, (3, 5), None),
-    ("Qwen/Qwen3.6-27B", "qwen", set(), 27, (3, 6), None),
-    ("Qwen/Qwen3.6-35B-A3B", "qwen", set(), 35, (3, 6), None),
-    ("Qwen/Qwen3.8-27B", "qwen", set(), 27, (3, 8), None),
-    ("Qwen/Qwen3-Coder-Next", "qwen", {"coder", "next"}, None, (3,), None),
-    ("Qwen/Qwen3-Coder-30B-A3B-Instruct", "qwen", {"coder"}, 30, (3,), None),
-    ("Qwen/Qwen3-Embedding-8B", "qwen", {"embedding"}, 8, (3,), None),
-    ("Qwen/Qwen3-Embedding-0.6B", "qwen", {"embedding"}, 0.6, (3,), None),
-    ("deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "deepseek-r1", {"qwen3"}, 8, (), _mmdd("0528")),
-    ("deepseek-ai/DeepSeek-V3.2", "deepseek", set(), None, (3, 2), None),
-    ("deepseek-ai/DeepSeek-V4-Flash-0731", "deepseek", {"flash"}, None, (4,), _mmdd("0731")),
-    ("meta-llama/Llama-4-Scout-17B-16E-Instruct", "llama", {"scout"}, 17, (4,), None),
-    ("meta-llama/Llama-3.3-70B-Instruct", "llama", set(), 70, (3, 3), None),
-    ("meta-llama/Llama-3.1-8B-Instruct", "llama", set(), 8, (3, 1), None),
-    ("meta-llama/Llama-3.2-3B-Instruct", "llama", set(), 3, (3, 2), None),
-    ("google/gemma-4-31B-it", "gemma", set(), 31, (4,), None),
-    ("google/gemma-4-26B-A4B-it", "gemma", set(), 26, (4,), None),
-    ("google/gemma-4-12B-it", "gemma", set(), 12, (4,), None),
-    ("google/gemma-4-E4B-it", "gemma", set(), 4, (4,), None),
-    ("microsoft/phi-4", "phi", set(), None, (4,), None),
-    ("microsoft/Phi-4-mini-instruct", "phi", {"mini"}, None, (4,), None),
-    ("openai/gpt-oss-120b", "gpt-oss", set(), 120, (), None),
-    ("openai/gpt-oss-20b", "gpt-oss", set(), 20, (), None),
-    ("zai-org/GLM-5.3-Flash", "glm", {"flash"}, None, (5, 3), None),
-    ("zai-org/GLM-4.7-Flash", "glm", {"flash"}, None, (4, 7), None),
-    ("moonshotai/Kimi-Linear-48B-A3B-Instruct", "kimi-linear", set(), 48, (), None),
-    ("ibm-granite/granite-4.2-30b", "granite", set(), 30, (4, 2), None),
-    ("ibm-granite/granite-4.2-8b", "granite", set(), 8, (4, 2), None),
-    ("ibm-granite/granite-4.2-3b", "granite", set(), 3, (4, 2), None),
-    ("nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16", "nvidia-nemotron", {"lightning"}, 30, (3, 5), None),
-    ("allenai/Olmo-3.1-32B-Instruct", "olmo", set(), 32, (3, 1), None),
-    ("allenai/Olmo-3-7B-Instruct", "olmo", set(), 7, (3,), None),
-    ("tiiuae/Falcon-H1-34B-Instruct", "falcon-h1", set(), 34, (), None),
-    ("tiiuae/Falcon-H1R-7B", "falcon-h1r", set(), 7, (), None),
-    ("tiiuae/Falcon-H1-7B-Instruct", "falcon-h1", set(), 7, (), None),
-    ("CohereLabs/command-a-reasoning-08-2025", "command-a-reasoning", set(), None, (), LineDate("mm-yyyy", 2025, 8, None)),
-    ("CohereLabs/North-Mini-Code-1.0", "north-mini-code", set(), None, (1, 0), None),
-    ("CohereLabs/aya-expanse-8b", "aya-expanse", set(), 8, (), None),
-    ("CohereLabs/tiny-aya-global", "tiny-aya-global", set(), None, (), None),
-    ("LiquidAI/LFM2.5-8B-A1B", "lfm", set(), 8, (2, 5), None),
-    ("LiquidAI/LFM2.5-2.6B", "lfm", set(), 2.6, (2, 5), None),
-    ("HuggingFaceTB/SmolLM3-3B", "smollm", set(), 3, (3,), None),
-    ("openbmb/MiniCPM5-2B", "minicpm", set(), 2, (5,), None),
-    ("tencent/Hy-MT2-30B-A3B", "hy-mt", set(), 30, (2,), None),
-    ("baidu/ERNIE-4.5-21B-A3B-Thinking", "ernie", {"thinking"}, 21, (4, 5), None),
-    ("MiniMaxAI/MiniMax-H3", "minimax-h3", set(), None, (), None),
+    ("mistralai/Ministral-3-14B-Instruct-2512", "ministral", "", set(), 14, (3,), _yymm("2512")),
+    ("mistralai/Ministral-3-8B-Instruct-2512", "ministral", "", set(), 8, (3,), _yymm("2512")),
+    ("mistralai/Ministral-3-3B-Instruct-2512", "ministral", "", set(), 3, (3,), _yymm("2512")),
+    (MISTRAL_SMALL_4, "mistral", "small", set(), 119, (4,), _yymm("2603")),
+    ("mistralai/Devstral-Small-2-24B-Instruct-2512", "devstral", "small", set(), 24, (2,), _yymm("2512")),
+    ("mistralai/Magistral-Small-2509", "magistral", "small", set(), None, (), _yymm("2509")),
+    (MISTRAL_SMALL_3, "mistral", "small", set(), 24, (3, 2), _yymm("2506")),
+    ("utter-project/EuroLLM-9B-Instruct", "eurollm", "", set(), 9, (), None),
+    ("utter-project/EuroLLM-9B-Instruct-2512", "eurollm", "", set(), 9, (), _yymm("2512")),
+    ("utter-project/EuroLLM-22B-Instruct-2512", "eurollm", "", set(), 22, (), _yymm("2512")),
+    ("utter-project/EuroMoE-2.6B-A0.6B-Instruct-2512", "euromoe", "", set(), 2.6, (), _yymm("2512")),
+    ("openGPT-X/Teuken-7B-instruct-v0.6", "teuken", "", set(), 7, (0, 6), None),
+    ("Qwen/Qwen3.5-9B", "qwen", "", set(), 9, (3, 5), None),
+    ("Qwen/Qwen3.5-4B", "qwen", "", set(), 4, (3, 5), None),
+    ("Qwen/Qwen3.5-27B", "qwen", "", set(), 27, (3, 5), None),
+    ("Qwen/Qwen3.5-35B-A3B", "qwen", "", set(), 35, (3, 5), None),
+    ("Qwen/Qwen3.5-122B-A10B", "qwen", "", set(), 122, (3, 5), None),
+    ("Qwen/Qwen3.6-27B", "qwen", "", set(), 27, (3, 6), None),
+    ("Qwen/Qwen3.6-35B-A3B", "qwen", "", set(), 35, (3, 6), None),
+    ("Qwen/Qwen3.8-27B", "qwen", "", set(), 27, (3, 8), None),
+    ("Qwen/Qwen3-Coder-Next", "qwen", "", {"coder", "next"}, None, (3,), None),
+    ("Qwen/Qwen3-Coder-30B-A3B-Instruct", "qwen", "", {"coder"}, 30, (3,), None),
+    ("Qwen/Qwen3-Embedding-8B", "qwen", "", {"embedding"}, 8, (3,), None),
+    ("Qwen/Qwen3-Embedding-0.6B", "qwen", "", {"embedding"}, 0.6, (3,), None),
+    ("deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "deepseek", "r", {"qwen3"}, 8, (1,), _mmdd("0528")),
+    ("deepseek-ai/DeepSeek-V3.2", "deepseek", "", set(), None, (3, 2), None),
+    ("deepseek-ai/DeepSeek-V4-Flash-0731", "deepseek", "", {"flash"}, None, (4,), _mmdd("0731")),
+    ("meta-llama/Llama-4-Scout-17B-16E-Instruct", "llama", "", {"scout"}, 17, (4,), None),
+    ("meta-llama/Llama-3.3-70B-Instruct", "llama", "", set(), 70, (3, 3), None),
+    ("meta-llama/Llama-3.1-8B-Instruct", "llama", "", set(), 8, (3, 1), None),
+    ("meta-llama/Llama-3.2-3B-Instruct", "llama", "", set(), 3, (3, 2), None),
+    ("google/gemma-4-31B-it", "gemma", "", set(), 31, (4,), None),
+    ("google/gemma-4-26B-A4B-it", "gemma", "", set(), 26, (4,), None),
+    ("google/gemma-4-12B-it", "gemma", "", set(), 12, (4,), None),
+    ("google/gemma-4-E4B-it", "gemma", "", set(), 4, (4,), None),
+    ("microsoft/phi-4", "phi", "", set(), None, (4,), None),
+    ("microsoft/Phi-4-mini-instruct", "phi", "", {"mini"}, None, (4,), None),
+    ("openai/gpt-oss-120b", "gpt", "", {"oss"}, 120, (), None),
+    ("openai/gpt-oss-20b", "gpt", "", {"oss"}, 20, (), None),
+    ("zai-org/GLM-5.3-Flash", "glm", "", {"flash"}, None, (5, 3), None),
+    ("zai-org/GLM-4.7-Flash", "glm", "", {"flash"}, None, (4, 7), None),
+    ("moonshotai/Kimi-Linear-48B-A3B-Instruct", "kimi", "", {"linear"}, 48, (), None),
+    ("ibm-granite/granite-4.2-30b", "granite", "", set(), 30, (4, 2), None),
+    ("ibm-granite/granite-4.2-8b", "granite", "", set(), 8, (4, 2), None),
+    ("ibm-granite/granite-4.2-3b", "granite", "", set(), 3, (4, 2), None),
+    ("nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16", "nvidia", "", {"lightning", "nemotron"}, 30, (3, 5), None),
+    ("allenai/Olmo-3.1-32B-Instruct", "olmo", "", set(), 32, (3, 1), None),
+    ("allenai/Olmo-3-7B-Instruct", "olmo", "", set(), 7, (3,), None),
+    ("tiiuae/Falcon-H1-34B-Instruct", "falcon", "", {"h1"}, 34, (), None),
+    ("tiiuae/Falcon-H1R-7B", "falcon", "", {"h1r"}, 7, (), None),
+    ("tiiuae/Falcon-H1-7B-Instruct", "falcon", "", {"h1"}, 7, (), None),
+    ("CohereLabs/command-a-reasoning-08-2025", "command", "", {"a", "reasoning"}, None, (), LineDate("mm-yyyy", 2025, 8, None)),
+    ("CohereLabs/North-Mini-Code-1.0", "north", "", {"code", "mini"}, None, (1, 0), None),
+    ("CohereLabs/aya-expanse-8b", "aya", "", {"expanse"}, 8, (), None),
+    ("CohereLabs/tiny-aya-global", "tiny", "", {"aya", "global"}, None, (), None),
+    ("LiquidAI/LFM2.5-8B-A1B", "lfm", "", set(), 8, (2, 5), None),
+    ("LiquidAI/LFM2.5-2.6B", "lfm", "", set(), 2.6, (2, 5), None),
+    ("HuggingFaceTB/SmolLM3-3B", "smollm", "", set(), 3, (3,), None),
+    ("openbmb/MiniCPM5-2B", "minicpm", "", set(), 2, (5,), None),
+    ("tencent/Hy-MT2-30B-A3B", "hy", "", {"mt"}, 30, (2,), None),
+    ("baidu/ERNIE-4.5-21B-A3B-Thinking", "ernie", "", {"thinking"}, 21, (4, 5), None),
+    ("MiniMaxAI/MiniMax-H3", "minimax", "", {"h3"}, None, (), None),
     # --- the recorded answers and the cases the grammar was written for ---
-    ("Qwen/Qwen3.8-2.4T-A95B", "qwen", set(), 2400, (3, 8), None),
-    ("Qwen/Qwen3-VL-4B-Instruct", "qwen", {"vl"}, 4, (3,), None),
-    ("Qwen/Qwen3.5-9B-Base", "qwen", {"base"}, 9, (3, 5), None),
-    ("Qwen/Qwen3-235B-A22B", "qwen", set(), 235, (3,), None),
-    ("other-org/Nebula-9B", "nebula", set(), 9, (), None),
-    ("HuggingFaceTB/SmolLM2-360M-Instruct", "smollm", set(), 0.36, (2,), None),
-    ("acme/Nova-7B", "nova", set(), 7, (), None),
-    ("acme/Nova-7B-2512", "nova", set(), 7, (), _yymm("2512")),
-    ("acme/Nova-1B", "nova", set(), 1, (), None),
+    ("Qwen/Qwen3.8-2.4T-A95B", "qwen", "", set(), 2400, (3, 8), None),
+    ("Qwen/Qwen3-VL-4B-Instruct", "qwen", "", {"vl"}, 4, (3,), None),
+    ("Qwen/Qwen3.5-9B-Base", "qwen", "", {"base"}, 9, (3, 5), None),
+    ("Qwen/Qwen3-235B-A22B", "qwen", "", set(), 235, (3,), None),
+    ("other-org/Nebula-9B", "nebula", "", set(), 9, (), None),
+    ("HuggingFaceTB/SmolLM2-360M-Instruct", "smollm", "", set(), 0.36, (2,), None),
+    ("acme/Nova-7B", "nova", "", set(), 7, (), None),
+    ("acme/Nova-7B-2512", "nova", "", set(), 7, (), _yymm("2512")),
+    ("acme/Nova-1B", "nova", "", set(), 1, (), None),
     # `a0.6b` is the active part of a mixture and no size; nothing else marks a boundary.
-    ("acme/Nova-A0.6B", "nova", set(), None, (), None),
+    ("acme/Nova-A0.6B", "nova", "", set(), None, (), None),
     # `16e` and `bf16` are read and ignored.
-    ("acme/Nova-2-7B-16E-BF16", "nova", set(), 7, (2,), None),
+    ("acme/Nova-2-7B-16E-BF16", "nova", "", set(), 7, (2,), None),
 ]
 
 NOT_INTERPRETABLE = [
@@ -124,12 +125,12 @@ NOT_INTERPRETABLE = [
 ]
 
 
-@pytest.mark.parametrize("repo, family, variant, size, version, dated", KEYS, ids=[row[0] for row in KEYS])
-def test_the_key_of_a_name(repo, family, variant, size, version, dated):
+@pytest.mark.parametrize("repo, family, line, variant, size, version, dated", KEYS, ids=[row[0] for row in KEYS])
+def test_the_key_of_a_name(repo, family, line, variant, size, version, dated):
     key = line_key(repo, None)
 
     assert key is not None
-    assert (key.family, set(key.variant), key.version, key.date) == (family, variant, version, dated)
+    assert (key.family, key.line, set(key.variant), key.version, key.date) == (family, line, variant, version, dated)
     assert key.size == (pytest.approx(size) if size is not None else None)
     assert key.publisher == repo.split("/", 1)[0].lower()
 
@@ -163,7 +164,7 @@ def test_the_size_comes_from_the_name_first_and_else_from_the_parameter_count():
 def test_a_word_with_a_number_behind_the_boundary_is_a_word_of_the_variant():
     key = line_key("deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", None)
 
-    assert key.version == ()
+    assert key.version == (1,)  # from the line counter `r1`, not from `qwen3` (AP9-UX2 U5)
     assert "qwen3" in key.variant
 
 
@@ -183,7 +184,7 @@ def test_instruct_before_the_boundary_is_no_word_of_the_family_either():
     2026-09-25): the instruction-tuned model is the plain one before the boundary as behind it."""
     key = line_key("mistralai/Mistral-Small-Instruct-2409", None)
 
-    assert (key.family, key.variant, key.version, key.date) == ("mistral-small", frozenset(), (), _yymm("2409"))
+    assert (key.family, key.line, key.variant, key.version, key.date) == ("mistral", "small", frozenset(), (), _yymm("2409"))
     assert _compute(["mistralai/Mistral-Small-Instruct-2409", MISTRAL_SMALL_4]) == {
         "mistralai/Mistral-Small-Instruct-2409": Release("legacy", MISTRAL_SMALL_4),
         MISTRAL_SMALL_4: Release("latest", None),
@@ -296,8 +297,9 @@ def test_a_lower_version_of_a_group_without_sizes_is_legacy_with_the_highest_as_
         ("acme/Nova-2-9B-Base", "acme/Nova-3-9B"),
     ],
 )
-def test_a_variant_is_a_group_of_its_own(lower, upper):
-    assert _compute([lower, upper]) == {lower: Release("latest", None), upper: Release("latest", None)}
+def test_every_variant_of_a_lower_version_is_legacy(lower, upper):
+    """Until AP9-UX2 a variant was a group of its own; since GF F3 it belongs to its version."""
+    assert _compute([lower, upper]) == {lower: Release("legacy", upper), upper: Release("latest", None)}
 
 
 def test_instruct_is_the_plain_model_and_no_group_of_its_own():
@@ -381,16 +383,17 @@ def test_one_candidate_is_the_successor_whatever_the_sizes_say():
     assert _compute(["acme/Nova-2", "acme/Nova-3-7B"])["acme/Nova-2"] == Release("legacy", "acme/Nova-3-7B")
 
 
-def test_an_unknown_size_and_more_than_one_candidate_stays_unknown():
+def test_an_unknown_size_takes_the_largest_candidate():
     result = _compute(["acme/Nova-2", "acme/Nova-3-7B", "acme/Nova-3-9B"])
 
-    assert "acme/Nova-2" not in result
+    assert result["acme/Nova-2"] == Release("legacy", "acme/Nova-3-9B")
 
 
-def test_two_candidates_that_fit_equally_well_leave_the_row_unknown():
+def test_variants_of_equal_standing_still_give_one_successor():
+    """Same size, same variation (`instruct` and `chat` make none): the name decides (U5 rule 3)."""
     result = _compute(["acme/Nova-1-7B", "acme/Nova-2-7B-Instruct", "acme/Nova-2-7B-Chat"])
 
-    assert "acme/Nova-1-7B" not in result
+    assert result["acme/Nova-1-7B"] == Release("legacy", "acme/Nova-2-7B-Chat")
     assert result["acme/Nova-2-7B-Instruct"] == result["acme/Nova-2-7B-Chat"] == Release("latest", None)
 
 
@@ -407,6 +410,7 @@ def test_a_maximal_member_with_a_stated_legacy_is_still_the_candidate():
 
 
 def test_a_stated_release_stays_as_it_is_and_counts_as_a_member():
+    """U5 rule 4: a catalog `latest` with nothing above it stays; it is a member all the same."""
     catalog = _catalog(_latest_row("acme/Nova-3-7B"), _row("acme/Nova-2-7B"))
     hits = [_hit("acme/Nova-3-7B", age="latest"), _hit("acme/Nova-2-7B")]
     ages = {"acme/Nova-3-7B": AgeVerdict("latest", None, "catalog"), **_silent("acme/Nova-2-7B")}
@@ -422,21 +426,50 @@ def test_a_catalog_row_without_a_hit_is_a_member_and_gets_no_status():
     assert _compute(["acme/Nova-2-7B"], catalog) == {"acme/Nova-2-7B": Release("legacy", "acme/Nova-3-7B")}
 
 
-@pytest.mark.parametrize(
-    "verdict",
-    [
-        AgeVerdict("unknown", None, "budget exhausted before the first edge"),
-        AgeVerdict("unknown", None, "new_version 'acme/Gone' is not a reachable repo of acme"),
-    ],
-)
-def test_an_unknown_that_a_fault_decided_is_not_computed(verdict):
-    """The group has a maximum, and still: a broken pointer or a budget is no silence."""
+def _cut(text: str) -> str:
+    """A note as step 2 shows it: at most 97 characters, a cut one ending in `...`."""
+    return text if len(text) <= 97 else text[:94] + "..."
+
+
+FAULTS = [
+    AgeVerdict("unknown", None, "budget exhausted before the first edge"),
+    AgeVerdict("unknown", None, "new_version 'acme/Gone' is not a reachable repo of acme"),
+]
+
+
+@pytest.mark.parametrize("verdict", FAULTS)
+def test_a_fault_is_a_note_and_a_higher_version_still_makes_legacy(verdict):
+    """GF F3 (Codex r2-2): a higher version decides the age; the fault stays a note of its own."""
+    from modelroom.search_release import release_notes
+
     ages = {"acme/Nova-2-7B": verdict, **_silent("acme/Nova-3-7B")}
+    hits = [_hit("acme/Nova-2-7B"), _hit("acme/Nova-3-7B")]
 
-    result = _compute(["acme/Nova-2-7B", "acme/Nova-3-7B"], ages=ages)
+    result = compute_release(hits, _empty(), ages)
 
-    assert "acme/Nova-2-7B" not in result
+    assert result["acme/Nova-2-7B"] == Release("legacy", "acme/Nova-3-7B")
     assert result["acme/Nova-3-7B"] == Release("latest", None)
+    assert release_notes(hits, _empty(), ages) == [_cut(f"Nova-2-7B: its own statement did not read ({verdict.evidence})")]
+
+
+@pytest.mark.parametrize("verdict", FAULTS)
+def test_a_fault_without_a_higher_version_stays_unknown_with_its_note(verdict):
+    from modelroom.search_release import release_notes
+
+    ages = {"acme/Nova-3-7B": verdict, **_silent("acme/Nova-2-7B")}
+    hits = [_hit("acme/Nova-2-7B"), _hit("acme/Nova-3-7B")]
+
+    assert "acme/Nova-3-7B" not in compute_release(hits, _empty(), ages)
+    assert release_notes(hits, _empty(), ages) == [_cut(f"Nova-3-7B: its own statement did not read ({verdict.evidence})")]
+
+
+def test_a_long_note_is_cut_to_97_characters():
+    from modelroom.search_release import release_notes
+
+    long_fault = AgeVerdict("unknown", None, "new_version '" + "acme/" + "x" * 120 + "' is not a reachable repo of acme")
+    notes = release_notes([_hit("acme/Nova-2-7B")], _empty(), {"acme/Nova-2-7B": long_fault})
+
+    assert len(notes[0]) == 97 and notes[0].startswith("Nova-2-7B: its own statement did not read (")
 
 
 def test_a_name_the_grammar_cannot_read_stays_unknown():
@@ -445,32 +478,145 @@ def test_a_name_the_grammar_cannot_read_stays_unknown():
     assert _compute([davidau]) == {}
 
 
-def test_computed_edges_on_a_cycle_with_the_stated_ones_all_fall():
-    """Stated Nova-2 -> Luna-1 and Luna-2 -> Nova-1; computed Nova-1 -> Nova-2 and Luna-1 -> Luna-2."""
-    rows = [_row("acme/Nova-2", successor="acme/Luna-1"), _row("acme/Luna-2", successor="acme/Nova-1")]
-    bases = ["acme/Nova-1", "acme/Luna-1"]
+def test_a_successor_that_closes_a_cycle_is_skipped():
+    """Stated Nova-2-7B -> Luna-1-7B -> Nova-1-7B: the edge Nova-1-7B -> Nova-2-7B would close a
+    cycle, so the next candidate by rule 3 is taken -- whatever the order of rows and hits."""
+    rows = [
+        _row("acme/Nova-2-7B", successor="acme/Luna-1-7B"),
+        _row("acme/Luna-1-7B", successor="acme/Nova-1-7B"),
+        _row("acme/Nova-2-9B"),
+    ]
+    bases = ["acme/Nova-1-7B", "acme/Luna-1-3B"]
 
     for row_order in itertools.permutations(rows):
         for base_order in itertools.permutations(bases):
-            assert _compute(list(base_order), _catalog(*row_order)) == {}
+            result = _compute(list(base_order), _catalog(*row_order))
+            assert result["acme/Nova-1-7B"] == Release("legacy", "acme/Nova-2-9B")
 
 
-def test_a_stated_edge_of_a_repository_closes_a_cycle_as_well():
-    hits = [_hit("acme/Nova-1"), _hit("acme/Nova-2", age="legacy", successor="acme/Nova-1-Pro"),
-            _hit("acme/Nova-1-Pro"), _hit("acme/Nova-2-Pro", age="legacy", successor="acme/Nova-1")]
-    ages = {
-        **_silent("acme/Nova-1", "acme/Nova-1-Pro"),
-        "acme/Nova-2": AgeVerdict("legacy", "acme/Nova-1-Pro", "new_version at acme/Nova-2"),
-        "acme/Nova-2-Pro": AgeVerdict("legacy", "acme/Nova-1", "new_version at acme/Nova-2-Pro"),
-    }
+def test_when_every_successor_closes_a_cycle_the_model_is_still_legacy_with_a_note():
+    from modelroom.search_release import release_notes
 
-    assert compute_release(hits, _empty(), ages) == {}
+    hits = [_hit("acme/Nova-1"), _hit("acme/Nova-2", age="legacy", successor="acme/Nova-1")]
+    ages = {**_silent("acme/Nova-1"), "acme/Nova-2": AgeVerdict("legacy", "acme/Nova-1", "new_version at acme/Nova-2")}
+
+    for order in itertools.permutations(hits):
+        assert compute_release(list(order), _empty(), ages) == {"acme/Nova-1": Release("legacy", "acme/Nova-2")}
+        assert release_notes(list(order), _empty(), ages) == [
+            "Nova-1: the successor statements around it contradict each other"
+        ]
 
 
 def test_a_chain_is_allowed():
     catalog = _catalog(_row("acme/Nova-3-7B", successor="acme/Luna-1-7B"), _latest_row("acme/Luna-1-7B"))
 
     assert _compute(["acme/Nova-2-7B"], catalog) == {"acme/Nova-2-7B": Release("legacy", "acme/Nova-3-7B")}
+
+
+# --- lines and variations (GF F3, AP9-UX2 U5) -----------------------------------------------------
+
+
+def test_the_group_has_no_variant():
+    assert line_key("Qwen/Qwen3.5-9B-Base", None).group == ("qwen", "qwen", "")
+    assert line_key("Qwen/Qwen3.5-9B-Base", None).variant == frozenset({"base"})
+    assert line_key("Qwen/Qwen3-Coder-Next", None).group == line_key("Qwen/Qwen3.8-27B", None).group
+
+
+def test_a_variant_before_the_version_belongs_to_the_family():
+    key = line_key("acme/Nova-Mini-2-7B", None)
+    assert (key.family, key.line, key.variant, key.version) == ("nova", "", frozenset({"mini"}), (2,))
+    assert _compute(["acme/Nova-Mini-2-7B", "acme/Nova-3-7B"])["acme/Nova-Mini-2-7B"] == Release("legacy", "acme/Nova-3-7B")
+
+
+def test_a_variant_after_the_version_belongs_to_the_family():
+    assert _compute(["acme/Nova-2-7B-Flash", "acme/Nova-3-7B"])["acme/Nova-2-7B-Flash"] == Release("legacy", "acme/Nova-3-7B")
+
+
+def test_an_older_release_of_a_line_is_legacy():
+    old = "mistralai/Mistral-Small-Instruct-2409"
+    assert _compute([old, MISTRAL_SMALL_3])[old] == Release("legacy", MISTRAL_SMALL_3)
+
+
+def test_a_line_is_not_superseded_by_another_line():
+    large = "mistralai/Mistral-Large-3"
+    assert line_key(large, None).group == ("mistralai", "mistral", "large")
+    assert _compute([MISTRAL_SMALL_3, large]) == {MISTRAL_SMALL_3: Release("latest", None), large: Release("latest", None)}
+
+
+def test_a_line_counter_is_a_line_of_its_own():
+    r1, others = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", ["deepseek-ai/DeepSeek-V3.2", "deepseek-ai/DeepSeek-V4-Flash-0731"]
+    assert line_key(r1, None).group == ("deepseek-ai", "deepseek", "r")
+    assert line_key("deepseek-ai/DeepSeek-V3.2", None).line == ""  # `v` is the prefix of a version
+    assert _compute([r1, *others])[r1] == Release("latest", None)
+    assert _compute([r1, *others, "deepseek-ai/DeepSeek-R2"])[r1] == Release("legacy", "deepseek-ai/DeepSeek-R2")
+
+
+def test_line_words_are_a_documented_vocabulary():
+    """New line words only with a GF decision and a test (ADR 0010)."""
+    from modelroom.search_release import LINE_COUNTERS, LINE_WORDS
+
+    assert LINE_WORDS == frozenset({"small", "medium", "large"})
+    assert LINE_COUNTERS == frozenset({"r"})
+
+
+def _packager(repo: str, parameters_b: float | None = None) -> SearchHit:
+    return SearchHit(
+        repo=repo, publisher_status="listed packager", resolved=False, unresolved_reason="relation_unknown",
+        parameters_b=parameters_b,
+    )
+
+
+def test_a_listed_packager_repo_proves_a_higher_version():
+    hits = [_hit("Qwen/Qwen3.5-9B"), _packager("unsloth/Qwen3.8-27B-GGUF")]
+
+    result = compute_release(hits, _empty(), _silent("Qwen/Qwen3.5-9B"))
+
+    assert result == {"Qwen/Qwen3.5-9B": Release("legacy", "unsloth/Qwen3.8-27B-GGUF")}
+
+
+def test_a_packager_family_matching_two_publishers_counts_for_none():
+    hits = [_hit("acme/Nova-2-7B"), _hit("other-org/Nova-1-7B"), _packager("unsloth/Nova-3-7B-GGUF")]
+
+    result = compute_release(hits, _empty(), _silent("acme/Nova-2-7B", "other-org/Nova-1-7B"))
+
+    assert result == {"acme/Nova-2-7B": Release("latest", None), "other-org/Nova-1-7B": Release("latest", None)}
+
+
+def test_a_catalog_latest_gives_way_to_a_higher_version():
+    catalog = _catalog(_latest_row("acme/Nova-2-7B"), _row("acme/Nova-3-7B"))
+    hits = [_hit("acme/Nova-2-7B", age="latest")]
+    ages = {"acme/Nova-2-7B": AgeVerdict("latest", None, "catalog")}
+
+    assert compute_release(hits, catalog, ages) == {"acme/Nova-2-7B": Release("legacy", "acme/Nova-3-7B")}
+    rebuilt = with_release(hits, catalog, ages)[0]
+    assert (rebuilt.age, rebuilt.successor, rebuilt.release_basis) == ("legacy", "acme/Nova-3-7B", "computed")
+
+
+def test_a_stated_legacy_is_never_recomputed():
+    hits = [_hit("acme/Nova-2-7B", age="legacy", successor="acme/Nova-2.5-7B"), _hit("acme/Nova-3-7B")]
+    ages = {
+        "acme/Nova-2-7B": AgeVerdict("legacy", "acme/Nova-2.5-7B", "new_version at acme/Nova-2-7B"),
+        **_silent("acme/Nova-3-7B"),
+    }
+
+    assert "acme/Nova-2-7B" not in compute_release(hits, _empty(), ages)
+
+
+def test_a_faulty_unknown_stays_unknown():
+    """A fault's `unknown` never becomes a computed `latest`, not even as the only member."""
+    ages = {"acme/Nova-3-7B": FAULTS[0]}
+
+    assert compute_release([_hit("acme/Nova-3-7B")], _empty(), ages) == {}
+
+
+def test_qwen35_0_8b_base_is_legacy():
+    bases = ["Qwen/Qwen3.5-0.8B-Base", "Qwen/Qwen3.5-9B"]
+    hits = [*(_hit(base) for base in bases), _hit("Qwen/Qwen3.8-27B", age="latest")]
+    ages = {**_silent(*bases), "Qwen/Qwen3.8-27B": AgeVerdict("latest", None, "catalog")}
+
+    result = compute_release(hits, _empty(), ages)
+
+    assert result == {base: Release("legacy", "Qwen/Qwen3.8-27B") for base in bases}
 
 
 # --- the hits, rebuilt ----------------------------------------------------------------------------
