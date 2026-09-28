@@ -117,11 +117,11 @@ def sp():
     return module
 
 
-NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS"
+NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S"
 PULLED_LINES = [
-    " ? Pull #1 into Ollama now? (2.9 GB)  Yes",
+    " ? Pull #1 into Ollama now? (5.0 GB)  Yes",
     f" pulling   {NAME}",
-    f" ✓ Pulled    {NAME} · 2.9 GB · say Yes in step 4 of the next run to measure it",
+    f" ✓ Pulled    {NAME} · 5.0 GB · say Yes in step 4 of the next run to measure it",
 ]
 PULL_CALLS = [("GET", "/api/tags", None), ("POST", "/api/pull", {"model": NAME, "stream": True}), ("GET", "/api/tags", None)]
 
@@ -145,7 +145,7 @@ INSTALL = f" install   #1  ollama pull {NAME}"
 @pytest.mark.parametrize(
     "tail",
     [
-        [" ? Pull #1 into Ollama now? (2.9 GB)  No"],
+        [" ? Pull #1 into Ollama now? (5.0 GB)  No"],
         [" install   #1 is local already · say Yes in step 4 to measure it"],
         [],  # a daemon the start screen did not reach: no question at all
     ],
@@ -157,9 +157,9 @@ def test_criterion_ten_passes_on_a_run_that_did_not_pull(sp, tail):
 @pytest.mark.parametrize(
     "lines, words",
     [
-        ([INSTALL, " ? Pull #1 into Ollama now? (2.9 GB)  Yes"], "Yes"),
+        ([INSTALL, " ? Pull #1 into Ollama now? (5.0 GB)  Yes"], "Yes"),
         ([INSTALL, f" pulling   {NAME}"], "pulled"),
-        ([INSTALL, f" ✓ Pulled    {NAME} · 2.9 GB"], "pulled"),
+        ([INSTALL, f" ✓ Pulled    {NAME} · 5.0 GB"], "pulled"),
         ([" ✓ Results         docs\\models.md"], "install line"),
     ],
 )
@@ -442,7 +442,7 @@ def test_criterion_three_names_a_screen_that_says_nothing_about_the_search():
 GOOD_DOCUMENT = "\n".join(
     [
         "Scenario: context 8k (entered), KV cache f16 (assumed), 1 request",
-        "Ranking rule: fit class (ample, fits, tight), then measured group",
+        "Ranking rule: graphics memory before system memory, then every model that is not legacy",
         "## Ranking: workstation",
     ]
 )
@@ -689,12 +689,12 @@ GOOD_DIALOG = [
     "",
     " workstation - context L 32k",
     " #    Model                     Package                 Fit                   Speed         Memory",
-    " 1    Qwen3.5-9B                unsloth - UD-IQ2_XXS    fits                  -             8.3 GB",
+    " 1    Qwen3.5-9B                unsloth - Q4_K_S        tight                 -             10.5 GB",
     " shown     1 of 25 packages",
     " memory    #1 fits into graphics memory, 11.0 GB free after the reserve",
     " speed     nothing measured in the rows shown - say Yes in step 4 to measure an installed package",
     "",
-    " install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS",
+    " install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S",
     "",
     " ok Results         docs/models.md",
 ]

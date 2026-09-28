@@ -46,7 +46,6 @@ from fixture_support import (
     build_transport,
     export_of,
     guided_transport_mapping,
-    json_response,
     loadtest_daemon,
     offline_daemon,
     offline_servers,
@@ -307,9 +306,9 @@ def test_the_measured_package_of_this_run_stays_in_the_result(tmp_path: Path):
         (DEEPSEEK, "Q6_K"),
         (DEEPSEEK, "Q4_K_M"),
     ]
-    qwen_total = sum(1 for p in snapshot.packages if p.base_model_hf_repo == QWEN and p.active)  # an upper bound only
-    assert rows[0]["note"]["text"].endswith(" packages of this model that fit.") and "Best of " in rows[0]["note"]["text"]
-    assert int(rows[0]["note"]["text"].rsplit("Best of ", 1)[1].split()[0]) <= qwen_total
+    # The exact count (Diff-Review N11): every ranked package of the block but the two DeepSeek builds.
+    qwen_ranked = block["ranked_total"] - 2
+    assert rows[0]["note"]["text"].endswith(f"Best of {qwen_ranked} packages of this model that fit.")
     assert (rows[1]["speed_tps"], rows[1]["note"]["text"].endswith("Best of 2 packages of this model that fit.")) == (None, True)
     appended = rows[2]
     assert (appended["measurement_group"], appended["speed_tps"] is not None) == (0, True)

@@ -62,7 +62,8 @@ FIT_POOL_HINT = (
     "gpu_split: all cards together",
     f"cpu_gpu, cpu{RAM_SUFFIX}: the system memory",
     "one memory shared by system and card counts as gpu, both reserves taken",
-    "off the card, and for a fit from size, the best is fits",
+    # Not "the best is fits": `best` names the least compression of one model (BEST_HINT, Diff-Review N4).
+    "off the card, and for a fit from size the highest class is fits",
 )
 # What `best` means in a result, and what modelroom never does (ADR 0009, A5): the same model with
 # less compression -- no benchmark, no family rated against another.

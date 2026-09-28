@@ -537,10 +537,12 @@ EXAMPLES: dict[str, dict] = {
         "base_model_count": 2,
         "package_count": 2,
         "scenario": dict(_SCENARIO),
+        # `ranking.RANKING_RULE` word for word (ADR 0009); `tests/test_ranking_words.py` holds the two together.
         "ranking_rule": (
-            "fit class (ample, fits, tight), then measured group (valid comparable "
-            "measurement first), then measured speed (faster first), then quantization, then "
-            "larger weights, then package identity"
+            "graphics memory before system memory, then every model that is not legacy before a "
+            "legacy one, then the larger model (parameter count), then the least compression, then "
+            "measured before unmeasured (a valid comparable measurement), then larger weights, then "
+            "package identity; the first 10 rows, then every measured package the rule leaves out"
         ),
         "rating_unavailable": None,
         "ratings": {"acme/Nova-7B": {"stars": 3.5, "source": "market index"}},

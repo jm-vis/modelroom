@@ -34,7 +34,7 @@ Showing 1 of 1 ranked packages.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | acme/Nova-8B | – | packager | Q4_K_M | gguf | 5.00 | fits (gpu) | 7.12 | 10.94 | unknown | 1 | – | from_metadata | Fits into graphics memory: it needs about 7.1 GiB of the 10.9 GiB left after the reserve. |
 
-Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · fits: up to 85 % · tight: up to 98 % · no fit: more · the pool is what the mode names, minus its reserve (per card) · gpu: one card · gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory · one memory shared by system and card counts as gpu, both reserves taken · off the card, and for a fit from size, the best is fits · best: the least compression of the same model that fits · modelroom rates no model family against another
+Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · fits: up to 85 % · tight: up to 98 % · no fit: more · the pool is what the mode names, minus its reserve (per card) · gpu: one card · gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory · one memory shared by system and card counts as gpu, both reserves taken · off the card, and for a fit from size the highest class is fits · best: the least compression of the same model that fits · modelroom rates no model family against another
 
 Speed is measured, see its column.
 

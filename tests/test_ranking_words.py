@@ -35,6 +35,18 @@ def test_one_row_per_model_is_said_in_the_key_and_one_model_says_nothing_more():
     assert showing_line(one_model) == "Showing 3 of 24 ranked packages."
 
 
+def test_the_example_document_carries_the_rule_word_for_word():
+    """The example of the render document and the contract quote the rule itself (Diff-Review N1)."""
+    from pathlib import Path
+
+    from modelroom.examples import EXAMPLES
+    from modelroom.ranking import RANKING_RULE
+
+    assert EXAMPLES["RenderDocument"]["ranking_rule"] == RANKING_RULE
+    contracts = (Path(__file__).parents[1] / "CONTRACTS.md").read_text(encoding="utf-8")
+    assert f'"ranking_rule": "{RANKING_RULE}"' in contracts
+
+
 def test_the_key_says_what_best_means_and_rates_no_family():
     assert "best: the least compression of the same model that fits" in FIT_HINT
     assert "modelroom rates no model family against another" in FIT_HINT

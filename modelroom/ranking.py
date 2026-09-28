@@ -84,7 +84,8 @@ class SetAside:
 @dataclass
 class Ranking:
     scenario: Scenario
-    rule: str = RANKING_RULE
+    # No `rule` field any more: the document names the rule of its case (`render.build_render_document`),
+    # and a field that always said the rule of one case was read by nobody (Diff-Review N6).
     ranked: list[RankedPackage] = field(default_factory=list)
     not_covered: list[SetAside] = field(default_factory=list)
     no_fit: list[SetAside] = field(default_factory=list)

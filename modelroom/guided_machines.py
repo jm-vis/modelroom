@@ -87,7 +87,7 @@ def _profile_choices(scan: ProfileScan, configured: set[str], skip: str | None =
     return chosen, blocked
 
 
-def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None, name: str, configured: Iterable[str] = ()) -> list[Choice]:
+def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None, name: str, configured: Iterable[str]) -> list[Choice]:
     """The machine list of step 1, rows 1 to 6 (module docstring); nothing is marked.
 
     `bound` is the profile this folder binds this machine to, `name` this machine's key in

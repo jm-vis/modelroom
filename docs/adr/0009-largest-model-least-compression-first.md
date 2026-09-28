@@ -85,6 +85,13 @@ family is rated against another.**
   it; the configuration of the folder stays the folder's.
 - **A new document schema**: `ranked` changes what rows it carries, not its shape.
 
+## Limits
+
+- A package measured on this machine that the fit sets aside -- `no_fit` (above 98 % of its pool)
+  or `not covered` (for instance beyond the window of its model) -- is no ranked package, so no row
+  is appended for it: it stands in its set-aside list, without its speed. The rows appended for
+  their measurement are the measured packages the rule ranks and leaves out, nothing more.
+
 ## Consequences
 
 - The first row, and so the install line and the pull, is a larger download: a `Q8_0` or a 16-bit

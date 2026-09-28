@@ -491,6 +491,25 @@ def test_the_balance_never_says_measured_when_nothing_counts(tmp_path: Path):
     assert " server    vLLM                    <n> tok/s total, 20 requests at once, not counted" in _card(lines)
 
 
+@pytest.mark.parametrize(
+    "answers, servers",
+    [
+        (ANSWERS, lambda: vllm_servers(finish="stop")),  # invalid: the balance reads the card's problem
+        ({**ANSWERS, "users": "65 requests"}, lambda: vllm_servers(requests=65)),  # capped: not comparable
+    ],
+    ids=["invalid", "not comparable"],
+)
+def test_a_measurement_with_a_problem_is_never_measured_in_the_balance(tmp_path: Path, answers, servers):
+    """Model and context of the run match (the number would count), but the measurement itself does
+    not hold: the balance says what the card says, never `vLLM measured` (Diff-Review M1)."""
+    code, lines = _run(tmp_path, answers, servers=servers())
+
+    step = _step(lines, 4)
+    assert code == 0
+    assert not any(line.startswith("the number will not count") for line in step)  # it would count
+    assert step[-1] == "✓ Measurement     vLLM ran, not counted"
+
+
 def test_one_request_is_singular(tmp_path: Path):
     from modelroom.fit_vllm import VllmFit
     from modelroom.guided_vllm import fit_lines, vllm_rows, VllmOffer
@@ -505,6 +524,9 @@ def test_one_request_is_singular(tmp_path: Path):
     row = vllm_rows(VllmOffer(SERVED, 1, "no package", False))[0]
     assert row.label == f"vLLM server  context 4k  1 request at once  {QWEN25_REPO}"
     assert (requests_words(1), requests_words(2)) == ("1 request", "2 requests")
+    from modelroom import guided_context
+
+    assert requests_words is guided_context.requests_words  # one definition (Diff-Review N5)
     fit = VllmFit(
         card_gib=22.49, weights_gib=1.0, runtime_gib=1.5, kv_gib=10.0, context=4096, requests=1, at_once=1,
         fit_class="tight", basis="size", budget_gib=20.7, kv_tokens=4096,

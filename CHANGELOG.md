@@ -12,7 +12,7 @@ All notable changes to this project are documented in this file. The format foll
   load test"; ADR 0008; decided 2026-09-27). The local servers are a list, `LOCAL_SERVERS`, and
   Ollama is its first entry, unchanged. A vLLM server on `127.0.0.1:8000` that answers gets a
   `server` row on the start screen with the model it states it serves; step 4 offers a load test of
-  n requests at once (`load_test_vllm`, three batches, `/metrics` before and after each), reports the
+  n requests at once (the row `vllm` of `load_test_packages` since AP9-UX, three batches, `/metrics` before and after each), reports the
   total and the per-request speed, and computes how many requests of the ranking's context one card
   holds (`0.92 x card - weights - 1.50 GiB` for the KV cache; 1.50 from the A100 recording, 1.31 from
   the L4 one). The card of step 5 carries a `server` row. Three calls only, no key, no proxy, no
@@ -153,7 +153,8 @@ All notable changes to this project are documented in this file. The format foll
   before runs unchanged. Unified memory computes as one pool after both reserves; no such machine was measured,
   every number there is computed. `scripts/selftest.py` gets criterion 11
   (`scripts/selftest_entered.py`): a run of its own that enters unified memory of 32 GiB and finds
-  it ranked on a shared pool of 23 GiB, next to this machine's own entry without a profile.
+  it ranked on a shared pool of 23 GiB; this machine's own entry is configured and left out of the
+  result (AP9-UX).
 - **Render document schema 2** (ADR 0003): `Fit.requests` in every row, `users` and
   `requests_origin` in `docs/models.json` when the rendered scenario is the configuration's.
 - **`docs/adr/`**, the first three decision records, with its index.

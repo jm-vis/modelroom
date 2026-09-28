@@ -270,13 +270,13 @@ def model_choices(
     configured_ollama: Mapping[str, str] | None = None,
     requests: int = 1,
 ) -> list[ModelChoice]:
-    """One `ModelChoice` per resolved base model of the search, best fit first.
+    """One `ModelChoice` per resolved base model of the search, in the order of the result's rule.
 
     Only what can be picked: with the owner filter on, a repository of an account that is neither
     a publisher nor a listed packager is no target of this run and no part of a model's `repos`
     either -- except the one repository `typed` names, which the filter never hides. The order is
-    the memory pool (graphics memory first), then the fit class, then the downloads, then the name,
-    with `no_fit` and `unknown` last -- the fit is what a reader is choosing by, and the
+    `_list_order`: the memory pool (graphics memory first), `legacy` last, the larger model first,
+    then the downloads, then the name, with `no_fit` and `unknown` last (ADR 0009) -- the
     downloads say what many people take (never a rank).
 
     `configured_ollama` is the `ollama_base:ollama_tag` pair the configuration holds per base

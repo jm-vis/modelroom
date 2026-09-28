@@ -228,7 +228,9 @@ def measure_vllm(
     run.servers.measured["vllm"] = outcome
     if measurement is None:
         return None
-    return MEASURED if offer.counts else NOT_COUNTED
+    # `vLLM measured` only where the number counts **and** the measurement holds: an invalid or not
+    # comparable one says so on the card, and the balance may not say otherwise (Diff-Review M1).
+    return MEASURED if offer.counts and measurement.problem is None else NOT_COUNTED
 
 
 def _measure(run: "GuidedRun", served: ServedModel, scenario: Scenario) -> VllmMeasurement | None:

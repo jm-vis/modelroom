@@ -3767,10 +3767,10 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    measure it would be wrong (decided 2026-09-26). Under a machine entered by hand the advice gives
    way to `nothing measured in the rows shown · a machine entered by hand is never measured`: it is
    not this machine, and measuring this machine never writes into its profile. **Of the rows shown,
-   not of the machine**: the ranking rule sorts by fit class first, so a measured package can stand
-   behind eleven unmeasured ones and be in no `RankedEntry` of the document at all -- the card of the
-   same screen counts that measurement, and the two may not contradict each other (second-model
-   round, 2026-09-24 and 2026-09-25).
+   not of the machine**: since ADR 0009 every measured package the rule leaves out is appended to the
+   rows, so the card and this line count the same measurements; a measured package the fit sets
+   aside (`no_fit`, `not covered`) is in no `RankedEntry` and in neither count (second-model round,
+   2026-09-24 and 2026-09-25; ADR 0009, "Limits").
 5. `key` -- only under a ranked table: the fit hint (`screen.FIT_HINT`, the same pieces as in the
    Markdown view), wrapped between its pieces, and `Speed is measured, see its column.` on a row of
    its own (decided 2026-09-27).
@@ -4081,7 +4081,7 @@ card; a hint, never a limit.
     "kv_type_assumed": true,
     "requests": 1
   },
-  "ranking_rule": "fit class (ample, fits, tight), then measured group (valid comparable measurement first), then measured speed (faster first), then quantization, then larger weights, then package identity",
+  "ranking_rule": "graphics memory before system memory, then every model that is not legacy before a legacy one, then the larger model (parameter count), then the least compression, then measured before unmeasured (a valid comparable measurement), then larger weights, then package identity; the first 10 rows, then every measured package the rule leaves out",
   "rating_unavailable": null,
   "ratings": {
     "acme/Nova-7B": {
@@ -4496,7 +4496,7 @@ other module:
   `dim` row for its plain text while it is marked, and back when it is unmarked. With something
   marked the pointer's row is a row a reader moved past, not a choice (decided 2026-09-25). Every
   binding is added after `questionary` has built the question, like `Esc`; the library itself is
-  unchanged, and `FileAsker` is untouched -- `select = []` in an answer file still means nothing.
+  unchanged, and `FileAsker` answers as before (it takes `header` and ignores it) -- `select = []` in an answer file still means nothing.
 - **The row under the pointer is a cursor line** across the whole width (`dialog._mark_pointer_line`,
   style `cursor-line`), a gray row included: it was bold only, and a `legacy` row not even that.
 - **The keys stand behind the question, what the list says about itself in a gray line under the
@@ -5203,8 +5203,8 @@ registered server says what it has to say, in the order of `LOCAL_SERVERS`, the 
 not count among it; then **one** question, `load_test` (`Measure the speed on this machine now?`,
 default **no**); on a yes **one** list, `load_test_packages` (`Which of these should be measured?`):
 the Ollama candidates of this run's models and, where the start screen read a served model, the row
-`vllm` (`vLLM server  context 4k  20 requests at once  <id>`), nothing marked, the `Enter` rule of
-every list. The key `load_test_vllm` is gone (0.2.0 was never released). Each server has `offer(run,
+`vllm` (`vLLM server  context 4k  20 requests at once  <id>`), none of them marked; `Enter` with nothing marked takes the
+pointer row, one candidate, never all (it measured all three in the hand test of 2026-09-24). The key `load_test_vllm` is gone (0.2.0 was never released). Each server has `offer(run,
 config, scenario, results_dir) -> Offer` (its notes, its rows, why it could not be read) and
 `measure(...) -> str | None` (`local_servers.LocalServer`, replacing `step`).
 
@@ -5269,8 +5269,10 @@ row. Nothing of it is written.
 | candidates | yes | yes | the candidates and `vllm` | `<k> of <n> measured · vLLM measured` (or `· vLLM ran, not counted`) | 0 |
 | any | -- | -- | -- | a measurement a server lets down: `nothing measured for <name>: <reason>` (`run.failed`) | 1 |
 
-`vLLM measured` is said only where the number counts; where nothing counts the balance says `vLLM
-ran, not counted`. The document is written in every state.
+`vLLM measured` is said only where the number counts **and** the measurement holds (valid and
+comparable); where it does not count, or the measurement is invalid or not comparable, the balance
+says `vLLM ran, not counted` -- the card's server row says why. The document is written in every
+state.
 
 **The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question

@@ -65,7 +65,7 @@
            the pool is what the mode names, minus its reserve (per card) · gpu: one card
            gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
            one memory shared by system and card counts as gpu, both reserves taken
-           off the card, and for a fit from size, the best is fits
+           off the card, and for a fit from size the highest class is fits
            best: the least compression of the same model that fits
            modelroom rates no model family against another
            one row per model, its least compression that fits
