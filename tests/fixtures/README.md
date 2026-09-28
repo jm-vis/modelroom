@@ -335,6 +335,31 @@ host name, address or machine identifier is in any file.
 Synthetic, in the tests: the metrics numbers of each batch, the three batch times of the load test,
 a `401`, a list of two served models, a `finish_reason` `stop`, and a server that goes away.
 
+## The publisher's repository as a target (AP9-UX2)
+
+Recorded on **2026-09-28** by the builder of AP9-UX2 from the public Hub, one anonymous `GET` each at
+the URLs `modelroom/hf.py` builds, and nothing else. Whole answers, verbatim; no host name, address
+or secret is in them. Since AP9-UX2 a guided run fetches every resolved base model's own repository
+(P3), so the fixture chain needs the publisher trees; `Qwen/Qwen3.5-4B` is the model the vLLM
+server of the second hand run served.
+
+- `hf_qwen_qwen35_9b_tree.json` -- the recursive tree of `Qwen/Qwen3.5-9B` at sha
+  `c202236235762e1c871ad0ccb60c8ee5ba337b9a` (the sha of `hf_qwen_qwen35_9b_model.json`): four
+  safetensors shards `model.safetensors-0000N-of-00004.safetensors` and their index.
+- `hf_deepseek_r1_qwen3_8b_tree.json` -- the recursive tree of `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`
+  at sha `6e8885a6ff5c1dc5201574c8fd700323f23c25fa` (the sha of `hf_deepseek_r1_qwen3_8b_model.json`):
+  two shards `model-0000N-of-000002.safetensors` and their index.
+- `hf_qwen_qwen35_4b_model.json`, `hf_qwen_qwen35_4b_config.json`, `hf_qwen_qwen35_4b_tree.json` --
+  `/api/models/Qwen/Qwen3.5-4B` (sha `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`), its `config.json` at
+  that sha (the text layers of the 9B model: 32 layers, 24 `linear_attention` and 8
+  `full_attention`, `mamba_ssm_dtype` `float32`) and the recursive tree at that sha: two shards of
+  5,329,398,688 and 3,990,429,408 bytes, one `tensor` package.
+
+Synthetic, in the tests (AP9-UX2): the packages of `acme/Nova-7B` behind the pull list and the
+repository lines (`tests/fixture_rows.py`), the fixed room of the laptop (`tests/fixture_room.py`:
+10,444 MiB graphics memory free, 44,236,955,648 bytes of disk free on `C:`), and the answers of
+`nvidia-smi --query-gpu=index,name,memory.free` in `tests/test_room.py`.
+
 ## Schema 2 and migration (AP9-K)
 
 All hand-written, fictitious machines and models (`acme/Nova-*`, `packager/*`); no real host

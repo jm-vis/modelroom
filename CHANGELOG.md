@@ -161,6 +161,31 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **The package to pull is chosen** (`modelroom/pull_choice.py`, `guided_install.py`; CONTRACTS.md,
+  "The pull"; ADR 0010; AP9-UX2 U6, decided 2026-09-28). Step 5 lists the rows shown for this machine
+  (`pull_package`), then names the command of the choice, checks the disk and asks `Pull #3 into
+  Ollama now?`. A row without an Ollama name and a row whose pull name is not unique are locked. An
+  answer file without `pull_package` takes `#1` as before. The ranking rule of ADR 0009 is unchanged.
+- **The table head says what is free now** (`modelroom/room.py`; AP9-UX2 U8, F5, F6): a `free` line
+  with the free memory of each card (`nvidia-smi`, live) and the free disk where Ollama keeps its
+  models (an approximation, with its drive), `unknown` where it cannot be read. The table gains a
+  column `Download` (the weight files); the `memory` line calls the fit's pool its budget. Before a
+  pull the disk is measured again: too little asks nothing and pulls nothing.
+- **The age of a model follows the version of its line** (`modelroom/search_release.py`; CONTRACTS.md,
+  "Latest and legacy evidence"; ADR 0010; AP9-UX2 U5, GF F3). The group is publisher, first word and
+  line (`small`, `medium`, `large`, counter `r`); every other word is a variation of its version, so
+  `Qwen3.5-0.8B-Base` is `legacy` beside Qwen 3.8. A listed packager's repository proves a higher
+  version, the successor is always one, a catalog `latest` gives way to a higher version, a fault is a
+  note and no longer keeps a model `unknown`, and a cycle chooses only the successor.
+- **The publisher's repository is always a target** (`search_apply.apply_hits`; AP9-UX2 P3, GF F8):
+  the fetch records its `tensor` package, so a vLLM server serving the base model finds it.
+- **The folder of the last run is a question** where it is not this one (`modelroom/guided_folder.py`;
+  AP9-UX2 U1, F1), and **a home folder or the top of a drive** is one before anything is written (U7,
+  F2; `write_home`, then `<home>/modelroom` offered).
+- **Another computer says so** (AP9-UX2 U2, U3): the card and the table head of an imported or
+  entered machine or another profile of the folder, and its command to copy with no pull.
+- **Rows that look alike name their repository** under the table (AP9-UX2 U4, F7), with the file form
+  where one repository has both; nothing is merged.
 - **The largest model that fits, the least compression of it** (`modelroom/ranking.py`; CONTRACTS.md,
   "Ranking rule"; ADR 0009; decided 2026-09-28). The rule ranks graphics memory before system memory,
   every model that is not `legacy` before a `legacy` one (`latest` and an unknown release alike), then
@@ -299,6 +324,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- **Qwen3.5 is computed on its architecture** (`modelroom/architecture.py`, `fit.py`, `fit_vllm.py`;
+  CONTRACTS.md, "Architecture", "Fit contract v1"; ADR 0010; AP9-UX2 P1): the new kind
+  `hybrid_linear` counts the KV cache of the 8 full-attention layers and the state of the 24 linear
+  ones once per request (`mamba_ssm_dtype`, 4 bytes where the config names none). The size basis had
+  overstated its KV cache by 4.5 times; `Q4_K_M` at L 32k now fits the laptop card. Snapshot schema 1
+  stays (precedent ADR 0007).
+- **A package between 98 and 100 % of a card is no longer `no fit`** (`fit._choose_pool`; AP9-UX2
+  P2): a pool is chosen only up to 98 % of it, else the next pool is tried; the last pool is judged as
+  it is.
+- **A vLLM server finds its package after a guided run** (AP9-UX2 P3, SV1-F): the publisher's own
+  repository is a fetch target now (see "Changed").
 - **A measurement of the run no longer drops out of its result** (ADR 0009): a measured package the
   rule does not show is appended behind the rule's rows with its place, and the card counts it.
 - **The column head of the model list stays in sight** (`Asker.checkbox(..., header=...)`): it stood
