@@ -129,6 +129,29 @@ its own, next to the machines you measured, and says `(entered)` wherever its na
 every number of such a machine is computed, none measured. The measurement is cross-checked with
 [llmfit](https://github.com/AlexsJones/llmfit) when it is installed.
 
+Nothing in the list is marked in advance: the arrow keys move, the space bar marks a row, and Enter
+takes what is marked or, with nothing marked, the row under the pointer. Where this machine was
+measured in this folder before, its profile is the first row (`this machine (gpu-server, server, as
+measured 2026-09-28)`), so Enter alone keeps it and measures nothing; `measure again` is the row
+under it. The result covers exactly the machines you marked in this run.
+
+#### Another computer
+
+A folder can hold the profiles of several machines -- the laptop you sit at and a server you rent,
+say. There are three ways to get another computer into the result:
+
+1. **Run modelroom on that computer** and measure it there -- for a rented instance, over SSH.
+   This is the only way that measures a vLLM server as well.
+2. **Measure it there and bring the file here**: on that computer `modelroom hardware` and
+   `modelroom export-profile`, send the file over, and answer step 1 here with `import a profile
+   file`.
+3. **Enter it by hand** from its data sheet (`enter a machine by hand`).
+
+Every profile the folder already holds stands in step 1 as a row of its own and can be picked;
+the result shows only the ones you marked. A folder collects profiles through `import`, which checks
+the file's schema and its name; a file copied by hand into `state/hardware/` is taken up by the next
+run. modelroom itself never connects to another computer.
+
 ### Step 2, Packages
 
 ![Step 2: the search word](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/3-search.png)
@@ -157,7 +180,9 @@ of a publisher the catalog does not know be picked as well.
 
 ![Step 2: the list of models, one row per model that can be picked](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/5-models.png)
 
-The list of models, one row per model that can really be picked, best fit first. The columns:
+The list of models, one row per model that can really be picked: what fits into the graphics card
+first, a model with a named successor (`legacy`) last, and otherwise the largest model first --
+the same rule the result follows. The column head stays above the list while you scroll. The columns:
 **Fit** is what the model's size allows on this machine at the folder's context (32k for a new
 folder): `fits`, `tight`, `no_fit`, the share of the memory it needs; `fits (RAM)` means it needs
 system memory rather than the graphics card's. The gray line under the question says what each
@@ -198,15 +223,17 @@ folder keeps the level it chose last time, and a number of tokens can be typed i
 
 ![Step 4: measure the speed of the chosen models the local daemon already has](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/7-measurement.png)
 
-Whether to measure the speed of the packages your local Ollama daemon already has. **Yes** lists
-the installed packages that match this folder's snapshot and lets you pick which to measure; a
-measurement runs a short prompt through the package and records tokens per second. It never
-downloads anything. The gray line says what was found: here the daemon has a `Qwen3.5-4B`, but
-its weights are Ollama's own build and not one of the fetched packages, so there is nothing to
-measure as such. **No** skips new measurements; a measurement stored earlier for the same package
+One question for every local server: **Measure the speed on this machine now?** First each server
+says what it has -- the packages of this run's models your Ollama daemon already has, and, where a
+vLLM server answers, which model it serves and whether its number will count for this run (it
+counts when it serves a model you chose, at the context you chose). **Yes** shows one list: the
+installed packages and the vLLM server, nothing marked, and you pick what to measure. An Ollama
+measurement runs a short prompt through the package and records tokens per second; it never
+downloads anything. **No** skips new measurements; a measurement stored earlier for the same package
 content at the same context stays in the ranking, and a row without one shows `–` for speed. A
 measurement always runs one request; when the ranking assumes more, the step says so first, and a
-measured row then names why its speed does not count there.
+measured row then names why its speed does not count there. The balance says `vLLM measured` only
+where the number counts, else `vLLM ran, not counted`.
 
 ### Step 5, Results
 
@@ -226,7 +253,12 @@ what was measured for **speed**; the **key** says what the fit words mean. The *
 paste. Where the local Ollama daemon answered and does not have that row yet, the run then asks
 **Pull #1 into Ollama now?** with the size of the package: **Yes** pulls it into the daemon and
 shows the progress, **No** leaves it at the line to paste; step 4 of the next run measures it. A
-row the daemon already has gets a note instead of the question. The ranking, the top ten per machine with the totals and what was set aside, is written to
+row the daemon already has gets a note instead of the question. The first row is the largest model
+that fits, in the least compression of it that fits -- "best" means the same model, less
+compressed; modelroom rates no model family against another. With several models the table shows
+one row per model, its best package; a package you measured here that the rule leaves out is added
+at the end with its place. The result shows only the machines and models this run chose; a later
+`modelroom render` shows the whole folder again. The ranking, with the totals and what was set aside, is written to
 `docs/models.md` and `docs/models.json`; what the search asked, page by page, is in
 `state/search.json` next to them.
 
@@ -235,9 +267,9 @@ row the daemon already has gets a note instead of the question. The ranking, the
 ![Step 2 with an empty search word: the catalog's current models, one page each, ranked by fit](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/9-anything.png)
 
 Press Enter on an empty search word and the run looks up the current models of the shipped
-catalog, one page each, and lists them best fit first: what fits into the graphics card, then what
-is tight there, then what needs system memory. This is the answer to "I have no model in mind,
-show me what fits this machine".
+catalog, one page each, and lists them by the rule of the result: what fits into the graphics card
+first, the largest model that fits and has no named successor at the top, then what needs system
+memory. This is the answer to "I have no model in mind, show me what fits this machine".
 
 ### Without a terminal
 
@@ -280,9 +312,11 @@ cat docs/models.md
    (`[guided].context`), so the ranking it writes is the one that run showed; a configuration no
    guided run has chosen a context in assumes 8192.
 5. Read the table. Only active, complete packages with `from_metadata` or `approved`
-   provenance are shown, and every one of them is ranked per machine: best fit first, a
-   measured package ahead of an unmeasured one of the same fit class, with the rule and the
-   scenario printed in the header. Packages fit v1 cannot judge stand under "not covered"
+   provenance are shown, and every one of them is ranked per machine: graphics memory before
+   system memory, the largest model first and, within one model, the least compression that
+   fits; a measurement only decides between two builds of the same compression. With several
+   models the table shows one row per model, and a measured package the rule leaves out is added
+   at the end. The rule and the scenario are printed in the header. Packages fit v1 cannot judge stand under "not covered"
    with the reason, ones that do not fit under "No fit". Every computed number says
    `(computed)`, the measured speed says `(measured)`.
 
