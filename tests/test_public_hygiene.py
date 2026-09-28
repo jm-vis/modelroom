@@ -130,14 +130,16 @@ def findings(paths: list[Path] | None = None, root: Path = REPO, words: list[str
     known = private_words() if words is True else words
     hits = []
     for path in paths if paths is not None else tracked_files():
-        if path.suffix in SKIP_SUFFIXES or not path.exists():
+        if path.suffix in SKIP_SUFFIXES:
             continue
         rel = path.relative_to(root).as_posix()
         private = known is None or any(word.casefold() in rel.casefold() for word in known)
         shown = WITHHELD if private or classify(rel) else rel
-        try:
+        try:  # every touch of the file system inside: its errors name the full path (Codex r5-2, r6)
+            if not path.exists():
+                continue
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:  # its message names the full path: only the place, redacted (Codex r5-2)
+        except OSError:  # its message names the full path: only the place, redacted
             hits.append(f"{shown}: unreadable file")
             continue
         hits += [f"{shown}:{line_no}: {name}" for line_no, name in classify(text, rel)]
@@ -218,6 +220,22 @@ def test_a_file_that_cannot_be_read_is_a_redacted_finding(tmp_path, capsys):
     folder = tmp_path / f"notes-{word}.txt"
     folder.mkdir()
     hits = findings([folder], tmp_path, words=[word])
+    print("\n".join(hits))
+    captured = capsys.readouterr()
+    assert hits == [f"{WITHHELD}: unreadable file"]
+    assert word not in captured.out + captured.err and str(tmp_path) not in captured.out + captured.err
+
+
+def test_an_error_of_the_existence_check_is_a_redacted_finding(tmp_path, monkeypatch, capsys):
+    """Codex r6: `exists` itself can fail, with the path in its message."""
+    word = "zq" + "workbench" + "7"
+    path = tmp_path / f"notes-{word}.txt"
+
+    def refused(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "exists", refused)
+    hits = findings([path], tmp_path, words=[word])
     print("\n".join(hits))
     captured = capsys.readouterr()
     assert hits == [f"{WITHHELD}: unreadable file"]
