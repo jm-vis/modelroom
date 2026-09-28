@@ -70,7 +70,25 @@ LOAD_NOTE_LINE = (
 )
 
 
-def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path) -> str | None:
+def local_measure_target(run: "GuidedRun", config: Configuration, results_dir: Path, name: str = "") -> str | None:
+    """The one check every local server passes before it offers anything (Codex F2, r3, r4).
+
+    First the identity: the profile this machine is bound to, with its fingerprint (`_bound_profile_id`);
+    then the choice: a machine this run chose names that profile (`chosen_here`). `None` with the note
+    of the first that fails, prefixed with the server's `name` where it is not the daemon.
+    """
+    prefix = f"{name}: " if name else ""
+    profile_id = _bound_profile_id(run, config, results_dir, prefix)
+    if profile_id is None:
+        return None
+    if not chosen_here(run, config, profile_id):
+        # Its measurement would land in a profile the result of this run does not show.
+        run.screen.note(prefix + NOT_CHOSEN_LINE)
+        return None
+    return profile_id
+
+
+def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path, prefix: str = "") -> str | None:
     """The profile **this** machine may measure into here, or `None` with a line saying so.
 
     Not `[machines.<name>].profile`: a configuration is shared, and a stale or foreign entry
@@ -83,7 +101,7 @@ def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path
     """
     bound = read_pointer(run.pointer_path).binding_for(results_dir)
     if bound is None:
-        run.screen.note("no load test: this machine is not bound to a profile in this results folder")
+        run.screen.note(f"{prefix}no load test: this machine is not bound to a profile in this results folder")
         return None
     scan = scan_profiles(config.paths.hardware_dir)
     known = {
@@ -97,7 +115,7 @@ def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path
     unused = next(candidate for candidate in ("0" * 16, "1" * 16, "2" * 16) if candidate not in known)
     target = resolve_profile_target(bound, None, known, local, unused)
     if target.action != "bound":
-        run.screen.note(f"no load test: {target.reason} ({target.profile_id})")
+        run.screen.note(f"{prefix}no load test: {target.reason} ({target.profile_id})")
         return None
     return bound
 
@@ -265,12 +283,8 @@ def ollama_offer(
     """
     if ranking_requests > 1:
         run.screen.note(("Ollama " if named else "") + ONE_REQUEST_LINE.format(requests=ranking_requests))
-    profile_id = _bound_profile_id(run, config, results_dir)
+    profile_id = local_measure_target(run, config, results_dir)
     if profile_id is None:
-        return OllamaOffer()
-    if not chosen_here(run, config, profile_id):
-        # Its measurement would land in a profile the result of this run does not show (Codex F2).
-        run.screen.note(NOT_CHOSEN_LINE)
         return OllamaOffer()
     packages = _snapshot_packages(run, config)
     if packages is None:

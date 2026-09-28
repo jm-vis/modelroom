@@ -18,13 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .binding import read_pointer
 from .config import Configuration
 from .contracts import Package, SchemaVersionError
 from .dialog import Choice
 from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VllmFit, largest_card, vllm_fit
 from .guided_context import machine_checked
-from .guided_loadtest import chosen_here
+from .guided_loadtest import local_measure_target
 from .intro import Fact
 from .loadtest import LoadTestError
 from .loadtest_vllm import MAX_REQUESTS, MAX_TOKENS, VllmMeasurement, run_vllm_load_test
@@ -45,7 +44,6 @@ MEASURED = "vLLM measured"
 NOT_COUNTED = "vLLM ran, not counted"
 NOT_A_PACKAGE = "no package of this folder"
 NOT_MEASURED = "not measured in this run"
-NOT_CHOSEN_LINE = "vLLM: no load test, this machine is not part of this run's result"
 REVISION_LINE = "revision unknown (not stated)"
 NOTHING_WRITTEN_LINE = "identity stated by the server; not ranked, nothing written"
 # Why there is no fit: `guided_context.machine_checked` found no profile the fit may compute for
@@ -187,11 +185,9 @@ def vllm_offer(run: "GuidedRun", config: Configuration, scenario: Scenario, resu
         run.screen.note(found if found == KEY_REASON else f"{NAME}: {found}")
     if not isinstance(found, ServedModel):
         return None
-    bound = read_pointer(run.pointer_path).binding_for(results_dir)
-    if bound is None or not chosen_here(run, config, bound):
-        # The same rule as Ollama's (Codex F2, r3): the server runs on this machine, so its number
-        # counts only where the run chose this machine; else nothing is offered, measured or counted.
-        run.screen.note(NOT_CHOSEN_LINE)
+    if local_measure_target(run, config, results_dir, NAME) is None:
+        # The daemon's own check (Codex F2, r3, r4): the server runs on this machine, so it counts only
+        # where this machine is the machine of its bound profile and the run chose it.
         return None
     requests = min(scenario.requests, MAX_REQUESTS)
     run.screen.note(f"a vLLM server answers here, context {found.max_model_len}")

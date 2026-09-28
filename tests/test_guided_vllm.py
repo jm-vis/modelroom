@@ -79,13 +79,29 @@ ANSWERS = {
 }
 
 
-def _folder(tmp_path: Path, bound: bool = True) -> Path:
-    """The results folder and the pointer file of a machine that measured itself into it before."""
+def _own_fingerprint() -> str:
+    """The fingerprint of the machine `windows_probes()` stands for, as the measurement computes it."""
+    from modelroom.measure import read_os_identity
+    from modelroom.profile import os_fingerprint
+
+    probes = windows_probes(host="workstation")
+    return os_fingerprint(read_os_identity(probes.platform, probes.runner, probes.read_text).raw_id)
+
+
+def _folder(tmp_path: Path, bound: bool = True, own: bool = True) -> Path:
+    """The results folder and the pointer file of a machine that measured itself into it before.
+
+    `own`: the bound profile carries this machine's fingerprint (it is this machine); else the
+    recorded one of the rented server, so the binding points at another machine (Codex r4).
+    """
     results = (tmp_path / "results").resolve()
     hardware = results / "state" / "hardware"
     hardware.mkdir(parents=True)
     (results / "modelroom.toml").write_bytes(CONFIG.encode("utf-8"))
-    shutil.copyfile(FIXTURES / "profiles_v4" / "two_l4_server.json", hardware / f"{L4_PROFILE}.json")
+    profile = json.loads((FIXTURES / "profiles_v4" / "two_l4_server.json").read_text(encoding="utf-8"))
+    if own:
+        profile["os_fingerprint"] = _own_fingerprint()
+    (hardware / f"{L4_PROFILE}.json").write_bytes(json.dumps(profile, indent=2).encode("utf-8"))
     bindings = {str(results): L4_PROFILE} if bound else {}
     pointer = GuidedPointer(schema_version=POINTER_SCHEMA_VERSION, current=str(results), bindings=bindings)
     write_pointer(tmp_path / "home" / ".modelroom" / "guided.json", pointer)
@@ -118,10 +134,17 @@ def _choosable_qwen25() -> dict:
 
 
 def _run(
-    tmp_path: Path, answers: dict | None = None, *, servers=None, bound: bool = True, keep: bool = False
+    tmp_path: Path,
+    answers: dict | None = None,
+    *,
+    servers=None,
+    bound: bool = True,
+    keep: bool = False,
+    own: bool = True,
+    daemon=None,
 ) -> tuple[int, list[str]]:
     """`keep`: the folder was laid out by the test already (e.g. with an imported profile)."""
-    results = (tmp_path / "results").resolve() if keep else _folder(tmp_path, bound)
+    results = (tmp_path / "results").resolve() if keep else _folder(tmp_path, bound, own)
     lines: list[str] = []
     code = run_guided(
         FileAsker(ANSWERS if answers is None else answers),
@@ -129,13 +152,20 @@ def _run(
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
         transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping(), **_choosable_qwen25()}),
         probes=windows_probes(host="workstation"),
-        daemon=offline_daemon(),
+        daemon=daemon if daemon is not None else offline_daemon(),
         servers=servers if servers is not None else vllm_servers(),
         now=RUN_AT,
         out=lines.append,
         colored=False,
     )
     return code, lines
+
+
+def _answering_daemon():
+    """The load test's daemon: it answers, and has no package of the served model installed."""
+    from fixture_support import loadtest_daemon
+
+    return loadtest_daemon()
 
 
 def _step(lines: list[str], number: int) -> list[str]:
@@ -196,11 +226,13 @@ def test_step_4_reads_the_lines_of_the_brief_with_the_vllm_row_picked(tmp_path: 
     assert code == 0
     assert _step(lines, 4) == [
         "Ollama measurements run one request; this ranking assumes 20",
-        f"no load test: profile from home binding has another os_fingerprint ({L4_PROFILE})",
         "a vLLM server answers here, context 4096",
         f"it states it serves {QWEN25_REPO}",
         "revision unknown (not stated)",
         "one warm-up request, then three batches of 20 requests, 128 tokens each",
+        # This machine is bound to its own profile now (Codex r4), so the daemon's reason stands too.
+        "Ollama: cannot reach the Ollama daemon at http://127.0.0.1:11434: "
+        "http://127.0.0.1:11434: the Ollama daemon did not answer (refused)",
         "? Measure the speed on this machine now?  Yes",
         "? Which of these should be measured?  vLLM server",
         "measured vLLM: <n> tok/s total (<n>–<n>), context 4k",
@@ -269,7 +301,8 @@ def test_a_server_that_lets_the_load_test_down_is_a_step_that_did_not_finish(tmp
 def test_a_server_that_asks_for_a_key_measures_nothing_and_ends_0(tmp_path: Path):
     asking = {"vllm": FixtureVllmServer({("GET", MODELS_PATH): Response(status=401, body=b"{}")})}
 
-    code, lines = _run(tmp_path, servers=asking)
+    # A daemon that answers, with nothing of this run installed: Ollama offers no row either.
+    code, lines = _run(tmp_path, servers=asking, daemon=_answering_daemon())
 
     assert code == 0
     assert "server    127.0.0.1:8000          asks for an API key" in [line.strip() for line in lines]
@@ -302,7 +335,7 @@ def test_without_a_bound_profile_the_server_is_not_offered(tmp_path: Path):
     _code, lines = _run(tmp_path, bound=False)
 
     step = _step(lines, 4)
-    assert "vLLM: no load test, this machine is not part of this run's result" in step
+    assert "vLLM: no load test: this machine is not bound to a profile in this results folder" in step
     assert not any(line.startswith(("vLLM fit, computed", "measured vLLM")) for line in step)
     assert not any("server    vLLM" in line for line in _card(lines))
 
@@ -393,17 +426,19 @@ def _written(tmp_path: Path) -> dict[str, bytes]:
 
 
 def test_a_run_with_a_vllm_server_writes_the_same_bytes_as_one_without(tmp_path: Path):
-    """Two runs, same clock and answers, Ollama offline in both; one with the vLLM fixtures.
+    """Two runs, same clock and answers, the same daemon with nothing of the run installed; one with
+    the vLLM fixtures.
 
     The snapshot is the fetch's own, from the recorded Hub answers, and holds the served package
-    (`qwen25_tensor_package`); the profile is `profiles_v4/two_l4_server.json`, bound by the pointer.
+    (`qwen25_tensor_package`); the profile is `profiles_v4/two_l4_server.json` with this machine's
+    fingerprint, bound by the pointer.
     """
     without = tmp_path / "run"
-    code, _lines = _run(without, servers=offline_servers())
+    code, _lines = _run(without, servers=offline_servers(), daemon=_answering_daemon())
     first = _written(without)
     shutil.rmtree(without)
 
-    code_with, lines = _run(without, servers=vllm_servers())
+    code_with, lines = _run(without, servers=vllm_servers(), daemon=_answering_daemon())
     second = _written(without)
 
     assert (code, code_with) == (0, 0)
@@ -605,25 +640,39 @@ def test_the_server_row_of_the_card_says_whether_the_number_counts(tmp_path: Pat
     assert f"                                   {identity}" in card
 
 
-@pytest.mark.parametrize("case", ["nothing marked", "an import that failed", "another machine only"])
+@pytest.mark.parametrize(
+    "case", ["nothing marked", "an import that failed", "another machine only", "another fingerprint"]
+)
 def test_the_vllm_server_is_measured_only_where_the_run_chose_this_machine(tmp_path: Path, case):
-    """Codex r3: like Ollama (F2), vLLM measures and counts only where a machine this run chose names
-    the profile this machine is bound to; else no question, no measurement, no number on the card."""
+    """Codex r3 and r4: the daemon's own check -- this machine is the machine of its bound profile
+    (fingerprint included), and the run chose it; else no question, no measurement, no number."""
     from modelroom.importer import import_profile
 
     from fixture_support import FOUR_L4_ID, export_of
 
-    machines = {"nothing marked": [], "an import that failed": ["import"], "another machine only": [f"profile:{FOUR_L4_ID}"]}
+    machines = {
+        "nothing marked": [],
+        "an import that failed": ["import"],
+        "another machine only": [f"profile:{FOUR_L4_ID}"],
+        "another fingerprint": [f"profile:{L4_PROFILE}"],
+    }
     answers = {**ANSWERS, "machines": machines[case], "import_file": "missing.export.json"}
     if case == "another machine only":
         results = _folder(tmp_path)
         import_profile(results / "modelroom.toml", export_of("four_l4_server.json", tmp_path / "exports"), RUN_AT)
     servers = vllm_servers()
 
-    code, lines = _run(tmp_path, answers, servers=servers, keep=case == "another machine only")
+    code, lines = _run(
+        tmp_path, answers, servers=servers, keep=case == "another machine only", own=case != "another fingerprint"
+    )
 
     step = _step(lines, 4)
-    assert "vLLM: no load test, this machine is not part of this run's result" in step
+    expected = (
+        f"vLLM: no load test: profile from home binding has another os_fingerprint ({L4_PROFILE})"
+        if case == "another fingerprint"
+        else "vLLM: no load test: this machine is not part of this run's result"
+    )
+    assert expected in step
     assert not any(line.startswith(("? Measure the speed", "measured vLLM")) for line in step)
     assert step[-1] == "– Measurement     none in this run"
     assert [call[1] for call in servers["vllm"].calls] == [MODELS_PATH]  # the start screen read it, nothing more
@@ -636,10 +685,12 @@ STATES = [
     ("unbound", "none", "offline", {}, False, None, "– Measurement     none in this run", 0),
     # Not bound: this machine is no machine of the run, so the vLLM server is not offered either (r3).
     ("unbound", "none", "vllm", {}, False, None, "– Measurement     none in this run", 0),
-    # Bound, but not to a profile the daemon may measure into (another fingerprint): Ollama offers
-    # nothing, the vLLM server of the chosen machine is offered.
-    ("foreign", "none", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM measured", 0),
-    ("foreign", "none", "vllm", {"load_test": False}, True, None, "– Measurement     none in this run", 0),
+    # Bound to a profile of another fingerprint: this is not the machine of that profile, so neither
+    # server offers anything (Codex r4) -- the same check for both.
+    ("foreign", "none", "vllm", {}, False, None, "– Measurement     none in this run", 0),
+    ("foreign", "none", "vllm", {"load_test": False}, False, None, "– Measurement     none in this run", 0),
+    # Bound to its own profile and chosen: the vLLM server is offered, measured and counted.
+    ("own", "none", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM measured", 0),
     ("fresh", "offline", "offline", {"load_test": False}, True, None, "– Measurement     none in this run", 0),
     ("fresh", "offline", "offline", {"load_test": True}, True, None, "– Measurement     none in this run", 1),
     ("fresh", "offline", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM ran, not counted", 0),
@@ -659,8 +710,10 @@ def test_every_state_of_step_four(tmp_path: Path, folder, daemon, servers, extra
     picked = [values[row] for row in rows or []]
     answers = {"load_test": True, "load_test_packages": picked, **extra}
     the_servers = vllm_servers() if servers == "vllm" else offline_servers()
-    if folder in ("unbound", "foreign"):
-        code, lines = _run(tmp_path, {**ANSWERS, **answers}, servers=the_servers, bound=folder == "foreign")
+    if folder in ("unbound", "foreign", "own"):
+        code, lines = _run(
+            tmp_path, {**ANSWERS, **answers}, servers=the_servers, bound=folder != "unbound", own=folder == "own"
+        )
         asker_rows = None
     else:
         base = WITH_DEEPSEEK if folder == "deepseek" else FRESH
@@ -670,7 +723,7 @@ def test_every_state_of_step_four(tmp_path: Path, folder, daemon, servers, extra
 
     step = _step(lines, 4)
     assert any(line.startswith("? Measure the speed on this machine now?") for line in step) is asked
-    if folder not in ("unbound", "foreign"):
+    if folder not in ("unbound", "foreign", "own"):
         assert asker_rows == (picked or None if rows else None)
     assert step[-1] == balance
     assert code == exit_code

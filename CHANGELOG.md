@@ -176,7 +176,8 @@ All notable changes to this project are documented in this file. The format foll
   the models step 2 chose; steps 3 and 4 and the balance of step 2 count the same. A run that chose
   no model ranks none of the folder's, one that chose no machine names none (not even the one this
   folder is bound to), and both say so; step 4 measures this machine -- through Ollama or its vLLM
-  server -- only where the run chose it. A package measured here at another context, or not comparable, stays visible without a
+  server, with one check for both -- only where it is the machine of its bound profile (the
+  fingerprint agrees) and the run chose it. A package measured here at another context, or not comparable, stays visible without a
   comparable speed, and its row says why. Nothing of the
   selection is written: `modelroom.toml` keeps every family and machine, and a later `modelroom
   render` shows the whole folder.
