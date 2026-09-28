@@ -53,6 +53,7 @@ from .state import UnreadableStateFileError, read_snapshot
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
+    from .selection import RunSelection
 
 STEP = 3
 
@@ -332,31 +333,37 @@ def fit_texts(
     return texts
 
 
-def context_cap(base_models: list[BaseModelSpec]) -> tuple[int, str] | None:
-    """The smallest context window the base models declare, or `None` when one of them is silent.
+CAP_WORDS = "every model of this run"
 
-    A window nobody knows is no reason to gray out a level: the packages themselves may hold a
-    smaller one, and `Architecture.max_context` is read from the publisher repository, which not
-    every base model publishes.
+
+def context_cap(base_models: list[BaseModelSpec]) -> tuple[int, str] | None:
+    """The largest context window the base models of this run declare, or `None` when one is silent.
+
+    A level is grayed out only beyond the window of **every** model of this run (AP9-UX H): one
+    model with a 32k window no longer locks XL and XXL for one with 256k -- a package beyond its own
+    model's window is `not covered` in the fit itself (`fit.compute_fit_v2`). A window nobody knows
+    is no reason to gray out a level: `Architecture.max_context` is read from the publisher
+    repository, which not every base model publishes.
     """
     if not base_models:
         return None
-    windows = [(spec.architecture.max_context, spec.hf_repo) for spec in base_models]
-    if any(window is None for window, _repo in windows):
+    windows = [spec.architecture.max_context for spec in base_models]
+    if any(window is None for window in windows):
         return None
-    return min(windows)  # type: ignore[arg-type,return-value]  -- every window is an int here
+    return max(windows), CAP_WORDS  # type: ignore[type-var]  -- every window is an int here
 
 
-def snapshot_packages(config: Configuration) -> tuple[list[Package], list[BaseModelSpec]]:
+def snapshot_packages(config: Configuration, selection: "RunSelection | None" = None) -> tuple[list[Package], list[BaseModelSpec]]:
     """The packages of this folder's snapshot a fit may be computed for, and its base models.
 
     Through the render's own filter (`render._eligible_packages`) and not a second one of this
     module's, so that the count in the scale is about exactly the packages the ranking of this
-    same run will judge. A snapshot that does not read is not this step's business: the scale
-    then shows no count, and the render that follows ends the run with the exit code that file's
-    own reader gives it.
+    same run will judge -- and through the same selection (`selection.narrow_snapshot`, AP9-UX B).
+    A snapshot that does not read is not this step's business: the scale then shows no count, and
+    the render that follows ends the run with the exit code that file's own reader gives it.
     """
     from .render import _eligible_packages
+    from .selection import narrow_snapshot
 
     try:
         snapshot = read_snapshot(config)
@@ -364,6 +371,8 @@ def snapshot_packages(config: Configuration) -> tuple[list[Package], list[BaseMo
         return [], []
     if snapshot is None:
         return [], []
+    if selection is not None:
+        snapshot = narrow_snapshot(snapshot, selection)
     return _eligible_packages(snapshot), snapshot.base_models
 
 
@@ -382,9 +391,10 @@ class SnapshotFacts:
     repositories: int
 
 
-def snapshot_facts(config: Configuration) -> SnapshotFacts:
-    """The four numbers of this folder's snapshot, read through the render's own filter."""
-    packages, base_models = snapshot_packages(config)
+def snapshot_facts(config: Configuration, selection: "RunSelection | None" = None) -> SnapshotFacts:
+    """The four numbers of this folder's snapshot, read through the render's own filter and this
+    run's selection, so the balance of step 2 and the card count what this run chose."""
+    packages, base_models = snapshot_packages(config, selection)
     accounts: list[str] = []
     repositories: list[str] = []
     for package in packages:
@@ -421,8 +431,9 @@ def _answered_requests(run: "GuidedRun", config: Configuration) -> RequestsAnswe
 
 
 def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked, requests: int = 1) -> int:
-    """The context the user picked, as a number of tokens; a level is translated here."""
-    packages, base_models = snapshot_packages(config)
+    """The context the user picked, as a number of tokens; a level is translated here. The scale
+    counts and caps with the models of this run alone (AP9-UX B and H)."""
+    packages, base_models = snapshot_packages(config, run.selection)
     default_context = config.guided.context if config.guided.context is not None else DEFAULT_CONTEXT
     contexts = [level.tokens for level in LEVELS] + [default_context]
     fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts, requests)

@@ -81,7 +81,8 @@ def test_markdown_table_reads_the_rendered_ranking(tmp_path):
     """Qwen3.5 is a hybrid architecture, so every package of it is judged from its size."""
     text, _payload = rendered(tmp_path, with_profile=True)
     rows = rs.markdown_table(text, "Ranking: workstation")
-    assert {row["Packager"] for row in rows} == {"unsloth"}  # the first ten of them
+    # The first ten under ADR 0009, least compression first: the Ollama builds stand among them.
+    assert {row["Packager"] for row in rows} == {"unsloth", "ollama"}
     assert all(row["Stars"] == "–" for row in rows)
     assert all(row["Fit (computed)"].startswith(("fits", "tight")) for row in rows)
     assert rs.markdown_table(text, "Not covered: workstation") == []

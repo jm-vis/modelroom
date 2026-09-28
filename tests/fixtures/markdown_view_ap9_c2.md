@@ -6,7 +6,7 @@ Snapshot run at: 2026-09-22T09:00:00+00:00
 Rendered at: 2026-09-22T10:00:00+00:00
 Base models / packages: 1 / 2
 Scenario: context 8k (default), KV cache f16 (assumed), 1 request
-Ranking rule: fit class (ample, fits, tight), then measured group (valid comparable measurement first), then measured speed (faster first), then quantization, then larger weights, then package identity
+Ranking rule: graphics memory before system memory, then every model that is not legacy before a legacy one, then the larger model (parameter count), then the least compression, then measured before unmeasured (a valid comparable measurement), then larger weights, then package identity; the first 10 rows, then every measured package the rule leaves out
 
 ## Areas
 
@@ -34,7 +34,7 @@ Showing 1 of 1 ranked packages.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | acme/Nova-8B | – | packager | Q4_K_M | gguf | 5.00 | fits (gpu) | 7.12 | 10.94 | unknown | 1 | – | from_metadata | Fits into graphics memory: it needs about 7.1 GiB of the 10.9 GiB left after the reserve. |
 
-Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · fits: up to 85 % · tight: up to 98 % · no fit: more · the pool is what the mode names, minus its reserve (per card) · gpu: one card · gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory · one memory shared by system and card counts as gpu, both reserves taken · off the card, and for a fit from size, the best is fits
+Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · fits: up to 85 % · tight: up to 98 % · no fit: more · the pool is what the mode names, minus its reserve (per card) · gpu: one card · gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory · one memory shared by system and card counts as gpu, both reserves taken · off the card, and for a fit from size the highest class is fits · best: the least compression of the same model that fits · modelroom rates no model family against another
 
 Speed is measured, see its column.
 

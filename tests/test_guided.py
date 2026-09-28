@@ -35,16 +35,28 @@ from modelroom.intro import STEP_NAMES
 from modelroom.profile import HardwareProfile
 from modelroom.state import acquire_lock, atomic_write_json, release_lock
 
+from modelroom.toml_writer import dump_toml
+
 from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
+    FOUR_L4_ID,
+    TWO_A100_ID,
+    TWO_L4_ID,
+    area_problems,
     build_transport,
+    example_without_eurollm,
+    expected_hf_areas,
+    export_of,
     guided_transport_mapping,
     json_response,
     loadtest_daemon,
     offline_daemon,
     offline_servers,
+    packager_probes,
     ps_answer,
     windows_probes,
+    windows_runner,
+    write_example_without_eurollm,
     v2_profile,
 )
 
@@ -68,11 +80,13 @@ class _WatchingAsker(FileAsker):
         super().__init__(answers)
         self.choices: dict[str, list[Choice]] = {}
         self.instructions: dict[str, str | None] = {}
+        self.headers: dict[str, str | None] = {}
         self._lines = lines
 
-    def checkbox(self, key: str, question: str, choices, instruction=None) -> list[str]:
+    def checkbox(self, key: str, question: str, choices, instruction=None, header=None) -> list[str]:
         self.choices[key] = list(choices)
         self.instructions[key] = instruction
+        self.headers[key] = header
         return super().checkbox(key, question, choices, instruction)
 
     def select(self, key: str, question: str, choices, instruction=None) -> str:
@@ -198,7 +212,8 @@ def test_every_answer_is_written_back_in_words(tmp_path: Path):
 
     answers = [line.strip() for line in lines if line.strip().startswith("? ")]
     assert "? Where should results live?  this folder" in answers
-    assert "? Which machines should the result cover?  this machine" in answers
+    # The machine is named (AP9-UX F); its class follows in the next answer on a first run.
+    assert "? Which machines should the result cover?  this machine (workstation)" in answers
     assert "? What are you looking for?  qwen" in answers
     assert "? Show only repositories of a publisher or a listed packager?  Yes" in answers
     # This answer file names repositories, as a file always could: an answer of the user appears
@@ -531,10 +546,12 @@ def test_no_machine_chosen_measures_nothing(tmp_path: Path):
 
 def _recorded_machines(tmp_path: Path, now, answers: dict) -> list:
     """The machine list of one run, as the dialog was offered it."""
+    for folder in ("results", "home"):
+        (tmp_path / folder).mkdir(parents=True, exist_ok=True)
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices, instruction=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None):
             asked[key] = list(choices)
             return super().checkbox(key, question, choices, instruction)
 
@@ -552,42 +569,69 @@ def _recorded_machines(tmp_path: Path, now, answers: dict) -> list:
     return asked["machines"]
 
 
-def test_a_first_run_offers_to_measure_this_machine_and_marks_it(tmp_path: Path):
-    this_machine = _recorded_machines(tmp_path, RUN1, FULL_ANSWERS)[0]
+def test_a_first_run_offers_to_measure_this_machine_first_and_marks_nothing(tmp_path: Path):
+    """Nothing is marked in advance (AP9-UX C): `Enter` alone takes the first row, which measures."""
+    rows = _recorded_machines(tmp_path, RUN1, FULL_ANSWERS)
 
-    assert this_machine.value == "this-machine"
-    assert this_machine.label == "this machine (measure now)"
-    assert this_machine.checked is True
+    assert (rows[0].value, rows[0].label) == ("this-machine", "this machine (workstation, measure now)")
+    assert not any(choice.checked for choice in rows)
 
 
-def test_a_machine_that_is_already_measured_here_is_not_marked_again(tmp_path: Path):
-    """Enter alone measured all three again in the hand test; measuring again is a decision now."""
+def _bound_run(tmp_path: Path) -> str:
+    """One first run that measures this machine; returns the profile the folder binds it to."""
     assert _run(tmp_path)[0] == 0
-    answers = {key: value for key, value in FULL_ANSWERS.items() if key != "results"}
-
-    this_machine = _recorded_machines(tmp_path, RUN2, answers)[0]
-
-    assert this_machine.checked is False
-    assert this_machine.label == "this machine (measure again, last measured 2026-09-23)"
+    return read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path))
 
 
-def test_every_profile_in_the_folder_is_listed_grouped_and_not_selectable(tmp_path: Path):
-    asked: dict[str, list] = {}
+def test_the_machine_list_keeps_its_order(tmp_path: Path):
+    """Rows 1-6 of AP9-UX C in three cases: a profile measured here, none, one entered by hand."""
+    first = [choice.value for choice in _recorded_machines(tmp_path / "none", RUN1, FULL_ANSWERS)]
+    assert first == ["this-machine", "import", "enter"]
 
-    class _Recording(FileAsker):
-        def checkbox(self, key, question, choices, instruction=None):
-            asked[key] = list(choices)
-            return super().checkbox(key, question, choices, instruction)
-
-    _run(tmp_path, {**FULL_ANSWERS, "machines": []})
-    hardware = _results(tmp_path) / "state" / "hardware"
+    bound = _bound_run(tmp_path)
     for index, name in enumerate(("alpha", "beta")):
         profile = v2_profile(profile_id=f"{index + 3}" * 16, display_name=name)
-        atomic_write_json(hardware / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
+        atomic_write_json(_results(tmp_path) / "state" / "hardware" / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
+    (_results(tmp_path) / "state" / "hardware" / "broken.json").write_text("{", encoding="utf-8")
+    rows = _recorded_machines(tmp_path, RUN2, _answers_without_folder(FULL_ANSWERS))
+    assert [choice.value for choice in rows] == [
+        f"profile:{bound}",
+        "this-machine",
+        f"profile:{'3' * 16}",
+        f"profile:{'4' * 16}",
+        "import",
+        "enter",
+        "broken:broken.json",
+    ]
+    assert rows[0].label == "this machine (workstation, laptop, as measured 2026-09-23)"
+    assert rows[1].label == "this machine (workstation, measure again)"
+    assert not any(choice.checked for choice in rows)
 
+    for folder in ("results", "home"):
+        (tmp_path / "entered" / folder).mkdir(parents=True)
+    asker, _lines = _bound_by_hand_to_an_entered_profile(tmp_path / "entered")
+    values = [choice.value for choice in asker.choices["machines"]]
+    assert values[0] == "this-machine"
+    assert values.index(f"profile:{'c' * 16}") < values.index("import")
+
+
+class _EnterAsker(FileAsker):
+    """`Enter` alone in the machine list: the answer is the first row that can be picked."""
+
+    def checkbox(self, key, question, choices, instruction=None, header=None):
+        if key == "machines":
+            self.asked.append(key)
+            return [next(choice.value for choice in choices if choice.disabled is None)]
+        return super().checkbox(key, question, choices, instruction)
+
+
+def test_enter_alone_keeps_the_profile_of_a_machine_measured_here(tmp_path: Path):
+    bound = _bound_run(tmp_path)
+    stored = (_results(tmp_path) / "state" / "hardware" / f"{bound}.json").read_bytes()
     lines: list[str] = []
-    run_guided(
-        _Recording({key: value for key, value in FULL_ANSWERS.items() if key != "results"} | {"machines": []}),
+
+    code = run_guided(
+        _EnterAsker(_answers_without_folder(FULL_ANSWERS)),
         here=_results(tmp_path),
         pointer_path=_pointer(tmp_path),
         transport=build_transport(guided_transport_mapping()),
@@ -598,19 +642,31 @@ def test_every_profile_in_the_folder_is_listed_grouped_and_not_selectable(tmp_pa
         out=lines.append,
     )
 
-    machines = asked["machines"]
-    groups = [choice for choice in machines if choice.value.startswith("group:")]
-    assert len(groups) == 1
-    assert "2 machines: alpha, beta" in groups[0].label
-    assert groups[0].disabled == "already in this results folder"
-    assert [choice.value for choice in machines if choice.disabled is None] == ["this-machine", "import", "enter"]
+    assert code == 0
+    assert [path.stem for path in _profiles(tmp_path)] == [bound]
+    assert (_results(tmp_path) / "state" / "hardware" / f"{bound}.json").read_bytes() == stored
+    assert not any(line.strip().startswith("measured") for line in lines)
+    assert "? Which machines should the result cover?  this machine (workstation, laptop)" in [line.strip() for line in lines]
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [(block["machine"], block["status"]) for block in payload["machines"]] == [("workstation", "ranked")]
+
+
+def test_this_machine_is_named_with_its_class(tmp_path: Path):
+    """AP9-UX F: the host name as the configuration names it, and the class of its profile where known."""
+    code, lines = _run(tmp_path, probes=windows_probes(host="GPU Server"))
+    assert code == 0
+    assert "? Which machines should the result cover?  this machine (gpu-server)" in [line.strip() for line in lines]
+
+    code, lines = _run(tmp_path, {**_answers_without_folder(FULL_ANSWERS), "machines": ["this-machine"]}, now=RUN2, probes=windows_probes(host="GPU Server"))
+    assert code == 0
+    assert "? Which machines should the result cover?  this machine (gpu-server, laptop)" in [line.strip() for line in lines]
 
 
 def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_path: Path):
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices, instruction=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None):
             asked[key] = list(choices)
             return super().checkbox(key, question, choices, instruction)
 
@@ -717,14 +773,15 @@ def test_an_import_adds_the_machine_and_never_changes_the_binding(tmp_path: Path
 
 
 def test_a_profile_already_in_the_folder_gets_a_machine_entry(tmp_path: Path):
-    """Otherwise the render, which covers configured machines only, would leave it out -- while
-    the machine list calls it "already in this results folder"."""
+    """Otherwise the render, which covers configured machines only, could not show it -- and since
+    AP9-UX C1 the machine list offers it to be picked, which needs the entry."""
     hardware = _results(tmp_path) / "state" / "hardware"
     hardware.mkdir(parents=True)
     profile = v2_profile(profile_id="5" * 16, display_name="server 01")
     atomic_write_json(hardware / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
 
-    code, lines = _run(tmp_path, {**FULL_ANSWERS, "write_config": True})
+    picked = {**FULL_ANSWERS, "write_config": True, "machines": ["this-machine", f"profile:{profile.profile_id}"]}
+    code, lines = _run(tmp_path, picked)
 
     assert code == 0
     config = load_config(_config_file(tmp_path))
@@ -784,7 +841,7 @@ def _adding_a_machine(tmp_path: Path, when_key: str, name: str = "other"):
                 add()
             return super().text(key, question, default)
 
-        def checkbox(self, key, question, choices, instruction=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None):
             if key == when_key:
                 add()
             return super().checkbox(key, question, choices, instruction)
@@ -1309,21 +1366,18 @@ def test_the_list_shows_one_line_per_model_with_its_fit_and_its_packagers(tmp_pa
 
     assert code == 0
     listed = asker.choices["select"]
-    # The column head, then two models, then the repositories an answer file of the older shape may
-    # name instead. The order is the memory pool first: at 32k the smaller model fits the graphics
-    # card and the 9B does not, so the 8B stands above it (the fit of the list is computed at the
-    # context the scale starts on since 2026-09-24).
-    assert listed[0].heading is True
-    assert listed[0].label.split() == ["Model", "Fit", "Size", "Release", "Packagers", "Downl.", "Ollama"]
-    assert sorted(choice.value for choice in listed[1:3]) == sorted(["Qwen/Qwen3.5-9B", DEEPSEEK_BASE])
-    assert sorted(choice.value for choice in listed[3:]) == sorted([QWEN_GGUF, UNSLOTH, DEEPSEEK])
+    # Two models, then the repositories an answer file of the older shape may name instead; the
+    # column head is the list's `header` since AP9-UX D, no row of it.
+    assert asker.headers["select"].split() == ["Model", "Fit", "Size", "Release", "Packagers", "Downl.", "Ollama"]
+    assert sorted(choice.value for choice in listed[0:2]) == sorted(["Qwen/Qwen3.5-9B", DEEPSEEK_BASE])
+    assert sorted(choice.value for choice in listed[2:]) == sorted([QWEN_GGUF, UNSLOTH, DEEPSEEK])
     assert all(choice.disabled is None for choice in listed)
-    qwen = next(choice for choice in listed[1:3] if choice.value == "Qwen/Qwen3.5-9B")
+    qwen = next(choice for choice in listed[0:2] if choice.value == "Qwen/Qwen3.5-9B")
     assert qwen.label.startswith("Qwen3.5-9B")
     assert any(word in qwen.label for word in ("fits", "tight", "no_fit", "unknown"))
     # Twelve characters for the packagers since 2026-09-25: the first account and a count.
     assert "Qwen +1" in qwen.label
-    assert all(len(choice.label) <= 95 for choice in listed[:3])
+    assert all(len(choice.label) <= 95 for choice in listed[:2])
 
 
 def test_the_hint_of_the_list_is_its_instruction_line_and_names_the_context_of_the_fit(tmp_path: Path):
@@ -1368,7 +1422,7 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
     from modelroom.search_pages import account_downloads_url, account_search_url, search_accounts
 
     class _Refusing(FileAsker):
-        def checkbox(self, key: str, question: str, choices, instruction=None) -> list[str]:
+        def checkbox(self, key: str, question: str, choices, instruction=None, header=None) -> list[str]:
             assert list(choices), f"{key}: a list with nothing in it was asked"
             return super().checkbox(key, question, choices, instruction)
 
@@ -1954,7 +2008,7 @@ def test_the_run_ends_with_both_views_and_a_word_on_the_load_test(tmp_path: Path
     assert (_results(tmp_path) / "docs" / "models.json").is_file()
     printed = "\n".join(lines)
     # The rule and the snapshot time are in the Markdown file; the screen shows the table.
-    assert "Ranking rule: fit class" in (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+    assert "Ranking rule: graphics memory before system memory" in (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
     assert "workstation · context" in printed
     assert "Model" in printed and "Package" in printed
 
@@ -2031,7 +2085,7 @@ def test_the_selection_list_shows_every_candidate_unchecked_with_its_four_facts(
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices, instruction=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None):
             asked[key] = list(choices)
             return super().checkbox(key, question, choices, instruction)
 
@@ -2714,11 +2768,12 @@ def test_the_machine_list_shows_each_shape_entered_by_hand_as_what_it_is(tmp_pat
 
     asker = _watched(tmp_path, {**FULL_ANSWERS, "machines": [], "write_config": True})
 
-    groups = {choice.label: choice.disabled for choice in asker.choices["machines"] if choice.value.startswith("group:")}
-    assert groups == {
-        "graphics card 24.00 GiB (entered) / 64.00 GiB RAM -- 1 machine: tower": "already in this results folder",
-        "no graphics card (entered) / 64.00 GiB RAM -- 1 machine: box": "already in this results folder",
-        "shared memory 32.00 GiB (entered) -- 1 machine: studio": "already in this results folder",
+    # One row per profile since AP9-UX C1, each a choice: its label, then its hardware.
+    rows = {choice.label: choice.disabled for choice in asker.choices["machines"] if choice.value.startswith("profile:")}
+    assert rows == {
+        "tower  graphics card 24.00 GiB (entered) / 64.00 GiB RAM": None,
+        "box  no graphics card (entered) / 64.00 GiB RAM": None,
+        "studio  shared memory 32.00 GiB (entered)": None,
     }
 
 
@@ -2741,8 +2796,9 @@ def test_a_machine_entered_by_hand_is_named_so_and_computed_on_shared_memory_in_
     assert gpu, "unified memory computes in mode gpu"
     assert {entry["fit"]["pool_gib"] for entry in gpu} == {23.0}
     assert {entry["note"]["origin"] for entry in block["ranked"] + block["no_fit"]} == {"computed"}
-    own = next(block for block in payload["machines"] if block["machine"] == "workstation")
-    assert own["status"] == "no_profile"
+    # This run chose the machine entered by hand alone: `workstation` is in the configuration, not in the result (B).
+    assert "workstation" in load_config(_config_file(tmp_path)).machines
+    assert [block["machine"] for block in payload["machines"]] == ["studio"]
 
 
 def test_a_machine_entered_by_hand_leaves_a_card_without_an_install_line_and_no_load_test(tmp_path: Path):
@@ -2772,7 +2828,8 @@ def test_a_home_binding_on_a_machine_entered_by_hand_measures_this_machine_into_
     config = load_config(_config_file(tmp_path))
     assert (config.machines["studio"].profile, config.machines["workstation"].profile) == ("c" * 16, measured)
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    assert [block["status"] for block in payload["machines"]] == ["ranked", "ranked"]
+    # This run measured this machine only, so the result is that machine's (AP9-UX B).
+    assert [(block["machine"], block["status"]) for block in payload["machines"]] == [("workstation", "ranked")]
 
 
 def _bound_by_hand_to_an_entered_profile(tmp_path: Path) -> tuple[_WatchingAsker, list[str]]:
@@ -2795,14 +2852,15 @@ def _bound_by_hand_to_an_entered_profile(tmp_path: Path) -> tuple[_WatchingAsker
     return asker, [line.strip() for line in lines]
 
 
-def test_a_home_binding_on_a_machine_entered_by_hand_offers_to_measure_now_and_marks_it(tmp_path: Path):
-    """Nothing of this machine was measured here, so there is no `last measured` date to name."""
+def test_a_home_binding_on_a_machine_entered_by_hand_offers_to_measure_now_first(tmp_path: Path):
+    """Nothing of this machine was measured here: no row of a kept profile, `measure now` is the
+    first row and nothing is marked (AP9-UX C, Review r3-N3); the entered profile stands among the others."""
     asker, _lines = _bound_by_hand_to_an_entered_profile(tmp_path)
 
-    this_machine = asker.choices["machines"][0]
-    assert this_machine.value == "this-machine"
-    assert this_machine.label == "this machine (measure now, the bound profile was entered by hand)"
-    assert this_machine.checked is True
+    rows = asker.choices["machines"]
+    assert (rows[0].value, rows[0].label) == ("this-machine", "this machine (workstation, measure now)")
+    assert not any(choice.checked for choice in rows)
+    assert f"profile:{'c' * 16}" in [choice.value for choice in rows[1:]]
 
 
 def test_the_first_measurement_after_a_binding_on_a_machine_entered_by_hand_is_no_second_one(tmp_path: Path):
@@ -2837,9 +2895,333 @@ def test_a_local_entry_on_a_machine_entered_by_hand_is_bound_to_the_new_measurem
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     assert [block["machine"] for block in payload["machines"]] == ["workstation"]
 
-    code, _lines = _run(tmp_path, {**answers, "machines": []}, now=RUN3)
+    # The entered profile got its entry back in the run before; picking it puts it in the result again.
+    studio = f"profile:{'c' * 16}"
+    code, _lines = _run(tmp_path, {**answers, "machines": [studio, f"profile:{_measured_stem(tmp_path)}"]}, now=RUN3)
 
     assert code == 0
     assert hand.read_bytes() == before
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     assert sorted(block["machine"] for block in payload["machines"]) == ["studio", "workstation"]
+
+
+# --- AP9-UX D: every asker takes the head of a list -------------------------------------------------
+
+
+def test_every_asker_takes_a_header():
+    """`header` changed the protocol (Review r1-N6): the terminal, the file and every test double take it."""
+    import inspect
+
+    from modelroom.dialog import Asker, TerminalAsker
+
+    for asker in (Asker, TerminalAsker, FileAsker, _WatchingAsker, _EnterAsker):
+        assert "header" in inspect.signature(asker.checkbox).parameters, asker
+    assert FileAsker({"select": ["a"]}).checkbox("select", "Which?", [Choice("a", "a row")], header="Model  Fit") == ["a"]
+
+
+# --- AP9-UX C1: every profile of the folder can be picked -------------------------------------------
+
+
+def _three_servers(tmp_path: Path) -> dict[str, str]:
+    """A first run, then the three server profiles imported from export files; returns id -> label."""
+    from modelroom.importer import import_profile
+
+    assert _run(tmp_path)[0] == 0
+    for name in ("two_a100_server.json", "two_l4_server.json", "four_l4_server.json"):
+        import_profile(_config_file(tmp_path), export_of(name, tmp_path / "exports"), RUN1)
+    return {TWO_A100_ID: "2 x NVIDIA A100", TWO_L4_ID: "2 x NVIDIA L4", FOUR_L4_ID: "4 x NVIDIA L4"}
+
+
+def test_every_profile_of_the_folder_is_a_choice(tmp_path: Path):
+    from modelroom.importer import SHORT_ID_LEN
+
+    servers = _three_servers(tmp_path)
+    lines: list[str] = []
+    asker = _WatchingAsker({**_answers_without_folder(FULL_ANSWERS), "machines": []}, lines)
+    run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=offline_daemon(),
+        servers=offline_servers(),
+        now=RUN2,
+        out=lines.append,
+    )
+
+    rows = asker.choices["machines"]
+    values = [choice.value for choice in rows]
+    bound = read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path))
+    assert values == [f"profile:{bound}", "this-machine", *(f"profile:{key}" for key in servers), "import", "enter"]
+    for key, cards in servers.items():
+        row = next(choice for choice in rows if choice.value == f"profile:{key}")
+        assert row.label.startswith(f"server ({key[:SHORT_ID_LEN]})  {cards}"), row.label
+        assert row.disabled is None and not row.checked
+    stripped = [line.strip() for line in lines]
+    assert stripped.index("another computer: pick its profile below, or import the file made there") < next(
+        index for index, line in enumerate(stripped) if line.startswith("? Which machines")
+    )
+
+
+def _machines_of(tmp_path: Path, picked: list[str]) -> tuple[int, dict]:
+    code, _lines = _run(tmp_path, {**_answers_without_folder(FULL_ANSWERS), "machines": picked}, now=RUN2)
+    return code, json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+
+
+def _block_of(payload: dict, profile_id: str) -> dict | None:
+    return next((block for block in payload["machines"] if (block.get("profile") or {}).get("profile_id") == profile_id), None)
+
+
+def test_a_picked_profile_is_in_the_result(tmp_path: Path):
+    _three_servers(tmp_path)
+    bound = read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path))
+
+    code, payload = _machines_of(tmp_path, [f"profile:{bound}", f"profile:{FOUR_L4_ID}"])
+
+    assert code == 0
+    assert [block["profile"]["profile_id"] for block in payload["machines"]] == [bound, FOUR_L4_ID]
+    assert _block_of(payload, FOUR_L4_ID)["status"] == "ranked"
+    assert len(_profiles(tmp_path)) == 4  # nothing measured, nothing written: the profile was taken as it is
+
+
+def test_a_profile_not_picked_stays_out_of_the_result(tmp_path: Path):
+    _three_servers(tmp_path)
+    config = load_config(_config_file(tmp_path))
+    # Precondition: the profile is in the folder and a machine of the configuration names it.
+    assert TWO_A100_ID in {machine.profile for machine in config.machines.values()}
+
+    code, payload = _machines_of(tmp_path, [f"profile:{FOUR_L4_ID}"])
+
+    assert code == 0
+    assert _block_of(payload, TWO_A100_ID) is None
+    assert [block["profile"]["profile_id"] for block in payload["machines"]] == [FOUR_L4_ID]
+
+
+def test_a_profile_no_machine_names_stays_grayed_with_its_reason(tmp_path: Path):
+    """Each run gives every profile an entry at its start; only one removed by hand afterwards is grayed."""
+    from modelroom.guided_machines import NO_MACHINE_NAMES, _machine_choices
+    from modelroom.importer import scan_profiles
+
+    _three_servers(tmp_path)
+    scan = scan_profiles(_results(tmp_path) / "state" / "hardware")
+    named = [key for key in scan.profiles if key != TWO_L4_ID]
+
+    rows = _machine_choices(scan, None, "workstation", named)
+
+    grayed = next(choice for choice in rows if choice.value == f"profile:{TWO_L4_ID}")
+    assert grayed.disabled == NO_MACHINE_NAMES
+    assert [choice.value for choice in rows].index(grayed.value) > [choice.value for choice in rows].index("enter")
+    assert all(choice.disabled is None for choice in rows if choice.value in {f"profile:{key}" for key in named})
+
+
+# --- AP9-UX B: the result covers this run's choice ---------------------------------------------------
+
+
+def _example_run(tmp_path: Path, answers: dict, **kwargs) -> tuple[int, list[str]]:
+    """A folder that holds the example configuration without EuroLLM, then one guided run in it."""
+    config_file = write_example_without_eurollm(_results(tmp_path))
+    transport = build_transport({**packager_probes(load_config(config_file)), **guided_transport_mapping()})
+    return _run(tmp_path, answers, transport=transport, **kwargs)
+
+
+def test_the_result_names_only_this_runs_machines_and_models(tmp_path: Path):
+    code, lines = _example_run(tmp_path, FULL_ANSWERS)
+
+    # Preconditions: the fetch is whole, and what the result leaves out is in the folder.
+    assert area_problems(_results(tmp_path)) == []
+    assert len(expected_hf_areas(_results(tmp_path))) == 12
+    assert code == 0
+    config = load_config(_config_file(tmp_path))
+    assert "deepseek-r1" in [family.name for family in config.families]
+    assert "inference-server" in config.machines
+    snapshot = json.loads((_results(tmp_path) / "state" / "modelroom.json").read_text(encoding="utf-8"))
+    assert any(package["base_model_hf_repo"] == DEEPSEEK_BASE for package in snapshot["packages"])
+
+    card = "\n".join(_card(lines).values())
+    markdown = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    for text in (card, markdown):
+        assert "DeepSeek" not in text
+        assert "inference-server" not in text
+    assert [block["status"] for block in payload["machines"]] == ["ranked"]
+
+
+def test_step_four_measures_this_machine_only_where_the_run_chose_it(tmp_path: Path):
+    """Codex F2: a run that marks only a server profile of the folder offers no measurement on this
+    machine -- its measurement would land in a profile the result does not show."""
+    from modelroom.importer import import_profile
+
+    assert _run(tmp_path)[0] == 0  # this machine measured and bound
+    import_profile(_config_file(tmp_path), export_of("four_l4_server.json", tmp_path / "exports"), RUN1)
+    answers = {
+        **_answers_without_folder(LOAD_TEST_ANSWERS),
+        "machines": [f"profile:{FOUR_L4_ID}"],
+    }
+    asker = FileAsker(answers)
+    lines: list[str] = []
+    code = run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=loadtest_daemon(),
+        servers=offline_servers(),
+        now=RUN2,
+        out=lines.append,
+    )
+
+    assert code == 0
+    assert "load_test" not in asker.asked
+    assert "no load test: this machine is not part of this run's result" in [line.strip() for line in lines]
+    assert not (_results(tmp_path) / "state" / "measurements").exists()
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [block["profile"]["profile_id"] for block in payload["machines"]] == [FOUR_L4_ID]
+
+
+def _second_run(tmp_path: Path, answers: dict) -> tuple[int, list[str], FileAsker]:
+    """A run in a folder the first run bound this machine to, with a daemon that could measure."""
+    asker = FileAsker(answers)
+    lines: list[str] = []
+    code = run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=loadtest_daemon(),
+        servers=offline_servers(),
+        now=RUN2,
+        out=lines.append,
+    )
+    return code, [line.strip() for line in lines], asker
+
+
+@pytest.mark.parametrize(
+    "machines, extra, exit_code",
+    [([], {}, 0), (["import"], {"import_file": "missing.export.json"}, 1)],
+    ids=["nothing marked", "an import that failed"],
+)
+def test_an_empty_machine_choice_stays_empty(tmp_path: Path, machines, extra, exit_code):
+    """Codex r2, finding 1: no machine the run did not choose is added -- not even the bound one."""
+    assert _run(tmp_path)[0] == 0
+    assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) is not None  # there is one to add
+
+    answers = {**_answers_without_folder(LOAD_TEST_ANSWERS), "machines": machines, **extra}
+    code, lines, asker = _second_run(tmp_path, answers)
+
+    assert code == exit_code
+    assert "this run chose no machine, so the result ranks none" in lines
+    assert "load_test" not in asker.asked
+    assert not (_results(tmp_path) / "state" / "measurements").exists()
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert payload["machines"] == []
+
+
+def test_a_run_that_chose_no_model_shows_no_model_of_the_folder(tmp_path: Path):
+    """Codex F1: a second run that marks no model shows none of the models the folder holds -- an
+    empty result that says why; `modelroom render` of the same folder still shows all of them."""
+    from modelroom.cli import render_with_config
+
+    code, _lines = _example_run(tmp_path, FULL_ANSWERS)
+    assert code == 0
+    snapshot = json.loads((_results(tmp_path) / "state" / "modelroom.json").read_text(encoding="utf-8"))
+    assert {package["base_model_hf_repo"] for package in snapshot["packages"]} >= {"Qwen/Qwen3.5-9B", DEEPSEEK_BASE}
+
+    code, lines = _run(tmp_path, {**_answers_without_folder(FULL_ANSWERS), "select": []}, now=RUN2,
+                       transport=build_transport({**packager_probes(load_config(_config_file(tmp_path))), **guided_transport_mapping()}))
+
+    assert code == 0
+    assert "this run chose no model, so the result ranks none" in [line.strip() for line in lines]
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [row for block in payload["machines"] for row in block["ranked"] + block["no_fit"] + block["not_covered"]] == []
+    assert (payload["base_model_count"], payload["areas"]) == (0, [])
+    assert render_with_config(load_config(_config_file(tmp_path)), now=RUN3) == 0
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert payload["base_model_count"] == 2
+
+
+def test_an_empty_card_names_only_this_runs_machines(tmp_path: Path):
+    """No family, so no fetch and nothing to rank: the card of step 5 still names this run's machine alone."""
+    data = {**example_without_eurollm(), "families": []}
+    (_results(tmp_path) / "modelroom.toml").write_bytes(dump_toml(data).encode("utf-8"))
+
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "select": []})
+
+    assert "inference-server" in load_config(_config_file(tmp_path)).machines  # it is there to be left out
+    card = _card(lines)
+    assert "nothing to rank: no package in this folder yet" in [line.strip() for line in lines]
+    assert card["result"].endswith("–") or card["result"].split()[-1] in ("–", "-")
+    assert not any("inference-server" in row for row in card.values())
+    assert any(row.startswith("machine") and "workstation" in row for row in card.values())
+    assert code == 1  # nothing to render, the render's own exit code as before
+
+
+def _masked_config(text: str, results: Path) -> str:
+    """The configuration with its three absolute paths as placeholders, the same on Windows and POSIX.
+
+    A fresh folder writes `paths.state`, `paths.markdown` and `guided.results`, JSON-escaped (doubled
+    backslashes on Windows), so the whole serialized form of each is replaced, the longest first.
+    The same function wrote `tests/golden/guided-config-db0dff9.toml` from the code of `db0dff9`.
+    """
+    from modelroom.guided import MARKDOWN_PATH, STATE_FOLDER
+
+    for path, shown in (
+        (results / STATE_FOLDER, "<results>/state"),
+        (results.joinpath(*MARKDOWN_PATH), "<results>/docs/models.md"),
+        (results, "<results>"),
+    ):
+        text = text.replace(json.dumps(str(path), ensure_ascii=False)[1:-1], shown)
+    return text
+
+
+def test_no_selection_key_is_written(tmp_path: Path):
+    """Nothing of the selection is persisted (GF question 4): no `[guided].models` or `machines`, and
+    the configuration of a fresh folder is byte for byte what `db0dff9` wrote for the same answers."""
+    from test_public_hygiene import FORBIDDEN
+
+    code, _lines = _run(tmp_path, FULL_ANSWERS, probes=windows_probes())
+
+    assert code == 0
+    text = _config_file(tmp_path).read_text(encoding="utf-8")
+    guided = tomllib.loads(text)["guided"]
+    assert "models" not in guided and "machines" not in guided
+    masked = _masked_config(text, _results(tmp_path).resolve())
+    assert str(tmp_path) not in masked
+    assert json.dumps(str(tmp_path), ensure_ascii=False)[1:-1] not in masked
+    assert not any(FORBIDDEN["absolute user path"].search(line) for line in masked.splitlines())
+    golden = Path(__file__).parent / "golden" / "guided-config-db0dff9.toml"
+    assert masked.encode("utf-8") == golden.read_bytes()
+
+
+# --- AP9-UX G: every note of a measurement stands where the notes stand -----------------------------
+
+
+def _completed(args, stdout="", code=0):
+    import subprocess
+
+    return subprocess.CompletedProcess(list(args), code, stdout=stdout, stderr="" if code == 0 else "planted")
+
+
+@pytest.mark.parametrize("case", ["two_l4", "llmfit", "fit_block"])
+def test_every_hardware_note_stands_indented_like_its_neighbours(tmp_path: Path, capsys, case):
+    from modelroom.measure import NVIDIA_SMI_ARGS, WINDOWS_ADAPTER_ARGS
+
+    from fixture_support import FIXTURES
+
+    overrides = {
+        "two_l4": {NVIDIA_SMI_ARGS: _completed(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_l4.csv").read_text(encoding="utf-8"))},
+        "llmfit": {("llmfit", "--version"): _completed(("llmfit", "--version"), code=1)},
+        "fit_block": {NVIDIA_SMI_ARGS: FileNotFoundError("nvidia-smi"), WINDOWS_ADAPTER_ARGS: FileNotFoundError("powershell")},
+    }[case]
+    expected = {
+        "two_l4": "nvidia-smi lists 2 adapters: 2 x NVIDIA L4",
+        "llmfit": "the llmfit cross-check is ",
+        "fit_block": "no fit is computed for this profile -- ",
+    }[case]
+
+    _code, lines = _run(tmp_path, probes=windows_probes(runner=windows_runner(overrides)))
+
+    assert any(line.startswith(f"   {expected}") for line in lines), [line for line in lines if expected[:12] in line]
+    assert "note: " not in capsys.readouterr().out

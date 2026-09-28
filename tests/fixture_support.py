@@ -421,6 +421,130 @@ def guided_transport_mapping() -> dict[tuple[str, str], Response]:
     return {**search_transport_mapping(), **qwen35_transport_mapping(), **deepseek_transport_mapping()}
 
 
+def packager_probes(config: Configuration) -> dict[tuple[str, str], Response]:
+    """An answer for every packager repository a fetch of `config` asks about: "does not exist".
+
+    For every base model of `config` and every target of `package_targets` one entry, answered
+    with the recorded 401 envelope (`hf_unsloth_does_not_exist_model.json`, public and in the repo),
+    which the fetch reads as "not there": the owner's area is then `complete` with no package
+    (AP9-UX, Review r3-H1). Put it **first** when mappings are merged, so a bound answer wins:
+    `{**packager_probes(config), **guided_transport_mapping(), **<the test's own>}`.
+    """
+    from modelroom.config import package_targets
+
+    return {
+        ("GET", f"https://huggingface.co/api/models/{target}"): envelope_response("hf_unsloth_does_not_exist_model.json")
+        for family in config.families
+        for base_model in family.base_models
+        for target in package_targets(config, base_model)
+    }
+
+
+def example_without_eurollm() -> dict:
+    """`modelroom.example.toml` as a dict, with the family `eurollm` taken out and nothing else changed.
+
+    No recording of EuroLLM is in the repo, and a `FixtureTransport` raises at any URL it does not
+    bind; everything else stays: two families, five packagers, the machines `workstation` (the
+    writer) and `inference-server` (no profile). A test writes it as `modelroom.toml` with
+    `write_example_without_eurollm` (AP9-UX, "Paket-Repo und Fixtures").
+    """
+    import tomllib
+
+    data = tomllib.loads((Path(__file__).parents[1] / "modelroom.example.toml").read_text(encoding="utf-8"))
+    data["families"] = [family for family in data["families"] if family["name"] != "eurollm"]
+    return data
+
+
+EXAMPLE_WITHOUT_EUROLLM = example_without_eurollm
+
+
+def expected_hf_areas(results: Path) -> set[tuple[str, str]]:
+    """Every (base model, owner) the fetch of the written configuration asks the Hub about, computed."""
+    from modelroom.config import load_config, package_targets
+    from modelroom.hf import target_owners
+
+    config = load_config(results / "modelroom.toml")
+    bases = [base for family in config.families for base in family.base_models]
+    return {(base.hf_repo, owner) for base in bases for owner in target_owners(package_targets(config, base))}
+
+
+def area_problems(results: Path) -> list[str]:
+    """Why the snapshot of `results` is not complete in every area; empty where it is (AP9-UX).
+
+    Every area `complete` without an error, the Hugging Face areas exactly (base model, owner) for
+    every base model of the written configuration and every owner of its targets, the Ollama areas
+    exactly the base models with `ollama_base` and `ollama_tag`. A fetch cut short by an unbound
+    address or a spent budget shows up here, before any other check of a test.
+    """
+    from modelroom.config import load_config
+    from modelroom.state import read_snapshot
+
+    config = load_config(results / "modelroom.toml")
+    snapshot = read_snapshot(config)
+    if snapshot is None:
+        return ["no snapshot"]
+    problems = [
+        f"{area.source} {area.base_model_hf_repo} {area.packager}: {area.status} ({area.error})"
+        for area in snapshot.areas
+        if area.status != "complete" or area.error is not None
+    ]
+    found = {(area.base_model_hf_repo, area.packager) for area in snapshot.areas if area.source == "huggingface"}
+    if found != expected_hf_areas(results):
+        problems.append(f"huggingface areas {sorted(found)} are not {sorted(expected_hf_areas(results))}")
+    bases = [base for family in config.families for base in family.base_models]
+    wanted = {base.hf_repo for base in bases if base.ollama_base and base.ollama_tag}
+    ollama = {area.base_model_hf_repo for area in snapshot.areas if area.source == "ollama"}
+    if ollama != wanted:
+        problems.append(f"ollama areas {sorted(ollama)} are not {sorted(wanted)}")
+    return problems
+
+
+def write_example_without_eurollm(folder: Path) -> Path:
+    """Write `example_without_eurollm()` as `<folder>/modelroom.toml`, as bytes; returns the path."""
+    from modelroom.toml_writer import dump_toml
+
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "modelroom.toml"
+    path.write_bytes(dump_toml(example_without_eurollm()).encode("utf-8"))
+    return path
+
+
+# The three recorded or derived server profiles (`tests/fixtures/profiles_v4`), by `profile_id`.
+TWO_A100_ID = "0291d4f706c0003c"
+TWO_L4_ID = "6a2f8beef0d71f93"
+FOUR_L4_ID = "4c7e19a2b5d8f036"
+_EXPORT_CONFIG = """schema_version = 3
+
+packagers = []
+publishers = []
+
+[paths]
+state = "state"
+markdown = "docs/models.md"
+"""
+
+
+def export_of(name: str, folder: Path) -> Path:
+    """An export file of the profile fixture `profiles_v4/<name>`, made with the package's own export.
+
+    The import takes an export file (`importer.import_profile`), so the fixture is placed in a
+    scratch results folder under `folder` and exported from there by `importer.export_profile`.
+    """
+    import shutil
+
+    from modelroom.importer import export_profile
+
+    source = FIXTURES / "profiles_v4" / name
+    profile_id = json.loads(source.read_text(encoding="utf-8"))["profile_id"]
+    home = folder / f"export-{profile_id}"
+    (home / "state" / "hardware").mkdir(parents=True)
+    shutil.copyfile(source, home / "state" / "hardware" / f"{profile_id}.json")
+    (home / "modelroom.toml").write_bytes(_EXPORT_CONFIG.encode("utf-8"))
+    out = folder / f"{profile_id}.export.json"
+    export_profile(home / "modelroom.toml", out, profile_id, home / "pointer.json")
+    return out
+
+
 def qwen35_example_config_dict(state_dir: str, markdown_path: str) -> dict:
     """A minimal Configuration payload for the `qwen3.5` family, matching modelroom.example.toml."""
     return {

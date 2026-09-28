@@ -11,7 +11,8 @@
 
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
- ? Which machines should the result cover?  this machine
+   another computer: pick its profile below, or import the file made there
+ ? Which machines should the result cover?  this machine (workstation)
  ? What kind of machine is this?  laptop
    measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ✓ Configuration   <results>, 1 machine
@@ -35,6 +36,7 @@
  – Measurement     none in this run
 
  ── Step 5 of 5  Results ────────────────────────────────────────────────
+   this run chose no model, so the result ranks none
    nothing to rank: no package in this folder yet
 
  folder    <results>

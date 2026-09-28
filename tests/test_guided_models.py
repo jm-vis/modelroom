@@ -252,7 +252,8 @@ def test_no_fit_and_unknown_carry_no_pool():
     assert (too_large.fit_word, unknown.fit_word) == ("no_fit", "unknown")
 
 
-def test_a_fit_in_graphics_memory_stands_above_a_fit_in_ram_whatever_the_class():
+def test_a_fit_in_graphics_memory_stands_above_a_fit_in_ram_whatever_the_size():
+    """ADR 0009: the pool first, then the larger model -- the fit class orders nothing."""
     hits = [
         _hit("unsloth/Nova-27B-GGUF", base="acme/Nova-27B", downloads=9_000_000),
         _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", downloads=10),
@@ -261,7 +262,11 @@ def test_a_fit_in_graphics_memory_stands_above_a_fit_in_ram_whatever_the_class()
 
     models = _models(hits, context=32768)
 
-    assert [model.fit_word for model in models] == ["fits", "tight", "fits (RAM)"]
+    assert [(model.name, model.fit_word) for model in models] == [
+        ("Nova-9B", "tight"),
+        ("Nova-2B", "fits"),
+        ("Nova-27B", "fits (RAM)"),
+    ]
 
 
 # --- the list itself ------------------------------------------------------------------------------
@@ -289,22 +294,26 @@ def test_the_list_shows_name_fit_size_release_packagers_downloads_and_ollama():
     assert label.rstrip().endswith("qwen3.5:9b")
 
 
-def test_the_head_of_the_list_names_every_column_and_cannot_be_picked():
-    """The list had no column head at all, so nobody could tell what a cell meant (2026-09-25)."""
+def test_the_head_of_the_list_names_every_column_and_is_no_row():
+    """The list had no column head at all (2026-09-25); since AP9-UX D it is text outside the rows."""
     head = list_header()
 
-    assert head.heading is True
-    assert head.label.split() == list(COLUMN_NAMES)
+    assert isinstance(head, str)
+    assert head.split() == list(COLUMN_NAMES)
     assert RELEASE_COLUMN in COLUMN_NAMES
+    assert all(choice.value for choice in list_choices(_models([_hit("unsloth/Qwen3.5-9B-GGUF")])))
 
 
-def test_the_head_is_indented_so_its_columns_stand_over_the_cells():
-    """A heading is drawn without the marker of a row, so its own line carries that width."""
+def test_the_columns_of_the_head_stand_over_the_cells():
+    """The dialog indents the head by the pointer and the marker, as a row's label is (`POINTER_WIDTH`)."""
+    from modelroom.dialog import HEAD_INDENT
+
     head = list_header()
     row = _labels(_models([_hit("unsloth/Qwen3.5-9B-GGUF")]))[0]
 
-    assert head.label.index("Model") == 2
-    assert head.label.index("Fit") - 2 == row.index("fits")
+    assert HEAD_INDENT == POINTER_WIDTH
+    assert head.index("Model") == 0
+    assert head.index("Fit") == row.index("fits")
 
 
 def test_a_model_without_an_ollama_name_says_a_dash():
@@ -437,11 +446,11 @@ def test_the_packagers_column_is_twelve_and_the_ollama_column_fourteen_character
     hits = [_hit(f"{owner}/Nova-9B-GGUF", base="acme/Nova-9B", ollama="abcdefghijklmnopqrst:9b") for owner in ("unsloth", "a", "b", "c")]
 
     label = _labels(_models(hits))[0]
-    head = list_header().label
+    head = list_header()  # text since AP9-UX D, its columns over the cells without an indent of its own
 
-    packagers_at = head.index("Packagers") - 2
-    downloads_at = head.index("Downl.") - 2
-    ollama_at = head.index("Ollama") - 2
+    packagers_at = head.index("Packagers")
+    downloads_at = head.index("Downl.")
+    ollama_at = head.index("Ollama")
     assert downloads_at - packagers_at == 12 + 2
     assert label[packagers_at:downloads_at].rstrip() == "unsloth +3"
     assert len(label) - ollama_at == 14
@@ -459,7 +468,7 @@ def test_no_line_of_the_list_is_wider_than_a_hundred_characters():
     ]
 
     assert LABEL_LIMIT == LINE_LIMIT - POINTER_WIDTH
-    for label in [list_header().label, *_labels(_models(hits))]:
+    for label in [list_header(), *_labels(_models(hits))]:
         assert len(label) <= LABEL_LIMIT, label
 
 
@@ -554,21 +563,23 @@ def test_a_size_and_a_download_count_of_any_length_keep_their_columns():
     assert len(label) <= LABEL_LIMIT, f"{len(label)}: {label}"
 
 
-def test_the_order_is_the_fit_class_then_the_downloads_then_the_name():
+def test_the_order_is_the_pool_then_the_size_then_the_downloads_then_the_name():
+    """ADR 0009, the same rule as the result: the largest model that fits first."""
     hits = [
         _hit("unsloth/Nova-400B-GGUF", base="acme/Nova-400B", downloads=9_000_000),  # no fit
         _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", downloads=1_000),
+        _hit("unsloth/Luna-9B-GGUF", base="acme/Luna-9B", downloads=5_000),
         _hit("unsloth/Nova-8B-GGUF", base="acme/Nova-8B", downloads=2_000),
         _hit("unsloth/Nova-One-GGUF", base="acme/Nova-One"),  # no parameter count: unknown
     ]
 
     models = _models(hits, checked=_measured(ram_gib=31.7))
 
-    assert [model.name for model in models] == ["Nova-8B", "Nova-9B", "Nova-400B", "Nova-One"]
+    assert [model.name for model in models] == ["Luna-9B", "Nova-9B", "Nova-8B", "Nova-400B", "Nova-One"]
 
 
-def test_the_release_stands_between_the_fit_class_and_the_downloads():
-    """`latest` first, then a release nobody knows, then `legacy` (decided 2026-09-25)."""
+def test_legacy_stands_last_and_latest_ranks_by_size_like_an_unknown_release():
+    """`latest` stands only before `legacy` (GF 2026-09-28); between `latest` and `–` the size decides."""
     hits = [
         _hit("unsloth/Nova-8B-GGUF", base="acme/Nova-8B", downloads=9_000_000, age="legacy", successor="acme/Nova-8B-2512"),
         _hit("unsloth/Nova-9B-GGUF", base="acme/Nova-9B", downloads=1_000),
@@ -577,7 +588,7 @@ def test_the_release_stands_between_the_fit_class_and_the_downloads():
 
     models = _models(hits)
 
-    assert [model.name for model in models] == ["Nova-7B", "Nova-9B", "Nova-8B"]
+    assert [model.name for model in models] == ["Nova-9B", "Nova-7B", "Nova-8B"]
 
 
 def test_a_computed_release_sorts_like_a_stated_one():
@@ -592,7 +603,7 @@ def test_a_computed_release_sorts_like_a_stated_one():
 
     models = _models(hits)
 
-    assert [model.name for model in models] == ["Nova-7B", "Luna-7B", "Nova-9B", "Nova-8B"]
+    assert [model.name for model in models] == ["Nova-9B", "Nova-7B", "Luna-7B", "Nova-8B"]
 
 
 def test_the_values_of_the_list_are_the_base_models():

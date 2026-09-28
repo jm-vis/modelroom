@@ -3,10 +3,10 @@
 12. **A machine entered by hand.** One more guided run, isolated from the two of criteria 1 to 6:
    a results folder of its own and a pointer file of its own, so the first two runs keep their one
    profile file and their binding. It marks only `enter` and enters unified memory of 32 GiB from a
-   data sheet. The document then has two blocks: this machine's own entry without a profile
-   (`no_profile` -- the guided mode always writes it) and the machine entered by hand, ranked, named
-   `(entered)`, computed on shared memory with one pool of 23 GiB (32 minus the reserves 8 + 1 of
-   `[defaults]`), and every note of its rows `computed`. Gate-free: the fixtures answer the search
+   data sheet. The document then has one block, since AP9-UX the machines this run chose: the machine
+   entered by hand, ranked, named `(entered)`, computed on shared memory with one pool of 23 GiB (32
+   minus the reserves 8 + 1 of `[defaults]`), and every note of its rows `computed`; this machine's own
+   entry is in the configuration (the guided mode always writes it) and not in the result. Gate-free: the fixtures answer the search
    and the fetch, and no daemon is asked -- this machine is not measured in this run at all.
 
 Imported by `scripts/selftest.py`, which keeps the run and the report.
@@ -65,13 +65,19 @@ def _row_problems(block: dict) -> list[str]:
     return problems
 
 
-def entered_problems(payload: dict, local: str) -> list[str]:
-    """Criterion 12 on the document: this machine without a profile, and the one entered by hand."""
+def entered_problems(payload: dict, local: str, configured: set[str] | None = None) -> list[str]:
+    """Criterion 12 on the document: the machine entered by hand alone, this machine left out.
+
+    Since AP9-UX B the result covers the machines this run chose: the machine entered by hand. This
+    machine's own entry stays in the configuration (`configured`, the guided mode always writes it)
+    and has no block in the document.
+    """
     blocks = payload["machines"]
-    problems = [] if len(blocks) == 2 else [f"machine blocks: {len(blocks)}, not two"]
-    own = next((block for block in blocks if block["machine"] == local), None)
-    if own is None or own["status"] != "no_profile":
-        problems.append(f"this machine's own entry {local!r} is not in the document as no_profile")
+    problems = [] if len(blocks) == 1 else [f"machine blocks: {len(blocks)}, not one"]
+    if any(block["machine"] == local for block in blocks):
+        problems.append(f"this machine's own entry {local!r} is in the document, though this run did not choose it")
+    if configured is not None and local not in configured:
+        problems.append(f"this machine's own entry {local!r} is not in the configuration")
     entered = _entered_block(blocks)
     if entered is None or entered["status"] != "ranked":
         return problems + ["the document has no block of a machine entered by hand that was ranked"]
@@ -116,7 +122,10 @@ def entered_steps(work: Path, answers_toml: Callable[[dict], str], now: datetime
     document = results / "docs" / "models.json"
     if code != 0 or not document.is_file():
         return [(NAME, False, f"the run ended with exit {code}: " + " | ".join(lines[-3:]))]
-    problems = entered_problems(json.loads(document.read_text(encoding="utf-8")), "workstation")
+    import tomllib
+
+    configured = set(tomllib.loads((results / "modelroom.toml").read_text(encoding="utf-8")).get("machines", {}))
+    problems = entered_problems(json.loads(document.read_text(encoding="utf-8")), "workstation", configured)
     bindings = json.loads(pointer.read_text(encoding="utf-8")).get("bindings", {}) if pointer.is_file() else {}
     if bindings:
         problems.append(f"the pointer file binds a profile after a run that measured nothing: {bindings}")
@@ -124,6 +133,6 @@ def entered_steps(work: Path, answers_toml: Callable[[dict], str], now: datetime
     pools = sorted({row["fit"]["pool_gib"] for row in entered["ranked"] if row["fit"]["mode"] == "gpu"})
     detail = (
         f"{entered.get('label')}: {len(entered['ranked'])} ranked, shared pool {pools} GiB, every row computed; "
-        "this machine's own entry no_profile, no binding"
+        "this machine's own entry configured and left out of the result, no binding"
     )
     return [(NAME, not problems, "\n".join(problems) or detail)]

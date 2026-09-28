@@ -28,7 +28,7 @@ from typing import Iterable, Literal, Mapping, Sequence
 
 from .catalog import Catalog
 from .guided_contracts import SearchHit
-from .guided_models import parameters_from_name
+from .parameters import parameters_from_name
 from .search_age import AgeVerdict
 
 # The token classes, in the order they are tried; the first that matches a lowercase token wins.
@@ -123,7 +123,7 @@ def line_key(hf_repo: str, parameters_b: float | None) -> LineKey | None:
     """The key of one repository name, or `None` when the grammar has no reading for it.
 
     `parameters_b` is the size the search read for this very repository; the name's own size
-    (`guided_models.parameters_from_name`, the one size rule of the package) comes first.
+    (`parameters.parameters_from_name`, the one size rule of the package) comes first.
     """
     owner, _, name = hf_repo.partition("/")
     tokens = _classified(_TOKEN_SPLIT.split(name.lower()))

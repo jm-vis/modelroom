@@ -27,10 +27,13 @@ import sys
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
-from .intro import GRAY, GREEN, WHITE, glyphs, style_rules
+from .intro import GRAY, GREEN, MUTED_DARK, WHITE, glyphs, style_rules
 
 YES = "yes"
 NO = "no"
+# What stands in front of a row's label: the one space, the pointer and its space, the marker and its
+# space -- the column a head outside the list is indented by (`guided_models.POINTER_WIDTH`).
+HEAD_INDENT = 5
 
 
 @dataclass(frozen=True)
@@ -87,7 +90,12 @@ class Asker(Protocol):
     def select(self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None) -> str: ...
 
     def checkbox(
-        self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None
+        self,
+        key: str,
+        question: str,
+        choices: Sequence[Choice],
+        instruction: str | None = None,
+        header: str | None = None,
     ) -> list[str]: ...
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool: ...
@@ -195,6 +203,7 @@ class TerminalAsker:
         )
         _bind_escape(built)
         _wrap_list_lines(built)
+        _mark_pointer_line(built)
         if bind is not None:
             bind(built)
         built.application.erase_when_done = True
@@ -215,31 +224,46 @@ class TerminalAsker:
         return self._ask(built)
 
     def select(self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None) -> str:
+        """A list that takes one row: nothing is marked, the pointer starts on a remembered answer
+        where there is one, the space bar marks, `Enter` takes the mark or the pointer row (C)."""
         import questionary
 
         pointer_at = _pointer_at(choices)
         return self._list_question(
-            questionary.select, question, choices, self.select_keys(), instruction, default=pointer_at
+            questionary.select,
+            question,
+            choices,
+            self.select_keys(),
+            instruction,
+            bind=_bind_single_select,
+            default=pointer_at,
         )
 
     def select_keys(self) -> str:
-        return f"{self._glyphs.move} move   Enter select   Esc leave"
+        return f"{self._glyphs.move} move   Space marks   Enter takes the marked row, or this one   Esc leave"
 
     def checkbox(
-        self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None
+        self,
+        key: str,
+        question: str,
+        choices: Sequence[Choice],
+        instruction: str | None = None,
+        header: str | None = None,
     ) -> list[str]:
         """A list that marks. `Enter` takes the marked rows, and the row under the pointer where
-        nothing is marked at all (`_bind_enter_takes_pointed`, decided 2026-09-25)."""
+        nothing is marked at all (`_bind_enter_takes_pointed`, decided 2026-09-25).
+
+        `header` is a column head: it stands under the keys, outside the window the list scrolls in,
+        indented by the pointer and the marker so its columns stand over the cells (AP9-UX D).
+        """
         import questionary
 
-        return self._list_question(
-            questionary.checkbox,
-            question,
-            choices,
-            self.checkbox_keys(),
-            instruction,
-            bind=_bind_enter_takes_pointed,
-        )
+        def bind(built) -> None:
+            _bind_enter_takes_pointed(built)
+            _bind_space_marks_row(built)
+
+        keys = self.checkbox_keys() if header is None else f"{self.checkbox_keys()}\n{' ' * HEAD_INDENT}{header}"
+        return self._list_question(questionary.checkbox, question, choices, keys, instruction, bind=bind)
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool:
         """A yes or no question as a list of two entries, the default one under the pointer."""
@@ -285,12 +309,15 @@ QUESTION_RULES = [
     ("answer", f"fg:{GREEN} bold"),
     ("pointer", f"fg:{GREEN} bold"),
     ("highlighted", f"fg:{WHITE} bold"),
-    ("selected", f"fg:{GREEN}"),
+    # A marked row is colored as a whole, the marker and the label (AP9-UX C).
+    ("selected", f"fg:{GREEN} reverse"),
     ("instruction", f"fg:{GRAY}"),
     ("disabled", f"fg:{GRAY}"),
     # A line of a list that is no entry: the column head of a table-shaped list, and the
     # instruction lines under it.
     ("separator", f"fg:{GRAY}"),
+    # The row under the pointer, to the edge of the window (AP9-UX D).
+    ("cursor-line", f"bg:{MUTED_DARK} nounderline"),
 ]
 
 
@@ -340,6 +367,17 @@ def _wrap_list_lines(question) -> None:
     _list_window(question).wrap_lines = to_filter(True)
 
 
+def _mark_pointer_line(question) -> None:
+    """Draw the row under the pointer across the whole width (`cursor-line`), a gray row included.
+
+    It was bold only, and a `legacy` row not even that (Befund 2, 2026-09-28): the library puts the
+    terminal cursor on the pointer row, and a cursor line colors that row to the edge of the window.
+    """
+    from prompt_toolkit.filters import to_filter
+
+    _list_window(question).cursorline = to_filter(True)
+
+
 def _bind_enter_takes_pointed(question) -> None:
     """Make `Enter` take the row under the pointer where nothing is marked (decided 2026-09-25).
 
@@ -366,22 +404,85 @@ def _bind_enter_takes_pointed(question) -> None:
         event.app.exit(result=[choice.value for choice in control.get_selected_values()])
 
 
+def _bind_single_select(question) -> None:
+    """A `select` only: nothing marked, the space bar marks the pointer row alone, `Enter` takes it.
+
+    `questionary` puts its `default` into the marked options and draws it green, so the green stayed
+    on the remembered answer while the pointer moved (Befund 3, 2026-09-28). The marks are emptied
+    after the question is built; the pointer stays on the remembered answer. The space bar marks the
+    row under the pointer and drops every other mark, and on the marked row it unmarks it, as in a list
+    that marks; `Enter` takes the marked row, else the pointer
+    row. Bound after the build like `_bind_escape`, so the library itself is unchanged.
+    """
+    from prompt_toolkit.keys import Keys
+
+    control = _list_window(question).content
+    control.selected_options = []
+
+    @question.application.key_bindings.add(" ", eager=True)
+    def _mark(event) -> None:
+        pointed = control.get_pointed_at()
+        if pointed.value is None or pointed.disabled:
+            return
+        # The space bar on the marked row unmarks it, as in a list that marks (Codex r2, finding 2).
+        control.selected_options = [] if control.selected_options == [pointed.value] else [pointed.value]
+
+    @question.application.key_bindings.add(Keys.ControlM, eager=True)
+    def _take(event) -> None:
+        control.is_answered = True
+        marked = control.selected_options[0] if control.selected_options else control.get_pointed_at().value
+        event.app.exit(result=marked)
+
+
+def _bind_space_marks_row(question) -> None:
+    """A `checkbox` only: the space bar marks and unmarks the pointer row, a gray row included.
+
+    A `dim` row carries a formatted title, which the library prints as it is -- gray even when
+    marked (`common.py`). Marking it swaps the gray title for the plain text, so the whole row takes
+    the color of a mark; unmarking gives the gray back (AP9-UX C).
+    """
+    control = _list_window(question).content
+    grays = {choice.value: choice.title for choice in control.choices if isinstance(choice.title, list)}
+
+    @question.application.key_bindings.add(" ", eager=True)
+    def _toggle(event) -> None:
+        _toggle_mark(control, grays)
+
+
+def _toggle_mark(control, grays: dict) -> None:
+    """Mark or unmark the row under the pointer; a gray row loses its gray while it is marked."""
+    pointed = control.get_pointed_at()
+    if pointed.value is None or pointed.disabled:
+        return
+    if pointed.value in control.selected_options:
+        control.selected_options.remove(pointed.value)
+        if pointed.value in grays:
+            pointed.title = grays[pointed.value]
+        return
+    control.selected_options.append(pointed.value)
+    if pointed.value in grays:
+        pointed.title = "".join(text for _class, text in grays[pointed.value])
+
+
 def _questionary_choices(choices: Sequence[Choice]) -> list:
     """This package's choices as the library's own, with a heading as its `Separator`.
 
     A `Separator` is what `questionary` draws as a line of the list nobody can point at, which is
     exactly what a column head is. A `dim` row is handed over as a formatted title -- a list of
     `(class, text)` fragments the library prints as they are -- so the row is gray as a whole; its
-    characters are the same ones a console without color prints.
+    characters are the same ones a console without color prints. The labels of the rows that can be
+    picked are padded to one width, so a marked row is colored to the same edge as every other.
     """
     import questionary
 
+    width = max((len(choice.label) for choice in choices if not choice.heading and choice.disabled is None), default=0)
     built = []
     for choice in choices:
         if choice.heading:
             built.append(questionary.Separator(choice.label))
             continue
-        title = [("class:note", choice.label)] if choice.dim else choice.label
+        label = choice.label.ljust(width) if choice.disabled is None else choice.label
+        title = [("class:note", label)] if choice.dim else label
         built.append(
             questionary.Choice(title=title, value=choice.value, checked=choice.checked, disabled=choice.disabled)
         )
@@ -421,8 +522,14 @@ class FileAsker:
         return str(value)
 
     def checkbox(
-        self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None
+        self,
+        key: str,
+        question: str,
+        choices: Sequence[Choice],
+        instruction: str | None = None,
+        header: str | None = None,
     ) -> list[str]:
+        """A list of selectable values; `header` is a line for the eye and a file has none to read."""
         value = self._answer(key, question)
         allowed = selectable(choices)
         if not isinstance(value, list) or any(entry not in allowed for entry in value):

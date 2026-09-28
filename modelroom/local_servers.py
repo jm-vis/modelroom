@@ -19,16 +19,35 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from . import guided_vllm
 from .config import Configuration
-from .guided_loadtest import NOTHING_MEASURED, load_test_step
+from .dialog import Choice
+from .guided_loadtest import NO_CANDIDATE_LINE, NO_INSTALLED_LINE, NOTHING_MEASURED, QUESTIONS as LOAD_TEST_QUESTIONS
+from .guided_loadtest import STEP, installed_note, measure_ollama, ollama_offer, ollama_rows, wants_load_test
 from .intro import Fact, daemon_fact
 from .measurements import Scenario
+from .screen import names_words, yes_no
 from .vllm_server import VLLM_BASE_URL, LocalVllmServer
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
 
-# The answer keys the registered servers ask beyond the daemon's own, for `guided.QUESTIONS`.
-QUESTIONS: dict[str, str] = dict(guided_vllm.QUESTIONS)
+# The answer keys the registered servers ask beyond the one question and the one list of step 4
+# (`load_test`, `load_test_packages`): none since AP9-UX E -- `load_test_vllm` is gone.
+QUESTIONS: dict[str, str] = {}
+
+
+@dataclass(frozen=True)
+class Offer:
+    """What one server offers step 4 before the one question (AP9-UX E).
+
+    `rows` are its rows of the one list; `unavailable` is why a server that should answer did not (a
+    `yes` only it could honor is a step that did not finish); `nothing` what it says where it offers
+    no row: alone, and next to another server's rows. `state` is the server's own, for `measure`.
+    """
+
+    rows: tuple[Choice, ...] = ()
+    unavailable: str | None = None
+    nothing: tuple[str, str] | None = None
+    state: Any = None
 
 
 @dataclass
@@ -62,7 +81,8 @@ class LocalServer:
     origin: str
     transport: Callable[[Any], Any]
     start_fact: Callable[[Any], Fact | None]
-    step: Callable[["GuidedRun", Configuration, Scenario, Path], str | None]
+    offer: Callable[["GuidedRun", Configuration, Scenario, Path], Offer]
+    measure: Callable[["GuidedRun", Configuration, Scenario, Path, Offer, list[str]], str | None]
     card_facts: Callable[["GuidedRun"], tuple[Fact, ...]]
 
 
@@ -73,16 +93,43 @@ def _ollama_start(origins) -> Fact | None:
     return fact
 
 
-def _ollama_step(run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path) -> str | None:
-    """Step 4 of the daemon, as it was: a measurement runs one request (protocol v1).
+def _ollama_offer(run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path) -> Offer:
+    """The daemon's notes and candidates. Where another server has a row on the start screen, the
+    line about one request names Ollama, so it is not read as that server's."""
+    others = any(key != "ollama" and value is not None for key, value in run.servers.found.items())
+    found = ollama_offer(run, config, results_dir, ranking_requests=scenario.requests, named=others)
+    if found.unavailable is not None:
+        return Offer(unavailable=found.unavailable, state=found)
+    if found.profile_id is None:
+        return Offer(state=found)
+    rows = ollama_rows(found)
+    if not rows:
+        return Offer(nothing=(NO_CANDIDATE_LINE, NO_INSTALLED_LINE), state=found)
+    run.screen.note(installed_note(len(rows)))
+    return Offer(tuple(rows), state=found)
+
+
+def _ollama_measure(
+    run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path, offer: Offer, picked: list[str]
+) -> str | None:
+    """Measure the picked candidates: a measurement runs one request (protocol v1).
 
     The load test gets a copy of the scenario at one request and the same context, the render the
-    whole scenario (decided 2026-09-26). Where another server has a row on the start screen, the
-    line about one request names Ollama, so it is not read as that server's.
+    whole scenario (decided 2026-09-26).
     """
     one_request = scenario.model_copy(update={"requests": 1})
-    others = any(key != "ollama" and value is not None for key, value in run.servers.found.items())
-    return load_test_step(run, config, one_request, results_dir, ranking_requests=scenario.requests, named=others)
+    return measure_ollama(run, config, offer.state, one_request, picked)
+
+
+def _vllm_offer(run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path) -> Offer:
+    found = guided_vllm.vllm_offer(run, config, scenario, results_dir)
+    return Offer(tuple(guided_vllm.vllm_rows(found)), state=found)
+
+
+def _vllm_measure(
+    run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path, offer: Offer, picked: list[str]
+) -> str | None:
+    return guided_vllm.measure_vllm(run, config, offer.state, scenario, results_dir, picked)
 
 
 LOCAL_SERVERS: tuple[LocalServer, ...] = (
@@ -92,7 +139,8 @@ LOCAL_SERVERS: tuple[LocalServer, ...] = (
         origin="http://127.0.0.1:11434",
         transport=lambda run: run.daemon,
         start_fact=_ollama_start,
-        step=_ollama_step,
+        offer=_ollama_offer,
+        measure=_ollama_measure,
         card_facts=lambda run: (),
     ),
     LocalServer(
@@ -101,7 +149,8 @@ LOCAL_SERVERS: tuple[LocalServer, ...] = (
         origin=VLLM_BASE_URL,
         transport=lambda run: run.servers.transports.get("vllm"),
         start_fact=guided_vllm.start_fact,
-        step=guided_vllm.vllm_step,
+        offer=_vllm_offer,
+        measure=_vllm_measure,
         card_facts=guided_vllm.card_facts,
     ),
 )
@@ -120,14 +169,52 @@ def start_rows(daemon, servers: ServerRun) -> tuple[tuple[Fact, ...], bool]:
 
 
 def load_tests(run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path) -> str:
-    """Step 4 of every registered server, in order; returns the balance of the step.
+    """Step 4 from one mould (AP9-UX E): every server's notes, then **one** question, then **one** list.
 
-    The daemon's own balance stands first where it measured anything, each other server's after it
-    behind a dot; where nothing was measured anywhere it is the daemon's `none in this run`.
+    The notes of every registered server come first, in order, the reason a number will not count
+    among them. The question `load_test` is asked where any server offers a row, or where a server
+    that should answer did not (a `yes` then is a step that did not finish, as before). The list
+    `load_test_packages` holds every row, nothing marked. The balance puts the daemon's own first and
+    each other server's behind a dot; where nothing was measured anywhere it is `none in this run`.
     """
-    parts = [server.step(run, config, scenario, results_dir) for server in LOCAL_SERVERS]
+    run.screen.blank()
+    run.screen.head(STEP)
+    offers = [(server, server.offer(run, config, scenario, results_dir)) for server in LOCAL_SERVERS]
+    rows = [row for _server, offer in offers for row in offer.rows]
+    for server, offer in offers:
+        if offer.nothing is not None:
+            run.screen.note(offer.nothing[1] if rows else offer.nothing[0])
+        if offer.unavailable is not None and rows:
+            run.screen.note(f"{server.name}: {offer.unavailable}")
+    picked = _asked(run, rows, [offer.unavailable for _server, offer in offers if offer.unavailable is not None])
+    parts = [server.measure(run, config, scenario, results_dir, offer, picked) for server, offer in offers]
     said = [part for part in parts if part and part != NOTHING_MEASURED]
     return f" {run.screen.glyphs.dot} ".join(said) if said else NOTHING_MEASURED
+
+
+def _asked(run: "GuidedRun", rows: list[Choice], unavailable: list[str]) -> list[str]:
+    """The one question and the one list; what was picked, or nothing."""
+    if not rows and not unavailable:
+        return []
+    wants = wants_load_test(run)
+    run.screen.answer(LOAD_TEST_QUESTIONS["load_test"], yes_no(wants))
+    if not rows:
+        # The daemon could not be read and nothing else offers a row: a yes cannot be honored.
+        if wants:
+            run.failed(f"nothing measured: {unavailable[0]}")
+        else:
+            run.screen.note(f"no load test: {unavailable[0]}")
+        return []
+    if not wants:
+        return []
+    picked = run.asker.checkbox("load_test_packages", LOAD_TEST_QUESTIONS["load_test_packages"], rows)
+    words = [ROW_WORDS.get(value, value) for value in picked]
+    run.screen.answer(LOAD_TEST_QUESTIONS["load_test_packages"], names_words(words, "nothing"))
+    return picked
+
+
+# The answer line names a server's row in words; an Ollama row is its local name already.
+ROW_WORDS = {guided_vllm.ROW: "vLLM server"}
 
 
 def card_facts(run: "GuidedRun") -> tuple[Fact, ...]:
@@ -139,6 +226,7 @@ __all__ = [
     "LOCAL_SERVERS",
     "QUESTIONS",
     "LocalServer",
+    "Offer",
     "Origins",
     "ServerRun",
     "card_facts",

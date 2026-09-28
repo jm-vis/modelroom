@@ -22,7 +22,9 @@ from collections.abc import Iterable
 
 from .document import MachineRanking, RenderDocument
 from .fit import OLLAMA_REQUEST_HINT, OLLAMA_REQUEST_HINT_TEXT
-from .guided_context import LEVELS
+# `requests_words` has one definition, in `guided_context` (step 3's head count); step 4 and the card
+# read it from here (AP9-UX E). A second copy here stood beside it (Diff-Review N5).
+from .guided_context import LEVELS, requests_words
 from .measurements import Scenario
 from .profile import HardwareProfile
 from .screen import ranks_text
@@ -117,6 +119,7 @@ __all__ = [
     "ENTERED_NEVER_MEASURED",
     "ONE_REQUEST_NOTE",
     "context_words",
+    "requests_words",
     "document_scenario",
     "load_hint",
     "never_measured",

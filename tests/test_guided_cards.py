@@ -208,12 +208,12 @@ def test_a_silent_chassis_asks_and_the_answer_is_entered(tmp_path: Path):
     assert "? What kind of machine is this?  server" in [line.strip() for line in lines]
 
 
-def test_not_sure_about_this_machine_leaves_the_class_unknown_with_the_note(tmp_path: Path, capsys):
-    """The notes of a measurement are printed in the guided run too (`summary=False` keeps them)."""
-    code, _lines = _run(tmp_path, {**FULL_ANSWERS, "machine_class": "unknown"}, probes=_silent_chassis())
+def test_not_sure_about_this_machine_leaves_the_class_unknown_with_the_note(tmp_path: Path):
+    """The notes of a measurement stand in the guided run too, since AP9-UX G as notes of the screen."""
+    code, lines = _run(tmp_path, {**FULL_ANSWERS, "machine_class": "unknown"}, probes=_silent_chassis())
     assert code == 0
     assert (_measured(tmp_path).machine_class, _measured(tmp_path).machine_class_source) == ("unknown", "unknown")
-    assert "note: the machine class is unknown: the chassis type is not a number" in capsys.readouterr().out
+    assert any(line.startswith("   the machine class is unknown: the chassis type is not a number") for line in lines)
 
 
 def test_a_silent_chassis_without_an_answer_ends_the_run_naming_the_key(tmp_path: Path):

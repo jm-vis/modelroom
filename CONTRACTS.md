@@ -75,7 +75,9 @@ documented decision (`docs/adr/`), never a side effect.
 | Measurement file | 2 | 2 | -- | -- |
 
 AP9-SV1 changes no persisted form (ADR 0008): a vLLM server's reading and its load test live in
-memory for one guided run and are written nowhere.
+memory for one guided run and are written nowhere. AP9-UX changes no persisted form (ADR 0009): the
+selection of a run (`RunSelection`) lives in memory, and the render document keeps schema 3 -- its
+`ranked` carries other rows, and `rank` is the number of the row shown.
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -2994,19 +2996,34 @@ pool is `ram_physical_gib` (a limit is a note, never an input). The context is
 `context_assumed` is `false`. `base_model` (its architecture) and `machine_config` (its
 reserves) are inputs because the formula needs them.
 
+The window of the model (AP9-UX, ADR 0009): after the gate and the package rules, a package whose
+base model declares `architecture.max_context` smaller than `scenario.context_requested` is
+`unknown` with the reason `context beyond the window of this model (32k)` and is set aside as not
+covered; a window nobody knows (`None`) checks nothing. So the size scale (`count_fitting`) and the
+ranking count the same packages beyond a window.
+
 ### Ranking rule
 
-`rank_packages(entries, measurements, scenario)` orders one device's packages, best first, as a
-total order that does not depend on input order:
+`rank_packages(entries, measurements, scenario, *, models=None)` orders one device's packages as a
+total order that does not depend on input order (ADR 0009, 2026-09-28; it replaces the rule of
+fit class, speed and `QUANT_ORDER` ascending). `models` maps a `base_model_hf_repo` to
+`ranking.ModelFacts(parameters_b, legacy)`; a model it does not name -- or `models is None` -- has
+an unknown parameter count and is not `legacy`. Seven steps:
 
-1. fit class: `ample`, `fits`, `tight`;
-2. measured group: group 0 has a counting measurement, group 1 has none;
-3. measured speed `tps_mean`, faster first (group 0 only);
-4. quantization, in `QUANT_ORDER`;
-5. larger weights first;
-6. package identity.
+1. **pool**: graphics memory (`Fit.mode` `gpu`, `gpu_split`) before system memory (`cpu_gpu`, `cpu`);
+2. **`legacy` last**: every model that is not `legacy` before every `legacy` one; `latest` and an
+   unknown age rank alike (GF 2026-09-28);
+3. **parameters**, larger first; an unknown count behind every known one;
+4. **compression**: `QUANT_ORDER` reversed, the least compression first; an unknown quantization
+   behind every known one; `F16`, `BF16` and `F32` are one step, the smaller weights first;
+5. **measured before unmeasured** (group 0 before group 1) -- a tie-break between two builds of one
+   compression step only; the speed is no part of the key;
+6. larger weights first;
+7. package identity.
 
-Fit comes before speed: a package that is `ample` ranks above a faster one that is `tight`. A measurement counts (`group_zero_measurement`) when it is protocol `v1`, `valid`,
+`ample`, `fits` and `tight` rank alike and keep their word in the row; `unknown` and `no_fit` are set
+apart as before. "Best" means the same model, less compressed: modelroom rates no model family
+against another. A measurement counts (`group_zero_measurement`) when it is protocol `v1`, `valid`,
 comparable, for the same `context_requested` and the same `requests` as the ranking and for
 exactly this package content (manifest digest, or repo, revision and a weight file's digest); the
 newest one wins. A measurement always runs one request, so a ranking of more requests has no
@@ -3019,10 +3036,76 @@ fits are listed apart (field `no_fit`) and never ranked; a computed fit for anot
 requests than the ranking's is a caller error. `Ranking.top` is the first 10. The rule states
 facts in order; it recommends nothing.
 
-The rule reads the fit class and not its `basis`, so inside one class a package judged from its
-architecture and one judged from its size stand mixed. That is deliberate: the class is the
-statement, the basis is how it was reached, and a reader sees the basis in the row itself
-("Fit from size").
+**The rows of a result** (`ranking.shown_rows(ranking, per_model)`). One base model among the
+eligible packages of the (narrowed) snapshot is **case 1**: the first `TOP_LIMIT` (10) packages under
+the whole key. Several are **case 2**: one row per model, its best package being its first under the
+whole key (`ranking.best_per_model`; the pool first, so a `Q4_K_M` on the card beats a `Q8_0` in
+system memory of the same model), the rows in the order of that key. `render.build_render_document`
+decides the case from the snapshot, never from the selection, so `modelroom render` decides alike.
+Behind the rule's rows every **measured** package of this machine the rule leaves out is appended, in
+the order of the key: any measurement of exactly this package content on this machine -- a counting
+one (group 0), one that fails on `requests` alone, or one that counts nowhere here for another
+reason (another context, not comparable, not valid; `RankedPackage.measured_other`, Codex F3). Such a
+last row stays in group 1 with no speed, and its note says why the number does not count (code
+`measured_not_comparable`: `measured at context 8k, this ranking's is 16k.`, `measured, not comparable
+(<reason>).`, `measured, not valid (<reason>).`); the `speed` line under the table names it the same
+way instead of the advice to measure. A measured package the fit sets aside (`no_fit`, `not
+covered`) is no ranked package and gets no row (ADR 0009, "Limits"). No row of the rule moves for a
+measurement. `ShownRow(ranked, why, place, of)`: `why` is `rule` or
+`measured`; `place` of `of` is the place among all ranked packages (case 1) or among the packages of
+that model (case 2).
+
+The row note keeps its form and code and gains one sentence (`ranking.row_sentence`), with the fact
+it names: case 2, a rule row, `ranking.best_per_model` -- `Best of 12 packages of this model that
+fit.`, or `The only package of this model that fits.`; an appended row,
+`ranking.shown_for_measurement` -- `Shown for its measurement; the rule puts it at place 14.` (case
+1) or `... at place 2 of this model's 2.` (case 2). `RankedEntry.rank` is the number of the row
+shown (1, 2, 3 ...); `ranked_total` stays the number of every ranked package. `ranking_rule` is
+`RANKING_RULE` (case 1) or `RANKING_RULE_PER_MODEL` (case 2); both name the appended measurements.
+The card counts measurements from `ranked` as before, so an appended row counts; the install line
+follows `ranked[0]`, never an appended row.
+
+The key under a table (`ranking_words.key_pieces`) carries the fit words, `best: the least
+compression of the same model that fits` and `modelroom rates no model family against another`, and
+in case 2 `one row per model, its least compression that fits` and `a run with one model shows its
+first 10 packages, then the measured ones` -- one wording for the guided mode and `modelroom render`. The `shown` line names the
+appended rows (`#3 is shown for its measurement, not by the rule`, `#3–4 are shown for their
+measurements, not by the rule`); the Markdown file says `Showing 3 rows of 24 ranked packages: one
+row per model, then 1 measured.` (`ranking_words.showing_line`).
+
+The rule reads the pool and not the fit's `basis`, so a package judged from its architecture and
+one judged from its size stand mixed. That is deliberate: the basis is how a fit was reached, and a
+reader sees it in the row itself ("Fit from size").
+
+### Run selection
+
+`selection.RunSelection(machines, models, release, parameters)`, frozen, in memory only (field
+`GuidedRun.selection`): the `[machines.<name>]` step 1 of this run chose -- measured, imported,
+entered, or a profile of the folder marked as it is -- and the base models step 2 chose, with the release (`SearchHit.age`) and the
+parameter count the list showed. `selection.narrow(config, snapshot, selection)` builds a filtered
+`Configuration` and `Snapshot` through their constructors; an empty `machines` or `models` is an
+empty choice, not "no filter" (Codex F1): a run that chose no model ranks none of the folder's models
+and says so -- `this run chose no model, so the result ranks none` -- and writes that empty result.
+A run that chose no machine -- nothing marked in an answer file, or only an `import` that failed --
+names none, says `this run chose no machine, so the result ranks none` and measures nothing in step
+4; no machine it did not choose is added, the one the pointer binds this folder to included (Codex
+r2; this drops the fallback to the bound machine the AP9-UX brief had, a decision of the steering).
+At a terminal `Enter` alone takes the pointer row, so a terminal run always chooses a machine. Only
+`modelroom render`, which passes no selection, shows the whole folder.
+`selection.model_facts(selection)` hands the
+rule `ModelFacts(parameters, release == "legacy")`. `render_with_config(..., selection=None)` narrows
+first, then ranks with those facts; the card, the tables and `docs/models.md/json` name only the
+selection. Steps 3 and 4, the balance of step 2 and the card of an empty step 5 read the same
+selection. Nothing of it is written: `modelroom.toml` keeps every family and machine, the fetch
+fetches them all, and a later `modelroom render` shows the whole folder again (GF 2026-09-28).
+
+**One rule for the parameter count** (`parameters.parameter_count(stated, name)`): the number the
+Hub states, else the one the name states (`parameters.parameters_from_name`), else `None`. The list
+of step 2 calls it with `SearchHit.parameters_b`, and `RunSelection.parameters` carries exactly that
+number to the result, so the list and the result of a run never order differently; `modelroom render`
+calls it with `BaseModelSpec.parameters_b`. Two models of one size by their names may therefore stand
+otherwise in a later `render`, where the Hub names two numbers -- one function, two inputs. A render
+without a run knows no release: no model is `legacy` there.
 
 ### SearchHit
 
@@ -3517,7 +3600,7 @@ configuration or the document.
   date makes the name not interpretable. The **variant** is the set of words after the boundary
   (a word with a version counts whole there: `qwen3` in `DeepSeek-R1-0528-Qwen3-8B`), without
   `instruct`, `it` and `chat` -- the instruction-tuned model is the ordinary one. The size is
-  `guided_models.parameters_from_name`, the package's one size rule, else the parameter count of a
+  `parameters.parameters_from_name`, the package's one size rule, else the parameter count of a
   hit that is that very repository.
 - **The order.** A name stands over another of its group when its version is higher (no version
   is lower than every version), or, with equal versions, when it carries a date and the other none
@@ -3587,10 +3670,13 @@ kept one (origin `entered`, 8192 included: a kept context is one a guided run ch
 dialog names it so), else `measurements.default_scenario()` (8192, origin `default`). So
 `modelroom render --config <toml>` of a folder a guided run wrote shows the ranking of that run
 with the same origin, and a measurement taken at that context stays in measured group 0. The
-scenario and `ranking.RANKING_RULE` are printed in every view.
+scenario and the rule (`ranking.RANKING_RULE`, or `RANKING_RULE_PER_MODEL` for one row per model)
+are printed in every view.
 
 **The ranking** per machine is `ranking.rank_packages` ("Ranking rule" above): `ranked` holds the
-first `ranking.TOP_LIMIT` entries and `ranked_total` says how many there were, `not_covered`
+rows of `ranking.shown_rows` -- the first `ranking.TOP_LIMIT` entries, or one per model where the
+snapshot holds several, then the measured packages the rule leaves out -- and `ranked_total` says how
+many packages were ranked in all, `not_covered`
 holds the `unknown` fits with their reason, `no_fit` the packages whose fit class is `no_fit`. A measurement
 counts only in measured group 0, and only then are `measurement_id` and `speed_tps` set.
 
@@ -3671,7 +3757,9 @@ line that continues the one above it carries no label of its own. The pieces of 
 with ` · ` and wrapped between pieces at what the label leaves of the 100 characters
 (`screen.joined`):
 
-1. `shown` -- `<n> of <m> packages`, and one piece per set-aside group: `<k> no fit (<up to three
+1. `shown` -- `<n> of <m> packages` (one row per model: `<n> rows of <m> packages, one row per model`),
+   the rows appended for their measurement (`#3 is shown for its measurement, not by the rule`, AP9-UX
+   A; `ranking_words.shown_pieces`), and one piece per set-aside group: `<k> no fit (<up to three
    names> and <r> more)`, `<k> not covered (…)`, with the reason named where the list has more than
    one of them. The word `package` is the count's own and is not repeated per piece. The names are the
    evidence behind the count and are what gives way where the line has no room for them -- two, then
@@ -3692,10 +3780,10 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    measure it would be wrong (decided 2026-09-26). Under a machine entered by hand the advice gives
    way to `nothing measured in the rows shown · a machine entered by hand is never measured`: it is
    not this machine, and measuring this machine never writes into its profile. **Of the rows shown,
-   not of the machine**: the ranking rule sorts by fit class first, so a measured package can stand
-   behind eleven unmeasured ones and be in no `RankedEntry` of the document at all -- the card of the
-   same screen counts that measurement, and the two may not contradict each other (second-model
-   round, 2026-09-24 and 2026-09-25).
+   not of the machine**: since ADR 0009 every measured package the rule leaves out is appended to the
+   rows, so the card and this line count the same measurements; a measured package the fit sets
+   aside (`no_fit`, `not covered`) is in no `RankedEntry` and in neither count (second-model round,
+   2026-09-24 and 2026-09-25; ADR 0009, "Limits").
 5. `key` -- only under a ranked table: the fit hint (`screen.FIT_HINT`, the same pieces as in the
    Markdown view), wrapped between its pieces, and `Speed is measured, see its column.` on a row of
    its own (decided 2026-09-27).
@@ -4006,7 +4094,7 @@ card; a hint, never a limit.
     "kv_type_assumed": true,
     "requests": 1
   },
-  "ranking_rule": "fit class (ample, fits, tight), then measured group (valid comparable measurement first), then measured speed (faster first), then quantization, then larger weights, then package identity",
+  "ranking_rule": "graphics memory before system memory, then every model that is not legacy before a legacy one, then the larger model (parameter count), then the least compression, then measured before unmeasured (a valid comparable measurement), then larger weights, then package identity; the first 10 rows, then every measured package the rule leaves out",
   "rating_unavailable": null,
   "ratings": {
     "acme/Nova-7B": {
@@ -4298,9 +4386,11 @@ it pulls is measured by the load test of the **next** run.
 
 A machine may serve models through more than one local server. **The origins are a list**:
 `LOCAL_SERVERS` in `modelroom/local_servers.py` is the one place a server is registered, as
-`LocalServer(key, name, origin, transport(run), start_fact, step, card_facts)`. `ollama` wraps what
-existed before, unchanged in behavior (its daemon row, `guided_loadtest.load_test_step`, the run's
-`daemon`); `vllm` is the second (AP9-SV1, decided 2026-09-27). The start screen, step 4 and both
+`LocalServer(key, name, origin, transport(run), start_fact, offer, measure, card_facts)` (AP9-UX E:
+`offer` says a server's notes and offers its rows of the one list of step 4, `measure` measures what
+was picked; they replace `step`, ADR 0009). `ollama` wraps what existed before (its daemon row,
+`guided_loadtest.ollama_offer` and `measure_ollama`, the run's `daemon`); `vllm` is the second
+(AP9-SV1, decided 2026-09-27). The start screen, step 4 and both
 card paths of step 5 loop over the list, so an entry added to it reaches all three. **Nothing a
 server states or measures is persisted**: no measurement file, no profile, no snapshot, no
 configuration, no export and no render document changes, and a machine without a vLLM server writes
@@ -4403,17 +4493,26 @@ other module:
   ASCII (`## :: .. ... ### ok - > ^v - -`). A Windows console under `cp1252` encodes none of them,
   and printing one would end a run with a `UnicodeEncodeError` instead of a dialog.
 - **Every question is a list** with the arrow keys, a green `❯` on the line the keyboard is on, the
-  grayed-out entries with their reason, and the instruction lines under it: `↑↓ move   Enter
-  select   Esc leave`, or `↑↓ move   Space marks   Enter takes the marked rows, or this one   Esc
-  leave` for a list that marks. **Yes or no is a list of `Yes` and `No`** with the default under the
-  pointer; there is no `(Y/n)` anywhere. An answer file still answers it with `true`/`false`.
-- **A list that marks answers with what is marked, and with the row under the pointer where nothing
-  is marked** (`dialog.TerminalAsker.checkbox`, decided 2026-09-25). `Enter` alone used to take
-  nothing at all, and a reader read the pointer as the selection ("I thought the bar was the
-  selection", test round 2026-09-25). With something marked the pointer's row is a row a reader
-  moved past, not a choice, so it is not added. The rule is one key binding added after
-  `questionary` has built the question, like `Esc`; the library itself is unchanged, and `FileAsker`
-  is untouched -- `select = []` in an answer file still means nothing.
+  grayed-out entries with their reason, and the instruction lines under it: `↑↓ move   Space marks
+  Enter takes the marked row, or this one   Esc leave` for a list that takes one row, `↑↓ move
+  Space marks   Enter takes the marked rows, or this one   Esc leave` for a list that marks. **Yes
+  or no is a list of `Yes` and `No`** with the default under the pointer; there is no `(Y/n)`
+  anywhere. An answer file still answers it with `true`/`false`.
+- **One rule for every list** (AP9-UX C, 2026-09-28): nothing is marked in advance; the arrows move;
+  the space bar marks and colors the whole row (`selected`: green, reversed; the labels of one list
+  are padded to one width) and, on a marked row, unmarks it -- in both kinds of list alike (Codex
+  r2); `Enter` takes what is marked, and the row under the pointer where nothing
+  is marked. The pointer starts on the first row, unless a list that takes one row has a remembered
+  answer: then it starts there, unmarked. `questionary` put a `select`'s default among the marked
+  options and drew it green while the pointer moved on (Befund 3); `dialog._bind_single_select` empties
+  the marks after the build, marks the pointer row alone on the space bar and takes the mark or the
+  pointer row on `Enter`. `dialog._bind_space_marks_row` (a `checkbox` only) swaps the gray title of a
+  `dim` row for its plain text while it is marked, and back when it is unmarked. With something
+  marked the pointer's row is a row a reader moved past, not a choice (decided 2026-09-25). Every
+  binding is added after `questionary` has built the question, like `Esc`; the library itself is
+  unchanged, and `FileAsker` answers as before (it takes `header` and ignores it) -- `select = []` in an answer file still means nothing.
+- **The row under the pointer is a cursor line** across the whole width (`dialog._mark_pointer_line`,
+  style `cursor-line`), a gray row included: it was bold only, and a `legacy` row not even that.
 - **The keys stand behind the question, what the list says about itself in a gray line under the
   list** (decided 2026-09-25). Two places, because the two lines are not worth the same: the library
   gives the list window the rows the terminal has left and scrolls it around the pointer, so a line
@@ -4428,9 +4527,13 @@ other module:
   file ignores it. **A line of a list wraps instead of being cut** (`dialog._wrap_list_lines`): the
   library's own window does not wrap, and a 153-character line lost its last piece in a window of
   100 columns (measured 2026-09-25).
-- **A list may carry a column head and gray rows.** `dialog.Choice(heading=True)` is a line of the
-  list that is no entry -- the column head of a table-shaped list; the pointer never rests on it,
-  and `dialog.selectable` leaves it out, so no answer can name it. `dialog.Choice(dim=True)` draws
+- **A list may carry a column head and gray rows.** `Asker.checkbox(..., header=None)` takes the column
+  head of a table-shaped list as text (AP9-UX D): the terminal draws it as a second line under the
+  keys, indented by the pointer and the marker (`dialog.HEAD_INDENT`, `guided_models.POINTER_WIDTH`),
+  outside the window the list scrolls in, so it stays where it is while the pointer moves; an answer
+  file ignores it, and every test double takes the parameter. `dialog.Choice(heading=True)` is still a
+  line of a list that is no entry; the pointer never rests on it, and `dialog.selectable` leaves it
+  out, so no answer can name it. `dialog.Choice(dim=True)` draws
   a whole row gray, for a row a reader should read as a side note rather than a recommendation (a
   `legacy` model). Without color both are the same characters they always were.
 - **Every question erases itself once it is answered** (`application.erase_when_done`, a list and a
@@ -4553,9 +4656,10 @@ size scale),
 The balances, one per step: `<folder>, <n> machine(s)` · `<k> models, <p> packages from <r>
 repositories` (nothing chosen, and nothing to fetch: `nothing chosen, the folder stays as it is`) ·
 the context as `L 32k` · `<n> of <m> measured` or `none in this run` · the Markdown path. All three
-numbers of step 2 are about **the snapshot this folder now holds**, not about what this run marked:
-`apply_hits` keeps the models that were already there, so counting the marked models and the packages
-of the whole folder in one sentence would mix two frames (second-model round, 2026-09-24).
+numbers of step 2 are about **the snapshot this folder now holds, narrowed to this run's models**
+(`selection.narrow_snapshot`, AP9-UX B): `apply_hits` keeps the models that were already there, and
+since AP9-UX the balance, like the result, counts only what this run chose -- one frame, never the
+marked models next to the packages of the whole folder (second-model round, 2026-09-24).
 
 The **fetch belongs to step 2**, before the context question and not after it: the scale of step 3
 counts how many of the packages the fetch just recorded still fit this machine, and the fetch
@@ -4569,7 +4673,7 @@ matter, so the move is invisible to it.
 | 1 | `results` | Where should results live? | `here` or `path` |
 | 1 | `results_path` | Path to the results folder | text (only after `path`) |
 | 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
-| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `enter` |
+| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `enter` and `profile:<profile_id>` for a profile of the folder a machine names (AP9-UX C1) |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
 | 1 | `entered_name` | What is the machine called? | text, 1 to 128 characters after trimming (only after `enter`) |
 | 1 | `entered_class` | What kind of machine is it? | `laptop`, `workstation`, `server` or `unknown` ("not sure") (only after `enter`, always; since 2026-09-26) |
@@ -4585,8 +4689,8 @@ matter, so the move is invisible to it.
 | 2 | `select` | Which of these models should the result cover? | a list of base model ids (`Qwen/Qwen3.5-9B`); an answer file may name repository ids instead, as before |
 | 3 | `users` | How many people use it on a typical day? | a whole number of people (`1..10240`), or the requests named outright as text, `"12 requests"` (`1..1024`); asked before `context`; the pointer starts on `[guided].users` when this folder kept one, else on `1` |
 | 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
-| 4 | `load_test` | Measure the speed of the checked models that are already installed here? | true/false, default false; **one of the two optional answers** -- an answer file that does not mention it does not measure |
-| 4 | `load_test_packages` | Which of these installed models should be measured? | a list of local Ollama names (only after `load_test` true) |
+| 4 | `load_test` | Measure the speed on this machine now? | true/false, default false; one question for every local server (AP9-UX E); **one of the two optional answers** -- an answer file that does not mention it does not measure |
+| 4 | `load_test_packages` | Which of these should be measured? | a list of local Ollama names and `vllm` for a vLLM server that states a model (only after `load_test` true, where a server offers a row) |
 | 5 | `pull` | Pull #1 into Ollama now? (the screen adds the weight of the row: `(6.1 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a first row that has an Ollama name and is not local already, and a daemon the start screen reached) |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
@@ -4652,32 +4756,44 @@ sentence ends after the hardware where `llmfit` confirmed nothing. The readings 
 profile id, `wrote <toml> with <name> as the writer of this results folder`, `<name> is now a writer`
 and `<name> is measured as profile <id>` are the configuration's and the profile file's business and
 are no longer printed (`cli.hardware_with_config(..., summary=False)`; `modelroom hardware` prints
-its summary line unchanged). An import leaves `imported <display_name>: <the hardware in plain
+its summary line unchanged). The notes of the measurement itself -- what `nvidia-smi` lists, why the
+llmfit cross-check did not run, why no fit is computed for the profile -- go through the screen as
+notes, indented like their neighbors and without `note: ` in front (`hardware_with_config(...,
+note=run.screen.note)`, AP9-UX G); `modelroom hardware` still prints them as `note: <text>`. An import leaves `imported <display_name>: <the hardware in plain
 words>`; an import that does not go through stays a `run.failed` sentence. A machine entered by
 hand leaves `entered <name>: 64 GiB memory, graphics card 24 GiB` (or `…, no graphics card`, `…,
 shared memory`), the sizes as they were entered.
 
-**Step 1, the machines.** The list is built from every profile file in the results folder
-(`scan_profiles`), grouped by hardware class (GPU, VRAM, RAM) with the count and the names,
-alphabetical. The group is a matter of operation only -- the ranking is computed per device.
-Those entries are shown and cannot be picked: they are already part of the result. So are the
-schema-1 files (`run modelroom migrate`) and the files that do not read (with their reason). A
-machine entered by hand stands in a group that says what it is: `graphics card 24.00 GiB (entered)
-/ 64.00 GiB RAM`, `no graphics card (entered) / 64.00 GiB RAM`, `shared memory 32.00 GiB
-(entered)`. The three entries that can be picked are `this machine`, `import a profile file` and
-`enter a machine by hand` (since 2026-09-26), and they run in this order when more than one is
-marked: measure, import, enter.
+**Step 1, the machines** (AP9-UX C and C1, `modelroom/guided_machines.py`). A note stands in front
+of the list: `another computer: pick its profile below, or import the file made there`. The list,
+from the top, nothing marked:
 
-**This machine is marked only when it has not been measured here.** With no profile bound to this
-machine for this folder the entry is `this machine (measure now)` and starts marked -- that is
-what a first run is for. Once there is one, it is `this machine (measure again, last measured
-<date>)` and starts **unmarked**: measuring again is a decision, and `Enter` alone must not make
-it. A binding to a profile entered by hand (which comes about only by hand) is no measurement of
-this machine: the entry is then `this machine (measure now, the bound profile was entered by hand)`
-and starts marked (decided 2026-09-26). The key and the answer stay the same (`machines`,
-`this-machine`), so an answer file is unaffected.
+1. the profile this folder binds this machine to, where it was measured here (value
+   `profile:<profile_id>`, `this machine (gpu-server, server, as measured 2026-09-28)`);
+2. `this machine (gpu-server, measure again)` with row 1, else `this machine (gpu-server, measure
+   now)` (value `this-machine`); the name is `[machines.<name>]` of this host, the class that of
+   the profile where it is known;
+3. every other profile of the folder a `[machines.<name>]` names, one row each (value
+   `profile:<profile_id>`, `<label>  <hardware>`: the label as the import forms it, with the short
+   id where two carry one name; the hardware as `2 x NVIDIA L4 44.98 GiB VRAM / 94.29 GiB RAM`, a
+   machine entered by hand as `shared memory 32.00 GiB (entered)`), by hardware, then label;
+4. `import a profile file`; 5. `enter a machine by hand`;
+6. grayed out: a profile no machine of the configuration names (`no machine of the configuration
+   names this profile` -- each run gives every profile of the folder an entry at its start, so this
+   happens only when one was removed by hand afterwards), then the schema-1 files (`run modelroom
+   migrate`), then the files that do not read (with their reason).
 
-`this machine (measure now)` makes sure `[machines.<host>]` exists and is a writer -- this
+So `Enter` alone takes the profile this machine already has, where there is one, and measures only
+where there is none -- which is what a first run is for. A binding to a profile entered by hand
+(which comes about only by hand) is no measurement of this machine: there is no row 1, the profile
+stands in row 3, and row 2 says `measure now` (decided 2026-09-26). A marked profile puts the
+machine(s) naming it into the selection of this run (`RunSelection.machines`); nothing is measured
+or written for it. The marked entries run in this order: measure, import, enter. The key and the
+answers `this-machine`, `import`, `enter` stay the same, so an answer file is unaffected; the answer
+line names this machine (`this machine (gpu-server, server)`, without a known class `this machine
+(gpu-server)`) and a marked profile by its label.
+
+`this machine (<name>, measure now)` makes sure `[machines.<host>]` exists and is a writer -- this
 machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the
 results folder as the binding key. The takeover rule decides which profile is written
 (`resolve_profile_target`, "Profile binding"); its `ask_clone` case is the `clone` question, and
@@ -4797,11 +4913,12 @@ and age `unknown` throughout and 40 grayed-out rows whose appended reason broke 
 "I cannot tell what to pick, or what I am risking" was the hand test's verdict).
 
 **A column head, then one line per model** (`ModelChoice`), and only the models that can be picked.
-The head is the first line of the list and no entry of it (`guided_models.list_header`,
-`dialog.Choice(heading=True)`): `Model  Fit  Size  Release  Packagers  Downl.  Ollama`, indented by
-two so its columns stand over the cells -- a heading is drawn without the marker of a row. Without
-it a reader had to guess what a cell meant and `latest` was invisible between two columns of numbers
-(test round, 2026-09-25).
+The head is the list's `header`, no row of it (`guided_models.list_header` returns the text, AP9-UX
+D): `Model  Fit  Size  Release  Packagers  Downl.  Ollama`, drawn under the keys outside the window
+the list scrolls in and indented by `POINTER_WIDTH` so its columns stand over the cells. As the first
+row of the list it scrolled out of sight once the pointer went down (71 rows, pointer on row 13).
+Without a head a reader had to guess what a cell meant and `latest` was invisible between two columns
+of numbers (test round, 2026-09-25).
 
 Seven columns, and the **whole** line is at most 100 characters -- ` ❯ ○ ` included, which is the
 one space every line of this screen carries plus the pointer and the marker (`POINTER_WIDTH`, 5;
@@ -4835,10 +4952,12 @@ has room for it. **Every cell is cut to its column** with `…`:
 all come from a registry. A registry name longer than the Ollama column (`qwen3-embedding:0.6b`) is
 cut here; the install line of step 5 carries the whole one.
 
-The order is the memory pool (a fit in graphics memory before one in system memory, whatever its
-class), then the fit class, then the release (`latest`, then a release nobody knows, then `legacy`),
-then the downloads, then the name, with `no_fit` and `unknown` last (decided 2026-09-24,
-release 2026-09-25); a computed status sorts like a stated one of the same word. A **`legacy` row
+The order is the rule of the result as far as a list of models can apply it (ADR 0009, AP9-UX): the
+memory pool (a fit in graphics memory before one in system memory, whatever its class), then every
+model that is not `legacy` before a `legacy` one (`latest` and a release nobody knows alike), then
+the larger model (`parameters.parameter_count`; an unknown size last), then the downloads, then the
+name, with `no_fit` and `unknown` last; a computed status sorts like a stated one of the same word.
+With an empty search word the largest model that fits and is not overtaken stands first. A **`legacy` row
 is drawn gray as a whole** (`dialog.Choice(dim=True)`), stated or computed: the family has moved on,
 and that belongs in the reading of the row rather than in one cell of it.
 
@@ -4867,7 +4986,7 @@ said `fit at 8k context` while the very next question started on `L 32k`, and tw
 are one too many (test round, 2026-09-24). A fit stands on a number either way, never on a level.
 The parameter count is what a
 repository states (`SearchHit.parameters_b`), else what the model's name says
-(`guided_models.parameters_from_name`: every `<number>B`/`<number>M`/`<number>T` that does not stand
+(`parameters.parameters_from_name`: every `<number>B`/`<number>M`/`<number>T` that does not stand
 behind a letter -- with an `E` in front allowed, an effective size -- the largest of them, `2.4T` as
 2400 and shown as `2.4T` again, `360M` as 0.36, `E4B` as 4 (`M` and `E` since 2026-09-25, when the
 computed release took its sizes from this same rule) -- so `Qwen3.5-35B-A3B-MTP` is 35, `Nova-A17B` and
@@ -4965,10 +5084,13 @@ in <toml>` all went (test round, 2026-09-24). A machine a fit cannot be computed
   for (`profile.fit_block_reason`), that reason; when no `[machines.<name>]` names that profile,
   that reason as well -- another machine's reserves under another machine's name would be a made-up
   number; without a snapshot, every level says `no packages yet`.
-- **The cap**: when every base model of the snapshot declares an `Architecture.max_context`, the
-  levels above the smallest of those are grayed out with `beyond the window of <base model>` and
-  cannot be answered, in an answer file either (exit `2`, naming the reason). If one base model
-  declares none, nothing is grayed out -- a window nobody knows is no reason to forbid a level.
+- **The cap** (AP9-UX H): only the base models of this run count. When every one of them declares an
+  `Architecture.max_context`, the levels above the **largest** of those are grayed out with `beyond
+  the window of every model of this run` and cannot be answered, in an answer file either (exit `2`,
+  naming the reason). If one of them declares none, nothing is grayed out -- a window nobody knows is
+  no reason to forbid a level. One model with a 32k window no longer locks XL and XXL for one with
+  256k: a package beyond its own model's window is `not covered` in the fit itself ("Fit with profile
+  v2"), so the count of the scale and the ranking agree.
 - **The answer** is a level name or a number of tokens; the level is translated into its tokens
   before anything is written. An answer out of a file is stripped of surrounding blanks **before**
   it is held against the grayed-out entries, so `" XXL "` is refused exactly as `"XXL"` is.
@@ -4989,10 +5111,13 @@ already said so would leave a context another process wrote in the file, and the
 afterwards computes the same ranking (see "Render (schema 2)", "The scenario"), instead of falling
 back to 8192 and putting the run's own measurement into group 1.
 
-**Step 5, the render and the card.** `render_with_config` with the chosen scenario, which writes both
+**Step 5, the render and the card.** `render_with_config` with the chosen scenario and the selection
+of this run (`selection=run.selection`, AP9-UX B: the card, the tables and `docs/models.md/json` name
+only the machines and the models this run chose; with no model chosen the step says `this run chose
+no model, so the result ranks none`), which writes both
 views -- so a measurement the load test just wrote is in the ranking of that same run -- and hands
 the document itself back (`on_document`). From it the step draws **the card of the whole run**
-(`views.result_card`, the `label value note` rows of the start screen, decided 2026-09-24), then one
+(`result_card.result_card`, re-exported by `views`, the `label value note` rows of the start screen, decided 2026-09-24), then one
 table per machine (`views.terminal_lines`), then `✓ Results         docs\models.md`. The card is the
 report a reader looks at once the run is over:
 
@@ -5004,7 +5129,7 @@ report a reader looks at once the run is over:
 | `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32k (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
 | `load` | only beyond `OLLAMA_REQUEST_HINT` (8) requests: the hint of the Markdown head's `Load:` line, wrapped on rows of its own so no line is wider than 100 columns | -- |
 | `speed` | `not measured` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts but for its requests alone (`#3 measured with 1 request, ranking assumes 3`; by count, `6 rows measured with ...`, where the ranks would make the row wider than 100 columns), and only without such a row `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table |
-| `server` | only for a registered server step 4 read a served model of (AP9-SV1): `vLLM` | `<t> tok/s measured (vLLM, 20 requests, total)`, and on a row of its own without a label `identity stated · fit: 32 at once, fits` (`no fit computed` without a fit); without a speed one row: `no package of this folder`, `invalid (<reason>)`, `not comparable (<reason>)` or `not measured in this run`, the reason cut at 65 columns. The same rows on the card of a run with nothing to rank (`views.show_nothing`) |
+| `server` | only for a registered server step 4 read a served model of (AP9-SV1): `vLLM` | whether its number counts for this run (AP9-UX E): `48.2 tok/s total, 20 requests at once, counts for this run`, `..., not counted` (another model or another context), `..., counts, no fit` (no package of this folder); `not measured in this run`; a measurement fault its reason (`invalid (<reason>)`, `not comparable (<reason>)`), cut at 65 columns. On a row of its own without a label `identity stated · fit: 32 at once, fits` (`no fit computed` without a fit, `no package of this folder` without a package). The same rows on the card of a run with nothing to rank (`views.show_nothing`) |
 | `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> no fit` (`0 no fit` where there is none), and every other set-aside reason with its count behind a `·` |
 
 The `speed` and `result` rows count **one** machine's ranking: the machine of the run where it has a
@@ -5020,8 +5145,8 @@ balance of the step both say where the document is, and the run said the same pa
 
 **A step 5 with nothing to rank** -- the folder holds **no snapshot** -- says so and draws the card
 all the same (`views.show_nothing`, decided 2026-09-25): the note `nothing to rank: no package in
-this folder yet`, the card with the rows it still knows -- the folder, the machines the configuration
-names with the profiles this folder holds (`render.machine_profile`, the same decision the document
+this folder yet`, the card with the rows it still knows -- the folder, the machines of this run's
+selection (`selection.narrow_config`, AP9-UX B) with the profiles this folder holds (`render.machine_profile`, the same decision the document
 would have rested on), `models none`, the context that was chosen, no measurement (with the reason
 `a machine entered by hand is never measured` where every profile the folder holds was entered by
 hand, `scenario_text.never_measured_of`) and `result –` -- and the balance `– Results         nothing
@@ -5085,79 +5210,106 @@ stays in every case**, for anyone who prefers to paste it.
 - **What is not written:** no configuration, no state file, no document. The pull changes the
   daemon and nothing else.
 
-**Step 4, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/guided_loadtest.py`,
-which `guided.py` calls between the context and the render). A measurement runs one request
-(protocol v1): the step gets a copy of the run's scenario with `requests = 1` and the same context,
-the render of step 5 the whole scenario. When the ranking assumes more than one request, the step's
-first line says so, before anything else and whether anything is measured or not: `measurements run
-one request; this ranking assumes 3` -- it explains the reason a measured row then carries in step 5
-(decided 2026-09-26). It measures into the profile **the
-pointer file binds this machine to for this results folder**, and only when the takeover rule
-(`resolve_profile_target`, "Profile binding") says `bound` for it -- the profile file is in the
-folder and its `os_fingerprint` agrees with this machine's. Never into `[machines.<host>].profile`:
-a configuration is shared, and a stale or foreign entry there would give this machine's speed to
-another device -- the very case the machine step declines with "put that profile file back".
-Without a binding, without that agreement, or without a snapshot to take packages from, the step
-says so in one line and the run stays `0` -- there is nothing a load test could be about. Otherwise
-the daemon's inventory is read and matched against the snapshot's active packages.
+**Step 4, the load test** (stage 1, "Load test (stage 1)" above; `modelroom/local_servers.py`
+with `modelroom/guided_loadtest.py` and `modelroom/guided_vllm.py`, which `guided.py` calls between
+the context and the render). **One mould for every server** (AP9-UX E, 2026-09-28): first every
+registered server says what it has to say, in the order of `LOCAL_SERVERS`, the reason a number will
+not count among it; then **one** question, `load_test` (`Measure the speed on this machine now?`,
+default **no**); on a yes **one** list, `load_test_packages` (`Which of these should be measured?`):
+the Ollama candidates of this run's models and, where the start screen read a served model, the row
+`vllm` (`vLLM server  context 4k  20 requests at once  <id>`), none of them marked; `Enter` with nothing marked takes the
+pointer row, one candidate, never all (it measured all three in the hand test of 2026-09-24). The key `load_test_vllm` is gone (0.2.0 was never released). Each server has `offer(run,
+config, scenario, results_dir) -> Offer` (its notes, its rows, why it could not be read) and
+`measure(...) -> str | None` (`local_servers.LocalServer`, replacing `step`).
 
-- **The daemon could not be read.** The `load_test` question is asked first. A **no** (which is
-  also what an answer file without the key means) is one line, `no load test: <reason>`, and exit
-  `0`: the daemon is needed for this step and for nothing else, so a machine without one still
-  finishes cleanly. A **yes** that cannot be honored is a step that did not finish -- `nothing
-  measured: <reason>` and exit `1`, with the document still written.
-- **No installed package matched.** One note, `no ranked package is installed on this machine;
-  the load test measures installed packages only (stage 1: no download)`, and no question. What
-  was left out is named first, **one note per reason** with the number of installed models behind
-  it and **no names** (`12 installed models -- <reason>`): which model exactly is `ollama list`'s
-  answer, and twelve names pushed the question off the screen (test round, 2026-09-24). The **cloud
-  models** are named only here -- with a candidate on the list, that a machine also holds cloud
-  models is beside the point. An installed model whose name matches a configured package but whose
-  digest the daemon did not show is named **either way**: that is a fault about a package a reader
-  may have wanted measured, and another candidate must not silence it (second-model round,
-  2026-09-24).
-- **At least one candidate.** `load_test` (default **no**), then `load_test_packages`: every
-  candidate, **none of them marked**, one line each with the local name, the base model, the
-  quantization and the weight size, aligned in columns. Nothing is marked because `Enter` measured
-  all three in the hand test of 2026-09-24 where the user had picked one; which models are measured
-  is a decision. A single candidate is a list with one entry as well -- one code path, and an
-  answer file reads the same on every machine. Before the runs the step notes that the load is
-  read once and that the model behind the name must not change, and the progress of each run is a
-  note of its own. Each measurement is written as its own file and reported in one note:
-  `measured <name>: 41.1 tok/s (39.8–42.3), context 32k`. That it is valid and comparable is what
-  makes it a measurement at all, so it is not said; a record that is neither carries **what it is
-  missing** instead (`<name>: not comparable (<reason>)`) and the run still ends `0` -- the record is
-  written and the ranking says where such a measurement stands. A daemon that lets a run down here
-  is a step that did not finish: the line names the model and the reason, the exit code is `1`, and
-  the document is still written.
-- **A vLLM server** (AP9-SV1, "Local servers and the vLLM load test"). After the daemon's part,
-  every other registered server has its own (`local_servers.load_tests`). Where the start screen read
-  a served model, the step says `a vLLM server answers here, context 4096`, `it states it serves
-  <id>` and `revision unknown (not stated)`, then `one warm-up request, then three batches of 20
-  requests, 128 tokens each` and asks `Measure the vLLM server with 20 requests at once?` (key
-  `load_test_vllm`, default no). A measurement is `measured vLLM: <t> tok/s total (<a>–<b>), context
-  4k` and `per request: <r> tok/s (<c>–<e>)`; an invalid or not comparable one is `vLLM: <reason>`
-  in their place, and a capped one says `64 of 65 requests measured` first. Then `identity stated by
-  the server; not ranked, nothing written`. The fit follows for the package the server serves: `vLLM
-  fit, computed: one card of 22.49 GiB, 0.92 of it for vLLM`, `weights 0.92 GiB, runtime 1.50 GiB (one
-  recording), KV cache 18.27 GiB`, `32 requests of context 4k at once, from size: fits`; without a
-  profile the fit may compute for, `no vLLM fit: <reason>`; without the package, the reason of
-  `match_served`. A server that asks for a key says so and nothing is measured (exit `0`). With a
-  vLLM row on the start screen the daemon's first line names it: `Ollama measurements run one
-  request; this ranking assumes 20`. **The balance** is the daemon's own where it measured, then `·
-  vLLM measured`; only vLLM: `vLLM measured` (done). A vLLM server that lets the load test down is a
-  step that did not finish (`nothing measured for vLLM: <reason>`, exit `1`). Nothing of it is written.
+The daemon's part. A measurement runs one request (protocol v1): the measurement gets a copy of the
+run's scenario with `requests = 1` and the same context, the render of step 5 the whole scenario. When
+the ranking assumes more than one request, the step's first line says so: `measurements run one
+request; this ranking assumes 3` (with another server on the start screen `Ollama measurements ...`)
+-- it explains the reason a measured row then carries in step 5 (decided 2026-09-26). It measures
+into the profile **the pointer file binds this machine to for this results folder**, and only when the
+takeover rule (`resolve_profile_target`, "Profile binding") says `bound` for it -- the profile file is
+in the folder and its `os_fingerprint` agrees with this machine's. Never into
+`[machines.<host>].profile`: a configuration is shared, and a stale or foreign entry there would give
+this machine's speed to another device. Without a binding, without that agreement, or without a
+snapshot to take packages from, the daemon says so in one line and offers nothing. **Nor where this
+machine is not part of the run's result** (Codex F2): where no machine this run chose names the
+profile this machine is bound to, its measurement would land in a profile the result does not show,
+so the step says `no load test: this machine is not part of this run's result` and offers no Ollama
+row. Otherwise its
+inventory is read and matched against the active packages of **this run's models**
+(`selection.narrow_snapshot`, AP9-UX B). What was left out is named first, **one note per reason**
+with the number of installed models behind it and **no names** (`12 installed models -- <reason>`);
+the **cloud models** only where the daemon has no candidate; an installed model whose name matches a
+configured package but whose digest the daemon did not show is named either way. With candidates the
+note is `Ollama: 2 installed packages of this run's models, one request each`; without, `no ranked
+package is installed on this machine; the load test measures installed packages only (stage 1: no
+download)` where no other server offers a row, else `Ollama: no package of this run's models is
+installed here`. Before the runs the step notes that the load is read once and that the model behind
+the name must not change, and the progress of each run is a note of its own. Each measurement is
+written as its own file and reported in one note: `measured <name>: 41.1 tok/s (39.8–42.3), context
+32k`; a record that is not valid or not comparable carries **what it is missing** instead (`<name>:
+not comparable (<reason>)`) and the run still ends `0`.
+
+The vLLM part (AP9-SV1, "Local servers and the vLLM load test"). The server runs on this machine, so
+it passes the daemon's own check, one function for both (`guided_loadtest.local_measure_target`,
+Codex r3 and r4): first the identity -- the profile this machine is bound to is in the folder and its
+`os_fingerprint` agrees with this machine's (the takeover rule's `bound`) -- then the choice -- a
+machine this run chose names that profile. Where either fails the step says the daemon's note with
+`vLLM: ` in front (`vLLM: no load test: profile from home binding has another os_fingerprint (<id>)`,
+`vLLM: no load test: this machine is not part of this run's result`) and offers no row -- nothing is
+measured, and neither the balance nor the card counts a number. Otherwise, where the start screen read a served
+model: `a vLLM server answers here, context 4096`, `it states it serves <id>`, `revision unknown (not
+stated)`, `one warm-up request, then three batches of 20 requests, 128 tokens each` (`1 request` for
+one: `scenario_text.requests_words`, the one place a number of requests is said). Then the first
+reason that holds, in this order, why its number will not count (`<name>` is the part behind `/`):
+
+1. another model: `the number will not count: the server serves <name>, this run chose <name>`;
+2. another context: `the number will not count: the server runs context 4k, this run asks for 32k`;
+3. no package of this folder: `the number counts, no fit: no package of this folder comes from
+   <root>`.
+
+The number **counts** where the served `root` is a base model of this run (the ones step 2 chose;
+none where it chose none, Codex F1) **and** the server runs this run's context; vLLM is never ranked. A
+line wider than 100 columns breaks before the name, indented like a note; no name is cut. A
+measurement is `measured vLLM: <t> tok/s total (<a>–<b>), context 4k` and `per request: <r> tok/s
+(<c>–<e>)`; an invalid or not comparable one is `vLLM: <reason>` in their place, a capped one says `64
+of 65 requests measured` first; then `identity stated by the server; not ranked, nothing written`.
+The fit follows for the package the server serves (`vLLM fit, computed: ...`, `32 requests of context
+4k at once, from size: fits`); without a profile the fit may compute for, `no vLLM fit: <reason>`;
+without the package, the reason of `match_served`. A server that asks for a key says so and offers no
+row. Nothing of it is written.
+
+**The states** (`local_servers.load_tests`; "vLLM" means the start screen read a served model):
+
+| Ollama | vLLM | Question | List | Balance | Exit |
+|---|---|---|---|---|---|
+| not bound, bound to another machine's profile, or not chosen | any (the same check stops vLLM) | none | -- | `none in this run` | 0 |
+| no snapshot | none, a key, or a fault | none | -- | `none in this run` | 0 |
+| no snapshot | yes | yes | `vllm` only | yes: `vLLM measured` or `vLLM ran, not counted`; no: `none in this run` | 0 |
+| no daemon | none, a key, or a fault | yes | -- | no: note `no load test: <reason>`; yes: `nothing measured: <reason>` (`run.failed`) | 0 / 1 |
+| no daemon | yes | yes, the note `Ollama: <reason>` before it | `vllm` only | as row 2 | 0 |
+| daemon, no candidate | none, a key, or a fault | none, the note `no ranked package is installed ...` | -- | `none in this run` | 0 |
+| daemon, no candidate | yes | yes | `vllm` only | as row 2 | 0 |
+| candidates | none, a key, or a fault | yes | the candidates | `<k> of <n> measured` | 0 |
+| candidates | yes | yes | the candidates and `vllm` | `<k> of <n> measured · vLLM measured` (or `· vLLM ran, not counted`) | 0 |
+| any | -- | -- | -- | a measurement a server lets down: `nothing measured for <name>: <reason>` (`run.failed`) | 1 |
+
+`vLLM measured` is said only where the number counts **and** the measurement holds (valid and
+comparable); where it does not count, or the measurement is invalid or not comparable, the balance
+says `vLLM ran, not counted` -- the card's server row says why. The document is written in every
+state.
 
 **The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question
 with no answer ends the run with exit `2` and names the question -- an answer file written for 0.1.0
 has no `users` and stops at step 3 until the key is added (`users = 1` keeps its old ranking); an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
-exit `3`. **The three exceptions are `load_test`, `pull` and `load_test_vllm`:** a file that does
-not mention `load_test` does not measure, one that does not mention `pull` does not pull, and one
-that does not mention `load_test_vllm` does not measure a vLLM server (AP9-SV1), because whether
-any of these questions is reached at all depends on the machine the file is run on -- its daemon,
-its servers, and what they already hold -- not on the file. An answer of the wrong shape (`pull = "yes"`) is still
+exit `3`. **The two exceptions are `load_test` and `pull`:** a file that does not mention
+`load_test` measures nothing -- on no server -- and one that does not mention `pull` does not pull,
+because whether either question is reached at all depends on the machine the file is run on -- its
+daemon, its servers, and what they already hold -- not on the file. The key `load_test_vllm` of
+AP9-SV1 is gone (AP9-UX E): the vLLM server is the row `vllm` of `load_test_packages`. An answer of the wrong shape (`pull = "yes"`) is still
 an error. A `load_test = true` without `load_test_packages` is a missing answer like any other.
 Since 2026-09-27 `machine_class` is asked on every measurement of this machine, so a file that
 measures it carries the key.

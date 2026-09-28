@@ -117,11 +117,11 @@ def sp():
     return module
 
 
-NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS"
+NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S"
 PULLED_LINES = [
-    " ? Pull #1 into Ollama now? (2.9 GB)  Yes",
+    " ? Pull #1 into Ollama now? (5.0 GB)  Yes",
     f" pulling   {NAME}",
-    f" ✓ Pulled    {NAME} · 2.9 GB · say Yes in step 4 of the next run to measure it",
+    f" ✓ Pulled    {NAME} · 5.0 GB · say Yes in step 4 of the next run to measure it",
 ]
 PULL_CALLS = [("GET", "/api/tags", None), ("POST", "/api/pull", {"model": NAME, "stream": True}), ("GET", "/api/tags", None)]
 
@@ -145,7 +145,7 @@ INSTALL = f" install   #1  ollama pull {NAME}"
 @pytest.mark.parametrize(
     "tail",
     [
-        [" ? Pull #1 into Ollama now? (2.9 GB)  No"],
+        [" ? Pull #1 into Ollama now? (5.0 GB)  No"],
         [" install   #1 is local already · say Yes in step 4 to measure it"],
         [],  # a daemon the start screen did not reach: no question at all
     ],
@@ -157,9 +157,9 @@ def test_criterion_ten_passes_on_a_run_that_did_not_pull(sp, tail):
 @pytest.mark.parametrize(
     "lines, words",
     [
-        ([INSTALL, " ? Pull #1 into Ollama now? (2.9 GB)  Yes"], "Yes"),
+        ([INSTALL, " ? Pull #1 into Ollama now? (5.0 GB)  Yes"], "Yes"),
         ([INSTALL, f" pulling   {NAME}"], "pulled"),
-        ([INSTALL, f" ✓ Pulled    {NAME} · 2.9 GB"], "pulled"),
+        ([INSTALL, f" ✓ Pulled    {NAME} · 5.0 GB"], "pulled"),
         ([" ✓ Results         docs\\models.md"], "install line"),
     ],
 )
@@ -179,8 +179,12 @@ def se():
     return module
 
 
+OWN_ENTRY = {"machine": "workstation", "status": "no_profile", "label": "workstation", "profile": None, "ranked": [], "no_fit": []}
+
+
 def _entered_payload(**studio) -> dict:
-    """A document of the run: this machine without a profile, and `studio` entered by hand."""
+    """A document of the run: `studio` entered by hand alone -- since AP9-UX B the result covers the
+    machines this run chose, and this machine's own entry stays in the configuration only."""
     block = {
         "machine": "studio",
         "status": "ranked",
@@ -190,8 +194,7 @@ def _entered_payload(**studio) -> dict:
         "no_fit": [],
     }
     block.update(studio)
-    own = {"machine": "workstation", "status": "no_profile", "label": "workstation", "profile": None, "ranked": [], "no_fit": []}
-    return {"machines": [own, block]}
+    return {"machines": [block]}
 
 
 def test_the_entered_answer_file_marks_only_the_machine_entered_by_hand(se):
@@ -237,12 +240,19 @@ def test_criterion_twelve_names_what_the_machine_entered_by_hand_lacks(se, studi
     assert any(words in problem for problem in se.entered_problems(_entered_payload(**studio), "workstation"))
 
 
-def test_criterion_twelve_names_a_document_without_this_machines_own_entry(se):
+def test_criterion_twelve_names_a_document_that_carries_this_machine_although_the_run_did_not_choose_it(se):
     payload = _entered_payload()
-    payload["machines"] = payload["machines"][1:]
+    payload["machines"] = [OWN_ENTRY, *payload["machines"]]
 
-    assert any("machine blocks: 1, not two" in problem for problem in se.entered_problems(payload, "workstation"))
-    assert any("no_profile" in problem for problem in se.entered_problems(payload, "workstation"))
+    assert any("machine blocks: 2, not one" in problem for problem in se.entered_problems(payload, "workstation"))
+    assert any("did not choose it" in problem for problem in se.entered_problems(payload, "workstation"))
+
+
+def test_criterion_twelve_names_a_configuration_without_this_machines_own_entry(se):
+    problems = se.entered_problems(_entered_payload(), "workstation", {"studio"})
+
+    assert any("not in the configuration" in problem for problem in problems)
+    assert se.entered_problems(_entered_payload(), "workstation", {"studio", "workstation"}) == []
 
 
 def test_criterion_twelve_passes_on_a_real_isolated_run(se, tmp_path: Path):
@@ -432,7 +442,7 @@ def test_criterion_three_names_a_screen_that_says_nothing_about_the_search():
 GOOD_DOCUMENT = "\n".join(
     [
         "Scenario: context 8k (entered), KV cache f16 (assumed), 1 request",
-        "Ranking rule: fit class (ample, fits, tight), then measured group",
+        "Ranking rule: graphics memory before system memory, then every model that is not legacy",
         "## Ranking: workstation",
     ]
 )
@@ -488,9 +498,25 @@ def _record(**changes) -> dict:
 
 
 def _row(**changes) -> dict:
-    data = {"rank": 1, "measurement_group": 0, "speed_tps": 58.4}
+    data = {"rank": 1, "measurement_group": 0, "speed_tps": 58.4, "quantization": st.DEEPSEEK_QUANT}
     data.update(changes)
     return data
+
+
+def test_the_measured_row_is_found_by_its_quantization_wherever_it_stands():
+    """ADR 0009: a less compressed build of the same repository is the rule's row, and the measured
+    `Q4_K_M` is appended behind it -- criteria 5 and 6 read that row, not the first of the repository."""
+    identity = ["huggingface", st.DEEPSEEK_GGUF, "x"]
+    rule = {**_row(rank=1, measurement_group=1, speed_tps=None, quantization="Q6_K"), "package_identity": identity,
+            "note": {"facts": ["fit.mode", "ranking.best_per_model"]}}
+    measured = {**_row(rank=2), "package_identity": identity, "note": {"facts": ["measurement.tps_mean", "ranking.shown_for_measurement"]}}
+    block = {"ranked": [rule, measured], "no_fit": []}
+
+    row = st._ranked_row(block, st.DEEPSEEK_GGUF, st.DEEPSEEK_QUANT)
+
+    assert row is measured
+    assert (row["measurement_group"], st.row_kind(row), st.row_kind(rule)) == (0, "measured", "rule")
+    assert st.load_test_problems([_record()], row) == []
 
 
 def test_criterion_five_passes_on_one_valid_comparable_ranked_measurement():
@@ -663,12 +689,12 @@ GOOD_DIALOG = [
     "",
     " workstation - context L 32k",
     " #    Model                     Package                 Fit                   Speed         Memory",
-    " 1    Qwen3.5-9B                unsloth - UD-IQ2_XXS    fits                  -             8.3 GB",
+    " 1    Qwen3.5-9B                unsloth - Q4_K_S        tight                 -             10.5 GB",
     " shown     1 of 25 packages",
     " memory    #1 fits into graphics memory, 11.0 GB free after the reserve",
     " speed     nothing measured in the rows shown - say Yes in step 4 to measure an installed package",
     "",
-    " install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS",
+    " install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S",
     "",
     " ok Results         docs/models.md",
 ]

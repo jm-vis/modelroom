@@ -12,7 +12,7 @@ All notable changes to this project are documented in this file. The format foll
   load test"; ADR 0008; decided 2026-09-27). The local servers are a list, `LOCAL_SERVERS`, and
   Ollama is its first entry, unchanged. A vLLM server on `127.0.0.1:8000` that answers gets a
   `server` row on the start screen with the model it states it serves; step 4 offers a load test of
-  n requests at once (`load_test_vllm`, three batches, `/metrics` before and after each), reports the
+  n requests at once (the row `vllm` of `load_test_packages` since AP9-UX, three batches, `/metrics` before and after each), reports the
   total and the per-request speed, and computes how many requests of the ranking's context one card
   holds (`0.92 x card - weights - 1.50 GiB` for the KV cache; 1.50 from the A100 recording, 1.31 from
   the L4 one). The card of step 5 carries a `server` row. Three calls only, no key, no proxy, no
@@ -153,13 +153,52 @@ All notable changes to this project are documented in this file. The format foll
   before runs unchanged. Unified memory computes as one pool after both reserves; no such machine was measured,
   every number there is computed. `scripts/selftest.py` gets criterion 11
   (`scripts/selftest_entered.py`): a run of its own that enters unified memory of 32 GiB and finds
-  it ranked on a shared pool of 23 GiB, next to this machine's own entry without a profile.
+  it ranked on a shared pool of 23 GiB; this machine's own entry is configured and left out of the
+  result (AP9-UX).
 - **Render document schema 2** (ADR 0003): `Fit.requests` in every row, `users` and
   `requests_origin` in `docs/models.json` when the rendered scenario is the configuration's.
 - **`docs/adr/`**, the first three decision records, with its index.
 
 ### Changed
 
+- **The largest model that fits, the least compression of it** (`modelroom/ranking.py`; CONTRACTS.md,
+  "Ranking rule"; ADR 0009; decided 2026-09-28). The rule ranks graphics memory before system memory,
+  every model that is not `legacy` before a `legacy` one (`latest` and an unknown release alike), then
+  the larger model and, within one model, the least compression that fits (`F16`/`BF16`/`F32` one step,
+  the smaller first); a measurement only breaks a tie between two builds of one compression, and the
+  speed is no rank any more. `ample`, `fits` and `tight` rank alike. On four L4 cards an `IQ1` build
+  stood at #1 before. Several models give one row per model, its best package; the key under the
+  table says what "best" means and that modelroom rates no model family against another. The list of
+  step 2 follows the same order, the empty search word included. The first row, and so the install
+  line and the pull, is a larger download now.
+- **The result covers the choice of the run** (`modelroom/selection.py`; CONTRACTS.md, "Run
+  selection"). The card, the tables and `docs/models.md/json` name only the machines step 1 chose and
+  the models step 2 chose; steps 3 and 4 and the balance of step 2 count the same. A run that chose
+  no model ranks none of the folder's, one that chose no machine names none (not even the one this
+  folder is bound to), and both say so; step 4 measures this machine -- through Ollama or its vLLM
+  server, with one check for both -- only where it is the machine of its bound profile (the
+  fingerprint agrees) and the run chose it. A package measured here at another context, or not comparable, stays visible without a
+  comparable speed, and its row says why. Nothing of the
+  selection is written: `modelroom.toml` keeps every family and machine, and a later `modelroom
+  render` shows the whole folder.
+- **Every profile of the folder can be picked** (`modelroom/guided_machines.py`): one row per profile,
+  the one this machine already has first, so `Enter` alone keeps it instead of measuring again. A note
+  says how to get another computer into the result; README has a section "Another computer".
+- **One rule for every list** (`modelroom/dialog.py`): nothing marked in advance, the space bar marks
+  and colors the whole row, `Enter` takes the mark or the row under the pointer; a list that takes one
+  row starts on its remembered answer without marking it. "this machine" names the machine
+  (`this machine (gpu-server, server)`).
+- **Step 4 from one mould** (`modelroom/local_servers.py`, `guided_loadtest.py`, `guided_vllm.py`):
+  every server's notes, then one question `load_test` (`Measure the speed on this machine now?`), then
+  one list `load_test_packages` with the Ollama candidates and the vLLM server. The reason a vLLM
+  number will not count (another model, another context, no package) stands before the question; the
+  card's server row says whether the number counts. The answer key `load_test_vllm` is gone (it was
+  never released).
+- **A model's window is checked** (`fit.compute_fit_v2`): a package beyond the window its model
+  declares is `not covered`; the size scale grays out a level only beyond the window of every model
+  of the run, no longer beyond the smallest.
+- **The hygiene test also looks for global IPv4 addresses** (`tests/test_public_hygiene.py`):
+  loopback, private and documentation addresses stay quiet.
 - **Fit words that say what was computed** (ADR 0006; decided 2026-09-27). `Fit.fit_class` is
   `ample`, `fits`, `tight`, `no_fit` or `unknown`, one to one for llmfit's `perfect`, `good`,
   `marginal`, `too_tight`; the thresholds and the cap are unchanged, the cap is called `fits`. A
@@ -223,7 +262,7 @@ All notable changes to this project are documented in this file. The format foll
   schema-3 profile inside, so a 0.1.0 `import-profile` fails on that profile with a validation
   error (exit `3`), not with the version message.
 
-- **A size in a model name can be in millions and can carry an `E`** (`guided_models.parameters_from_name`):
+- **A size in a model name can be in millions and can carry an `E`** (`parameters.parameters_from_name`):
   `SmolLM2-360M-Instruct` is 0.36B and `gemma-4-E4B-it` 4B. The list computes a fit for such names
   now, and the computed release takes its sizes from the same rule. `A3B`, `A0.6B` and `8x7B` stay
   no size.
@@ -259,6 +298,16 @@ All notable changes to this project are documented in this file. The format foll
   does the card of a run that ranked nothing, where every profile the folder holds was entered.
 
 ### Fixed
+
+- **A measurement of the run no longer drops out of its result** (ADR 0009): a measured package the
+  rule does not show is appended behind the rule's rows with its place, and the card counts it.
+- **The column head of the model list stays in sight** (`Asker.checkbox(..., header=...)`): it stood
+  in the list and scrolled away once the pointer went down; the row under the pointer is now marked
+  across the whole width, a gray `legacy` row included.
+- **The notes of a measurement stand where the notes stand**: `nvidia-smi`, the llmfit reason and a
+  blocked fit went past the screen as `note: ...` lines; the guided mode indents them like every note.
+- **`1 request`, not `1 requests`**, wherever step 4 and the card say a number of requests
+  (`scenario_text.requests_words`).
 
 - **Two runs that create the configuration at once no longer replace each other's file**
   (`state.publish_new_text`, new; `search_apply.write_configuration`; CONTRACTS.md, "Search over the

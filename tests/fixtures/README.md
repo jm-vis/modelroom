@@ -280,7 +280,15 @@ The two instances: one at Verda (Helsinki), one at Scaleway (Paris).
 
 Still synthetic: `nvidia_smi_one_gpu.csv` and the other `lspci_nn_*` and `proc_meminfo_linux.txt`
 files of the section above, and every list of three cards or more or of mixed sizes, which the
-tests write inline (`tests/test_measure_cards.py`, `tests/test_profile_v4.py`).
+tests write inline (`tests/test_measure_cards.py`, `tests/test_profile_v4.py`). Also synthetic:
+`profiles_v4/four_l4_server.json` (AP9-UX, 2026-09-28) -- **derived, not measured**: a copy of
+`two_l4_server.json` with these fields changed and nothing else: `gpus` four entries (index 0-3,
+each `NVIDIA L4`, 22.49, `nvidia-smi`), `vram_gib` and `llmfit_crosscheck.vram.own_gib`/`llmfit_gib`
+89.96, `profile_id` `4c7e19a2b5d8f036`, `os_fingerprint` `c3d4e5f607182939` (a fixed literal of the
+same shape; the source stays `linux_machine_id`), `recorded_at` `2026-09-28T09:14:03Z`. Unchanged:
+`display_name` `server`, `machine_class` `unknown`, the RAM, the cross-check status, `llmfit_version`,
+no newline at the end. All three server profiles are called `server`, so a test finds a block by its
+`profile_id`, never by the label (the import puts the short id behind a shared name).
 
 ## Local servers (AP9-SV1)
 

@@ -22,8 +22,6 @@ See CONTRACTS.md, "Guided mode", step 2.
 
 from __future__ import annotations
 
-import math
-import re
 from typing import Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -33,6 +31,7 @@ from .contracts import Fit, validate_hf_repo
 from .dialog import Asker, Choice, FileAsker, columns
 from .fit import fit_from_parameters, profile_memory, unknown_fit
 from .guided_context import DEFAULT_CONTEXT, Checked
+from .parameters import _GGUF_SUFFIX, _TRILLION_FACTOR, parameter_count, parameters_from_name
 from .screen import FIT_SCALE_HINT, context_tokens_text
 from .guided_contracts import SearchHit
 from .search_pages import format_downloads
@@ -74,9 +73,6 @@ _COLUMN_WIDTHS = (24, 14, 6, 7, 12, 6)
 LINE_LIMIT = 100
 POINTER_WIDTH = 5
 LABEL_LIMIT = LINE_LIMIT - POINTER_WIDTH
-# A heading is drawn without the marker of a row (three spaces, not five), so the head carries the
-# two characters that are missing itself and its columns stand over the cells.
-_HEAD_INDENT = "  "
 # What the padded columns and the two spaces between them take up, so the last cell knows its room.
 _FIXED_WIDTH = sum(_COLUMN_WIDTHS) + 2 * len(_COLUMN_WIDTHS)
 _OLLAMA_WIDTH = LABEL_LIMIT - _FIXED_WIDTH
@@ -87,9 +83,6 @@ _RELEASE_WORDS = {"latest": "latest", "legacy": "legacy", UNKNOWN: DASH}
 # Behind a release computed from the version numbers of the family, never behind a stated one:
 # `latest*` and `legacy*` still fit the seven characters of the column (decided 2026-09-25).
 COMPUTED_MARK = "*"
-# `latest` first, then a release nobody knows, then `legacy`: a reader is choosing what to fetch,
-# and a model whose family has moved on belongs under the ones that have not (decided 2026-09-25).
-_RELEASE_ORDER = ("latest", UNKNOWN, "legacy")
 _CLASS_ORDER = ("ample", "fits", "tight", "no_fit", "unknown")
 # A fit against system memory says so behind its word: fit v1 caps that pool at `fits`, and live
 # on 2026-09-24 a 122B model stood as `fits` above a 9B `tight` that fits the graphics card,
@@ -97,7 +90,6 @@ _CLASS_ORDER = ("ample", "fits", "tight", "no_fit", "unknown")
 # graphics memory stands above one in system memory, whatever its class (decided 2026-09-24).
 _RAM_MODES = ("cpu_gpu", "cpu")
 _RAM_SUFFIX = " (RAM)"
-_MODE_ORDER = ("gpu", "gpu_split", "cpu_gpu", "cpu", None)
 _SETTLED = ("no_fit", "unknown")
 
 # A stated age is positive evidence about one model; a computed one compares the version numbers of
@@ -112,16 +104,6 @@ RELEASE_HINT = (
 FIT_RAM_HINT = f"{_RAM_SUFFIX.strip()}: the pool is the system memory"
 FIT_FROM_SIZE_HINT = "fit from the size at {context} context, the best is fits, exact after the fetch"
 FIT_UNKNOWN_HINT = "fit unknown until this machine is measured"
-
-# A parameter count in a model name: `9B`, `0.6B`, `2.4T`, `360M`, the effective size `E4B`, and
-# never one that stands behind a letter, a digit or a decimal point -- `A3B`, `A17B`, `8x7B` are the
-# active parameters of a mixture or a factor, not a total, and the `.` keeps the tail of such a
-# decimal out as well (`Nova-A0.6B` read as 6 in the second-model round of 2026-09-24). `M` and `E`
-# since 2026-09-25: the computed release takes its sizes from this one rule as well.
-_PARAMETERS_RE = re.compile(r"(?<![0-9A-Za-z.])[Ee]?(\d+(?:\.\d+)?)([BbMmTt])(?![0-9A-Za-z])")
-_TRILLION_FACTOR = 1000
-_MILLION_DIVISOR = 1000
-_GGUF_SUFFIX = "-GGUF"
 
 
 class ModelChoice(BaseModel):
@@ -242,30 +224,6 @@ def list_context(kept: int | None) -> int:
     return kept if kept is not None else DEFAULT_CONTEXT
 
 
-def parameters_from_name(name: str) -> float | None:
-    """The total parameter count a model name states, in billions, or `None` when it states none.
-
-    Every `<number>B`, `<number>M` and `<number>T` of the name that stands on its own counts, with
-    an `E` in front of it as well (`E4B`, an effective size) -- a count behind a letter, a digit or a
-    decimal point is the active parameters of a mixture (`A3B`, `A0.6B`) or a factor (`8x7B`),
-    never a total -- and the largest of them is the model's size. `2.4T` is 2400, `360M` is 0.36.
-    A name is registry-controlled text, so only a real, finite, positive number is a count:
-    `Nova-0B` and a number of 400 digits both say nothing (the fit is then `unknown` with
-    `parameter count unknown`, never a guess and never an exception out of the list).
-    """
-    stem = name[: -len(_GGUF_SUFFIX)] if name.upper().endswith(_GGUF_SUFFIX) else name
-    counts = []
-    for number, unit in _PARAMETERS_RE.findall(stem):
-        value = float(number)  # digits and at most one dot: `float` raises for nothing else
-        if unit in "Tt":
-            value *= _TRILLION_FACTOR
-        elif unit in "Mm":
-            value /= _MILLION_DIVISOR
-        if math.isfinite(value) and value > 0:
-            counts.append(value)
-    return max(counts) if counts else None
-
-
 def hit_reason(hit: SearchHit, filtered: bool, *, typed: str | None = None) -> str | None:
     """Why this repository is no model of the list, in plain words, or `None` when it is one.
 
@@ -312,13 +270,13 @@ def model_choices(
     configured_ollama: Mapping[str, str] | None = None,
     requests: int = 1,
 ) -> list[ModelChoice]:
-    """One `ModelChoice` per resolved base model of the search, best fit first.
+    """One `ModelChoice` per resolved base model of the search, in the order of the result's rule.
 
     Only what can be picked: with the owner filter on, a repository of an account that is neither
     a publisher nor a listed packager is no target of this run and no part of a model's `repos`
     either -- except the one repository `typed` names, which the filter never hides. The order is
-    the memory pool (graphics memory first), then the fit class, then the downloads, then the name,
-    with `no_fit` and `unknown` last -- the fit is what a reader is choosing by, and the
+    `_list_order`: the memory pool (graphics memory first), `legacy` last, the larger model first,
+    then the downloads, then the name, with `no_fit` and `unknown` last (ADR 0009) -- the
     downloads say what many people take (never a rank).
 
     `configured_ollama` is the `ollama_base:ollama_tag` pair the configuration holds per base
@@ -340,15 +298,17 @@ def model_choices(
 
 
 def _list_order(model: ModelChoice) -> tuple:
+    """The rule of the result (ADR 0009) as far as a list of models can apply it: the pool, `legacy`
+    last, the larger model first; then the downloads and the name. `no_fit` and `unknown` last."""
     fit = model.fit
     settled = fit.fit_class in _SETTLED
-    pool = _CLASS_ORDER.index(fit.fit_class) if settled else _MODE_ORDER.index(fit.mode)
-    release = _RELEASE_ORDER.index(str(model.age)) if str(model.age) in _RELEASE_ORDER else len(_RELEASE_ORDER)
+    pool = _CLASS_ORDER.index(fit.fit_class) if settled else (1 if fit.mode in _RAM_MODES else 0)
+    size = model.parameters_b
     return (
         settled,
         pool,
-        _CLASS_ORDER.index(fit.fit_class),
-        release,
+        model.legacy,
+        (0, -size) if size is not None else (1, 0.0),
         -(model.downloads or 0),
         model.name,
     )
@@ -363,9 +323,8 @@ def _model_choice(
     requests: int = 1,
 ) -> ModelChoice:
     publisher, _slash, name = base_model.partition("/")
-    parameters_b = next((hit.parameters_b for hit in repos if hit.parameters_b is not None), None)
-    if parameters_b is None:
-        parameters_b = parameters_from_name(name)
+    # The one rule the ranking of the result reads as well (`parameters.parameter_count`, ADR 0009).
+    parameters_b = parameter_count(next((hit.parameters_b for hit in repos if hit.parameters_b is not None), None), name)
     counts = [hit.downloads for hit in repos if hit.downloads is not None]
     # Age and basis from one and the same repository, so a row never shows one hit's age with
     # another hit's star.
@@ -424,13 +383,15 @@ def model_fit(parameters_b: float | None, checked: Checked, context: int, reques
     )
 
 
-def list_header() -> Choice:
-    """The column head of the list: the first line, and no entry anybody can pick.
+def list_header() -> str:
+    """The column head of the list, as text: the dialog draws it above the list, outside its window.
 
     The list had none, so a reader had to guess what a cell meant and `latest` was invisible
-    between two columns of numbers (test round, 2026-09-25).
+    between two columns of numbers (test round, 2026-09-25). Since AP9-UX D it is no row of the list:
+    as its first row it scrolled out of the window once the pointer moved down (Bild 083916). The
+    dialog indents it by the pointer and the marker (`dialog.HEAD_INDENT`, `POINTER_WIDTH`).
     """
-    return Choice("", _HEAD_INDENT + columns([list(COLUMN_NAMES)], _COLUMN_WIDTHS)[0], heading=True)
+    return columns([list(COLUMN_NAMES)], _COLUMN_WIDTHS)[0]
 
 
 def list_choices(models: Sequence[ModelChoice]) -> list[Choice]:
@@ -485,14 +446,13 @@ def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instr
     would be the 120 lines this list exists to replace. The question is asked once either way, so
     a file's `select` is read once.
 
-    The column head stands in front of the rows, as the first line of the list and no entry of it
-    (`list_header`); a file reads no list, so it is no part of the choices an answer is held
-    against (`dialog.selectable`) either way.
+    The column head is handed over as the list's `header` (`list_header`), outside the rows; a file
+    reads no list and ignores it.
     """
-    choices = [list_header(), *list_choices(models)]
+    choices = list_choices(models)
     if isinstance(asker, FileAsker):
         choices = [*choices, *_repo_choices(models)]
-    return asker.checkbox(SELECT_KEY, question, choices, instruction)
+    return asker.checkbox(SELECT_KEY, question, choices, instruction, header=list_header())
 
 
 def _repo_choices(models: Sequence[ModelChoice]) -> list[Choice]:

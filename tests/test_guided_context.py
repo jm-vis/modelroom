@@ -273,10 +273,34 @@ def test_a_profile_the_fit_may_not_compute_for_gets_no_column_either(tmp_path):
 # --- the cap ---------------------------------------------------------------------------------------
 
 
-def test_the_cap_is_the_smallest_window_the_base_models_declare():
+def test_one_small_window_no_longer_locks_a_level_for_all():
+    """A 32k model no longer grays out XL and XXL for a 128k one: the cap is the largest window."""
     models = [_base_model(131072, "a/Nova-8B"), _base_model(32768, "b/Small-8B")]
 
-    assert context_cap(models) == (32768, "b/Small-8B")
+    assert context_cap(models) == (131072, "every model of this run")
+    assert not [choice.value for choice in scale_choices(LEVELS, 32768, {}, context_cap(models)) if choice.disabled]
+    capped = scale_choices(LEVELS, 32768, {}, context_cap([_base_model(65536, "a/Nova-8B"), _base_model(32768, "b/Small-8B")]))
+    assert [(choice.value, choice.disabled) for choice in capped if choice.disabled] == [
+        ("XXL", "beyond the window of every model of this run")
+    ]
+
+
+def test_a_silent_window_locks_nothing():
+    assert context_cap([_base_model(4096, "b/Small-8B"), _base_model(None, "c/Silent-8B")]) is None
+
+
+def test_the_scale_and_the_ranking_agree_beyond_a_window():
+    """Beyond the window of its model a package is counted by neither: the fit itself says `unknown`."""
+    small = _base_model(8192)
+    by_repo = {PACKAGES[0].base_model_hf_repo: small}
+    wide = context_scenario(16384)
+
+    fits = [(package, compute_fit_v2(_profile(), package, small, wide, MACHINE)) for package in PACKAGES]
+    ranking = rank_packages(fits, [], wide)
+
+    assert count_fitting(_profile(), MACHINE, PACKAGES, by_repo, 16384) == len(ranking.ranked) == 0
+    assert {item.reason for item in ranking.not_covered} == {"context beyond the window of this model (8k)"}
+    assert count_fitting(_profile(), MACHINE, PACKAGES, by_repo, 8192) == _fitting_by_hand(8192)
 
 
 def test_a_base_model_without_a_window_caps_nothing():
