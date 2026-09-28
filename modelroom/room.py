@@ -88,8 +88,10 @@ def ollama_models_candidates(environ: Mapping[str, str], home: Path, system: str
     configured = environ.get("OLLAMA_MODELS")
     if configured:
         # `~` is the `home` passed in, never this process's own (Codex r1 m5): the decision stays pure.
+        # Every separator behind it goes, not just one: `~//models` would join a root path onto home.
         if configured == "~" or configured.startswith(("~/", "~\\")):
-            return [home / configured[2:]] if len(configured) > 1 else [home]
+            rest = configured[1:].lstrip("/\\")
+            return [home / rest] if rest else [home]
         return [Path(configured)]
     candidates = [home / ".ollama" / "models"]
     if system.startswith("linux"):

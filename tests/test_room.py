@@ -69,6 +69,18 @@ def test_a_tilde_in_ollama_models_is_the_home_that_was_passed_in(value):
     assert [path.as_posix() for path in candidates] == [("/srv/ada/models" if value != "~" else "/srv/ada")]
 
 
+@pytest.mark.parametrize("value", ["~//models", "~\\\\models", "~/\\models"])
+def test_repeated_separators_after_the_tilde_stay_under_home(value):
+    """AP9-GPU G11: `~//models` cut two characters and joined `/models`, a root path, onto home."""
+    candidates = ollama_models_candidates({"OLLAMA_MODELS": value}, Path("/srv/ada"), "linux")
+    assert [path.as_posix() for path in candidates] == ["/srv/ada/models"]
+
+
+def test_only_separators_after_the_tilde_is_home():
+    candidates = ollama_models_candidates({"OLLAMA_MODELS": "~//"}, Path("/srv/ada"), "linux")
+    assert [path.as_posix() for path in candidates] == ["/srv/ada"]
+
+
 def test_the_user_default_when_only_it_exists():
     room, measured = _room({"/srv/ada/.ollama/models", "/srv/ada", "/"})
     disk = free_disk(room)
