@@ -70,6 +70,10 @@ class RankedPackage:
     measurement_group: int
     measurement: MeasurementRecord | None
     measurement_note: str | None = None
+    # Why a measurement of exactly this package counts nowhere here for another reason than `requests`:
+    # another context, not comparable, not valid (`other_measurement_note`, Codex F3). The package stays
+    # in sight; the number is not shown as comparable.
+    measured_other: str | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +174,29 @@ def measurement_note(package: Package, measurements: list[MeasurementRecord], sc
     return f"measured with {measured} request{'s' if measured != 1 else ''}, ranking assumes {scenario.requests}"
 
 
+def _tokens(context: int) -> str:
+    return f"{context // 1024}k" if context % 1024 == 0 else f"{context} tokens"
+
+
+def other_measurement_note(package: Package, measurements: list[MeasurementRecord], scenario: Scenario) -> str | None:
+    """Why the newest measurement of `package` counts nowhere here, where neither group 0 nor the
+    `requests` note covers it: `None` when there is no measurement of this content at all."""
+    if group_zero_measurement(package, measurements, scenario) is not None:
+        return None
+    if measurement_note(package, measurements, scenario) is not None:
+        return None
+    mine = [record for record in measurements if _matches(record, package)]
+    if not mine:
+        return None
+    newest = max(mine, key=lambda r: (r.measured_at, r.measurement_id))
+    if newest.protocol != "v1" or newest.validity != "valid":
+        return f"measured, not valid ({newest.validity_reason or newest.validity})"
+    if not newest.comparable:
+        return f"measured, not comparable ({newest.comparable_reason})"
+    measured, ranked = newest.scenario.context_requested, scenario.context_requested
+    return f"measured at context {_tokens(measured)}, this ranking's is {_tokens(ranked)}"
+
+
 def _compression_key(quantization: str | None, weights: int) -> tuple:
     """Least compression first; an unknown quantization behind every known one; 16/32 bit one step."""
     if quantization not in QUANT_ORDER:
@@ -226,7 +253,13 @@ def rank_packages(
     rankable.sort(key=lambda item: item[0])
     ranking.ranked = [
         RankedPackage(
-            rank, package, fit, 0 if measured is not None else 1, measured, measurement_note(package, measurements, scenario)
+            rank,
+            package,
+            fit,
+            0 if measured is not None else 1,
+            measured,
+            measurement_note(package, measurements, scenario),
+            other_measurement_note(package, measurements, scenario),
         )
         for rank, (_, package, fit, measured) in enumerate(rankable, start=1)
     ]
@@ -247,8 +280,9 @@ def best_per_model(ranking: Ranking) -> list[RankedPackage]:
 
 
 def _was_measured(ranked: RankedPackage) -> bool:
-    """A counting measurement (group 0), or one that fails on `requests` alone."""
-    return ranked.measurement is not None or ranked.measurement_note is not None
+    """Any measurement of exactly this package on this machine: counting (group 0), failing on
+    `requests` alone, or counting nowhere here for another reason (Codex F3)."""
+    return ranked.measurement is not None or ranked.measurement_note is not None or ranked.measured_other is not None
 
 
 def _places(ranking: Ranking, per_model: bool) -> dict[int, tuple[int, int]]:

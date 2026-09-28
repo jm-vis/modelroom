@@ -3047,6 +3047,62 @@ def test_the_result_names_only_this_runs_machines_and_models(tmp_path: Path):
     assert [block["status"] for block in payload["machines"]] == ["ranked"]
 
 
+def test_step_four_measures_this_machine_only_where_the_run_chose_it(tmp_path: Path):
+    """Codex F2: a run that marks only a server profile of the folder offers no measurement on this
+    machine -- its measurement would land in a profile the result does not show."""
+    from modelroom.importer import import_profile
+
+    assert _run(tmp_path)[0] == 0  # this machine measured and bound
+    import_profile(_config_file(tmp_path), export_of("four_l4_server.json", tmp_path / "exports"), RUN1)
+    answers = {
+        **_answers_without_folder(LOAD_TEST_ANSWERS),
+        "machines": [f"profile:{FOUR_L4_ID}"],
+    }
+    asker = FileAsker(answers)
+    lines: list[str] = []
+    code = run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=loadtest_daemon(),
+        servers=offline_servers(),
+        now=RUN2,
+        out=lines.append,
+    )
+
+    assert code == 0
+    assert "load_test" not in asker.asked
+    assert "no load test: this machine is not part of this run's result" in [line.strip() for line in lines]
+    assert not (_results(tmp_path) / "state" / "measurements").exists()
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [block["profile"]["profile_id"] for block in payload["machines"]] == [FOUR_L4_ID]
+
+
+def test_a_run_that_chose_no_model_shows_no_model_of_the_folder(tmp_path: Path):
+    """Codex F1: a second run that marks no model shows none of the models the folder holds -- an
+    empty result that says why; `modelroom render` of the same folder still shows all of them."""
+    from modelroom.cli import render_with_config
+
+    code, _lines = _example_run(tmp_path, FULL_ANSWERS)
+    assert code == 0
+    snapshot = json.loads((_results(tmp_path) / "state" / "modelroom.json").read_text(encoding="utf-8"))
+    assert {package["base_model_hf_repo"] for package in snapshot["packages"]} >= {"Qwen/Qwen3.5-9B", DEEPSEEK_BASE}
+
+    code, lines = _run(tmp_path, {**_answers_without_folder(FULL_ANSWERS), "select": []}, now=RUN2,
+                       transport=build_transport({**packager_probes(load_config(_config_file(tmp_path))), **guided_transport_mapping()}))
+
+    assert code == 0
+    assert "this run chose no model, so the result ranks none" in [line.strip() for line in lines]
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [row for block in payload["machines"] for row in block["ranked"] + block["no_fit"] + block["not_covered"]] == []
+    assert (payload["base_model_count"], payload["areas"]) == (0, [])
+    assert render_with_config(load_config(_config_file(tmp_path)), now=RUN3) == 0
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert payload["base_model_count"] == 2
+
+
 def test_an_empty_card_names_only_this_runs_machines(tmp_path: Path):
     """No family, so no fetch and nothing to rank: the card of step 5 still names this run's machine alone."""
     data = {**example_without_eurollm(), "families": []}

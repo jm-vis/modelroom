@@ -3043,8 +3043,15 @@ whole key (`ranking.best_per_model`; the pool first, so a `Q4_K_M` on the card b
 system memory of the same model), the rows in the order of that key. `render.build_render_document`
 decides the case from the snapshot, never from the selection, so `modelroom render` decides alike.
 Behind the rule's rows every **measured** package of this machine the rule leaves out is appended, in
-the order of the key: a counting measurement (group 0) or one that fails on `requests` alone. No row
-of the rule moves for a measurement. `ShownRow(ranked, why, place, of)`: `why` is `rule` or
+the order of the key: any measurement of exactly this package content on this machine -- a counting
+one (group 0), one that fails on `requests` alone, or one that counts nowhere here for another
+reason (another context, not comparable, not valid; `RankedPackage.measured_other`, Codex F3). Such a
+last row stays in group 1 with no speed, and its note says why the number does not count (code
+`measured_not_comparable`: `measured at context 8k, this ranking's is 16k.`, `measured, not comparable
+(<reason>).`, `measured, not valid (<reason>).`); the `speed` line under the table names it the same
+way instead of the advice to measure. A measured package the fit sets aside (`no_fit`, `not
+covered`) is no ranked package and gets no row (ADR 0009, "Limits"). No row of the rule moves for a
+measurement. `ShownRow(ranked, why, place, of)`: `why` is `rule` or
 `measured`; `place` of `of` is the place among all ranked packages (case 1) or among the packages of
 that model (case 2).
 
@@ -3060,8 +3067,8 @@ follows `ranked[0]`, never an appended row.
 
 The key under a table (`ranking_words.key_pieces`) carries the fit words, `best: the least
 compression of the same model that fits` and `modelroom rates no model family against another`, and
-in case 2 `one row per model, its least compression that fits` and `a run with one model shows all
-its packages` -- one wording for the guided mode and `modelroom render`. The `shown` line names the
+in case 2 `one row per model, its least compression that fits` and `a run with one model shows its
+first 10 packages, then the measured ones` -- one wording for the guided mode and `modelroom render`. The `shown` line names the
 appended rows (`#3 is shown for its measurement, not by the rule`, `#3–4 are shown for their
 measurements, not by the rule`); the Markdown file says `Showing 3 rows of 24 ranked packages: one
 row per model, then 1 measured.` (`ranking_words.showing_line`).
@@ -3077,9 +3084,11 @@ reader sees it in the row itself ("Fit from size").
 entered, or a profile of the folder marked as it is; with nothing marked, the machine the pointer
 binds this folder to -- and the base models step 2 chose, with the release (`SearchHit.age`) and the
 parameter count the list showed. `selection.narrow(config, snapshot, selection)` builds a filtered
-`Configuration` and `Snapshot` through their constructors; an empty `machines` or `models` filters
-nothing (a run that chose no model shows the models of the folder and says so: `this run chose no
-model; the result shows the models this folder holds`). `selection.model_facts(selection)` hands the
+`Configuration` and `Snapshot` through their constructors; an empty `machines` or `models` is an
+empty choice, not "no filter" (Codex F1): a run that chose no model ranks none of the folder's models
+and says so -- `this run chose no model, so the result ranks none` -- and writes that empty result;
+only `modelroom render`, which passes no selection, shows the whole folder.
+`selection.model_facts(selection)` hands the
 rule `ModelFacts(parameters, release == "legacy")`. `render_with_config(..., selection=None)` narrows
 first, then ranks with those facts; the card, the tables and `docs/models.md/json` name only the
 selection. Steps 3 and 4, the balance of step 2 and the card of an empty step 5 read the same
@@ -5100,7 +5109,7 @@ back to 8192 and putting the run's own measurement into group 1.
 **Step 5, the render and the card.** `render_with_config` with the chosen scenario and the selection
 of this run (`selection=run.selection`, AP9-UX B: the card, the tables and `docs/models.md/json` name
 only the machines and the models this run chose; with no model chosen the step says `this run chose
-no model; the result shows the models this folder holds`), which writes both
+no model, so the result ranks none`), which writes both
 views -- so a measurement the load test just wrote is in the ranking of that same run -- and hands
 the document itself back (`on_document`). From it the step draws **the card of the whole run**
 (`result_card.result_card`, re-exported by `views`, the `label value note` rows of the start screen, decided 2026-09-24), then one
@@ -5218,7 +5227,11 @@ takeover rule (`resolve_profile_target`, "Profile binding") says `bound` for it 
 in the folder and its `os_fingerprint` agrees with this machine's. Never into
 `[machines.<host>].profile`: a configuration is shared, and a stale or foreign entry there would give
 this machine's speed to another device. Without a binding, without that agreement, or without a
-snapshot to take packages from, the daemon says so in one line and offers nothing. Otherwise its
+snapshot to take packages from, the daemon says so in one line and offers nothing. **Nor where this
+machine is not part of the run's result** (Codex F2): where no machine this run chose names the
+profile this machine is bound to, its measurement would land in a profile the result does not show,
+so the step says `no load test: this machine is not part of this run's result` and offers no Ollama
+row. Otherwise its
 inventory is read and matched against the active packages of **this run's models**
 (`selection.narrow_snapshot`, AP9-UX B). What was left out is named first, **one note per reason**
 with the number of installed models behind it and **no names** (`12 installed models -- <reason>`);
@@ -5244,8 +5257,8 @@ reason that holds, in this order, why its number will not count (`<name>` is the
 3. no package of this folder: `the number counts, no fit: no package of this folder comes from
    <root>`.
 
-The number **counts** where the served `root` is a base model of this run (the ones step 2 chose,
-else the ones the folder holds) **and** the server runs this run's context; vLLM is never ranked. A
+The number **counts** where the served `root` is a base model of this run (the ones step 2 chose;
+none where it chose none, Codex F1) **and** the server runs this run's context; vLLM is never ranked. A
 line wider than 100 columns breaks before the name, indented like a note; no name is cut. A
 measurement is `measured vLLM: <t> tok/s total (<a>–<b>), context 4k` and `per request: <r> tok/s
 (<c>–<e>)`; an invalid or not comparable one is `vLLM: <reason>` in their place, a capped one says `64

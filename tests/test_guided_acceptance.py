@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from modelroom.catalog import Catalog, load_catalog
-from modelroom.config import Configuration, MachineConfig, load_config
+from modelroom.config import MachineConfig, load_config
 from modelroom.contracts import Package
 from modelroom.dialog import FileAsker
 from modelroom.fit import compute_fit_v2
@@ -31,8 +31,6 @@ from modelroom.guided import run_guided
 from modelroom.measurements import Scenario
 from modelroom.profile import HardwareProfile
 from modelroom.quantization import QUANT_ORDER
-from modelroom.ranking import ModelFacts
-from modelroom.render import MachineProfile, build_render_document
 from modelroom.render_cmd import render_with_config
 from modelroom.state import read_snapshot
 
@@ -100,9 +98,12 @@ AGES = {
 # --- one run of the real path, and its preconditions ----------------------------------------------------
 
 
-def _run(tmp_path: Path, answers: dict, catalog: Catalog, *, daemon=None, extra: dict | None = None) -> tuple[int, list[str], Path]:
+def _run(
+    tmp_path: Path, answers: dict, catalog: Catalog, *, daemon=None, extra: dict | None = None, now=RUN1, fresh: bool = True
+) -> tuple[int, list[str], Path]:
+    """One guided run; `fresh` writes the example configuration first, a later run keeps the folder."""
     here = tmp_path / "results"
-    config = load_config(write_example_without_eurollm(here))
+    config = load_config(write_example_without_eurollm(here) if fresh else here / "modelroom.toml")
     (tmp_path / "home").mkdir(exist_ok=True)
     mapping = {**packager_probes(config), **guided_transport_mapping(), **(extra or {})}
     lines: list[str] = []
@@ -115,7 +116,7 @@ def _run(tmp_path: Path, answers: dict, catalog: Catalog, *, daemon=None, extra:
         probes=windows_probes(ids=[THIS_ID, THIS_ID]),
         daemon=daemon if daemon is not None else offline_daemon(),
         servers=offline_servers(),
-        now=RUN1,
+        now=now,
         out=lines.append,
         catalog=catalog,
         colored=False,
@@ -207,7 +208,7 @@ def test_a_guided_run_on_four_l4_ranks_the_least_compression_of_the_chosen_model
     payload = _payload(here)
     block = _block(payload, FOUR_L4_ID)
     _first_is_the_oracle(here, block, QWEN)
-    assert {row["base_model_hf_repo"] for row in block["ranked"]} == {QWEN}  # one model: all its packages
+    assert {row["base_model_hf_repo"] for row in block["ranked"]} == {QWEN}  # one model: its first ten, no row per model
     text = json.dumps(payload) + (here / "docs" / "models.md").read_text(encoding="utf-8")
     assert "DeepSeek" not in text
     assert "inference-server" not in [block["machine"] for block in payload["machines"]]
@@ -331,30 +332,21 @@ def test_the_measured_package_of_this_run_stays_in_the_result(tmp_path: Path):
 
 # --- A4 -----------------------------------------------------------------------------------------------------
 
-# Fixed facts of the two models (the rule's own input), with and without Qwen3.5-9B `legacy`.
-FACTS = {
-    "not legacy": {QWEN: ModelFacts(9.65, False), DEEPSEEK: ModelFacts(8.19, False)},
-    "qwen legacy": {QWEN: ModelFacts(9.65, True), DEEPSEEK: ModelFacts(8.19, False)},
-}
 # The expected first row per machine: the model and its pool are fixed, so a broken rule turns red and
 # not only a wrong oracle; the compression is the oracle's, on 2 x A100 the 16-bit step as well.
-EXPECTED = {
-    "laptop": {"not legacy": QWEN, "qwen legacy": DEEPSEEK},
-    "two-a100": {"not legacy": QWEN, "qwen legacy": DEEPSEEK},
-    "two-l4": {"not legacy": QWEN, "qwen legacy": DEEPSEEK},
-    "four-l4": {"not legacy": QWEN, "qwen legacy": DEEPSEEK},
-}
-
-
-def _server(name: str) -> HardwareProfile:
-    return HardwareProfile.model_validate_json((FIXTURES / "profiles_v4" / name).read_text(encoding="utf-8"))
+EXPECTED = {"not legacy": QWEN, "qwen legacy": DEEPSEEK}
+CATALOGS = {"not legacy": CATALOG_NOT_LEGACY, "qwen legacy": CATALOG_QWEN_LEGACY}
+RUNS = (RUN1, RUN2, datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc), datetime(2026, 9, 28, 11, 0, 0, tzinfo=timezone.utc))
+SERVERS = (("two_a100_server.json", TWO_A100_ID), ("two_l4_server.json", TWO_L4_ID), ("four_l4_server.json", FOUR_L4_ID))
 
 
 @pytest.mark.parametrize("ages", ["not legacy", "qwen legacy"])
 def test_one_rule_for_every_hardware(tmp_path: Path, ages):
-    answers = {
+    """Over the guided path (Codex F4): the laptop measured, the three server profiles each brought in
+    by a guided import, then one run that marks all four and chooses both models with the catalog of
+    the variant; the document that run writes is checked, block by block."""
+    base = {
         "results": "here",
-        "machines": ["this-machine"],
         "machine_class": "laptop",
         "search": "qwen",
         "filter_owners": True,
@@ -363,31 +355,29 @@ def test_one_rule_for_every_hardware(tmp_path: Path, ages):
         "context": "8192",
         "load_test": False,
     }
-    code, _lines, here = _run(tmp_path, answers, CATALOG_NOT_LEGACY)
-    _preconditions(code, here, "not legacy")
-    config = load_config(here / "modelroom.toml")
-    laptop = HardwareProfile.model_validate_json((config.paths.hardware_dir / f"{THIS_ID}.json").read_text(encoding="utf-8"))
-    profiles = {
-        "laptop": laptop,
-        "two-a100": _server("two_a100_server.json"),
-        "two-l4": _server("two_l4_server.json"),
-        "four-l4": _server("four_l4_server.json"),
-    }
-    assert [profiles[name].profile_id for name in ("two-a100", "two-l4", "four-l4")] == [TWO_A100_ID, TWO_L4_ID, FOUR_L4_ID]
-    # The reserves written out: 8 GiB of RAM and 1 GiB per card, `[defaults]` of the example (Review r3-N5).
-    machines = {name: {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False, "profile": p.profile_id} for name, p in profiles.items()}
-    four = Configuration.model_validate({**config.model_dump(), "machines": machines})
-    found = {name: MachineProfile("ranked", profile.display_name, profile, None) for name, profile in profiles.items()}
+    catalog = CATALOGS[ages]
+    exports = tmp_path / "exports"
+    first = {**base, "machines": ["this-machine", "import"], "import_file": str(export_of(SERVERS[0][0], exports))}
+    code, _lines, here = _run(tmp_path, first, catalog, now=RUNS[0])
+    assert code == 0
+    for (name, _profile_id), now in zip(SERVERS[1:], RUNS[1:3]):
+        answers = {**base, "machines": ["import"], "import_file": str(export_of(name, exports))}
+        assert _run(tmp_path, answers, catalog, now=now, fresh=False)[0] == 0
+    picked = [f"profile:{profile_id}" for profile_id in (THIS_ID, *(profile_id for _name, profile_id in SERVERS))]
+    code, _lines, here = _run(tmp_path, {**base, "machines": picked}, catalog, now=RUNS[3], fresh=False)
 
-    document = build_render_document(
-        four, read_snapshot(config), found, {}, SCENARIO, RUN2, models=FACTS[ages]
-    )
-
-    for block in document.machines:
-        first = block.ranked[0]
-        model = EXPECTED[block.machine][ages]
-        assert (first.base_model_hf_repo, first.fit.mode in _GRAPHICS) == (model, True), block.machine
-        expected = _oracle(here, model, block.profile, 8.0, 1.0)
-        assert first.quantization == expected.quantization, block.machine
-        if block.machine == "two-a100" and model == QWEN:
-            assert first.quantization in _FULL
+    _preconditions(code, here, ages)
+    payload = _payload(here)
+    blocks = {block["profile"]["profile_id"]: block for block in payload["machines"]}
+    assert sorted(blocks) == sorted([THIS_ID, TWO_A100_ID, TWO_L4_ID, FOUR_L4_ID])
+    assert "inference-server" not in [block["machine"] for block in payload["machines"]]
+    for profile_id, block in blocks.items():
+        # The reserves as written: 8 GiB of RAM and 1 GiB per card, `[defaults]` of the example (Review r3-N5).
+        assert (block["reserve_ram_gib"], block["reserve_vram_gib"]) == (8.0, 1.0), profile_id
+        first_row = block["ranked"][0]
+        model = EXPECTED[ages]
+        assert (first_row["base_model_hf_repo"], first_row["fit"]["mode"] in _GRAPHICS) == (model, True), profile_id
+        profile = HardwareProfile.model_validate(block["profile"])
+        assert first_row["quantization"] == _oracle(here, model, profile, 8.0, 1.0).quantization, profile_id
+        if profile_id == TWO_A100_ID and model == QWEN:
+            assert first_row["quantization"] in _FULL

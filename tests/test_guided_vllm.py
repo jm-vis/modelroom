@@ -66,7 +66,9 @@ ANSWERS = {
     "machines": [],
     "search": "qwen",
     "filter_owners": True,
-    "select": [],
+    # The run chooses the served model (Codex F1: a run that chooses none ranks none, and a vLLM
+    # number then counts for no model of the run). It is choosable through `_choosable_qwen25`.
+    "select": [QWEN25_REPO],
     "users": "20 requests",
     "context": "4096",
     # One question and one list for every server since AP9-UX E; `load_test_vllm` is gone.
@@ -88,6 +90,31 @@ def _folder(tmp_path: Path, bound: bool = True) -> Path:
     return results
 
 
+def _choosable_qwen25() -> dict:
+    """The `Qwen` account page of the search for `qwen`, with one more entry: `Qwen/Qwen2.5-0.5B-Instruct-GGUF`.
+
+    SYNTHETIC, built here from the recorded page of the same account: a quantized repository of the
+    served model, so step 2 can offer that model and a run can choose it. The fetch then asks for the
+    repository and gets the recorded "does not exist" (`qwen25_transport_mapping`), so no package of it
+    enters the snapshot -- the served `tensor` package stays the only one.
+    """
+    from modelroom.search_pages import account_downloads_url, account_search_url
+
+    page = json.loads((FIXTURES / "hf_search_qwen_publisher.json").read_text(encoding="utf-8"))
+    page.append(
+        {
+            "_id": "0000000000000000000000aa",
+            "id": f"{QWEN25_REPO}-GGUF",
+            "cardData": {"license": "apache-2.0", "base_model": QWEN25_REPO, "base_model_relation": "quantized"},
+            "tags": ["gguf", f"base_model:{QWEN25_REPO}", f"base_model:quantized:{QWEN25_REPO}", "license:apache-2.0"],
+            "createdAt": "2024-09-19T00:00:00.000Z",
+            "downloads": 1000,
+        }
+    )
+    body = Response(status=200, headers={}, body=json.dumps(page).encode("utf-8"))
+    return {("GET", account_search_url("qwen", "Qwen")): body, ("GET", account_downloads_url("qwen", "Qwen")): body}
+
+
 def _run(tmp_path: Path, answers: dict | None = None, *, servers=None, bound: bool = True) -> tuple[int, list[str]]:
     results = _folder(tmp_path, bound)
     lines: list[str] = []
@@ -95,7 +122,7 @@ def _run(tmp_path: Path, answers: dict | None = None, *, servers=None, bound: bo
         FileAsker(ANSWERS if answers is None else answers),
         here=results,
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
-        transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping()}),
+        transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping(), **_choosable_qwen25()}),
         probes=windows_probes(host="workstation"),
         daemon=offline_daemon(),
         servers=servers if servers is not None else vllm_servers(),
@@ -281,7 +308,7 @@ def test_a_folder_with_nothing_to_rank_shows_the_row_without_a_speed(tmp_path: P
     lines: list[str] = []
 
     run_guided(
-        FileAsker(ANSWERS),
+        FileAsker({**ANSWERS, "select": []}),
         here=results,
         pointer_path=tmp_path / "empty" / "home" / ".modelroom" / "guided.json",
         transport=build_transport(guided_transport_mapping()),
@@ -554,7 +581,7 @@ def test_the_server_row_of_the_card_says_whether_the_number_counts(tmp_path: Pat
             FileAsker(answers),
             here=results,
             pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
-            transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping()}),
+            transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping(), **_choosable_qwen25()}),
             probes=windows_probes(host="workstation"),
             daemon=offline_daemon(),
             servers=vllm_servers(),

@@ -43,11 +43,16 @@ family is rated against another.**
    rows in both; `rank` is the number of the row shown; `ranked_total` is every ranked package. The
    row note keeps its form and gains one sentence with the fact it names
    (`ranking.best_per_model`, `ranking.shown_for_measurement`). Document schema 3 is unchanged.
+   "Measured" is any measurement of exactly this package on this machine: one that counts, one that
+   fails on `requests` alone, or one that counts nowhere here (another context, not comparable, not
+   valid) -- the last kind stays without a speed, and its row says why.
 4. **The result covers the choice of the run** (`selection.RunSelection`, in memory only): the
    machines step 1 chose -- measured, imported, entered, or a profile of the folder marked as it is --
    and the models step 2 chose, with the release and the size the list showed. Steps 3 and 4, the
-   balance of step 2, the card and `docs/models.md/json` read the same selection. Nothing of it is
-   written; a later `modelroom render` shows the whole folder, one row per model.
+   balance of step 2, the card and `docs/models.md/json` read the same selection. An empty choice is
+   a choice: a run that chose no model ranks none of the folder's, and says so. Step 4 measures this
+   machine only where the run chose it. Nothing of it is written; a later `modelroom render` shows the
+   whole folder, one row per model.
 5. **Two inputs for the parameter count, one function** (`parameters.parameter_count`): the list of
    step 2 takes `SearchHit.parameters_b`, else the name, and hands that very number to the result;
    `modelroom render` takes `BaseModelSpec.parameters_b`, else the name. Two models of one size by
@@ -98,5 +103,5 @@ family is rated against another.**
   build where an `IQ1` stood before.
 - Where step 2 names Qwen3.5-9B `legacy*` -- the shipped catalog does -- a smaller model that is not
   overtaken stands before it in a run of both.
-- A run that chose one model shows all its packages; a `render` of a folder of several shows one row
-  per model.
+- A run that chose one model shows its first ten packages and its measured ones; a `render` of a
+  folder of several shows one row per model.

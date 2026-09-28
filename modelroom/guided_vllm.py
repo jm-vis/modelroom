@@ -145,10 +145,8 @@ def _name(repo: str) -> str:
 
 
 def run_models(run: "GuidedRun", snapshot) -> tuple[str, ...]:
-    """The base models of this run: the ones step 2 chose, else the ones the folder holds (B)."""
-    if run.selection.models:
-        return tuple(run.selection.models)
-    return tuple(spec.hf_repo for spec in snapshot.base_models) if snapshot is not None else ()
+    """The base models of this run: the ones step 2 chose -- none where it chose none (B, Codex F1)."""
+    return tuple(run.selection.models)
 
 
 def not_counting_reason(served: ServedModel, models: tuple[str, ...], context: int, matched: Package | str) -> str | None:

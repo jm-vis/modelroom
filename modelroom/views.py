@@ -471,6 +471,10 @@ def _speed_pieces(block: MachineRanking, dash: str) -> list[str]:
     if not block.ranked:
         return []
     pieces = [f"#{entry.rank} measured {entry.speed_tps:.1f} tok/s" for entry in block.ranked if entry.speed_tps is not None]
+    # A measurement that counts nowhere here says why, and is never told to measure (Codex F3).
+    pieces += [
+        f"#{entry.rank} {entry.note.text.split('. ')[0].rstrip('.')}" for entry in block.ranked if entry.note.code == "measured_not_comparable"
+    ]
     unused = unused_measurements(block, dash)
     return pieces + ([unused] if unused else []) or [_NO_SPEED_YET, never_measured(block) or MEASURE_HINT]
 

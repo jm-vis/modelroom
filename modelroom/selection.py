@@ -20,16 +20,18 @@ from .config import Configuration
 from .contracts import Snapshot
 from .ranking import ModelFacts
 
-# The note of a run that chose no model (70 characters).
-NO_MODEL_CHOSEN = "this run chose no model; the result shows the models this folder holds"
+# The note of a run that chose no model (Codex F1): an empty choice is a choice, and the result of
+# the run shows none of the folder's models; `modelroom render` without a run still shows them all.
+NO_MODEL_CHOSEN = "this run chose no model, so the result ranks none"
 
 
 @dataclass(frozen=True)
 class RunSelection:
     """The `[machines.<name>]` and the base models of one run, with the release and size step 2 showed.
 
-    An empty `machines` or `models` is no filter: the result then shows what the folder holds.
-    `parameters` carries the very number the list of step 2 ordered by (`parameters.parameter_count`),
+    An empty `machines` or `models` is an empty choice, not "no filter": the result of the run then
+    names no machine or ranks no model (Codex F1). Only a render without a selection (`modelroom
+    render`, `selection=None`) shows the whole folder. `parameters` carries the very number the list of step 2 ordered by (`parameters.parameter_count`),
     so the list and the result never order differently; `release` is `SearchHit.age` of that run.
     """
 
@@ -47,22 +49,18 @@ def narrow(config: Configuration, snapshot: Snapshot, selection: RunSelection) -
 def narrow_config(config: Configuration, selection: RunSelection) -> Configuration:
     """`config` with only the chosen machines and the families' chosen base models (validated anew)."""
     data = config.model_dump()
-    if selection.machines:
-        data["machines"] = {name: machine for name, machine in data["machines"].items() if name in selection.machines}
-    if selection.models:
-        families = []
-        for family in data["families"]:
-            kept = [spec for spec in family["base_models"] if spec["hf_repo"] in selection.models]
-            if kept:
-                families.append({**family, "base_models": kept})
-        data["families"] = families
+    data["machines"] = {name: machine for name, machine in data["machines"].items() if name in selection.machines}
+    families = []
+    for family in data["families"]:
+        kept = [spec for spec in family["base_models"] if spec["hf_repo"] in selection.models]
+        if kept:
+            families.append({**family, "base_models": kept})
+    data["families"] = families
     return Configuration.model_validate(data)
 
 
 def narrow_snapshot(snapshot: Snapshot, selection: RunSelection) -> Snapshot:
     """`snapshot` with only the chosen base models, their packages and their areas (validated anew)."""
-    if not selection.models:
-        return snapshot
     chosen = set(selection.models)
     data = snapshot.model_dump()
     data["base_models"] = [spec for spec in data["base_models"] if spec["hf_repo"] in chosen]

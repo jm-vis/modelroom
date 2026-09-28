@@ -173,7 +173,10 @@ All notable changes to this project are documented in this file. The format foll
   line and the pull, is a larger download now.
 - **The result covers the choice of the run** (`modelroom/selection.py`; CONTRACTS.md, "Run
   selection"). The card, the tables and `docs/models.md/json` name only the machines step 1 chose and
-  the models step 2 chose; steps 3 and 4 and the balance of step 2 count the same. Nothing of the
+  the models step 2 chose; steps 3 and 4 and the balance of step 2 count the same. A run that chose
+  no model ranks none of the folder's and says so; step 4 measures this machine only where the run
+  chose it. A package measured here at another context, or not comparable, stays visible without a
+  comparable speed, and its row says why. Nothing of the
   selection is written: `modelroom.toml` keeps every family and machine, and a later `modelroom
   render` shows the whole folder.
 - **Every profile of the folder can be picked** (`modelroom/guided_machines.py`): one row per profile,

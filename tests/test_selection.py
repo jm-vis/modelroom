@@ -82,11 +82,14 @@ def test_the_configuration_keeps_every_family_and_machine():
     assert len(snapshot.packages) == 2
 
 
-def test_a_run_that_chose_no_model_keeps_every_model_of_the_folder():
-    config, snapshot = narrow(_config(), _snapshot(), RunSelection(("laptop",), (), {}, {}))
+def test_a_run_that_chose_no_model_shows_none_of_the_folder():
+    """An explicitly empty choice is a choice (Codex F1): no model and no machine of the folder is shown.
+    Only `modelroom render` without a selection shows the whole folder."""
+    config, snapshot = narrow(_config(), _snapshot(), RunSelection((), (), {}, {}))
 
-    assert [family.name for family in config.families] == ["nova", "vega"]
-    assert len(snapshot.packages) == 2
+    assert (config.families, config.machines) == ([], {})
+    assert (snapshot.base_models, snapshot.packages, snapshot.areas) == ([], [], [])
+    assert snapshot.run_at == NOW
 
 
 def test_model_facts_carry_the_lists_numbers():

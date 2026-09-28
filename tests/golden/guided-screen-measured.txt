@@ -69,7 +69,7 @@
            best: the least compression of the same model that fits
            modelroom rates no model family against another
            one row per model, its least compression that fits
-           a run with one model shows all its packages
+           a run with one model shows its first 10 packages, then the measured ones
            Speed is measured, see its column.
 
  install   #1  ollama pull hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M

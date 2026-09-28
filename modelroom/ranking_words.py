@@ -8,14 +8,15 @@ view and the Markdown file both take their words from here (ADR 0009), so `views
 
 from __future__ import annotations
 
-from .ranking import BEST_FACT, SHOWN_FACT
+from .ranking import BEST_FACT, SHOWN_FACT, TOP_LIMIT
 from .screen import FIT_HINT, ranks_text
 
 # The two pieces of the key where the result shows one row per model -- one wording for the guided
-# mode and `modelroom render` alike (Review r1-N5).
+# mode and `modelroom render` alike (Review r1-N5). One model shows its first ten, not all of them
+# (Codex F5): "all its packages" promised rows the table does not have.
 PER_MODEL_PIECES = (
     "one row per model, its least compression that fits",
-    "a run with one model shows all its packages",
+    f"a run with one model shows its first {TOP_LIMIT} packages, then the measured ones",
 )
 
 

@@ -363,6 +363,13 @@ def _row_note(ranked: RankedPackage, shared_memory: bool, cards: int = 1) -> Not
         if ranked.fit.basis == "size":
             text, facts = f"{text}.{_FROM_SIZE_SENTENCE}", [*facts, "fit.basis"]
         return Note(code="measured_with_one_request", subject="package", origin="computed", text=_clip(text), facts=facts)
+    if ranked.measured_other is not None:
+        # A measurement of this package that counts nowhere here (another context, not comparable, not
+        # valid): the row says why, and no speed stands in it (Codex F3, ADR 0009).
+        text, facts = f"{ranked.measured_other}.", ["measurement.scenario.context_requested", "measurement_group"]
+        if ranked.fit.basis == "size":
+            text, facts = f"{text}{_FROM_SIZE_SENTENCE}", [*facts, "fit.basis"]
+        return Note(code="measured_not_comparable", subject="package", origin="computed", text=_clip(text), facts=facts)
     return _computed_note(ranked.fit, shared_memory, cards)
 
 

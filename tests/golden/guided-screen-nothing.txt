@@ -36,7 +36,7 @@
  – Measurement     none in this run
 
  ── Step 5 of 5  Results ────────────────────────────────────────────────
-   this run chose no model; the result shows the models this folder holds
+   this run chose no model, so the result ranks none
    nothing to rank: no package in this folder yet
 
  folder    <results>

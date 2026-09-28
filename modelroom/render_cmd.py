@@ -184,7 +184,7 @@ def _render_locked(
     if selection is not None:
         # First the selection, then the rule's facts from it (AP9-UX B, ADR 0009).
         shown, snapshot = narrow(config, snapshot, selection)
-        models = model_facts(selection) if selection.models else None
+        models = model_facts(selection)
     scan = scan_profiles(config.paths.hardware_dir)
     profiles = _machine_profiles(shown, scan)
     measurements, notes = _measurements_of(config, profiles)

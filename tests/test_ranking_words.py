@@ -35,6 +35,14 @@ def test_one_row_per_model_is_said_in_the_key_and_one_model_says_nothing_more():
     assert showing_line(one_model) == "Showing 3 of 24 ranked packages."
 
 
+def test_the_key_promises_no_more_rows_than_one_model_shows():
+    """One model shows its first ten packages and the measured ones, not all (Codex F5)."""
+    from modelroom.ranking import TOP_LIMIT
+
+    assert f"a run with one model shows its first {TOP_LIMIT} packages, then the measured ones" in PER_MODEL_PIECES
+    assert not any("all its packages" in piece for piece in PER_MODEL_PIECES)
+
+
 def test_the_example_document_carries_the_rule_word_for_word():
     """The example of the render document and the contract quote the rule itself (Diff-Review N1)."""
     from pathlib import Path

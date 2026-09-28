@@ -371,6 +371,30 @@ def test_a_measured_package_outside_the_rule_is_appended_with_its_place():
     )
 
 
+def test_a_package_measured_at_another_context_stays_visible_without_a_comparable_speed():
+    """Codex F3: a measurement of the package that does not count -- here another context -- still
+    keeps the package in sight; group 1, no speed, and the row says why the number does not count."""
+    from modelroom.render import _ranked_entries
+
+    packages = _fifteen_packages()
+    ranking = rank_packages([(p, _fit("fits")) for p in packages], [], default_scenario(), models=FACTS)
+    fourteenth = ranking.ranked[13].package
+    other_context = {"scenario": {**EXAMPLES["Scenario"], "context_origin": "entered", "context_requested": 4096}}
+    measured = rank_packages(
+        [(p, _fit("fits")) for p in packages], [_measurement(fourteenth, 42.0, **other_context)], default_scenario(), models=FACTS
+    )
+
+    rows = shown_rows(measured, per_model=False)
+    assert [row.why for row in rows] == ["rule"] * TOP_LIMIT + ["measured"]
+    appended = rows[-1].ranked
+    assert (appended.package, appended.measurement_group, appended.measurement) == (fourteenth, 1, None)
+    assert appended.measured_other == "measured at context 4k, this ranking's is 8k"
+    entry = _ranked_entries(measured)[-1]
+    assert (entry.speed_tps, entry.note.code) == (None, "measured_not_comparable")
+    assert entry.note.text.startswith("measured at context 4k, this ranking's is 8k.")
+    assert "Shown for its measurement; the rule puts it at place 14." in entry.note.text
+
+
 def test_a_measured_package_of_a_model_stays_visible_in_one_row_per_model():
     entries = _four_models()
     measured_q4 = next(p for p, _fit_ in entries if p.base_model_hf_repo == NOVA_SMALL and p.quantization == "Q4_K_M")
