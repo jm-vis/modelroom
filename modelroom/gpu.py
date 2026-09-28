@@ -10,10 +10,13 @@ never counts. Of the counted backends, the one with the largest sum counts (F8).
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
+
 from .gpu_linux import LSPCI_ARGS, is_wsl, linux_adapters, lspci_adapters
 from .gpu_llmfit import llmfit_adapters
 from .gpu_macos import apple_reading, apple_silicon, intel_mac_reading
-from .gpu_nvidia import compute_capabilities, nvidia_adapters, read_nvidia
+from .gpu_nvidia import card_details, nvidia_adapters, read_nvidia
 from .gpu_usable import (
     DISPLAY_ONLY_NOTE,
     DISPLAY_ONLY_VENDORS,  # noqa: F401 -- exported back through `measure`
@@ -38,6 +41,8 @@ NOT_RECOGNIZED = "not recognized: "
 WSL_NOTE = f"{WSL_STANDIN_REASON}; nvidia-smi did not answer"
 MODE_B_NOTE = "no card could be counted from modelroom's own reading; the counted cards are llmfit's"
 NO_COUNTED_NOTE = "no counted graphics card: "
+NOT_LISTED_REASON = "nvidia-smi does not list this card"
+UNREADABLE_SMI_REASON = "the answer of nvidia-smi could not be read"
 _BACKEND_ORDER = ("cuda", "rocm")
 
 
@@ -67,32 +72,75 @@ def measure_gpu(
         evidence, name = apple_silicon(runner, llmfit.gpus if llmfit else ())
         return apple_reading(runner, ram_gib, evidence, name) if evidence else intel_mac_reading(runner)
     nvidia = read_nvidia(runner)
-    if nvidia.failure is not None:
-        return nvidia.failure
-    own = nvidia_adapters(nvidia.cards, compute_capabilities(runner), platform) if nvidia.cards else []
-    failed = [] if nvidia.cards else [nvidia.reason or NO_NVIDIA_SMI_REASON]
-    listed, reason, wsl = _platform_adapters(platform, runner, read, listing, skip_nvidia=bool(nvidia.cards))
+    # An answer of `nvidia-smi` that does not read is one failed source, not the end of the
+    # measurement: its diagnosis stays, and every other source and llmfit are still asked.
+    problem = nvidia.failure.note if nvidia.failure is not None else None
+    capabilities, slots = card_details(runner) if nvidia.cards else ({}, {})
+    own = nvidia_adapters(nvidia.cards, capabilities, platform, slots) if nvidia.cards else []
+    failed = [] if nvidia.cards else [problem or nvidia.reason or NO_NVIDIA_SMI_REASON]
+    listed, reason, wsl = _platform_adapters(platform, runner, read, listing, own)
+    listed = [_nvidia_reason(adapter, bool(nvidia.cards), problem) for adapter in listed]
     if reason is not None:
         failed.append(reason)
     failed.append(llmfit_reason(reference))
-    return decide(own + listed, llmfit, platform, failed=failed, listed=reason is None, wsl=wsl)
+    reading = decide(own + listed, llmfit, platform, failed=failed, listed=reason is None, wsl=wsl)
+    if problem is not None and problem not in (reading.note or ""):
+        reading = replace(reading, note="; ".join(part for part in (reading.note, problem) if part))
+    return reading
 
 
-def _platform_adapters(platform: str, runner: Runner, read: FileText, listing: ListDir, *, skip_nvidia: bool):
-    """`(adapters, reason the list failed, WSL)` of the platform's own list of display adapters."""
+def _platform_adapters(platform: str, runner: Runner, read: FileText, listing: ListDir, cards: list[GraphicsAdapter]):
+    """`(adapters, reason the list failed, WSL)` of the platform's own list of display adapters,
+    without the entries that are, beyond doubt, a card `nvidia-smi` already lists (`unmatched`)."""
     if platform == "linux":
         stdout, reason = _run(runner, LSPCI_ARGS)
         if stdout is None:
             return [], reason, False
-        entries = lspci_adapters(stdout)
+        entries = unmatched(lspci_adapters(stdout), cards)
         wsl = any(entry.vendor_id == "1414" for entry in entries) and is_wsl(read)
-        return linux_adapters(entries, read, listing, skip_nvidia=skip_nvidia, wsl=wsl), None, wsl
+        return linux_adapters(entries, read, listing, wsl=wsl), None, wsl
     entries, reason = list_video_controllers(runner)
     if entries is None:
         return [], reason, False
-    wanted = [entry for entry in entries if not (skip_nvidia and entry.vendor_id == "10de")]
-    memory = registry_memory(runner, wanted) if wanted else {}
-    return windows_adapters(entries, memory, skip_nvidia=skip_nvidia), None, False
+    entries = unmatched(entries, cards)
+    memory = registry_memory(runner, entries) if entries else {}
+    return windows_adapters(entries, memory), None, False
+
+
+def unmatched(entries: list, cards: list[GraphicsAdapter]) -> list:
+    """The listed entries without the NVIDIA ones that are certainly a card `nvidia-smi` lists.
+
+    Certain means: the same PCI address; or as many NVIDIA entries as `nvidia-smi` cards (every
+    NVIDIA card is a PCI device, so the two sets are the same); or else the same name, one entry
+    per card. Every other NVIDIA entry stays, shown and not counted: a card `nvidia-smi` does not list.
+    """
+    nvidia = [entry for entry in entries if entry.vendor_id == "10de"]
+    if not cards or not nvidia:
+        return list(entries)
+    if len(nvidia) == len(cards):
+        return [entry for entry in entries if entry.vendor_id != "10de"]
+    addresses = {card.pci_slot for card in cards if card.pci_slot}
+    if addresses:
+        return [entry for entry in entries if not (entry.vendor_id == "10de" and getattr(entry, "slot", None) in addresses)]
+    names = Counter(card.name for card in cards)
+    kept = []
+    for entry in entries:
+        if entry.vendor_id == "10de" and entry.name and names[entry.name] > 0:
+            names[entry.name] -= 1
+            continue
+        kept.append(entry)
+    return kept
+
+
+def _nvidia_reason(adapter: GraphicsAdapter, answered: bool, problem: str | None) -> GraphicsAdapter:
+    """An NVIDIA entry of the list next to an answer of `nvidia-smi`: why its card is not in it."""
+    if adapter.vendor != "nvidia" or not adapter.reason or NO_NVIDIA_SMI_REASON not in adapter.reason:
+        return adapter
+    if answered:
+        return adapter.model_copy(update={"reason": adapter.reason.replace(NO_NVIDIA_SMI_REASON, NOT_LISTED_REASON, 1)})
+    if problem is not None:
+        return adapter.model_copy(update={"reason": adapter.reason.replace(NO_NVIDIA_SMI_REASON, UNREADABLE_SMI_REASON, 1)})
+    return adapter
 
 
 def decide(
@@ -176,6 +224,6 @@ def no_counted_note(adapters: list[GraphicsAdapter]) -> str:
     """Why no card counts, card by card; the NVIDIA tools named where their answer was missing."""
     parts = [f"{adapter_label(adapter)}: {adapter.reason}" for adapter in adapters if adapter.reason and not is_display_only(adapter)]
     note = NO_COUNTED_NOTE + "; ".join(parts)
-    if any(adapter.vendor == "nvidia" and adapter.reason == NO_NVIDIA_SMI_REASON for adapter in adapters):
+    if any(adapter.vendor == "nvidia" and NO_NVIDIA_SMI_REASON in (adapter.reason or "") for adapter in adapters):
         note += f"; {NVIDIA_TOOLS_HINT}"
     return note

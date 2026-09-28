@@ -7,6 +7,7 @@ A capability that cannot be read shuts nothing out: the card list itself is the 
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .gpu_usable import exclusion, graphics_adapter, own_verdict
@@ -15,7 +16,9 @@ from .measure_base import MIB, GpuReading, _gib, _run, _whole_number
 from .profile import GpuAdapter, GraphicsAdapter
 
 NVIDIA_SMI_ARGS = ("nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits")
-NVIDIA_CC_ARGS = ("nvidia-smi", "--query-gpu=index,compute_cap", "--format=csv,noheader,nounits")
+NVIDIA_CC_ARGS = ("nvidia-smi", "--query-gpu=index,compute_cap,pci.bus_id", "--format=csv,noheader,nounits")
+# `nvidia-smi` writes the PCI domain with eight digits (`00000000:01:00.0`); lspci writes four.
+_BUS_ID_RE = re.compile(r"^([0-9a-fA-F]{4,8}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$")
 
 
 @dataclass(frozen=True)
@@ -67,30 +70,39 @@ def _nvidia_adapter(row: str) -> GpuAdapter | GpuReading:
     return GpuAdapter(index=index, name=fields[1], vram_gib=vram_gib, vram_source="nvidia-smi")
 
 
-def compute_capabilities(runner: Runner) -> dict[int, float]:
-    """`index -> compute capability` of every card that reads; empty where the call or a line does not."""
+def card_details(runner: Runner) -> tuple[dict[int, float], dict[int, str]]:
+    """`(index -> compute capability, index -> PCI address)` of every card whose line reads; both
+    empty where the call does not. The address ties a card to its line of `lspci` (Linux)."""
     stdout, _reason = _run(runner, NVIDIA_CC_ARGS)
-    found: dict[int, float] = {}
+    capabilities: dict[int, float] = {}
+    slots: dict[int, str] = {}
     for row in (stdout or "").splitlines():
         parts = [part.strip() for part in row.split(",")]
-        if len(parts) != 2:
+        index = _whole_number(parts[0]) if len(parts) in (2, 3) else None
+        if index is None:
             continue
-        index = _whole_number(parts[0])
         try:
             value = float(parts[1])
         except ValueError:
-            continue
-        if index is not None and value == value and 0 < value < 100:  # a real version number, not NaN
-            found[index] = value
-    return found
+            value = float("nan")
+        if value == value and 0 < value < 100:  # a real version number, not NaN
+            capabilities[index] = value
+        match = _BUS_ID_RE.match(parts[2]) if len(parts) == 3 else None
+        if match:
+            domain = int(match.group(1), 16)
+            slots[index] = f"{domain:04x}:{match.group(2).lower()}:{match.group(3).lower()}.{match.group(4)}"
+    return capabilities, slots
 
 
-def nvidia_adapters(cards: tuple[GpuAdapter, ...], capabilities: dict[int, float], platform: str) -> list[GraphicsAdapter]:
+def nvidia_adapters(
+    cards: tuple[GpuAdapter, ...], capabilities: dict[int, float], platform: str, slots: dict[int, str] | None = None
+) -> list[GraphicsAdapter]:
     """Every card `nvidia-smi` listed as an adapter: CUDA, unless its compute capability shuts it out."""
     adapters = []
     for card in cards:
         verdict = exclusion("nvidia", platform, compute_capability=capabilities.get(card.index)) or own_verdict(
             "nvidia", platform, nvidia_listed=True
         )
-        adapters.append(graphics_adapter("nvidia", verdict, "discrete", "nvidia-smi", name=card.name, memory_gib=card.vram_gib))
+        slot = (slots or {}).get(card.index)
+        adapters.append(graphics_adapter("nvidia", verdict, "discrete", "nvidia-smi", name=card.name, memory_gib=card.vram_gib, pci_slot=slot))
     return adapters

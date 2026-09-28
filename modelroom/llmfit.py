@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from typing import Callable, Literal, Protocol
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
+# The most cards one entry of llmfit's `gpus[]` may stand for; above it the list does not read (AP9-GPU).
+MAX_GPU_COUNT = 64
 # F9b (fix-round 5): `Which = (name) -> absolute path | None`, the same dependency-injection
 # shape `Transport`/`Runner` already use -- the real implementation is `_default_which` (an
 # explicit PATH walk, see its own docstring). Only `SubprocessRunner` takes one (a test never
@@ -383,8 +385,8 @@ def llmfit_gpus(system: dict) -> tuple[LlmfitGpu, ...]:
             return ()
         vram, count, name = entry.get("vram_gb"), entry.get("count"), entry.get("name")
         unified = entry.get("unified_memory", False)
-        if not (_is_finite_number(vram) and vram >= 0 and isinstance(count, int) and not isinstance(count, bool) and count >= 1):
-            return ()
+        if not (_is_finite_number(vram) and vram >= 0 and isinstance(count, int) and not isinstance(count, bool) and 1 <= count <= MAX_GPU_COUNT):
+            return ()  # a count no machine has (`10**30`) is no reading: the list is unfolded card by card
         if not (name is None or isinstance(name, str)) or not isinstance(unified, bool):
             return ()
         read.append(LlmfitGpu(name.strip() if isinstance(name, str) and name.strip() else None, entry["backend"], float(vram), count, unified))

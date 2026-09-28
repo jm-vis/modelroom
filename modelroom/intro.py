@@ -31,6 +31,7 @@ from .binding import PointerFileError, read_pointer
 from .config import ConfigError, load_config
 from .contracts import SchemaVersionError
 from .daemon import TAGS_PATH, VERSION_PATH, Daemon, DaemonError
+from .gpu_usable import adapter_label, is_display_only
 from .importer import scan_profiles
 from .measure import Probes
 from .profile import HardwareProfile
@@ -366,8 +367,8 @@ def graphics_words(profile: HardwareProfile, unmeasured: str = "graphics memory 
     """The graphics of a machine without a counted card (AP9-GPU G8): none, the first card not
     counted, unified memory, or `unmeasured` (the card of step 5 and the start screen word it apart)."""
     if profile.gpu_state == "none":
-        named = [adapter.name for adapter in profile.adapters if adapter.name and adapter.reason != "display adapter only"]
-        return f"no counted graphics card ({named[0]})" if named else "no graphics card"
+        units = [adapter for adapter in profile.adapters if not is_display_only(adapter)]
+        return f"no counted graphics card ({adapter_label(units[0])})" if units else "no graphics card"
     if profile.gpu_state == "unified_memory" and profile.vram_gib is not None and profile.adapters:
         return f"unified memory {profile.vram_gib:.0f} GB"
     return unmeasured

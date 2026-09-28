@@ -117,7 +117,8 @@ def sysfs_bytes(read_text: FileText, card: str, file: str, minimum: int = 1) -> 
         value = _whole_number(read_text(f"{DRM_CLASS}/{card}/device/{file}").strip())
     except OSError:
         return None
-    return value if value is not None and value >= minimum else None
+    # `%llu`: a value beyond 64 bits is no byte count the kernel wrote, and no float could hold it anyway.
+    return value if value is not None and minimum <= value < 2**64 else None
 
 
 def kfd_slots(read_text: FileText, list_dir: ListDir) -> set[str]:
@@ -142,19 +143,13 @@ def kfd_slots(read_text: FileText, list_dir: ListDir) -> set[str]:
 
 
 def linux_adapters(
-    listed: list[LinuxListed], read_text: FileText, list_dir: ListDir, *, skip_nvidia: bool, wsl: bool
+    listed: list[LinuxListed], read_text: FileText, list_dir: ListDir, *, wsl: bool
 ) -> list[GraphicsAdapter]:
-    """Every listed device as an adapter; NVIDIA cards are left to `nvidia-smi` where it answered."""
+    """Every listed device as an adapter (the caller has taken out what `nvidia-smi` lists itself)."""
     amd = any(vendor_of_pci(entry.vendor_id) == "amd" for entry in listed)
     slots = drm_slots(read_text, list_dir) if amd else {}
     kfd = kfd_slots(read_text, list_dir) if amd else set()
-    adapters = []
-    for entry in listed:
-        vendor = vendor_of_pci(entry.vendor_id)
-        if skip_nvidia and vendor == "nvidia":
-            continue
-        adapters.append(_one_adapter(entry, vendor, read_text, slots, kfd, wsl))
-    return adapters
+    return [_one_adapter(entry, vendor_of_pci(entry.vendor_id), read_text, slots, kfd, wsl) for entry in listed]
 
 
 def _one_adapter(entry: LinuxListed, vendor, read_text: FileText, slots: dict[str, list[str]], kfd: set[str], wsl: bool) -> GraphicsAdapter:

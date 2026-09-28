@@ -25,12 +25,16 @@ _VRAM_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(MB|GB)\s*$", re.IGNORECASE)
 
 
 def apple_silicon(runner: Runner, llmfit_gpus: tuple) -> tuple[str | None, str | None]:
-    """`(evidence, llmfit name)`: `sysctl` where `hw.optional.arm64` is 1, else `llmfit` where it
-    lists `Metal` with unified memory, else `(None, None)` -- an Intel Mac."""
+    """`(evidence, llmfit name)`: `sysctl` where `hw.optional.arm64` is 1; a valid `0` is an Intel
+    Mac, whatever llmfit says; only where the reading failed or does not read, `llmfit` where it
+    lists `Metal` with unified memory; else `(None, None)` -- an Intel Mac."""
     stdout, _reason = _run(runner, MACOS_ARM64_ARGS)
     metal = next((gpu for gpu in llmfit_gpus if gpu.backend == "Metal" and gpu.unified_memory), None)
-    if stdout is not None and stdout.strip() == "1":
+    answer = stdout.strip() if stdout is not None else None
+    if answer == "1":
         return "sysctl", metal.name if metal else None
+    if answer == "0":
+        return None, None
     if metal is not None:
         return "llmfit", metal.name
     return None, None

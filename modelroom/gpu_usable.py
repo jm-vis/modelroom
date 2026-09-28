@@ -71,8 +71,14 @@ VENDOR_WORDS: dict[str, str] = {"nvidia": "NVIDIA", "amd": "AMD", "intel": "Inte
 
 
 def adapter_label(adapter: GraphicsAdapter) -> str:
-    """What a reader calls a card: its name, else its vendor -- never `unknown` where a source knows something."""
-    return adapter.name or f"{VENDOR_WORDS[adapter.vendor]} graphics"
+    """What a reader calls a card: its name, else its vendor, else the display adapter its PCI id
+    names -- never `unknown` where a source knows something; `not recognized` where none does."""
+    if adapter.name:
+        return adapter.name
+    if adapter.vendor != "other":
+        return f"{VENDOR_WORDS[adapter.vendor]} graphics"
+    known = DISPLAY_ONLY_VENDORS.get((adapter.pci_id or "")[:4])
+    return f"{known} display adapter" if known else "graphics unit, vendor not recognized"
 
 
 def is_display_only(adapter: GraphicsAdapter) -> bool:
@@ -230,7 +236,17 @@ def graphics_adapter(
 
 
 def not_counted_reason(verdict: Verdict, form: Form, source: str, memory_gib: float | None, memory_reason: str | None) -> str | None:
-    """Why a card is not counted, the weightiest first: an exclusion, the build, the proof, the memory.
+    """Why a card is not counted, the weightiest first; a diagnosis of its memory (a registry
+    conflict, a sysfs file that did not read) is kept behind it, never hidden by it."""
+    reason = _weightiest_reason(verdict, form, source, memory_gib, memory_reason)
+    kept = memory_gib is None and memory_reason and form not in ("integrated", "unified")
+    if kept and reason and memory_reason not in reason:
+        return f"{reason}; {memory_reason}"
+    return reason
+
+
+def _weightiest_reason(verdict: Verdict, form: Form, source: str, memory_gib: float | None, memory_reason: str | None) -> str | None:
+    """An exclusion, the build, the proof, the memory -- in this order.
 
     A usable card of its own with countable memory gets `OTHER_BACKEND_REASON` for now; the count
     (`gpu.count_adapters`) takes it away from every card it counts.

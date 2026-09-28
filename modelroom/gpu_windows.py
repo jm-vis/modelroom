@@ -98,7 +98,7 @@ def registry_bytes(value: object) -> int | None:
         number = int.from_bytes(bytes(value), "little")
     else:
         return None
-    return number if number >= MIN_REGISTRY_BYTES else None
+    return number if MIN_REGISTRY_BYTES <= number < 2**64 else None  # a 64-bit value, nothing larger
 
 
 def registry_memory(runner: Runner, listed: list[Listed]) -> dict[str, tuple[float | None, str | None]]:
@@ -119,21 +119,21 @@ def registry_memory(runner: Runner, listed: list[Listed]) -> dict[str, tuple[flo
             entries.setdefault(key, []).append(registry_bytes(item.get(QW_MEMORY_SIZE)))
     found = {}
     for key, values in entries.items():
-        read = {value for value in values if value is not None}
-        if len(read) == 1:
-            found[key] = (_gib(read.pop()), None)
-        elif len(read) > 1:
+        if all(value is None for value in values):
+            continue  # no size at all (integrated graphics): nothing to show, nothing to explain
+        complete = None not in values and len(values) >= adapters[key] and len(set(values)) == 1
+        if complete:
+            found[key] = (_gib(values[0]), None)
+        else:  # one value for some of the entries only, or different values: unknown, never guessed
             found[key] = (None, REGISTRY_ENTRIES_REASON.format(entries=len(values), adapters=adapters[key]))
     return found
 
 
-def windows_adapters(listed: list[Listed], memory: dict[str, tuple[float | None, str | None]], *, skip_nvidia: bool) -> list[GraphicsAdapter]:
-    """Every listed controller as an adapter; NVIDIA cards are left to `nvidia-smi` where it answered."""
+def windows_adapters(listed: list[Listed], memory: dict[str, tuple[float | None, str | None]]) -> list[GraphicsAdapter]:
+    """Every listed controller as an adapter (the caller has taken out what `nvidia-smi` lists itself)."""
     adapters = []
     for entry in listed:
         vendor = vendor_of_pci(entry.vendor_id)
-        if skip_nvidia and vendor == "nvidia":
-            continue
         display = is_display_adapter(entry.vendor_id, entry.name, entry.pnp)
         gib, reason = memory.get(entry.key or "", (None, None))
         verdict = exclusion(vendor, "win32", display=display) or own_verdict(vendor, "win32")

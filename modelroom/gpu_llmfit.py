@@ -39,16 +39,16 @@ def llmfit_adapters(gpus: tuple[LlmfitGpu, ...], platform: str, own: list[Graphi
     A card that may count carries `OTHER_BACKEND_REASON` until the count takes it (`gpu.count_adapters`);
     a Windows value at or below 4.0 GB (the raw number, F10) and a card without memory (Z2) never do.
     """
-    blocked = {adapter.vendor for adapter in own if adapter.usable == "no" and adapter.vendor != "other"}
+    blocked = {adapter.vendor for adapter in own if adapter.usable == "no"}
     adapters = []
     for entry in gpus:
         if entry.backend not in ADAPTER_BACKENDS:
             continue
         vendor = vendor_of_name(entry.name)
         fallback = llmfit_verdict(entry.backend)
-        verdict = exclusion(vendor, platform) or (
-            Verdict("no", fallback.backend, EXCLUDED_VENDOR_REASON) if vendor in blocked else fallback
-        )
+        # An own exclusion comes first, before every rule of the platform (D3, Z1), for every vendor.
+        own_exclusion = Verdict("no", fallback.backend, EXCLUDED_VENDOR_REASON) if vendor in blocked else None
+        verdict = own_exclusion or exclusion(vendor, platform) or fallback
         memory = round(entry.vram_gb, 2) if entry.vram_gb > 0 and round(entry.vram_gb, 2) > 0 else None
         adapter = graphics_adapter(
             vendor, verdict, form_of(vendor, entry.name, platform), "llmfit",
