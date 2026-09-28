@@ -99,7 +99,8 @@ def test_row_10_no_display_device_is_none():
 
 def test_the_backend_with_the_larger_counted_sum_counts_after_the_filter():
     """CUDA 40 GiB against ROCm 24 GiB counted plus 24 GiB only in the registry or llmfit: CUDA."""
-    reading = _linux(NVIDIA_LINE + AMD_LINE, _amd_sysfs(), reference(LlmfitGpu("AMD Radeon RX 7900 XTX", "ROCm", 23.98, 1)), smi="0, NVIDIA A40, 40960\n")
+    reading = _linux(NVIDIA_LINE + AMD_LINE, _amd_sysfs(), reference(LlmfitGpu("AMD Radeon RX 7900 XTX", "ROCm", 23.98, 1)), smi="0, NVIDIA A40, 40960\n",
+                     cc="0, 8.6, 00000000:01:00.0\n")
     nvidia, amd = reading.graphics
     assert (nvidia.counted, amd.counted, amd.reason) == (True, False, OTHER_BACKEND_REASON)
     assert (reading.gpu_state, reading.vram_gib, reading.vram_source) == ("measured", 40.0, "nvidia-smi")
@@ -149,7 +150,8 @@ def test_crosscheck_row_5_the_same_set_of_cards_is_compared():
 
 
 def test_crosscheck_row_5_an_intel_card_beside_is_no_obstacle():
-    reading = measure_gpu("win32", gpu_runner(smi="0, NVIDIA L4, 23034\n", cim=fixture("win_video_controllers_laptop.json.txt")))
+    smi = "0, NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 23034\n"  # the name the list gives, so it is the same card
+    reading = measure_gpu("win32", gpu_runner(smi=smi, cim=fixture("win_video_controllers_laptop.json.txt")))
     llmfit = reference(CARD, LlmfitGpu("Intel(R) Graphics", "SYCL", 2.0, 1))
     assert vram_crosscheck(reading, llmfit, False).status == "confirmed"
 

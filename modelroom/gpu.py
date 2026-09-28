@@ -110,22 +110,22 @@ def _platform_adapters(platform: str, runner: Runner, read: FileText, listing: L
 def unmatched(entries: list, cards: list[GraphicsAdapter]) -> list:
     """The listed entries without the NVIDIA ones that are certainly a card `nvidia-smi` lists.
 
-    Certain means: the same PCI address; or as many NVIDIA entries as `nvidia-smi` cards (every
-    NVIDIA card is a PCI device, so the two sets are the same); or else the same name, one entry
-    per card. Every other NVIDIA entry stays, shown and not counted: a card `nvidia-smi` does not list.
+    Certain means, first: the same PCI address, where both sides carry one (`lspci`); an entry at
+    another address is another card, whatever the counts. Then, for the entries that carry no
+    address (`Win32_VideoController`) and the cards no address matched: the same name, one entry per
+    card. Every other NVIDIA entry stays, shown and not counted: a card `nvidia-smi` does not list.
     """
-    nvidia = [entry for entry in entries if entry.vendor_id == "10de"]
-    if not cards or not nvidia:
+    if not cards or not any(entry.vendor_id == "10de" for entry in entries):
         return list(entries)
-    if len(nvidia) == len(cards):
-        return [entry for entry in entries if entry.vendor_id != "10de"]
-    addresses = {card.pci_slot for card in cards if card.pci_slot}
-    if addresses:
-        return [entry for entry in entries if not (entry.vendor_id == "10de" and getattr(entry, "slot", None) in addresses)]
-    names = Counter(card.name for card in cards)
+    slots = {getattr(entry, "slot", None) for entry in entries if entry.vendor_id == "10de"} - {None}
+    by_address = {card.pci_slot for card in cards if card.pci_slot in slots}
+    names = Counter(card.name for card in cards if card.pci_slot not in by_address)
     kept = []
     for entry in entries:
-        if entry.vendor_id == "10de" and entry.name and names[entry.name] > 0:
+        slot = getattr(entry, "slot", None)
+        if entry.vendor_id == "10de" and slot is not None and slot in by_address:
+            continue
+        if entry.vendor_id == "10de" and slot is None and entry.name and names[entry.name] > 0:
             names[entry.name] -= 1
             continue
         kept.append(entry)

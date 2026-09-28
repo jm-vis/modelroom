@@ -105,6 +105,65 @@ def test_a_missing_file_is_a_usage_error_that_names_no_path(tmp_path, monkeypatc
     assert "gone.txt" not in str(caught.value)
 
 
+def test_a_list_with_a_byte_order_mark_finds_its_first_word(tmp_path, monkeypatch):
+    """Codex r2-11: the mark is not part of the first word."""
+    path = tmp_path / "bom-words.txt"
+    path.write_bytes(b"\xef\xbb\xbf" + WORD.encode("utf-8") + b"\n")
+    monkeypatch.setenv(rc.PRIVATE_WORDS_ENV, str(path))
+    assert rc.private_words_pattern().search(f"ran on {WORD}")
+
+
+def test_a_list_inside_the_repository_is_a_usage_error_with_a_neutral_message(tmp_path, monkeypatch):
+    """Codex r2-12: a list inside the repository would publish its own words."""
+    repo = make_repo(tmp_path)
+    inside = repo / "private" / "words.txt"
+    inside.parent.mkdir()
+    inside.write_text(f"{WORD}\n", encoding="utf-8")
+    monkeypatch.setenv(rc.PRIVATE_WORDS_ENV, str(inside))
+    with pytest.raises(rc.UsageError, match="inside the repository") as caught:
+        rc.private_words_pattern(repo)
+    assert "words.txt" not in str(caught.value) and WORD not in str(caught.value)
+    outside = tmp_path / "outside.txt"
+    outside.write_text(f"{WORD}\n", encoding="utf-8")
+    monkeypatch.setenv(rc.PRIVATE_WORDS_ENV, str(outside))
+    assert rc.private_words_pattern(repo).search(WORD)
+
+
+@pytest.mark.parametrize(
+    ("member", "data"),
+    [
+        ("modelroom/notes.txt", f"built on {WORD}\n".encode("utf-16")),
+        ("modelroom/le.txt", f"built on {WORD}\n".encode("utf-16-le")),
+        ("modelroom/data.json", ('{"host": "' + "".join(f"\\u{ord(c):04x}" for c in WORD) + '"}').encode("ascii")),
+        ("modelroom/icon.png", b"\x89PNG\r\n\x1a\n" + f"tEXtComment\x00{WORD}".encode("latin-1") + b"\x00\x00"),
+    ],
+    ids=["utf-16", "utf-16-le", "json-escape", "binary"],
+)
+def test_a_word_in_another_encoding_or_a_binary_member_is_a_finding(tmp_path, words, member, data):
+    wheel = tmp_path / "modelroom-0.1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(member, data)
+    assert any(finding.endswith(": private word") for finding in rc.distribution_findings(wheel, lists()))
+
+
+def test_a_word_in_a_tag_message_is_a_meta_finding(tmp_path, words):
+    repo = make_repo(tmp_path)
+    git(repo, "tag", "-a", "v0.1.0", "-m", f"release from {WORD}")
+    findings = rc.meta_findings(repo, lists())
+    assert any(finding.startswith("meta:tag v0.1.0:message:") and finding.endswith("private word") for finding in findings)
+
+
+def test_a_path_of_the_history_that_holds_the_word_is_never_printed(tmp_path, words):
+    repo = make_repo(tmp_path)
+    (repo / f"{WORD}.md").write_text("see /ho" + "me/someone/notes.md\n", encoding="utf-8")
+    commit_all(repo, "docs: notes")
+    (repo / f"{WORD}.md").unlink()
+    commit_all(repo, "docs: drop")
+    findings = rc.history_findings(repo, lists())
+    assert any(finding.endswith(": absolute user path") for finding in findings)
+    assert not any(WORD in finding.lower() for finding in findings)
+
+
 def test_the_gate_run_never_prints_the_word_and_does_not_pass_without_the_list(tmp_path, words, monkeypatch, capsys):
     repo = make_repo(tmp_path)
     (repo / "notes.md").write_text(f"{WORD}\n", encoding="utf-8")

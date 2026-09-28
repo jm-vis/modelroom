@@ -102,18 +102,22 @@ def load_negative_list() -> NegativeList:
     return NegativeList(module.FORBIDDEN, module.ALLOWED, module.SKIP_SUFFIXES)
 
 
-def private_words_pattern() -> re.Pattern[str]:
+def private_words_pattern(repo: Path = REPO) -> re.Pattern[str]:
     """The words of the file `MODELROOM_RELEASE_PRIVATE_WORDS` names, as one pattern, any case.
 
-    Blank lines and lines starting with `#` are left out. An unset variable or a file that cannot be
-    read is a usage error: the gate would otherwise pass without the check. The message names
-    neither the file nor a word.
+    Blank lines and lines starting with `#` are left out; a byte order mark is not part of the first
+    word (`utf-8-sig`). An unset variable, a file that cannot be read, or a file inside `repo` (it
+    would publish the words it guards) is a usage error: the gate would otherwise pass without the
+    check. The message names neither the file nor a word.
     """
     location = os.environ.get(PRIVATE_WORDS_ENV, "").strip()
     if not location:
         raise UsageError(f"{PRIVATE_WORDS_ENV} is not set: it names the file of private words")
+    path = Path(location)
     try:
-        lines = Path(location).read_text(encoding="utf-8").splitlines()
+        if path.resolve().is_relative_to(repo.resolve()):
+            raise UsageError(f"the file {PRIVATE_WORDS_ENV} names lies inside the repository; keep it outside")
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
         raise UsageError(f"the file {PRIVATE_WORDS_ENV} names cannot be read") from exc
     words = sorted({line.strip() for line in lines if line.strip() and not line.strip().startswith("#")}, key=len, reverse=True)
@@ -169,6 +173,33 @@ def scan_text(place: str, path: str, text: str, lists: NegativeList) -> list[str
     for line_no, line in enumerate(text.split("\n"), start=1):
         findings += [f"{place}:{line_no}: {name}" for name in leak_classes(line, lists, path)]
     return findings
+
+
+_JSON_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def text_variants(data: bytes) -> list[str]:
+    """Every reading of `data` a word could hide in: UTF-8; UTF-16 where a byte order mark or a
+    share of NUL bytes says so; and the text with its JSON `\\uXXXX` escapes resolved."""
+    variants = [data.decode("utf-8", "replace")]
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        variants.append(data.decode("utf-16", "replace"))
+    elif len(data) >= 4 and data.count(b"\x00") * 4 >= len(data):
+        variants += [data.decode("utf-16-le", "replace"), data.decode("utf-16-be", "replace")]
+    variants += [_JSON_ESCAPE.sub(lambda m: chr(int(m[1], 16)), text) for text in list(variants) if _JSON_ESCAPE.search(text)]
+    return variants
+
+
+def scan_data(place: str, path: str, data: bytes, lists: NegativeList) -> list[str]:
+    """`scan_text` over every reading of a file (`text_variants`); a binary file (a skipped
+    suffix) is read byte for byte for the classes of the current state that are words, the private words."""
+    if skipped(path, lists):
+        words = {name: p for name, p in lists.forbidden.items() if name == PRIVATE_WORD}
+        return scan_text(place, path, data.decode("latin-1"), lists._replace(forbidden=words)) if words else []
+    found: dict[str, None] = {}
+    for text in text_variants(data):
+        found.update(dict.fromkeys(scan_text(place, path, text, lists)))
+    return list(found)
 
 
 def shown(name: str, lists: NegativeList) -> str:
@@ -249,10 +280,7 @@ def ref_findings(repo: Path, ref: str, lists: NegativeList) -> list[str]:
     findings = []
     for path in filter(None, names.split("\0")):
         findings += name_findings("ref", path, lists)
-        if skipped(path, lists):
-            continue
-        text = git(repo, "show", f"{ref}:{path}").stdout.decode("utf-8", "replace")
-        findings += scan_text(f"ref:{shown(path, lists)}", path, text, lists)
+        findings += scan_data(f"ref:{shown(path, lists)}", path, git(repo, "show", f"{ref}:{path}").stdout, lists)
     return findings
 
 
@@ -268,8 +296,11 @@ def patch_path(field: str) -> str:
 class _PatchScanner:
     """Walks `git log -p` output and checks every added line at its line number in the new file."""
 
-    def __init__(self, lists: NegativeList) -> None:
+    def __init__(self, lists: NegativeList, names: NegativeList | None = None) -> None:
         self.lists = lists
+        # The list a printed path is withheld by: the whole one, current-state classes included, so
+        # a path of the history that holds a private word is never printed either.
+        self.names = names or lists
         self.commit = self.path = ""
         self.old_left = self.new_left = self.line_no = 0
         self.findings: dict[str, None] = {}
@@ -290,7 +321,7 @@ class _PatchScanner:
         marker, content = raw[:1], raw[1:]
         if marker == "+":
             if self.path and not skipped(self.path, self.lists):
-                place = f"history:{self.commit}:{shown(self.path, self.lists)}:{self.line_no}"
+                place = f"history:{self.commit}:{shown(self.path, self.names)}:{self.line_no}"
                 for name in leak_classes(content, self.lists, self.path):
                     self.findings[f"{place}: {name}"] = None
             self.new_left -= 1
@@ -302,13 +333,13 @@ class _PatchScanner:
 
 
 def history_findings(repo: Path, lists: NegativeList) -> list[str]:
-    lists = current_state_only(lists)
+    names, lists = lists, current_state_only(lists)
     # --diff-merges=separate: a merge against each parent, whatever log.diffMerges says; --text:
     # binary files as text; --no-renames: a renamed file is a full addition under its new name;
     # explicit prefixes: a repository's diff.noprefix/mnemonicPrefix cannot change them.
     log = git_text(repo, "log", "--all", "--diff-merges=separate", "-p", "--text", "--no-renames", "--no-color", "--no-ext-diff",
                    "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--format=commit %H")
-    scanner = _PatchScanner(lists)
+    scanner = _PatchScanner(lists, names)
     for raw in log.split("\n"):
         scanner.feed(raw.rstrip("\r"))
     return list(scanner.findings) + history_name_findings(repo, lists)
@@ -496,8 +527,7 @@ def distribution_findings(archive: Path, lists: NegativeList) -> list[str]:
         file_class = forbidden_file_class(name)
         if file_class:
             findings.append(f"{place}: forbidden file ({file_class})")
-        if not skipped(name, lists):
-            findings += scan_text(place, name, data.decode("utf-8", "replace"), lists)
+        findings += scan_data(place, name, data, lists)
     if archive.suffix == ".whl":
         findings += wheel_shape_findings(label, members)
     return findings
@@ -546,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ensure_repository(args.repo)
         try:
-            words = private_words_pattern()
+            words = private_words_pattern(args.repo)
         except UsageError as exc:  # every other check still runs and reports; the gate does not pass
             words, words_error = None, exc
         lists = with_private_words(load_negative_list(), words)

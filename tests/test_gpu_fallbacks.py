@@ -9,7 +9,7 @@ from fixture_gpu import cim, fixture, gpu_runner, reference, registry
 from fixture_support import v2_profile
 from modelroom.gpu import NOT_LISTED_REASON, measure_gpu
 from modelroom.gpu_llmfit import vram_crosscheck
-from modelroom.gpu_usable import EXCLUDED_VENDOR_REASON, adapter_label
+from modelroom.gpu_usable import EXCLUDED_VENDOR_REASON, adapter_label, is_display_only
 from modelroom.intro import graphics_words
 from modelroom.llmfit import FixtureRunner, LlmfitGpu, llmfit_gpus
 from modelroom.measure_base import FixtureFiles
@@ -54,10 +54,46 @@ def test_on_linux_the_pci_address_of_nvidia_smi_decides_which_line_is_the_same_c
     assert reading.graphics[1].reason == NOT_LISTED_REASON
 
 
-def test_as_many_nvidia_entries_as_cards_are_the_same_cards():
-    runner = gpu_runner(smi="0, NVIDIA L4, 23034\n1, NVIDIA L4, 23034\n", lspci=fixture("lspci_nnD_two_l4_server.txt"))
-    reading = measure_gpu("linux", runner)
+TWO_L4 = "0, NVIDIA L4, 23034\n1, NVIDIA L4, 23034\n"
+
+
+def test_the_recorded_l4_server_matches_both_cards_by_their_addresses():
+    cc = "0, 8.9, 00000000:01:00.0\n1, 8.9, 00000000:02:00.0\n"
+    reading = measure_gpu("linux", gpu_runner(smi=TWO_L4, cc=cc, lspci=fixture("lspci_nnD_two_l4_server.txt")))
     assert [adapter.source for adapter in reading.graphics] == ["nvidia-smi", "nvidia-smi"]
+
+
+def test_as_many_entries_as_cards_at_other_addresses_are_other_cards():
+    """Codex r2-1: the same count proves nothing; a line at an address nvidia-smi does not name stays."""
+    lspci = "0000:03:00.0 3D controller [0302]: NVIDIA Corporation AD104GL [L4] [10de:27b8] (rev a1)\n"
+    llmfit = reference(LlmfitGpu("NVIDIA L4", "CUDA", 22.49, 1))
+    reading = measure_gpu("linux", gpu_runner(smi="0, NVIDIA L4, 23034\n", cc="0, 8.9, 00000000:01:00.0\n", lspci=lspci), reference=llmfit)
+    assert [(adapter.pci_slot, adapter.counted) for adapter in reading.graphics] == [("0000:01:00.0", True), ("0000:03:00.0", False)]
+    assert vram_crosscheck(reading, llmfit, False).status == "not_comparable"
+
+
+def test_without_addresses_the_same_count_removes_nothing_on_linux():
+    reading = measure_gpu("linux", gpu_runner(smi=TWO_L4, lspci=fixture("lspci_nnD_two_l4_server.txt")))
+    assert [adapter.source for adapter in reading.graphics] == ["nvidia-smi", "nvidia-smi", "lspci", "lspci"]
+
+
+def test_on_windows_an_address_of_nvidia_smi_does_not_stop_the_name_match():
+    """Codex r2-9: `Win32_VideoController` carries no address; the name decides there."""
+    runner = gpu_runner(smi="0, NVIDIA GeForce RTX 3090, 24576\n", cc="0, 8.6, 00000000:01:00.0\n",
+                        cim=cim(("NVIDIA GeForce RTX 3090", PNP_A), ("NVIDIA GeForce GTX 1080 Ti", PNP_B)))
+    counted, second = measure_gpu("win32", runner).graphics
+    assert (counted.source, second.name, second.reason) == ("nvidia-smi", "NVIDIA GeForce GTX 1080 Ti", NOT_LISTED_REASON)
+
+
+def test_a_basic_display_adapter_with_a_registry_conflict_stays_a_display_adapter():
+    """Codex r2-10: the kept diagnosis does not turn a display adapter into a graphics unit."""
+    pnp, key = "PCI\\VEN_1414&DEV_008E&SUBSYS_00000000&REV_00\\X", "PCI\\VEN_1414&DEV_008E"
+    runner = gpu_runner(cim=cim(("Microsoft Basic Display Adapter", pnp), ("Microsoft Basic Display Adapter", pnp)),
+                        registry=registry((key, 268435456), (key, None)))
+    reading = measure_gpu("win32", runner)
+    assert all(is_display_only(adapter) for adapter in reading.graphics)
+    assert "the registry holds 2 entries" in reading.graphics[0].reason
+    assert (reading.gpu_state, reading.note) == ("none", "display adapter only")
 
 
 # --- 2: an answer of nvidia-smi that does not read is one failed source ---------------------------------------

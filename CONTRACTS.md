@@ -2187,8 +2187,9 @@ Mac is a CPU machine (`none`, every unit `not usable`). `nvidia-smi` lines that 
 without memory, or indexes other than `0 ... n-1` make `nvidia-smi` a failed source: its reason stays in
 the note, and every other source and llmfit are still asked (a card of another vendor may count).
 An NVIDIA entry of the platform's list is left out only where it is certainly a card `nvidia-smi`
-lists: the same PCI address; as many NVIDIA entries as `nvidia-smi` cards; else the same name, one
-entry per card. Every other NVIDIA entry stays, not counted (`nvidia-smi does not list this card`),
+lists: the same PCI address where the entry carries one (`lspci`; an entry at another address is
+another card, whatever the counts); for an entry without an address (`Win32_VideoController`) the
+same name, one entry per card that no address matched. Every other NVIDIA entry stays, not counted (`nvidia-smi does not list this card`),
 and keeps the cross-check `not_comparable`. On macOS a valid `hw.optional.arm64` of `0` is an Intel
 Mac whatever llmfit says; llmfit's `Metal` entry proves Apple Silicon only where that reading failed.
 

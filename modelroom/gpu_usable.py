@@ -82,8 +82,11 @@ def adapter_label(adapter: GraphicsAdapter) -> str:
 
 
 def is_display_only(adapter: GraphicsAdapter) -> bool:
-    """A display or virtual adapter (D13): shut out with exactly that reason."""
-    return adapter.usable == "no" and adapter.reason == DISPLAY_ONLY_NOTE
+    """A display or virtual adapter (D13), read from what it is -- shut out, no backend, and a
+    display-only PCI vendor or the Basic Display name -- never from the words of its reason."""
+    vendor_id = (adapter.pci_id or "")[:4]
+    known = vendor_id in DISPLAY_ONLY_VENDORS or (adapter.name or "").strip() == BASIC_DISPLAY_NAME
+    return adapter.usable == "no" and adapter.backend == "none" and known
 
 
 def recognized(adapter: GraphicsAdapter) -> bool:

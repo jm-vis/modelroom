@@ -192,7 +192,7 @@ def test_the_recorded_two_l4_machine_is_confirmed_by_its_own_llmfit_answer():
     smi = _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_l4.csv").read_text(encoding="utf-8"))
     files = FixtureFiles({PROC_MEMINFO_FILE: "MemTotal:       98870364 kB\n", LINUX_CHASSIS_FILE: "1\n"})
     lspci = _done(LSPCI_ARGS, (FIXTURES / "lspci_nnD_two_l4_server.txt").read_text(encoding="utf-8"))
-    runner = FixtureRunner({NVIDIA_SMI_ARGS: smi, NVIDIA_CC_ARGS: _done(NVIDIA_CC_ARGS, "0, 8.9\n1, 8.9\n"), LSPCI_ARGS: lspci})
+    runner = FixtureRunner({NVIDIA_SMI_ARGS: smi, NVIDIA_CC_ARGS: _done(NVIDIA_CC_ARGS, "0, 8.9, 00000000:01:00.0\n1, 8.9, 00000000:02:00.0\n"), LSPCI_ARGS: lspci})
     measured = measure_hardware("linux", runner, files, lambda: 0)
     llmfit = _done(("llmfit", "system", "--json"), (FIXTURES / "llmfit_system_two_l4.json").read_text(encoding="utf-8"))
     version = _done(("llmfit", "--version"), (FIXTURES / "llmfit_version.txt").read_text(encoding="utf-8"))
