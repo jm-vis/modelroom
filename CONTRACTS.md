@@ -5251,7 +5251,11 @@ written as its own file and reported in one note: `measured <name>: 41.1 tok/s (
 32k`; a record that is not valid or not comparable carries **what it is missing** instead (`<name>:
 not comparable (<reason>)`) and the run still ends `0`.
 
-The vLLM part (AP9-SV1, "Local servers and the vLLM load test"). Where the start screen read a served
+The vLLM part (AP9-SV1, "Local servers and the vLLM load test"). The server runs on this machine, so
+the same rule as the daemon's holds (Codex r3): where this machine is not bound to a profile of the
+folder, or no machine this run chose names that profile, the step says `vLLM: no load test, this
+machine is not part of this run's result` and offers no row -- nothing is measured, and neither the
+balance nor the card counts a number. Otherwise, where the start screen read a served
 model: `a vLLM server answers here, context 4096`, `it states it serves <id>`, `revision unknown (not
 stated)`, `one warm-up request, then three batches of 20 requests, 128 tokens each` (`1 request` for
 one: `scenario_text.requests_words`, the one place a number of requests is said). Then the first
@@ -5277,8 +5281,8 @@ row. Nothing of it is written.
 
 | Ollama | vLLM | Question | List | Balance | Exit |
 |---|---|---|---|---|---|
-| not bound, or no snapshot | none, a key, or a fault | none | -- | `none in this run` | 0 |
-| not bound, or no snapshot | yes | yes | `vllm` only | yes: `vLLM measured` or `vLLM ran, not counted`; no: `none in this run` | 0 |
+| not bound, or no snapshot | none, a key, a fault, or this machine not chosen | none | -- | `none in this run` | 0 |
+| bound to a profile it may not measure into, or no snapshot | yes | yes | `vllm` only | yes: `vLLM measured` or `vLLM ran, not counted`; no: `none in this run` | 0 |
 | no daemon | none, a key, or a fault | yes | -- | no: note `no load test: <reason>`; yes: `nothing measured: <reason>` (`run.failed`) | 0 / 1 |
 | no daemon | yes | yes, the note `Ollama: <reason>` before it | `vllm` only | as row 2 | 0 |
 | daemon, no candidate | none, a key, or a fault | none, the note `no ranked package is installed ...` | -- | `none in this run` | 0 |

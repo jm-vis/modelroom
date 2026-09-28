@@ -63,7 +63,9 @@ state = "state"
 markdown = "docs/models.md"
 """
 ANSWERS = {
-    "machines": [],
+    # The run chooses this machine -- its bound profile, row 1 of the list: vLLM measures and counts
+    # only for a machine the run chose (Codex r3).
+    "machines": [f"profile:{L4_PROFILE}"],
     "search": "qwen",
     "filter_owners": True,
     # The run chooses the served model (Codex F1: a run that chooses none ranks none, and a vLLM
@@ -115,8 +117,11 @@ def _choosable_qwen25() -> dict:
     return {("GET", account_search_url("qwen", "Qwen")): body, ("GET", account_downloads_url("qwen", "Qwen")): body}
 
 
-def _run(tmp_path: Path, answers: dict | None = None, *, servers=None, bound: bool = True) -> tuple[int, list[str]]:
-    results = _folder(tmp_path, bound)
+def _run(
+    tmp_path: Path, answers: dict | None = None, *, servers=None, bound: bool = True, keep: bool = False
+) -> tuple[int, list[str]]:
+    """`keep`: the folder was laid out by the test already (e.g. with an imported profile)."""
+    results = (tmp_path / "results").resolve() if keep else _folder(tmp_path, bound)
     lines: list[str] = []
     code = run_guided(
         FileAsker(ANSWERS if answers is None else answers),
@@ -291,13 +296,15 @@ def test_an_answer_file_without_the_load_test_answer_measures_nothing(tmp_path: 
     assert "                                   identity stated · fit: 32 at once, fits" in card
 
 
-def test_without_a_bound_profile_the_fit_line_gives_the_reason(tmp_path: Path):
+def test_without_a_bound_profile_the_server_is_not_offered(tmp_path: Path):
+    """Without a binding this machine is no machine of the run (Codex r3): the server is neither
+    measured nor counted, even where the run picked the folder's profile."""
     _code, lines = _run(tmp_path, bound=False)
 
     step = _step(lines, 4)
-    assert "no vLLM fit: this machine has no profile in this folder a fit may compute for" in step
-    assert not any(line.startswith("vLLM fit, computed") for line in step)
-    assert "                                   identity stated · no fit computed" in _card(lines)
+    assert "vLLM: no load test, this machine is not part of this run's result" in step
+    assert not any(line.startswith(("vLLM fit, computed", "measured vLLM")) for line in step)
+    assert not any("server    vLLM" in line for line in _card(lines))
 
 
 def test_a_folder_with_nothing_to_rank_shows_the_row_without_a_speed(tmp_path: Path):
@@ -598,11 +605,41 @@ def test_the_server_row_of_the_card_says_whether_the_number_counts(tmp_path: Pat
     assert f"                                   {identity}" in card
 
 
+@pytest.mark.parametrize("case", ["nothing marked", "an import that failed", "another machine only"])
+def test_the_vllm_server_is_measured_only_where_the_run_chose_this_machine(tmp_path: Path, case):
+    """Codex r3: like Ollama (F2), vLLM measures and counts only where a machine this run chose names
+    the profile this machine is bound to; else no question, no measurement, no number on the card."""
+    from modelroom.importer import import_profile
+
+    from fixture_support import FOUR_L4_ID, export_of
+
+    machines = {"nothing marked": [], "an import that failed": ["import"], "another machine only": [f"profile:{FOUR_L4_ID}"]}
+    answers = {**ANSWERS, "machines": machines[case], "import_file": "missing.export.json"}
+    if case == "another machine only":
+        results = _folder(tmp_path)
+        import_profile(results / "modelroom.toml", export_of("four_l4_server.json", tmp_path / "exports"), RUN_AT)
+    servers = vllm_servers()
+
+    code, lines = _run(tmp_path, answers, servers=servers, keep=case == "another machine only")
+
+    step = _step(lines, 4)
+    assert "vLLM: no load test, this machine is not part of this run's result" in step
+    assert not any(line.startswith(("? Measure the speed", "measured vLLM")) for line in step)
+    assert step[-1] == "– Measurement     none in this run"
+    assert [call[1] for call in servers["vllm"].calls] == [MODELS_PATH]  # the start screen read it, nothing more
+    assert not any("tok/s" in line or "server    vLLM" in line for line in _card(lines))
+    assert code == (1 if case == "an import that failed" else 0)
+
+
 STATES = [
     # (folder, daemon, servers, answers, question asked, list, balance, exit)
     ("unbound", "none", "offline", {}, False, None, "– Measurement     none in this run", 0),
-    ("unbound", "none", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM measured", 0),
-    ("unbound", "none", "vllm", {"load_test": False}, True, None, "– Measurement     none in this run", 0),
+    # Not bound: this machine is no machine of the run, so the vLLM server is not offered either (r3).
+    ("unbound", "none", "vllm", {}, False, None, "– Measurement     none in this run", 0),
+    # Bound, but not to a profile the daemon may measure into (another fingerprint): Ollama offers
+    # nothing, the vLLM server of the chosen machine is offered.
+    ("foreign", "none", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM measured", 0),
+    ("foreign", "none", "vllm", {"load_test": False}, True, None, "– Measurement     none in this run", 0),
     ("fresh", "offline", "offline", {"load_test": False}, True, None, "– Measurement     none in this run", 0),
     ("fresh", "offline", "offline", {"load_test": True}, True, None, "– Measurement     none in this run", 1),
     ("fresh", "offline", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM ran, not counted", 0),
@@ -622,8 +659,8 @@ def test_every_state_of_step_four(tmp_path: Path, folder, daemon, servers, extra
     picked = [values[row] for row in rows or []]
     answers = {"load_test": True, "load_test_packages": picked, **extra}
     the_servers = vllm_servers() if servers == "vllm" else offline_servers()
-    if folder == "unbound":
-        code, lines = _run(tmp_path, {**ANSWERS, **answers}, servers=the_servers, bound=False)
+    if folder in ("unbound", "foreign"):
+        code, lines = _run(tmp_path, {**ANSWERS, **answers}, servers=the_servers, bound=folder == "foreign")
         asker_rows = None
     else:
         base = WITH_DEEPSEEK if folder == "deepseek" else FRESH
@@ -633,7 +670,7 @@ def test_every_state_of_step_four(tmp_path: Path, folder, daemon, servers, extra
 
     step = _step(lines, 4)
     assert any(line.startswith("? Measure the speed on this machine now?") for line in step) is asked
-    if folder != "unbound":
+    if folder not in ("unbound", "foreign"):
         assert asker_rows == (picked or None if rows else None)
     assert step[-1] == balance
     assert code == exit_code

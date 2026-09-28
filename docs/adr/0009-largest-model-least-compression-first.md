@@ -67,7 +67,8 @@ family is rated against another.**
    one this machine already has first; the column head of the model list stands outside its window.
 8. **Step 4 from one mould**: every server's notes, then one question `load_test`, then one list
    `load_test_packages` with the Ollama candidates and the row `vllm`. A vLLM number counts where the
-   served model is a model of the run and the server runs the run's context; the reason it will not
+   served model is a model of the run and the server runs the run's context; like the daemon, the
+   server is offered, measured and counted only where the run chose this machine; the reason it will not
    count stands before the question; the balance never says `vLLM measured` where nothing counts.
 
 ## Superseded sentences

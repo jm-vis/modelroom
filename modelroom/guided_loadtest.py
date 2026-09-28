@@ -239,7 +239,7 @@ class OllamaOffer:
 NOT_CHOSEN_LINE = "no load test: this machine is not part of this run's result"
 
 
-def _chosen_here(run: "GuidedRun", config: Configuration, profile_id: str) -> bool:
+def chosen_here(run: "GuidedRun", config: Configuration, profile_id: str) -> bool:
     """Whether a machine this run chose names the profile this machine is bound to."""
     return any(
         name in run.selection.machines and machine.profile == profile_id for name, machine in config.machines.items()
@@ -268,7 +268,7 @@ def ollama_offer(
     profile_id = _bound_profile_id(run, config, results_dir)
     if profile_id is None:
         return OllamaOffer()
-    if not _chosen_here(run, config, profile_id):
+    if not chosen_here(run, config, profile_id):
         # Its measurement would land in a profile the result of this run does not show (Codex F2).
         run.screen.note(NOT_CHOSEN_LINE)
         return OllamaOffer()
