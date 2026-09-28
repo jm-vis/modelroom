@@ -13,12 +13,14 @@ constructors, so every validator runs, and changes neither of the objects it was
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Iterable, Literal, Mapping
 
 from .catalog import Age
 from .config import Configuration
 from .contracts import Snapshot
 from .ranking import ModelFacts
+
+Origin = Literal["this", "imported", "entered", "folder"]
 
 # The note of a run that chose no model (Codex F1): an empty choice is a choice, and the result of
 # the run shows none of the folder's models; `modelroom render` without a run still shows them all.
@@ -41,6 +43,10 @@ class RunSelection:
     models: tuple[str, ...]
     release: Mapping[str, Age] = field(default_factory=dict)
     parameters: Mapping[str, float | None] = field(default_factory=dict)
+    # Where each chosen machine came from in this run (AP9-UX2 U2), in memory only: `this` (measured
+    # here, or its profile is the one bound to this folder and measured here), `imported`, `entered`
+    # (by hand in this run), `folder` (any other profile of the folder) -- in this order of precedence.
+    origins: Mapping[str, Origin] = field(default_factory=dict)
 
 
 def narrow(config: Configuration, snapshot: Snapshot, selection: RunSelection) -> tuple[Configuration, Snapshot]:
@@ -71,6 +77,32 @@ def narrow_snapshot(snapshot: Snapshot, selection: RunSelection) -> Snapshot:
     return Snapshot.model_validate(data)
 
 
+def machine_origins(
+    config: Configuration,
+    machines: Iterable[str],
+    *,
+    this: Iterable[str] = (),
+    imported: Iterable[str] = (),
+    entered: Iterable[str] = (),
+) -> dict[str, Origin]:
+    """The origin of every chosen machine by precedence (Codex r1-14): `this` machine names, then the
+    machines whose profile id this run imported (even one the folder held already), then entered, then
+    `folder`. `this` names machines, `imported` and `entered` profile ids."""
+    this, imported, entered = set(this), set(imported), set(entered)
+    origins: dict[str, Origin] = {}
+    for machine in machines:
+        profile = config.machines[machine].profile if machine in config.machines else None
+        if machine in this:
+            origins[machine] = "this"
+        elif profile in imported:
+            origins[machine] = "imported"
+        elif profile in entered:
+            origins[machine] = "entered"
+        else:
+            origins[machine] = "folder"
+    return origins
+
+
 def model_facts(selection: RunSelection) -> dict[str, ModelFacts]:
     """What the rule knows of each chosen model: the list's size, and whether step 2 called it `legacy`."""
     return {
@@ -79,4 +111,14 @@ def model_facts(selection: RunSelection) -> dict[str, ModelFacts]:
     }
 
 
-__all__ = ["NO_MACHINE_CHOSEN", "NO_MODEL_CHOSEN", "RunSelection", "model_facts", "narrow", "narrow_config", "narrow_snapshot"]
+__all__ = [
+    "NO_MACHINE_CHOSEN",
+    "NO_MODEL_CHOSEN",
+    "Origin",
+    "RunSelection",
+    "machine_origins",
+    "model_facts",
+    "narrow",
+    "narrow_config",
+    "narrow_snapshot",
+]

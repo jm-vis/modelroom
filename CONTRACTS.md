@@ -77,7 +77,10 @@ documented decision (`docs/adr/`), never a side effect.
 AP9-SV1 changes no persisted form (ADR 0008): a vLLM server's reading and its load test live in
 memory for one guided run and are written nowhere. AP9-UX changes no persisted form (ADR 0009): the
 selection of a run (`RunSelection`) lives in memory, and the render document keeps schema 3 -- its
-`ranked` carries other rows, and `rank` is the number of the row shown.
+`ranked` carries other rows, and `rank` is the number of the row shown. AP9-UX2 (ADR 0010) keeps
+snapshot schema 1 while `Architecture` gains the kind `hybrid_linear` and six `linear_*` fields,
+by the precedent of ADR 0007 (see "Architecture"); the origins of a run's machines, the free memory
+and disk and the pull choice live in memory; `search.json` keeps schema 3.
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -130,10 +133,16 @@ names a real model with a matching example.
 ### Architecture
 
 A base model's transformer shape, read from the *publisher* repo's `config.json` (packager
-GGUF repos never carry one). `kind` is `"dense_classic"` only when the three numeric fields
-are all present, `layer_types` is either absent or entirely `"full_attention"`, and none of
-the MoE fields below signal a mixture-of-experts model; a hybrid or MoE config, or a missing
-file, resolves to `"unknown"` with the numeric fields left at `None`. The MoE check looks at
+GGUF repos never carry one; the reader is `modelroom/architecture.py`). `kind` is
+`"dense_classic"` only when the three numeric fields are all present, `layer_types` is either
+absent or entirely `"full_attention"`, and none of the MoE fields below signal a
+mixture-of-experts model. It is `"hybrid_linear"` (AP9-UX2, ADR 0010) under exactly these
+invariants and no MoE field: the three numeric fields; `layer_types` of `num_hidden_layers`
+entries, each `"full_attention"` or `"linear_attention"`, both present; and the five
+`linear_*` fields of the config -- Qwen3.5 is the case. `linear_state_bytes` is read from
+`mamba_ssm_dtype` (`float32` 4, `bfloat16`/`float16` 2, a missing field 4 as a documented
+assumption; another dtype is `"unknown"`). Any other config, MoE included, or a missing file
+resolves to `"unknown"` with the numeric fields left at `None`. The MoE check looks at
 both the top level of `config.json` and, when present, its `text_config`: any of
 `num_local_experts`, `num_experts`, `n_routed_experts`, `num_experts_per_tok` or
 `moe_intermediate_size` present with a value other than `null` rules out `dense_classic` even
@@ -144,12 +153,19 @@ interpreted: a dense decoder does not carry these fields at all.
 |---|---|---|---|
 | `source_repo` | `str` | -- | the publisher repo the config was read from |
 | `source_revision` | `str \| None` | 40-hex commit sha, or `None` | the commit the config was read at |
-| `kind` | `"dense_classic" \| "unknown"` | see above | whether the shape is a plain decoder-only transformer |
-| `num_hidden_layers` | `int \| None` | `0 < n <= 2**31 - 1`; required when `kind == "dense_classic"` | transformer block count |
-| `num_key_value_heads` | `int \| None` | `0 < n <= 2**31 - 1`; required when `kind == "dense_classic"` | KV heads (for GQA/MQA KV-cache sizing) |
-| `head_dim` | `int \| None` | `0 < n <= 2**31 - 1`; required when `kind == "dense_classic"` | per-head dimension |
-| `layer_types` | `list[str] \| None` | `None` or all `"full_attention"` when `kind == "dense_classic"` | per-layer attention kind, when the config states one |
+| `kind` | `"dense_classic" \| "hybrid_linear" \| "unknown"` | see above | a plain decoder-only transformer, one with linear-attention layers between its full-attention ones, or neither |
+| `num_hidden_layers` | `int \| None` | `0 < n <= 2**31 - 1`; required unless `kind == "unknown"` | transformer block count |
+| `num_key_value_heads` | `int \| None` | `0 < n <= 2**31 - 1`; required unless `kind == "unknown"` | KV heads (for GQA/MQA KV-cache sizing) |
+| `head_dim` | `int \| None` | `0 < n <= 2**31 - 1`; required unless `kind == "unknown"` | per-head dimension |
+| `layer_types` | `list[str] \| None` | `None` or all `"full_attention"` when `dense_classic`; `hybrid_linear`: `num_hidden_layers` entries of `"full_attention"` and `"linear_attention"`, both present | per-layer attention kind, when the config states one |
 | `max_context` | `int \| None` | `0 < n <= 2**31 - 1` | the model's trained maximum context length |
+| `linear_num_key_heads`, `linear_num_value_heads`, `linear_key_head_dim`, `linear_value_head_dim`, `linear_conv_kernel_dim` | `int \| None` | `0 < n <= 2**31 - 1`; required when `hybrid_linear`, `None` otherwise | the state of a linear-attention layer (AP9-UX2) |
+| `linear_state_bytes` | `int \| None` | `0 < n <= 2**31 - 1`; required when `hybrid_linear`, `None` otherwise | bytes of one state element, from `mamba_ssm_dtype` (4 when the config names none) |
+
+**Persisted form (ADR 0010).** The snapshot keeps schema 1 with the new `kind` value and the six
+fields, by the precedent of ADR 0007: a snapshot the 0.1.0 reader wrote reads on (the fields are
+`None`), and the next `fetch` reads `config.json` again; the 0.1.0 reader does not read a snapshot
+rewritten by a later version in any case.
 
 **Upper bound `2**31 - 1` (R7-10, fix-round 6).** `> 0` alone never bounded the top end: a
 publisher `config.json` value like `10**400` (which `json.loads` parses without complaint)
@@ -1609,9 +1625,10 @@ always label this result "fit (computed, v1)", never "runs"** -- it is computed 
 memory-sizing formula, not a measurement of the package actually loading and generating
 tokens (that is what `Measurement`/`bench`, a later work package, are for).
 
-**Coverage.** Only `base_model.architecture.kind == "dense_classic"` is judged by this formula;
-anything else (including a hybrid or MoE architecture resolved to `"unknown"`, e.g.
-`Qwen/Qwen3.5-9B`) comes back `fit_class="unknown"`,
+**Coverage.** A `base_model.architecture.kind` of `"dense_classic"` or, since AP9-UX2 (ADR 0010),
+`"hybrid_linear"` (e.g. `Qwen/Qwen3.5-9B`) is judged by this formula; anything else (an MoE
+architecture, a hybrid one that does not meet the invariants, resolved to `"unknown"`) comes back
+`fit_class="unknown"`,
 `reason="architecture not covered by v1"` from `compute_fit`, and is computed from its size by
 `compute_fit_v2` instead ("Fit from size (basis `size`)" below, decided 2026-09-24). Only a `complete`
 `format == "gguf"` package is judged; an incomplete package or a non-GGUF (`tensor`) package
@@ -1627,16 +1644,24 @@ never print them for an `"unknown"` fit.
 - `context` = `package.default_context` when the package states one, else `8192`
   (`context_assumed=True` in that case). The assumption is deliberately visible in the result,
   never silently baked into `need_gib` alone.
-- `kv_gib = 2 * L * KVH * D * 2 bytes * context / 1024**3`, where `L =
-  architecture.num_hidden_layers`, `KVH = architecture.num_key_value_heads`, `D =
-  architecture.head_dim` -- the standard KV-cache size for a GQA/MQA transformer at 16-bit
-  precision (`2 bytes` per element, the leading `2` for key and value each).
+- `kv_gib = (kv_token_bytes * context + state_bytes) * requests / 1024**3`
+  (`modelroom/architecture.py`): `kv_token_bytes = 2 * L * KVH * D * 2 bytes`, where `L =
+  architecture.num_hidden_layers` for `dense_classic` and the number of `"full_attention"` layers
+  for `hybrid_linear`, `KVH = architecture.num_key_value_heads`, `D = architecture.head_dim` --
+  the standard KV-cache size for a GQA/MQA transformer at 16-bit precision (`2 bytes` per element,
+  Ollama's default, the leading `2` for key and value each). `state_bytes` is `0` for
+  `dense_classic`; for `hybrid_linear` it is the state each request keeps in its
+  `"linear_attention"` layers whatever the context: `n_linear x (value_heads x key_dim x
+  value_dim + (conv_kernel - 1) x (2 x key_heads x key_dim + value_heads x value_dim)) x
+  linear_state_bytes`. Qwen3.5-9B and -4B: `kv_token_bytes` 32,768 (8 of 32 layers), `state_bytes`
+  52,690,944 -- the size basis below overstated their KV cache by 4.5 times (L 32k: 4.50 GiB
+  instead of 1.00 GiB).
 - `need_gib = weights_gib * 1.10 + kv_gib + 0.50` -- a 10 % overhead on the weights themselves
   (allocator/runtime overhead) plus a flat 0.50 GiB fixed cost (activations and other small
   buffers), on top of the KV cache.
 
 **Pool and mode.** `available_vram = hardware.vram_gib - machine_config.reserve_vram_gib`.
-When `need_gib <= available_vram`, the package fits the GPU: `mode="gpu"`, `pool_gib =
+When `need_gib <= 0.98 x available_vram` (`TIGHT_RATIO`, AP9-UX2 P2), the package fits the GPU: `mode="gpu"`, `pool_gib =
 available_vram`, `reserve_gib = reserve_vram_gib`. Otherwise it falls back to the RAM pool:
 `pool_gib = hardware.ram_gib - machine_config.reserve_ram_gib`, `reserve_gib =
 reserve_ram_gib`, `mode="cpu_gpu"` when `hardware.vram_gib > 0` (some GPU exists, just not
@@ -1648,15 +1673,23 @@ one `vram_gib` is one card above 0, else none. The rule, in order:
 
 1. Unified memory, as below.
 2. One card first, the way Ollama loads a model, and only with at least one card:
-   `available_one = max(cards) - reserve_vram_gib`; when `need_gib <= available_one`, `mode="gpu"`,
+   `available_one = max(cards) - reserve_vram_gib`; when `need_gib <= 0.98 x available_one`, `mode="gpu"`,
    `pool_gib = available_one`, `reserve_gib = reserve_vram_gib`, not capped. With one card this
    is the rule above, and no value of a fit changes.
 3. All cards, with two or more: `available_all = sum(card - reserve_vram_gib)` -- each card keeps
-   its own reserve; when `need_gib <= available_all`, `mode="gpu_split"`, `pool_gib =
+   its own reserve; when `need_gib <= 0.98 x available_all`, `mode="gpu_split"`, `pool_gib =
    available_all`, `reserve_gib = n x reserve_vram_gib` (the reserve of all cards), **not capped**:
    the package lies in graphics memory whole, and what the spread costs is speed, which the load
    test measures.
 4. The system memory as above: `mode="cpu_gpu"` with cards, `"cpu"` without, capped at `fits`.
+
+**A pool is chosen only where the package fits it (AP9-UX2 P2, ADR 0010):** "fits" means `need_gib
+<= TIGHT_RATIO x pool` with the pool after its reserve, the same line the classification draws.
+Until then a package between 98 and 100 % of the card was chosen for the card and classified
+`no_fit` there, although the next pool held it (`Q4_K_M` of Qwen3.5-9B at L 32k on the laptop
+of the fixtures: 10.82 GiB on 10.99 GiB). The last pool -- the system memory, or unified memory,
+which has no fallback -- is classified as it is: above 98 % it stays `no_fit`. `no_fit` therefore
+means that no pool holds the package with a margin of 2 %.
 
 The size basis keeps its cap at `fits` on every pool. `OLLAMA_SCHED_SPREAD=1` makes the daemon
 spread a model although one card holds it: the fit then says `gpu` and the daemon spreads all the
@@ -1725,8 +1758,8 @@ replaced:
   always, and `kv_gib = context x KV_PER_TOKEN_SIZE_BASIS x requests / 1024**3` with
   `KV_PER_TOKEN_SIZE_BASIS = 147_456`
   bytes (`2 x 36 layers x 8 KV heads x 128 wide x 2 bytes`, the numbers of a dense 9B model at
-  16-bit precision). `compute_fit_v2` calls it for every package whose architecture is not
-  `dense_classic`.
+  16-bit precision). `compute_fit_v2` calls it for every package whose architecture is
+  `unknown` (since AP9-UX2 a `hybrid_linear` one is computed on its architecture).
 - `fit_from_parameters(parameters_b, vram_gib, ram_gib, machine_config, context, *, requests=1,
   shared_memory=False)` -- before the fetch, for the selection list of the guided mode's step 2
   (`guided_models.model_fit` hands it `[guided].requests` and the memory the ranking would read,
@@ -3577,13 +3610,46 @@ once per distinct resolved base model in a search, not once per hit. `repo_creat
 labeled "repo created" and is never read as a release date or as an age. Every age this section
 decides is `stated` (`SearchHit.release_basis`).
 
-**Computed release** (`modelroom/search_release.py`, decided 2026-09-25). Where no statement
-decides -- `decide_age` said `unknown` **because the catalog is silent** (`AgeVerdict.evidence ==
-"catalog"`) -- the list computes a status from the names of one family instead of keeping a
-maintained list of successors. `run_search` does it once every age lookup is done, without a request
-of its own, and rebuilds each such hit through `SearchHit.model_validate`, so the coupling checks
-run. It reaches the list (`latest*`, `legacy*`) and `search.json`, never the catalog, the
-configuration or the document.
+**Computed release** (`modelroom/search_release.py`, decided 2026-09-25, reworked by AP9-UX2 U5
+after GF F3, ADR 0010). The list computes a status from the version numbers of one **line** of one
+publisher's family instead of keeping a maintained list of successors. `run_search` does it once
+every age lookup is done, without a request of its own, and rebuilds each such hit through
+`SearchHit.model_validate`, so the coupling checks run. It reaches the list (`latest*`, `legacy*`)
+and `search.json`, never the catalog, the configuration or the document.
+
+**Since AP9-UX2 (these rules replace the ones below where they differ).**
+
+- **Family, line, variation.** The **family** is the first word of the name (`qwen3.5` -> `qwen`); a
+  name that starts with a size, a version or a date has no reading. A **line** is a size step with
+  a name and a version series of its own, from the documented vocabulary `LINE_WORDS = {small,
+  medium, large}` and `LINE_COUNTERS = {r}` (a word of that letter and a number, `r1`, is line `r`
+  with the version `(1,)` where the name carries no other); the first such word of the name. Every
+  other word is a **variation** (`base`, `instruct`, `mini`, `flash`, `vl`, `coder`, `next` ...;
+  `instruct`, `it`, `chat` say nothing). New line words come only with a GF decision and a test.
+- **Group** = `(publisher, family, line)`: a variation belongs to its version, so a higher version,
+  whatever its publisher's variation, makes every variation of the lower one `legacy`; a line is
+  not superseded by another line (`Mistral-Small-3.2` stays `latest` beside `Mistral-Large-3`).
+- **Population** adds the unresolved repositories of a listed packager (`publisher_status ==
+  "listed packager"`), read without `-GGUF`, when their family is the family of **exactly one**
+  publisher of the population; they count under that publisher, prove a higher version and can be
+  the successor (the packager's repository then). Ollama names without a Hub hit are not seen.
+- **Successor, always one** where there is a candidate: of the maximal members, the same size, else
+  the next larger, else the next smaller, a candidate without a size last (for a row of unknown
+  size the largest known); then the same variation before another; then the fewest variations;
+  then the name.
+- **Stated against computed.** A stated `legacy` stays, always. A **catalog** `latest` gives way to a
+  computed `legacy` only where a member carries a **strictly higher version number** (the catalog
+  ages); a later date of the same version does not overrule it, while a computed status still reads
+  the date. A silent catalog's `unknown`
+  is computed. An `unknown` from a **fault** (a broken `new_version`, a budget) is computed too --
+  `legacy` where a member stands over it, `unknown` otherwise -- and the fault is a note of step 2 of
+  its own: `<name>: its own statement did not read (<fault>)`, cut to 97 characters.
+- **Cycles choose only the successor.** Of the candidates in the order above, the first whose edge
+  closes no cycle with the **stated** edges; where every one does, the first all the same and the
+  note `<name>: the successor statements around it contradict each other`. No status falls for a
+  cycle.
+
+**Until AP9-UX2**, as decided 2026-09-25 (kept for the record):
 
 - **A name as a key** (`line_key`). The name half of the repository id is lowercased and split at
   `-` and `_`; each token takes the first class that matches, in this order: precision (`bf16`,
@@ -3735,10 +3801,26 @@ neither of the last two. The hints are prose, so they say `no fit`; the cell say
 step's head; `modelroom render` writes the two files and stays silent unless a caller asks for it.
 The guided mode draws the head and the card itself and then prints `views.terminal_lines`, which is
 the blocks alone. It shows fewer columns than the Markdown table (a terminal is narrow) and the ones
-a reader recognizes a package by: `#` (3), `Model` (24, the base model's name without its account),
-`Package` (22, `packager · quant`, cut with `…` where it does not fit), `Fit` (20), `Speed` (12) and
-`Memory` (8, `need_gib` as `GB` with one decimal). With the one space every line is indented by,
-that is 100 characters, and no line of this view is wider.
+a reader recognizes a package by: `#` (3), `Model` (22, the base model's name without its account),
+`Package` (22, `packager · quant`, cut with `…` where it does not fit), `Fit` (12, the longest word
+`tight (RAM)` is 11), `Speed` (12, up to `9999.9 tok/s`), `Memory` (8, `need_gib` as `GB` with one
+decimal) and, since AP9-UX2 (U8), `Download` (8, `weights_gib` as `GB`: the weight files a pull
+brings). With the one space every line is indented by, that is 100 characters, and no line of this
+view is wider but the repository lines and the commands below.
+
+**Under the head, the room left** (AP9-UX2 U8, GF F5): a line `free      graphics 10.2 GB free now ·
+disk 41.2 GB free on C: (Ollama models)`, read live when step 5 draws (`room.py`): the free memory
+of each card of this machine's profile through `nvidia-smi --query-gpu=index,name,memory.free`
+(`21.0 + 21.0 + 20.4 + 21.0 GB free now` for several), matched by index, and the free disk where
+Ollama keeps its models (see "The pull"). Whatever cannot be read -- no `nvidia-smi`, a timeout, a
+line that does not read, cards whose number or names differ from the profile, unified memory, no
+NVIDIA card -- is `unknown`, never `none`. A machine that is not this one says `free      unknown on
+another computer`; `modelroom render`, which reads no machine live, says `free      graphics unknown
+· disk unknown (modelroom render reads no machine live)`. The two pieces break onto two lines where
+they would pass 100 columns (several cards). The choice of a pool and the class compare the very
+same ratio `need / pool` with `TIGHT_RATIO`, so they never disagree at a floating-point edge. A machine of the run that is not this
+computer says so in its head too (U2): `server (a1b2c3d4) · imported · context L 32k`, or `· another
+computer` for an entered machine or another profile of the folder.
 
 Above each machine's table stands `<label> · context L 32k`, and `<label> · <status>` with its
 reason for a machine that is not `ranked` (decided 2026-09-24: `Ranking: dellpromax-jv
@@ -3766,8 +3848,11 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    one, then none; the count and the reason never do, and no name is cut in the middle (a piece of 137
    characters was measured in the second-model round of 2026-09-24).
 2. `memory` -- the fit of the ranked rows **bundled by memory pool**, with their rank ranges and
-   **one pool per line**: `#1–2 fit into graphics memory, 10.9 GB free after the reserve`, `#3 fits
-   into graphics memory, spread over the cards, 44.0 GB free after the reserve on each card`, `#4–5 need
+   **one pool per line**: since AP9-UX2 (U8, F5) the pool is the fit's **budget**, labeled as such
+   next to the free memory of the head: `#1–2 fit into graphics memory, budget 10.9 GB (card minus
+   reserve, from the profile)`, `#3 fits into graphics memory, spread over the cards, budget 44.0 GB`
+   with `(cards minus the reserve on each, from the profile)` on a line of its own where the
+   statement is longer than the room, `#4–5 need
    system memory, the graphics card helps`, `#6 needs system memory, no graphics card`. Two
    statements about two memories joined by a `·` read as one. The numbers come from the fields of
    `Fit`, never from parsing a note's own sentence back apart.
@@ -3795,7 +3880,12 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    looked up; a package with no such name has no line. `modelroom render` draws no such line at all:
    a configuration may name several writers, and which of them the command runs on it cannot know
    (second-model round, 2026-09-24). It is a command to copy, so it is never cut, and it is the one
-   line of this view that may pass 100 characters. Installing is a work package of its own.
+   line of this view that may pass 100 characters. Installing is a work package of its own. Since
+   AP9-UX2 (U3) every other machine of a guided run with an Ollama name in `#1` gets `install   #1 on
+   server (a1b2c3d4)  ollama pull <name>` and under it `run it on that computer; this run pulls only
+   onto this one` -- no pull, no question; a pull name that is not unique has the note `#1 has no
+   command: its pull name is not unique` instead (U4). Rows that look alike carry a `repo` line each
+   directly under the table (U4, "The pull").
 
 Ten rows carried ten notes of the same two sentences and 41 lines of `not covered` said the same
 thing 41 times in the test rounds of 2026-09-24; a reader needs each statement once, with the ranks
@@ -4418,6 +4508,21 @@ quantization word; `hf.py`, `contracts.py` and `provenance.py` unchanged). None 
 package of this folder comes from <root>`; several (one repository at several revisions) is `the
 server names none of the <k> tensor packages of <root>`, and there is no fit.
 
+**The publisher's repository is always a target** (AP9-UX2 P3, GF F8, ADR 0010). Until then a
+guided run wrote only the repository of the hit that led to a base model -- a packager's GGUF
+repository, as a rule -- as its `repos` target, so the fetch never read the publisher's `tensor`
+package and a server serving the base model found none (second hand run, 2026-09-28).
+`search_apply.apply_hits` now adds every resolved base model's **own** repository as a `repos`
+target where it is not one yet, once; the fetch reads it in the publisher's area and records its
+`tensor` package (`unresolved`/`format`, outside ranking, balance and card). `match_served` is
+unchanged. The cost per base model without such a target before: one model info besides the meta
+request, and the pages of its tree (usually one). `Qwen/Qwen3.5-4B` has one such package: two
+safetensors shards of 5,329,398,688 and 3,990,429,408 bytes (public Hub tree), which
+`normalize_file_stem` groups under one stem. Configurations written by hand and `package_targets`
+are unchanged. The vLLM fit of a `hybrid_linear` model counts only its full-attention layers per
+token and its linear-layer state once per request: `at_once = floor(kv_bytes / (per_token x context
++ state_bytes))` (P1).
+
 **The load test** (`modelroom/loadtest_vllm.py`). One warm-up request, then three batches of `n =
 min(scenario.requests, 64)` requests at once; the scenario itself never changes. Each request is
 the one recorded against vLLM 0.30.0: a chat of 128 tokens, temperature 0.0, seed 42, not streamed,
@@ -4642,6 +4747,15 @@ first thing a run prints is never a traceback.
 **Which folder.** `--config <path>` wins over the pointer file's `current`. A `--config` that
 names no file, and a remembered folder that no longer holds a `modelroom.toml`, are said out
 loud and the folder question is asked again -- neither is silently replaced by a new folder.
+Since AP9-UX2 (U1, GF F1; `modelroom/guided_folder.py`) a remembered folder that is not the one the
+run was started in is a question too, with `the folder of the last run (<path>)` first and the
+pointer on it, then `this folder (<here>)`, then `another path`; the start screen says `the folder
+of the last run, not this one`. Every comparison is on resolved paths; the same folder asks
+nothing. Before anything is written or migrated, a chosen folder that is the home folder or the
+top of a drive is a question (U7, GF F2): a note (`this is your home folder: modelroom.toml, docs
+and state would land in it`, or `this is the top of a drive: ...`) and `Write the results into
+this folder anyway?`, No by default; No asks for a path with `<home>/modelroom` offered, and at a
+terminal the question comes again while the answer is such a folder.
 
 **Five steps.** Each one is a block: a head of 72 characters (`── Step <n> of 5  <name> ───…`), one
 answer line per question, at most two notes, and one balance line -- a check mark, the step's name
@@ -4670,8 +4784,9 @@ matter, so the move is invisible to it.
 
 | # | Key | Question | Answer |
 |---|---|---|---|
-| 1 | `results` | Where should results live? | `here` or `path` |
-| 1 | `results_path` | Path to the results folder | text (only after `path`) |
+| 1 | `results` | Where should results live? | `here` or `path`; `last` too where the pointer file remembers a folder with a configuration that is not this one (AP9-UX2 U1, the pointer starts on it) |
+| 1 | `results_path` | Path to the results folder | text (only after `path`, or after `write_home` false: then `<home>/modelroom` is offered) |
+| 1 | `write_home` | Write the results into this folder anyway? | true/false, default false (only when the chosen folder is the home folder or the top of a drive, AP9-UX2 U7; an answer file whose `results_path` names one again ends with exit 2) |
 | 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
 | 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `enter` and `profile:<profile_id>` for a profile of the folder a machine names (AP9-UX C1) |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
@@ -4691,7 +4806,8 @@ matter, so the move is invisible to it.
 | 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
 | 4 | `load_test` | Measure the speed on this machine now? | true/false, default false; one question for every local server (AP9-UX E); **one of the two optional answers** -- an answer file that does not mention it does not measure |
 | 4 | `load_test_packages` | Which of these should be measured? | a list of local Ollama names and `vllm` for a vLLM server that states a model (only after `load_test` true, where a server offers a row) |
-| 5 | `pull` | Pull #1 into Ollama now? (the screen adds the weight of the row: `(6.1 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a first row that has an Ollama name and is not local already, and a daemon the start screen reached) |
+| 5 | `pull_package` | Which package should be pulled into Ollama? | the Ollama name of a row of the list, or `none` (AP9-UX2 U6); optional: without it `#1` is taken where it has a pull name of its own, else nothing; a name the list does not offer, or a locked row, is exit 2 |
+| 5 | `pull` | Pull #1 into Ollama now? (the screen names the row chosen and adds its weight: `Pull #3 into Ollama now? (5.0 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a chosen row that has an Ollama name of its own and is not local already, enough disk or disk unknown, and a daemon the start screen reached) |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
@@ -4867,6 +4983,16 @@ Machines table `<name> (entered) (<profile_id>)`, and the card of step 5 `graphi
 memory, entered` (or `no graphics card, …`, `shared memory 32 GB, entered`) -- no date and never
 `measured`. Unified memory computes as one pool, the memory minus both reserves, and its rows say
 `shared memory` ("Fit contract v1", "Unified memory").
+
+**Where a machine of the run came from** (AP9-UX2 U2; `RunSelection.origins`, in memory only). Step 1
+keeps imported and entered machines apart; each chosen machine is `this` (measured in this run, or
+its profile is the one bound to this folder and measured here, `profile:<id>`), else `imported`
+(its profile id came from this run's import, even one the folder held already), else `entered`,
+else `folder`. On the card, under the machine row of every machine that is not `this`, a line
+without a label: `imported profile · not this computer`, `profile from this folder · not this
+computer`; an entered machine keeps its own words. The card of an empty step 5 does the same. The
+table head says `· imported` or `· another computer` (see "The terminal view"); the Markdown view is
+unchanged, since the document does not know the origin.
 
 **Step 2, search, choice and fetch.** The two search questions, the search itself and its notes live
 in `modelroom/guided_search.py` (`search_step`, since 2026-09-25); the choice and the write-back into
@@ -5172,6 +5298,41 @@ the note). The question is the Yes/No list of the dialog, default `No`:
 column of the table. Its answer file key is `pull`, optional like `load_test`. **The install line
 stays in every case**, for anyone who prefers to paste it.
 
+**Since AP9-UX2 the user chooses the package** (U6, GF F4; `modelroom/pull_choice.py`; ADR 0009 and
+its rule stay unchanged). Where a shown row of this machine has an Ollama name, the step first asks
+`Which package should be pulled into Ollama?` (key `pull_package`): one row per row of the table,
+regular and appended measured ones, in table order -- `#1  unsloth · Q4_K_S  5.0 GB
+hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S`, the name last and whole, `local already` behind a row the
+daemon provably holds -- then `none, do not pull`. A row without an Ollama name is locked (`no pull
+name`), so is every row whose name is not unique (below). The pointer starts on the first row that
+can be chosen, nothing is marked. After the choice the pull part names it, `install   #3  ollama
+pull <name>`, then checks the disk, then asks `Pull #3 into Ollama now? (5.0 GB)`; a local row is
+the note instead and no question; `none` is nothing. An answer file without `pull_package` takes
+`#1` where it has a name of its own, else nothing -- the behavior before.
+
+**The disk, checked again before the pull** (U8, GF F6). Measured fresh after the choice, never the
+number of the table head: the place Ollama keeps its models is approximated (`room.py`:
+`OLLAMA_MODELS`, else the user default `~/.ollama/models` and on Linux the service default
+`/usr/share/ollama/.ollama/models`, the one that exists; none: the user default; both: unclear),
+measured at the nearest existing folder, on its drive (`C:`, a UNC path is `network share`, a POSIX
+path its mount point). Need = the weight files of the package + `PULL_DISK_MARGIN_BYTES` (1 GiB).
+Free at least the need: the question. Less: no question, no POST, `install   not enough disk for
+#3: needs 37.9 GB, 21.4 GB free on C:` -- no `run.failed`, the command above stays to copy.
+Unknown or unclear: the question, with the note `disk space where Ollama keeps its models is not
+known` before it. A pull that fails on a full disk all the same is a fault as below.
+
+**Pull names that are not unique** (U4, GF F7). The name of a pull (`hf.co/<repo>:<quant>`, or an
+Ollama name) does not tell file forms apart. `pull_choice.pull_collisions` collects every name more
+than one package identity answers to, over every active, complete GGUF or Ollama package of the
+run's base models **before** the eligibility filter and whatever its provenance -- an approved row
+can have an `unresolved` counterpart the render hides. Such a name belongs to no row: every row with
+it says `#2 has no unique pull name: 2 files answer to it` in its `shown` line, is locked in the
+list, has no install line (`#1 has no command: its pull name is not unique`) and no disk check --
+also where the counterpart is not shown. Rows that look alike (the same `packager · quant` among
+the rows shown) name their repository under the table, `repo      #2  unsloth/Qwen3.5-9B-GGUF`,
+with the file form where one repository has both (`BF16/ (folder)`, `(single file)`); the Markdown
+view says the same under its table. Nothing is merged, no measurement moves.
+
 - **Local already.** Before asking, the step reads `/api/tags` and applies the load test's own rule
   (`loadtest.installed_candidates`): a registry package by its manifest digest, a `hf.co/…` name by
   its name **and** its weight digest through `/api/show`. A row proven that way is no question but a
@@ -5203,8 +5364,9 @@ stays in every case**, for anyone who prefers to paste it.
   during a pull adds `a canceled pull resumes with the same command` and goes up to the central
   handler, which says the run was stopped and ends with `130` -- both lines on purpose: Ollama keeps
   what arrived, and the next pull of the same name goes on from there. A `No` is no fault.
-- **What is not checked:** the free space where the daemon keeps its models (where that is cannot
-  be read from outside the daemon), whose daemon answers on the port (the documented limit of the
+- **What is not checked:** where the daemon really keeps its models (it cannot be read from outside
+  the daemon; since AP9-UX2 the disk is checked at the approximated place above), whose daemon
+  answers on the port (the documented limit of the
   transport), and another process pulling the same name at the same time -- Ollama shares the
   progress of one pull between its callers, and this step reads whatever the daemon reports.
 - **What is not written:** no configuration, no state file, no document. The pull changes the

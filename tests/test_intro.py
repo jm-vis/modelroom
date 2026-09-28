@@ -175,6 +175,21 @@ def test_a_run_with_no_folder_yet_says_the_first_question_asks():
     assert "first question" in folder.note
 
 
+def test_a_remembered_folder_that_is_not_this_one_says_so(tmp_path: Path):
+    """AP9-UX2 U1: the start screen names the folder of the last run as what it is (40 characters)."""
+    config = tmp_path / "last" / "modelroom.toml"
+    config.parent.mkdir()
+    config.write_bytes(b"schema_version = 3\n")
+    intro = collect_intro(
+        _daemon(), windows_probes(), Path("nowhere") / "guided.json", config, ServerRun(offline_servers()), last_elsewhere=True
+    )
+
+    folder = intro.facts[0]
+    assert (folder.value, folder.note) == (str(config.parent), "the folder of the last run, not this one")
+    assert len(folder.note) == 40
+    assert _intro(config_file=config).facts[0].note != folder.note  # the same folder says what it holds
+
+
 def test_a_reachable_daemon_is_named_with_its_version_and_its_number_of_models():
     daemon = _intro().facts[1]
 

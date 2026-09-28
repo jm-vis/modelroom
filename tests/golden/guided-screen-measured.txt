@@ -52,13 +52,13 @@
  result    docs\models.md          24 packages ranked, 0 no fit
 
  workstation · context S 8k
- #    Model                     Package                 Fit                   Speed         Memory
+ free      graphics 10.2 GB free now · disk 41.2 GB free on C: (Ollama models)
+ #    Model                   Package                 Fit           Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    DeepSeek-R1-0528-Qwen3-8  unsloth · Q4_K_M        fits                  <speed>    6.8 GB
- 2    Qwen3.5-9B                unsloth · UD-Q6_K_XL    tight                 –             10.6 GB
+ 1    DeepSeek-R1-0528-Qwen3  unsloth · Q4_K_M        fits          <speed>    6.8 GB    4.7 GB
+ 2    Qwen3.5-9B              unsloth · Q8_0          tight         –             10.6 GB   8.9 GB
  shown     2 rows of 24 packages, one row per model
- memory    #1–2 fit into graphics memory, 11.0 GB free after the reserve
- basis     #2 computed from the package size, not its architecture
+ memory    #1–2 fit into graphics memory, budget 11.0 GB (card minus reserve, from the profile)
  speed     #1 measured <speed>
  key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
            fits: up to 85 % · tight: up to 98 % · no fit: more

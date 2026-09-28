@@ -65,6 +65,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -226,13 +227,10 @@ def search_problems(log: dict, lines: list[str]) -> list[str]:
 
 
 def ranking_problems(text: str, machine: str, block: dict) -> list[str]:
-    """Criterion 4: the header carries rule and context, and Qwen3.5 is judged from its size.
+    """Criterion 4: the header carries rule and context, and Qwen3.5 is judged on its architecture.
 
-    `entered` and not `default`: everything the dialog writes is a decision of the user, 8192
-    included -- `default` is what the three automation commands assume when nobody chose one
-    (CONTRACTS.md, "Guided mode", step 3). Qwen3.5 is a hybrid architecture fit v1 cannot read;
-    since 2026-09-24 that is no longer a reason to set its packages aside but to compute them
-    from their size (`basis: "size"`), so this criterion watches exactly that.
+    `entered`, not `default`: everything the dialog writes is the user's decision (CONTRACTS.md,
+    "Guided mode", step 3). Qwen3.5 is `hybrid_linear` since AP9-UX2 (P1, ADR 0010), `basis: "architecture"`.
     """
     lines = text.splitlines()
     problems = []
@@ -246,8 +244,8 @@ def ranking_problems(text: str, machine: str, block: dict) -> list[str]:
     ]
     if not judged:
         problems.append(f"no package of {QWEN_BASE} was judged on this machine")
-    if any(entry["fit"]["basis"] != "size" for entry in judged):
-        problems.append(f"a package of {QWEN_BASE} was judged on another basis than its size")
+    if any(entry["fit"]["basis"] != "architecture" for entry in judged):
+        problems.append(f"a package of {QWEN_BASE} was judged on another basis than its architecture")
     stale = [entry["reason"] for entry in block["not_covered"] if entry["reason"] == "architecture not covered by v1"]
     if stale:
         problems.append(f"{len(stale)} packages are still set aside as not covered by v1")
@@ -419,14 +417,19 @@ def model_list_problems(models: list[str]) -> list[str]:
     return problems
 
 
+_FREE_LINE = r"free\s+graphics (?:unknown|[\d.]+(?: \+ [\d.]+)* GB free now) [·.-] disk (?:unknown.*|[\d.]+ GB free on .+ \(Ollama models\))"
+
+
 def result_table_problems(lines: list[str]) -> list[str]:
     """Criterion 7, the result table: the columns of the mockup, and every note said once."""
     problems = []
     head = next((line for line in lines if "Model" in line and "Package" in line and "Fit" in line), None)
     if head is None:
         problems.append("the result view has no table head with Model, Package and Fit")
-    elif head.split() != ["#", "Model", "Package", "Fit", "Speed", "Memory"]:
+    elif head.split() != ["#", "Model", "Package", "Fit", "Speed", "Memory", "Download"]:
         problems.append(f"the columns of the result table are {head.split()}")
+    if not any(re.fullmatch(_FREE_LINE, line.strip()) for line in lines):  # AP9-UX2 U8: the form, not the numbers
+        problems.append("the table head carries no free line of the expected form")
     if not any(line.strip().startswith("shown ") for line in lines):
         problems.append("the result table says not how many of its rows are shown")
     if not any(line.strip().startswith("install ") for line in lines):
@@ -600,13 +603,13 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             + next(line.strip() for line in lines if "you can pick from" in line),
         ),
         Step(
-            "(4) the ranking carries rule and context, Qwen3.5 is judged from its size",
+            "(4) the ranking carries rule and context, Qwen3.5 is judged on its architecture",
             not ranking_problems(text, machine, block),
             "\n".join(ranking_problems(text, machine, block))
             or f"{len(block['ranked'])} ranked, {len(block['no_fit'])} no fit, "
             f"{len(block['not_covered'])} not covered; "
-            f"{sum(1 for e in block['ranked'] + block['no_fit'] if e['fit']['basis'] == 'size')} "
-            f"rows judged from the size",
+            f"{sum(1 for e in block['ranked'] + block['no_fit'] if e['fit']['basis'] == 'architecture')} "
+            f"rows judged on the architecture",
         ),
     ]
     return steps, lines

@@ -108,9 +108,11 @@ def test_unified_memory_stays_its_own_pool():
 
 @pytest.mark.parametrize(("sizes", "need"), [((8.0,), 5.0), ((8.0,), 7.5), ((0.5,), 3.0), ((), 3.0), ((12.0,), 11.0)])
 def test_every_value_of_a_one_card_fit_is_the_same_as_before(sizes, need):
-    """The rule before 2026-09-26, written out: one VRAM minus its reserve, else the RAM."""
+    """The rule before 2026-09-26, written out: one VRAM minus its reserve, else the RAM -- chosen
+    since AP9-UX2 only where the package takes at most 98 % of it (P2)."""
     vram = sizes[0] if sizes else 0.0
-    before = ("gpu", vram - 1.0, 1.0, False) if need <= vram - 1.0 else ("cpu_gpu" if vram > 0 else "cpu", 24.0, 8.0, True)
+    fits_card = need <= 0.98 * (vram - 1.0)
+    before = ("gpu", vram - 1.0, 1.0, False) if fits_card else ("cpu_gpu" if vram > 0 else "cpu", 24.0, 8.0, True)
     assert _choose_pool(need, GpuPool(sizes), 32.0, MACHINE) == before
 
 
@@ -193,6 +195,8 @@ def test_a_rendered_machine_with_two_small_cards_ranks_a_spread_row(tmp_path: Pa
     assert rows, "no row spread over the two cards"
     assert all("spread over 2 cards" in row["note"]["text"] and "1.0 GiB on each card" in row["note"]["text"] for row in rows)
     block = RenderDocument.model_validate(payload).machines[0]
-    assert any("spread over the cards" in piece and "the reserve on each card" in piece for piece in _pool_pieces(block, "-"))
+    # Since AP9-UX2 (U8) the budget is labeled and a long statement breaks before its bracket.
+    pooled = " ".join(_pool_pieces(block, "-"))
+    assert "spread over the cards, budget" in pooled and "cards minus the reserve on each" in pooled
     markdown = (tmp_path / "models.md").read_text(encoding="utf-8")
     assert "| multi_gpu | 0 Nova GPU 5.00; 1 Nova GPU 5.00 | server (chassis) |" in markdown

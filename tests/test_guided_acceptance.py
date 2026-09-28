@@ -74,6 +74,12 @@ _FULL = ("F16", "BF16", "F32")
 def _catalog(qwen_legacy: bool) -> Catalog:
     """The shipped catalog with two models changed, validated anew (`model_dump` -> `model_validate`)."""
     data = load_catalog().model_dump()
+    if not qwen_legacy:
+        # Since AP9-UX2 (U5, GF F3) a catalog `latest` gives way to a higher version the population
+        # holds: without Qwen 3.6 and 3.8 the statement `latest` of Qwen3.5-9B stands.
+        for family in data["families"]:
+            family["models"] = [m for m in family["models"] if not m["hf_repo"].startswith(("Qwen/Qwen3.6", "Qwen/Qwen3.8"))]
+        data["families"] = [family for family in data["families"] if family["models"]]
     for family in data["families"]:
         for model in family["models"]:
             if model["hf_repo"] == QWEN and qwen_legacy:

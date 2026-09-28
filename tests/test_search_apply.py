@@ -268,3 +268,48 @@ def test_two_processes_that_create_the_file_at_once_leave_exactly_one_winner(tmp
         on_disk = config_from_text(target.read_text(encoding="utf-8"), target).paths.state.resolve()
         assert on_disk == states[outputs.index("written")]
         assert list(folder.glob("*.tmp")) == []
+
+
+# --- AP9-UX2 P3 (GF F8): the publisher's own repository is always a target ------------------------
+
+
+def _resolved_hit(repo: str, base: str = "Qwen/Qwen3.5-9B"):
+    from modelroom.guided_contracts import SearchHit
+
+    status = "publisher" if repo.split("/", 1)[0] == base.split("/", 1)[0] else "listed packager"
+    return SearchHit(
+        repo=repo,
+        publisher_status=status,
+        base_model=[base],
+        base_model_relation="quantized",
+        resolved=True,
+        resolved_base_model=base,
+    )
+
+
+def _empty_config(tmp_path: Path) -> Configuration:
+    data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
+    data.update({"schema_version": 3, "families": [], "publishers": [], "packagers": []})
+    return Configuration.from_dict(data)
+
+
+def test_apply_hits_adds_the_publisher_repo_once(tmp_path: Path):
+    from modelroom.catalog import load_catalog
+    from modelroom.search_apply import apply_hits
+
+    hits = [_resolved_hit("unsloth/Qwen3.5-9B-GGUF"), _resolved_hit("bartowski/Qwen_Qwen3.5-9B-GGUF")]
+    once = apply_hits(_empty_config(tmp_path), hits, catalog=load_catalog())
+    twice = apply_hits(once, hits, catalog=load_catalog())
+
+    repos = once.families[0].base_models[0].repos
+    assert repos == ["unsloth/Qwen3.5-9B-GGUF", "Qwen/Qwen3.5-9B", "bartowski/Qwen_Qwen3.5-9B-GGUF"]
+    assert twice.model_dump() == once.model_dump()
+
+
+def test_a_hit_that_is_the_publisher_repo_is_not_added_twice(tmp_path: Path):
+    from modelroom.catalog import load_catalog
+    from modelroom.search_apply import apply_hits
+
+    config = apply_hits(_empty_config(tmp_path), [_resolved_hit("Qwen/Qwen3.5-9B")], catalog=load_catalog())
+
+    assert config.families[0].base_models[0].repos == ["Qwen/Qwen3.5-9B"]

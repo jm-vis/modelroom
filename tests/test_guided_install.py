@@ -27,7 +27,7 @@ from modelroom.guided_install import (
     FirstRow,
     LiveLine,
     first_row,
-    pull_step,
+    pull_chosen,
     pulled_problem,
 )
 from modelroom.guided_context import snapshot_packages
@@ -55,8 +55,9 @@ UNSLOTH = "unsloth/Qwen3.5-9B-GGUF"
 QWEN_GGUF = "Qwen/Qwen3.5-9B-GGUF"
 DEEPSEEK = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
 # The first row of this machine for the answers below, at 8192 tokens: since ADR 0009 the least
-# compressed Qwen3.5-9B build the graphics card holds (`UD-Q6_K_XL`, `tight`, 10.6 of 11.0 GB).
-FIRST_NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-Q6_K_XL"
+# compressed Qwen3.5-9B build the graphics card holds -- since AP9-UX2 computed on its hybrid
+# architecture (P1), so `Q8_0` (`tight`, 10.6 of 11.0 GB) and no longer `UD-Q6_K_XL`.
+FIRST_NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q8_0"
 
 ANSWERS = {
     "results": "here",
@@ -84,7 +85,7 @@ def _folders(tmp_path: Path):
     (tmp_path / "home").mkdir()
 
 
-def _run(tmp_path: Path, answers: dict, daemon) -> tuple[int, list[str], FileAsker]:
+def _run(tmp_path: Path, answers: dict, daemon, room=None) -> tuple[int, list[str], FileAsker]:
     lines: list[str] = []
     asker = FileAsker(answers)
     code = run_guided(
@@ -98,6 +99,7 @@ def _run(tmp_path: Path, answers: dict, daemon) -> tuple[int, list[str], FileAsk
         now=RUN1,
         out=lines.append,
         colored=False,
+        room=room,
     )
     return code, [line.strip() for line in lines], asker
 
@@ -221,15 +223,13 @@ def test_a_yes_pulls_the_first_row_and_checks_the_list_of_the_daemon_afterwards(
 
 
 def test_a_pull_writes_nothing_into_the_results_folder(tmp_path: Path):
-    from modelroom.guided_install import pull_step
-
     _run(tmp_path, {**ANSWERS, "pull": False}, pull_daemon())
     first = _first_row_of(tmp_path)
     before = _tree(tmp_path)
     lines: list[str] = []
     run = _bare_run(tmp_path, pull_daemon(after_pull=tags_with(FIRST_NAME)), {"pull": True}, lines)
 
-    pull_step(run, first, True)
+    pull_chosen(run, first)
 
     assert lines[-1].strip().startswith("✓ Pulled")
     assert _tree(tmp_path) == before  # every file of the results folder and the home folder
@@ -383,7 +383,7 @@ def test_enter_alone_at_the_terminal_declines_the_pull(tmp_path: Path):
     with create_pipe_input() as pipe:
         pipe.send_text("\r")
         run = _bare_run(tmp_path, daemon, {}, lines, asker=TerminalAsker(input=pipe, output=DummyOutput()))
-        pull_step(run, first, True)
+        pull_chosen(run, first)
 
     assert _pull_calls(daemon) == []
     assert [line.strip() for line in lines if "Pull #1" in line] == [f"? Pull #1 into Ollama now? ({first.weights_gib:.1f} GB)  No"]
@@ -473,3 +473,153 @@ def test_the_recorded_stream_is_the_whole_answer_of_a_real_pull():
 
     assert len(lines) == PULL_STREAM_LINES
     assert lines[0] == {"status": "pulling manifest"} and lines[-1] == {"status": "success"}
+
+
+# --- AP9-UX2 U6: the package is chosen from a list, then its command, the disk, the question -------------
+
+# The third row at 8192 tokens, and the weight of the first row's file (`Qwen3.5-9B-Q8_0.gguf`).
+THIRD_NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q6_K"
+FIRST_BYTES = 9_527_502_048
+NEED = FIRST_BYTES + 1024**3  # the weight files and the margin (`room.PULL_DISK_MARGIN_BYTES`)
+
+
+def test_choosing_row_three_pulls_its_name(tmp_path: Path):
+    daemon = pull_daemon(after_pull=tags_with(THIRD_NAME))
+
+    code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull_package": THIRD_NAME, "pull": True}, daemon)
+
+    assert code == 0
+    after = _after_results(lines)
+    assert f"? Which package should be pulled into Ollama?  #3  {THIRD_NAME}" in after
+    assert f"install   #3  ollama pull {THIRD_NAME}" in after
+    assert "? Pull #3 into Ollama now? (6.9 GB)  Yes" in after
+    assert _pull_calls(daemon) == [("POST", PULL_PATH, {"model": THIRD_NAME, "stream": True})]
+    assert after[-1].startswith(f"✓ Pulled    {THIRD_NAME} · 6.9 GB")
+
+
+def test_an_invalid_answer_is_exit_2(tmp_path: Path, capsys):
+    from modelroom.cli import main
+
+    code = main(
+        [], transport=build_transport(guided_transport_mapping()), probes=windows_probes(),
+        pointer_path=tmp_path / "home" / ".modelroom" / "guided.json", now=RUN1,
+        asker=FileAsker({**ANSWERS, "pull_package": "hf.co/unsloth/Qwen3.5-9B-GGUF:Q9_Z"}), here=tmp_path / "results",
+        out=lambda line: None, daemon=pull_daemon(), servers=offline_servers(),
+    )
+
+    assert code == 2 and "pull_package" in capsys.readouterr().err
+
+
+def test_none_pulls_nothing_and_asks_nothing(tmp_path: Path):
+    daemon = pull_daemon()
+
+    code, lines, asker = _run(tmp_path, {**ANSWERS, "pull_package": "none", "pull": True}, daemon)
+
+    assert code == 0
+    assert "pull" not in asker.asked and _pull_calls(daemon) == []
+    assert "? Which package should be pulled into Ollama?  none, do not pull" in _after_results(lines)
+
+
+def test_a_local_row_gives_the_note_and_no_question(tmp_path: Path):
+    """DeepSeek is proven local by its digest: chosen from the list, it is a note and no question."""
+    daemon = pull_daemon()
+
+    code, lines, asker = _run(tmp_path, {**MEASURED, "pull_package": DEEPSEEK_OLLAMA_NAME, "pull": True}, daemon)
+
+    assert code == 0
+    assert "pull" not in asker.asked and _pull_calls(daemon) == []
+    assert "install   #1 is local already · say Yes in step 4 to measure it" in _after_results(lines)
+
+
+# --- AP9-UX2 U8: the disk, measured again before the pull ------------------------------------------------
+
+
+def test_the_disk_is_measured_again_before_the_pull(tmp_path: Path):
+    """The head read enough disk; the check before the pull reads again and finds too little."""
+    from fixture_room import SequenceDisk, room_with_disk
+
+    disk = SequenceDisk(100 * 1024**3, NEED - 1)
+    daemon = pull_daemon()
+
+    code, lines, asker = _run(tmp_path, PULL, daemon, room=room_with_disk(disk))
+
+    assert code == 0  # no `run.failed`: too little disk is a finding, not a fault
+    assert disk.calls == 2
+    assert "free      graphics 10.2 GB free now · disk 100.0 GB free on C: (Ollama models)" in lines
+    after = _after_results(lines)
+    assert "install   not enough disk for #1: needs 9.9 GB, 9.9 GB free on C:" in after
+    assert "pull" not in asker.asked and _pull_calls(daemon) == []
+    assert f"install   #1  ollama pull {FIRST_NAME}" in after  # the command stays, to copy
+
+
+def test_exactly_enough_disk_asks(tmp_path: Path):
+    from fixture_room import SequenceDisk, room_with_disk
+
+    _code, _lines, asker = _run(tmp_path, {**ANSWERS, "pull": False}, pull_daemon(), room=room_with_disk(SequenceDisk(NEED)))
+
+    assert "pull" in asker.asked
+
+
+def test_one_byte_short_does_not_ask(tmp_path: Path):
+    from fixture_room import SequenceDisk, room_with_disk
+
+    _code, lines, asker = _run(tmp_path, {**ANSWERS, "pull": True}, pull_daemon(), room=room_with_disk(SequenceDisk(NEED - 1)))
+
+    assert "pull" not in asker.asked
+    assert any(line.startswith("install   not enough disk for #1") for line in lines)
+
+
+def test_an_unknown_disk_asks_with_a_note(tmp_path: Path):
+    from fixture_room import fixed_room
+
+    _code, lines, asker = _run(tmp_path, {**ANSWERS, "pull": False}, pull_daemon(), room=fixed_room(free_disk_bytes=None))
+
+    after = _after_results(lines)
+    assert "disk space where Ollama keeps its models is not known" in after
+    assert "pull" in asker.asked
+
+
+def test_the_table_head_names_free_graphics_and_disk(tmp_path: Path):
+    _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
+
+    head = lines.index(next(line for line in lines if line.startswith("workstation · context")))
+    assert lines[head + 1] == "free      graphics 10.2 GB free now · disk 41.2 GB free on C: (Ollama models)"
+    assert any("budget 11.0 GB (card minus reserve, from the profile)" in line for line in lines)
+
+
+def test_unknown_is_never_none(tmp_path: Path):
+    from fixture_room import fixed_room
+
+    _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon(), room=fixed_room(None, None))
+
+    free = next(line for line in lines if line.startswith("free "))
+    assert free == "free      graphics unknown · disk unknown"
+    assert "none" not in free
+
+
+def test_the_self_test_pull_criterion_goes_through_the_pull_list(tmp_path: Path):
+    """Criterion 9 of `scripts/selftest.py` calls `pull_step` with the context of step 5 (AP9-UX2 U6):
+    the wiring the self-test depends on, without the whole self-test."""
+    import importlib.util
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest_pull.py"
+    if not (script.parent.parent / ".git").exists():
+        pytest.skip("scripts/ is not shipped in the sdist; the self-test is tested from a clone")
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_pull_wiring", script)
+    selftest_pull = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(selftest_pull)
+    assert _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())[0] == 0
+
+    problems, detail = selftest_pull._fixture_pull(
+        tmp_path / "results", tmp_path / "home" / ".modelroom" / "guided.json", "workstation", RUN1
+    )
+
+    assert problems == [], problems
+    assert detail.startswith(f"{FIRST_NAME}: ") and "Pulled" in detail
+
+
+def test_the_download_column_is_the_weight_of_the_package(tmp_path: Path):
+    _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
+
+    row = next(line for line in lines if line.startswith("1 "))
+    assert row.endswith(f"{_first_weights(tmp_path):.1f} GB") and row.endswith("8.9 GB")

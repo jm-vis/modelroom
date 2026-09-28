@@ -70,6 +70,7 @@ from .measure import MeasuredHardware, Probes, build_profile, measure_hardware
 from .migrate import MigrationError, migrate
 from .profile import MACHINE_CLASSES, HardwareProfile, MachineClass, fit_block_reason, os_fingerprint, read_profile_document
 from .render_cmd import render_with_config
+from .room import RoomProbes
 from .state import (
     LockHeldError,
     StaleRunError,
@@ -164,11 +165,12 @@ def main(
     out: Callable[[str], None] | None = None,
     daemon: "Daemon | None" = None,
     servers: dict | None = None,
+    room: "RoomProbes | None" = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon, servers)
+        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon, servers, room)
     if args.answers is not None:
         print(f"--answers belongs to the guided mode; {args.command} never asks a question", file=sys.stderr)
         return 2
@@ -200,6 +202,7 @@ def _cmd_guided(
     out: Callable[[str], None] | None,
     daemon: "Daemon | None" = None,
     servers: dict | None = None,
+    room: "RoomProbes | None" = None,
 ) -> int:
     """`modelroom` with no subcommand: the guided mode (`modelroom/guided.py`).
 
@@ -224,6 +227,7 @@ def _cmd_guided(
             out=out if out is not None else print,
             daemon=daemon,
             servers=servers,
+            room=room,  # `None`: the real room of this machine (`room.default_room_probes`, AP9-UX2 U8)
             # A run that answers from a file is read from a log: no color, whatever the
             # terminal it was started in (CONTRACTS.md, "Guided mode", the start screen).
             colored=None if args.answers is None else False,

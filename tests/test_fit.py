@@ -254,17 +254,18 @@ def _need_gib_of(package: Package, base_model: BaseModelSpec) -> float:
 
 
 @pytest.mark.parametrize(
-    "ratio, expected_class",
+    "ratio, expected_mode, expected_class",
     [
-        (0.60, "ample"),
-        (0.6000001, "fits"),
-        (0.85, "fits"),
-        (0.8500001, "tight"),
-        (0.98, "tight"),
-        (0.9800001, "no_fit"),
+        (0.60, "gpu", "ample"),
+        (0.6000001, "gpu", "fits"),
+        (0.85, "gpu", "fits"),
+        (0.8500001, "gpu", "tight"),
+        (0.98, "gpu", "tight"),
+        # AP9-UX2 P2: above 98 % of the card the next pool is tried -- here the huge RAM.
+        (0.9800001, "cpu_gpu", "fits"),
     ],
 )
-def test_gpu_mode_ratio_boundaries(ratio, expected_class):
+def test_gpu_mode_ratio_boundaries(ratio, expected_mode, expected_class):
     package = _gguf_package(weights_bytes=5 * GIB, default_context=1024)
     base_model = _base_model()
     need_gib = _need_gib_of(package, base_model)
@@ -275,7 +276,7 @@ def test_gpu_mode_ratio_boundaries(ratio, expected_class):
 
     fit = compute_fit(package, base_model, hardware, machine)
 
-    assert fit.mode == "gpu"
+    assert fit.mode == expected_mode
     assert fit.fit_class == expected_class
 
 
@@ -355,3 +356,65 @@ def test_a_package_beyond_its_models_window_is_not_covered():
     assert (ranking.ranked, [item.reason for item in ranking.not_covered]) == ([], [beyond.reason])
     silent = BaseModelSpec.model_validate({**payload, "architecture": {**payload["architecture"], "max_context": None}})
     assert compute_fit_v2(profile, package, silent, scenario(131072), machine).fit_class != "unknown"
+
+
+# --- AP9-UX2 P2: a pool is chosen only where the package fits it with a margin of 2 % ---------------
+#
+# Every pool below is 50 GiB after its reserve, so `0.98 x pool` is exactly 49.0 and one hundredth of
+# a GiB above it 49.01 (a ratio of 0.9802). `_classify` itself is unchanged.
+
+
+def _judge(need_gib: float, cards: tuple[float, ...], ram_gib: float, *, shared: bool = False, reserve_ram: float = 8.0):
+    from modelroom.fit import GpuPool, _choose_pool, _classify
+
+    machine = _machine(reserve_ram_gib=reserve_ram, reserve_vram_gib=1.0)
+    mode, pool_gib, _reserve, cap = _choose_pool(need_gib, GpuPool(cards, shared), ram_gib, machine)
+    return mode, pool_gib, _classify(need_gib, pool_gib, cap)
+
+
+@pytest.mark.parametrize(
+    ("need", "expected"),
+    [(49.0, ("gpu", 50.0, "tight")), (49.01, ("cpu_gpu", 120.0, "fits"))],
+)
+def test_one_card_is_chosen_up_to_98_percent_and_falls_back_above(need, expected):
+    assert _judge(need, (51.0,), 128.0) == expected
+
+
+@pytest.mark.parametrize(
+    ("need", "expected"),
+    [(49.0, ("gpu_split", 50.0, "tight")), (49.01, ("cpu_gpu", 120.0, "fits"))],
+)
+def test_the_card_group_is_chosen_up_to_98_percent_and_falls_back_above(need, expected):
+    assert _judge(need, (26.0, 26.0), 128.0) == expected
+
+
+@pytest.mark.parametrize(("need", "expected"), [(49.0, ("cpu", 50.0, "tight")), (49.01, ("cpu", 50.0, "no_fit"))])
+def test_the_system_memory_is_the_last_pool_and_is_judged_as_it_is(need, expected):
+    """`tight` there is `tight (RAM)` on the screen; above 98 % there is no further pool."""
+    assert _judge(need, (), 58.0) == expected
+
+
+@pytest.mark.parametrize(("need", "expected"), [(49.0, ("gpu", 50.0, "tight")), (49.01, ("gpu", 50.0, "no_fit"))])
+def test_unified_memory_is_one_pool_and_is_judged_as_it_is(need, expected):
+    assert _judge(need, (), 52.0, shared=True, reserve_ram=1.0) == expected
+
+
+def test_the_pool_choice_and_the_class_draw_the_same_line_in_floating_point():
+    """Codex r1 M2: 4.9 on a pool of 5.0 is `0.9800000000000001` as a ratio; the card may not be
+    chosen for it and then called `no_fit` -- the system memory is tried, and holds it."""
+    assert 4.9 / 5.0 > 0.98  # the case itself
+    assert _judge(4.9, (6.0,), 128.0) == ("cpu_gpu", 120.0, "fits")
+    assert _judge(4.9, (3.5, 3.5), 128.0) == ("cpu_gpu", 120.0, "fits")
+
+
+def test_a_package_between_98_and_100_percent_of_the_card_falls_back_to_system_memory():
+    """Until AP9-UX2 such a package was `no_fit` on the card, though the system memory holds it."""
+    package = _gguf_package(weights_bytes=int(8.5 * GIB))
+    base_model = _base_model(architecture=_architecture(num_hidden_layers=32, num_key_value_heads=8, head_dim=128))
+    hardware = _hardware(vram_gib=11.99, ram_gib=127.46)
+    machine = _machine(reserve_ram_gib=8.0, reserve_vram_gib=1.0)
+    # need = 8.5 x 1.10 + 1.0 (8192 tokens) + 0.5 = 10.85: above 98 % (10.77) of the card of 10.99
+    # after reserve, below 100 %
+    fit = compute_fit(package, base_model, hardware, machine)
+    assert fit.need_gib > 0.98 * 10.99 and fit.need_gib < 10.99
+    assert fit.mode == "cpu_gpu" and fit.fit_class == "fits"

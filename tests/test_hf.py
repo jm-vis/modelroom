@@ -81,7 +81,7 @@ def _targets(base_model: BaseModelSpec, owner: str, *extra: str) -> list[str]:
 # --- fetch_base_model_meta --------------------------------------------------------------
 
 
-def test_fetch_base_model_meta_reads_parameters_and_resolves_a_hybrid_config_to_unknown():
+def test_fetch_base_model_meta_reads_parameters_and_resolves_a_hybrid_config_to_hybrid_linear():  # ADR 0010
     transport = build_transport(
         {
             ("GET", "https://huggingface.co/api/models/Qwen/Qwen3.5-9B"): json_response(
@@ -98,7 +98,7 @@ def test_fetch_base_model_meta_reads_parameters_and_resolves_a_hybrid_config_to_
 
     assert meta.publisher == "Qwen"
     assert meta.parameters_b == pytest.approx(9653104368 / 1e9)
-    assert meta.architecture.kind == "unknown"
+    assert meta.architecture.kind == "hybrid_linear"
     assert meta.architecture.source_revision == QWEN_SHA
 
 

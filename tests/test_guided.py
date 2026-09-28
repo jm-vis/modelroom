@@ -432,9 +432,9 @@ def test_the_second_run_reuses_the_configuration_and_the_binding(tmp_path: Path)
     first = _profiles(tmp_path)
     assert len(first) == 1
 
-    # No folder question this time: the pointer file remembers it. `here` is somewhere else on
-    # purpose, so a run that fell back to "this folder" would write a second configuration.
-    answers = {key: value for key, value in FULL_ANSWERS.items() if key != "results"}
+    # `here` is somewhere else on purpose, so a run that fell back to "this folder" would write a second
+    # configuration; since AP9-UX2 (U1) the remembered folder is a question, answered with `last`.
+    answers = {**FULL_ANSWERS, "results": "last"}
     code, lines = _run(tmp_path, answers, here=tmp_path / "somewhere-else", now=RUN2)
 
     assert code == 0
@@ -1110,7 +1110,7 @@ def test_the_search_leaves_two_notes_and_puts_the_accounts_into_search_json(tmp_
     # The seven account lines, the request count and the budget are in the file, not on the screen.
     assert not any(line.strip().startswith(("Qwen 2", "unsloth 6", "bartowski 0")) for line in lines)
     assert not any("cannot be picked:" in line for line in lines)
-    assert not any("budget " in line for line in lines)
+    assert not any("budget " in line and " GB" not in line for line in lines)  # `budget 11.0 GB` is the fit's (U8)
     log = _search_log(tmp_path)
     assert log["schema_version"] == 3
     assert log["mode"] == "word"
@@ -1333,7 +1333,7 @@ def test_the_answer_file_keys_of_step_2_are_unchanged(tmp_path: Path):
 
     assert code == 0
     assert sorted(load_config(_config_file(tmp_path)).families[0].base_models[0].repos) == sorted(
-        [QWEN_GGUF, UNSLOTH]
+        [QWEN_GGUF, UNSLOTH, "Qwen/Qwen3.5-9B"]  # the publisher's own repository since AP9-UX2 (P3, F8)
     )
 
 
@@ -1343,7 +1343,7 @@ def test_the_chosen_repositories_reach_the_configuration(tmp_path: Path):
     config = load_config(_config_file(tmp_path))
     base_model = config.families[0].base_models[0]
     assert base_model.hf_repo == "Qwen/Qwen3.5-9B"
-    assert sorted(base_model.repos) == sorted([QWEN_GGUF, UNSLOTH])
+    assert sorted(base_model.repos) == sorted([QWEN_GGUF, UNSLOTH, "Qwen/Qwen3.5-9B"])  # P3, F8
     assert (base_model.ollama_base, base_model.ollama_tag) == ("qwen3.5", "9b")
     assert config.publishers == ["Qwen"]
 
@@ -1404,14 +1404,14 @@ def test_the_hint_of_the_list_is_its_instruction_line_and_names_the_context_of_t
 
 
 def test_a_model_is_fetched_from_the_publisher_and_from_one_listed_packager(tmp_path: Path):
-    """Two repositories per model, because every one costs the fetch about ten requests."""
+    """Two repositories per model, each costs about ten requests; the publisher's own is the third (P3)."""
     answers = {**FULL_ANSWERS, "select": ["Qwen/Qwen3.5-9B"]}
 
     code, _lines = _run(tmp_path, answers)
 
     assert code == 0
     base_model = load_config(_config_file(tmp_path)).families[0].base_models[0]
-    assert sorted(base_model.repos) == sorted([QWEN_GGUF, UNSLOTH])
+    assert sorted(base_model.repos) == sorted([QWEN_GGUF, UNSLOTH, "Qwen/Qwen3.5-9B"])
 
 
 def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
@@ -2246,14 +2246,14 @@ def test_a_second_run_keeps_the_measurement_and_writes_no_second_file(tmp_path: 
 
 
 def test_qwen35_is_judged_from_the_size_of_its_packages(tmp_path: Path):
-    """Its architecture is a hybrid one fit v1 cannot read, so the size answers (2026-09-24)."""
+    """Its architecture is hybrid; from the size until AP9-UX2, read as `hybrid_linear` since (P1)."""
     assert _run(tmp_path)[0] == 0
 
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     block = payload["machines"][0]
     assert block["status"] == "ranked"
-    assert block["ranked"], "a package of a hybrid architecture is judged from its size now"
-    assert {entry["fit"]["basis"] for entry in block["ranked"]} == {"size"}
+    assert block["ranked"], "a package of a hybrid architecture is judged on its architecture now"
+    assert {entry["fit"]["basis"] for entry in block["ranked"]} == {"architecture"}
     assert not any(entry["reason"] == "architecture not covered by v1" for entry in block["not_covered"])
 
 
@@ -2783,8 +2783,8 @@ def test_a_machine_entered_by_hand_is_named_so_and_computed_on_shared_memory_in_
 
     assert code == 0
     stripped = [line.strip() for line in lines]
-    assert any(line.startswith("studio (entered) · context") for line in stripped)
-    assert any("fit into shared memory, 23.0 GB free after both reserves" in line for line in stripped)
+    assert any(line.startswith("studio (entered) · another computer · context") for line in stripped)  # U2, U8
+    assert any("fit into shared memory, budget 23.0 GB" in line for line in stripped)
     card = next(line for line in stripped if line.startswith("machine") and "studio" in line)
     assert card.endswith("shared memory 32 GB, entered")
     assert "measured" not in card
@@ -2807,7 +2807,7 @@ def test_a_machine_entered_by_hand_leaves_a_card_without_an_install_line_and_no_
     assert code == 0
     stripped = [line.strip() for line in lines]
     assert any(line.startswith("no load test: ") for line in stripped)
-    assert not any(line.startswith("install ") for line in stripped)
+    assert all(" on tower " in line for line in stripped if line.startswith(("install ", "? Pull")))  # U3
     card = next(line for line in stripped if line.startswith("machine") and "tower" in line)
     assert card.endswith("graphics card 24 GB, 64 GB memory, entered")
 
@@ -3191,8 +3191,8 @@ def test_no_selection_key_is_written(tmp_path: Path):
     assert str(tmp_path) not in masked
     assert json.dumps(str(tmp_path), ensure_ascii=False)[1:-1] not in masked
     assert not any(FORBIDDEN["absolute user path"].search(line) for line in masked.splitlines())
-    golden = Path(__file__).parent / "golden" / "guided-config-db0dff9.toml"
-    assert masked.encode("utf-8") == golden.read_bytes()
+    golden = (Path(__file__).parent / "golden" / "guided-config-db0dff9.toml").read_bytes().decode("utf-8")  # fixed (Codex r1-16)
+    assert masked == golden.replace('-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]', '-9B-GGUF", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-9B-GGUF"]')  # + own repo (P3)
 
 
 # --- AP9-UX G: every note of a measurement stands where the notes stand -----------------------------

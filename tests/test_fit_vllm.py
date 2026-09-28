@@ -130,3 +130,30 @@ def test_the_largest_card_of_a_profile_is_the_one_computed():
 
 def test_a_profile_without_a_card_has_none():
     assert largest_card(v2_profile(vram_gib=0)) is None
+
+
+def _qwen35_architecture() -> Architecture:
+    import json
+
+    from modelroom.architecture import architecture_from_hf_config
+
+    config = json.loads((FIXTURES / "hf_qwen_qwen35_9b_config.json").read_text(encoding="utf-8"))
+    return architecture_from_hf_config("Qwen/Qwen3.5-4B", None, config)
+
+
+def test_at_once_counts_the_state_once_per_request():
+    """AP9-UX2 P1: `at_once = floor(kv_bytes / (32_768 x context + 52_690_944))`, exact at the edge."""
+    from modelroom.fit_vllm import requests_at_once
+
+    per_request = 32_768 * 32_768 + 52_690_944
+    for n in (1, 7, 40):
+        assert requests_at_once(n * per_request, 32_768, 32_768, 52_690_944) == n
+        assert requests_at_once(n * per_request - 1, 32_768, 32_768, 52_690_944) == n - 1
+
+    architecture = _qwen35_architecture()
+    assert kv_per_token_bytes(architecture) == (32_768, "architecture")
+    fit = vllm_fit(22.494, 9_319_828_096, context=32_768, requests=1, architecture=architecture)
+    kv_bytes = int(fit.kv_gib * GIB)
+    assert fit.basis == "architecture"
+    assert fit.at_once == kv_bytes // per_request
+    assert fit.kv_tokens == kv_bytes // 32_768

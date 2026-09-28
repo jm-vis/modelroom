@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .architecture import kv_token_bytes, state_bytes
 from .config import MachineConfig
 from .contracts import Architecture, BaseModelSpec, Fit, HardwareSnapshot, Package
 from .measurements import Scenario
@@ -32,7 +33,6 @@ from .profile import HardwareProfile, fit_block_reason
 GIB = 1024**3
 
 DEFAULT_CONTEXT = 8192
-KV_BYTES_PER_ELEMENT = 2
 WEIGHTS_OVERHEAD_RATIO = 1.10
 FIXED_OVERHEAD_GIB = 0.50
 
@@ -95,7 +95,8 @@ def compute_fit(
 ) -> Fit:
     """Judge whether `package` fits `hardware`, given `machine_config`'s reserved headroom.
 
-    Only a `complete` `format == "gguf"` package of a `dense_classic` architecture is judged;
+    Only a `complete` `format == "gguf"` package of a `dense_classic` or `hybrid_linear`
+    architecture is judged;
     everything else comes back `fit_class == "unknown"` with a `reason`, never a guess.
     """
     base = _judgeable_or_reason(package, base_model)
@@ -142,7 +143,7 @@ def compute_fit_v2(
         # A context the model cannot hold is no fit anybody computed (ADR 0009, AP9-UX H); a window
         # nobody knows checks nothing.
         return unknown_fit(f"context beyond the window of this model ({_tokens_text(window)})")
-    if base_model.architecture.kind != "dense_classic":
+    if base_model.architecture.kind == "unknown":
         # The architecture is no reason to say nothing any more: the size of the package
         # answers instead, on its own basis (decided 2026-09-24).
         return fit_from_size(
@@ -211,7 +212,7 @@ def _judgeable_or_reason(package: Package, base_model: BaseModelSpec) -> Fit | N
     reason = _package_reason(package)
     if reason is not None:
         return unknown_fit(reason)
-    if base_model.architecture.kind != "dense_classic":
+    if base_model.architecture.kind == "unknown":
         return unknown_fit(ARCHITECTURE_NOT_COVERED)
     return None
 
@@ -359,10 +360,11 @@ def _fit_for_memory(
 
 
 def _architecture_kv_gib(arch: Architecture, context: int, requests: int) -> float:
-    """The 16-bit KV cache in GiB: key and value, per layer, KV head and head width, per token and
-    request. Exact integers until the one division, which may raise `OverflowError`."""
-    per_token = 2 * arch.num_hidden_layers * arch.num_key_value_heads * arch.head_dim * KV_BYTES_PER_ELEMENT
-    return per_token * context * requests / GIB
+    """The 16-bit KV cache in GiB: key and value, per layer of full attention, KV head and head
+    width, per token and request, plus a hybrid model's linear-layer state once per request
+    (`architecture.py`, ADR 0010). Exact integers until the one division, which may raise
+    `OverflowError`."""
+    return (kv_token_bytes(arch) * context + state_bytes(arch)) * requests / GIB
 
 
 def _choose_pool(
@@ -371,11 +373,14 @@ def _choose_pool(
     """The memory pool `need_gib` is judged against, and whether the class is capped at `fits`.
 
     One card first, the way Ollama loads a model: the package fits the GPU when `need_gib` is at
-    most the largest card's VRAM left after `reserve_vram_gib` (mode `gpu`). With two cards or
-    more it is then spread over all of them (mode `gpu_split`, decided 2026-09-26): each card
-    keeps its own reserve, so the pool is the sum of `card - reserve_vram_gib` and the reserve the
-    fit reports is the reserve of all cards together; nothing is capped, the package lies in
-    graphics memory whole. Otherwise it falls back to the RAM pool (minus `reserve_ram_gib`),
+    most `TIGHT_RATIO` of the largest card's VRAM left after `reserve_vram_gib` (mode `gpu`). With
+    two cards or more it is then spread over all of them (mode `gpu_split`, decided 2026-09-26):
+    each card keeps its own reserve, so the pool is the sum of `card - reserve_vram_gib` and the
+    reserve the fit reports is the reserve of all cards together; nothing is capped, the package
+    lies in graphics memory whole. A pool is only chosen when the package fits it in the sense of
+    `_classify` -- at most `TIGHT_RATIO` of it (AP9-UX2 P2, ADR 0010): a package between 98 and
+    100 % of the card is tried on the next pool instead of being `no_fit` on this one. The last
+    pool is judged as it is. Otherwise it falls back to the RAM pool (minus `reserve_ram_gib`),
     mode `cpu_gpu` when there is some VRAM at all, `cpu` when there is none -- and the class is
     capped at `fits` off the GPU, since `ample` only ever describes a package with room to spare
     in VRAM.
@@ -389,15 +394,21 @@ def _choose_pool(
     if pool.shared:
         reserve_gib = machine_config.reserve_ram_gib + reserve
         return "gpu", ram_gib - reserve_gib, reserve_gib, False
-    if pool.cards and need_gib <= max(pool.cards) - reserve:
+    if pool.cards and _holds(need_gib, max(pool.cards) - reserve):
         return "gpu", max(pool.cards) - reserve, reserve, False
     spread = sum(card - reserve for card in pool.cards)
-    if len(pool.cards) > 1 and need_gib <= spread:
+    if len(pool.cards) > 1 and _holds(need_gib, spread):
         return "gpu_split", spread, len(pool.cards) * reserve, False
 
     pool_gib = ram_gib - machine_config.reserve_ram_gib
     mode = "cpu_gpu" if pool.cards else "cpu"
     return mode, pool_gib, machine_config.reserve_ram_gib, True
+
+
+def _holds(need_gib: float, pool_gib: float) -> bool:
+    """Whether a pool holds the package in the sense of `_classify`: the very same ratio, so the two
+    never disagree at a floating-point edge (4.9 / 5.0 is 0.9800000000000001; Codex r1 M2)."""
+    return pool_gib > 0 and need_gib / pool_gib <= TIGHT_RATIO
 
 
 def _classify(need_gib: float, pool_gib: float, cap_at_fits: bool = False) -> str:

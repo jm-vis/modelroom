@@ -229,3 +229,89 @@ def test_measuring_again_reads_the_class_again(tmp_path: Path):
     code, _lines = _run(tmp_path, answers, probes=_silent_chassis(), now=RUN2)
     assert code == 0
     assert _measured(tmp_path).machine_class == "workstation"
+
+
+# --- AP9-UX2 U2/U3: a machine that is not this computer says so -------------------------------------------
+
+IMPORTED_WORDS = "imported profile · not this computer"
+
+
+def _import_answers(tmp_path: Path, machines: list[str], **changes) -> dict:
+    from fixture_support import export_of
+
+    export = export_of("two_a100_server.json", tmp_path / "exports")
+    return {**FULL_ANSWERS, "machines": machines, "import_file": str(export), **changes}
+
+
+def _after(lines: list[str], start: str) -> list[str]:
+    stripped = [line.strip() for line in lines]
+    return stripped[next(index for index, line in enumerate(stripped) if line.startswith(start)) :]
+
+
+def test_an_imported_machine_says_so_on_the_card_and_in_its_table_head(tmp_path: Path):
+    code, lines = _run(tmp_path, _import_answers(tmp_path, ["import"]))
+
+    assert code == 0
+    card = _after(lines, "── Step 5 of 5")
+    machine = next(index for index, line in enumerate(card) if line.startswith("machine") and "server" in line)
+    assert card[machine + 1] == IMPORTED_WORDS
+    assert any(line.startswith("server") and " · imported · context " in line for line in card)
+    assert "free      unknown on another computer" in card
+
+
+def test_this_machine_chosen_by_its_existing_profile_is_this(tmp_path: Path):
+    assert _run(tmp_path)[0] == 0
+    bound = _measured(tmp_path).profile_id
+    answers = {**_answers_without_folder(FULL_ANSWERS), "machines": [f"profile:{bound}"]}
+
+    code, lines = _run(tmp_path, answers, now=RUN2)
+
+    assert code == 0
+    card = _after(lines, "── Step 5 of 5")
+    assert not any("not this computer" in line for line in card)
+    assert any(line.startswith("workstation · context ") for line in card)
+
+
+def test_reimporting_a_profile_of_the_folder_is_imported(tmp_path: Path):
+    answers = _import_answers(tmp_path, ["import"])
+    assert _run(tmp_path, answers)[0] == 0
+
+    # The same file again: its profile is in the folder already, and still this run imported it.
+    code, lines = _run(tmp_path, _answers_without_folder(answers), now=RUN2)
+
+    assert IMPORTED_WORDS in _after(lines, "── Step 5 of 5")
+    assert any(" · imported · context " in line for line in _after(lines, "── Step 5 of 5"))
+
+
+def test_this_machine_and_an_import_together(tmp_path: Path):
+    code, lines = _run(tmp_path, _import_answers(tmp_path, ["this-machine", "import"]))
+
+    assert code == 0
+    card = _after(lines, "── Step 5 of 5")
+    assert any(line.startswith("workstation · context ") for line in card)
+    assert any(line.startswith("server") and " · imported · context " in line for line in card)
+    assert card.count(IMPORTED_WORDS) == 1
+    assert any(line.startswith("free      graphics ") for line in card)  # this machine, measured now
+
+
+def test_the_empty_card_names_the_origin(tmp_path: Path):
+    code, lines = _run(tmp_path, _import_answers(tmp_path, ["import"], select=[]))
+
+    card = _after(lines, "── Step 5 of 5")
+    assert "nothing to rank: no package in this folder yet" in card
+    assert IMPORTED_WORDS in card
+
+
+def test_another_computer_gets_its_install_line_and_no_pull(tmp_path: Path):
+    from fixture_support import pull_daemon
+
+    daemon = pull_daemon()
+    code, lines = _run(tmp_path, _import_answers(tmp_path, ["import"], pull=True), daemon=daemon)
+
+    assert code == 0
+    card = _after(lines, "── Step 5 of 5")
+    install = [line for line in card if line.startswith("install")]
+    assert install and all(line.startswith("install   #1 on server") and "ollama pull hf.co/" in line for line in install)
+    assert "run it on that computer; this run pulls only onto this one" in card
+    assert not any(line.startswith("? ") for line in card)  # no list, no question: nothing of this machine
+    assert not any(call[1] == "/api/pull" for call in daemon.calls)

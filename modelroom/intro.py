@@ -316,13 +316,16 @@ def fact_line(fact: Fact) -> list[tuple[str, str]]:
 # --- reading the three facts ---------------------------------------------------------------------
 
 
-def collect_intro(daemon: Daemon, probes: Probes, pointer_path: Path, config_file: Path | None, servers=None) -> Intro:
+def collect_intro(
+    daemon: Daemon, probes: Probes, pointer_path: Path, config_file: Path | None, servers=None, *, last_elsewhere: bool = False
+) -> Intro:
     """Read what the start screen shows. Every fact that cannot be read says so; nothing raises.
 
     `config_file` is the configuration this run already knows about -- from `--config` or from
     the pointer file -- or `None`, in which case the first question is still to come and the
     folder row says so. `servers` is the run's `local_servers.ServerRun`: the rows come from that
     module's list, the daemon's first, and what each server said is kept there for step 4.
+    `last_elsewhere`: the remembered folder is not the one this run was started in (AP9-UX2 U1).
     """
     from .local_servers import ServerRun, start_rows  # imported here: that module imports this one
 
@@ -330,7 +333,7 @@ def collect_intro(daemon: Daemon, probes: Probes, pointer_path: Path, config_fil
     return Intro(
         version=modelroom.__version__,
         source=source_url(),
-        facts=(_folder_fact(config_file), rows[0], _machine_fact(probes, pointer_path, config_file)),
+        facts=(_folder_fact(config_file, last_elsewhere), rows[0], _machine_fact(probes, pointer_path, config_file)),
         daemon_reachable=reachable,
         servers=rows[1:],
     )
@@ -390,10 +393,15 @@ def card_names(profile: HardwareProfile) -> str:
     return ", ".join(names)
 
 
-def _folder_fact(config_file: Path | None) -> Fact:
+LAST_ELSEWHERE_NOTE = "the folder of the last run, not this one"
+
+
+def _folder_fact(config_file: Path | None, last_elsewhere: bool = False) -> Fact:
     if config_file is None:
         return Fact("folder", "not chosen yet", "the first question asks where results live")
     folder = config_file.parent
+    if last_elsewhere:
+        return Fact("folder", str(folder), LAST_ELSEWHERE_NOTE)
     written = [name for name in ("state", "docs") if (folder / name).is_dir()]
     note = "a configuration, and results from an earlier run" if written else "a configuration, nothing rendered yet"
     return Fact("folder", str(folder), note)

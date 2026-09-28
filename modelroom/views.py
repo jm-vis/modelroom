@@ -8,13 +8,16 @@ guided mode prints can never disagree. The JSON view is the document itself
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+from typing import Mapping
 
 from .contracts import Area, Fit, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
+from .pull_choice import collision_pieces, entry_pull_name, repo_lines
 from .ranking_words import key_pieces, showing_line, shown_pieces
 from .render import format_header_line
 from .result_card import _DASH, _folder_is_empty, _model_name, context_fact, context_short, empty_card
@@ -28,7 +31,6 @@ from .screen import (
     deviation_words,
     fit_word,
     head_line,
-    install_name,
     install_pull_line,
     joined,
     plain,
@@ -239,11 +241,13 @@ def _machine_sections(block: MachineRanking, document: RenderDocument) -> list[s
         headline = f"{headline}: {_cell(block.reason)}"
     sections = [f"## Ranking: {block.machine}", "", headline, ""]
     if block.ranked:
+        repos = repo_lines(block)
         sections += [
             showing_line(block),
             "",
             _table(_RANKED_COLUMNS, [_ranked_row(entry, document) for entry in block.ranked]),
             "",
+            *([_cell(" · ".join(repos)), ""] if repos else []),
             " · ".join(key_pieces(block)),
             "",
             SPEED_HINT,
@@ -293,16 +297,17 @@ def document_markdown(document: RenderDocument) -> str:
 # The result table as the mockup of 2026-09-24 draws it: what a reader recognizes a package by
 # (its model and its packager) before what a fit is made of. 99 characters wide plus the one space
 # every line of this view is indented by, so it fits a 100-column window without wrapping.
-# `Fit` is 20 and not 18: a fit word with its suffix was cut mid-word at 18 (second-model round,
-# 2026-09-24). The two came off `Package`, whose cell
-# says so with `…` instead of ending mid-word.
+# Since AP9-UX2 (U8) the table carries the download of each row, the weight files of its package:
+# `Fit` gave up 8 (its longest word, `tight (RAM)`, is 11) and `Model` 2, so the table stays 99 wide.
+# `Package` says a cut with `…` instead of ending mid-word; `Speed` holds up to `9999.9 tok/s`.
 _TERMINAL_COLUMNS = (
     ("#", 3),
-    ("Model", 24),
+    ("Model", 22),
     ("Package", 22),
-    ("Fit", 20),
+    ("Fit", 12),
     ("Speed", 12),
     ("Memory", 8),
+    ("Download", 8),
 )
 _INDENT = " "
 # The labels of the lines under the table, in the order a reader reads them. They stand in the
@@ -317,6 +322,14 @@ SPEED_LABEL = "speed"
 # 2026-09-27): the same hint the Markdown file carries under its ranking.
 KEY_LABEL = "key"
 INSTALL_LABEL = "install"
+# U4 and U8 (AP9-UX2): the repositories of rows that look alike, and the room left on this machine.
+REPO_LABEL = "repo"
+FREE_LABEL = "free"
+ANOTHER_COMPUTER_FREE = "unknown on another computer"
+# `modelroom render` reads no machine live: its head says so rather than leaving the line out (Codex r1 m7).
+RENDER_FREE = ("graphics unknown", "disk unknown (modelroom render reads no machine live)")
+OTHER_INSTALL_NOTE = "run it on that computer; this run pulls only onto this one"
+NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 # What is left of the 100 characters for the text of a labeled line: the label's own column, and
 # the one space every line of this screen carries.
 _NOTE_WIDTH = JOIN_WIDTH - LABEL_COLUMN - len(_INDENT)
@@ -413,15 +426,18 @@ def _terminal_speed(entry: RankedEntry, dash: str) -> str:
     return dash if entry.speed_tps is None else f"{entry.speed_tps:.1f} tok/s"
 
 
-def _block_head(block: MachineRanking, scenario: Scenario, dot: str) -> str:
+def _block_head(block: MachineRanking, scenario: Scenario, dot: str, origin: str | None = None) -> str:
     """The line above one machine's table: what the machine is called, and what was computed for it.
 
     Where llmfit read the profile otherwise, both readings follow (`screen.deviation_words`); a
-    confirmed or absent check leaves the line as it is.
+    confirmed or absent check leaves the line as it is. A machine that is not the one of this run
+    says so after its label (U2): `imported`, or `another computer`.
     """
+    where = {"imported": f" {dot} imported", "entered": f" {dot} another computer", "folder": f" {dot} another computer"}
+    label = f"{block.label}{where.get(origin or 'this', '')}"
     if block.status == "ranked":
-        return f"{block.label} {dot} context {context_short(scenario.context_requested)}{_deviation(block)}"
-    return f"{block.label} {dot} {block.status}"
+        return f"{label} {dot} context {context_short(scenario.context_requested)}{_deviation(block)}"
+    return f"{label} {dot} {block.status}"
 
 
 def _deviation(block: MachineRanking) -> str:
@@ -453,9 +469,15 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
             plural, singular = "fit into shared memory", "fits into shared memory"
         text = f"{ranks_text([entry.rank for entry in entries], dash)} {singular if len(entries) == 1 else plural}"
         if mode in ("gpu", "gpu_split"):
-            after = "both reserves" if shared else "the reserve on each card" if mode == "gpu_split" else "the reserve"
-            text += f", {entries[0].fit.pool_gib:.1f} GB free after {after}"
-        pieces.append(text)
+            # The fit's own budget, labeled as such (U8, F5): the free memory of now is the `free` line.
+            source = (
+                "memory minus both reserves" if shared else "cards minus the reserve on each" if mode == "gpu_split"
+                else "card minus reserve"
+            )
+            text += f", budget {entries[0].fit.pool_gib:.1f} GB ({source}, from the profile)"
+        # A statement longer than the room breaks before its bracket, never inside a word.
+        head, bracket, rest = text.partition(" (")
+        pieces += [head, f"({rest}"] if len(text) > _NOTE_WIDTH and bracket else [text]
     return pieces
 
 
@@ -489,12 +511,25 @@ def _labeled(label: str, pieces: list[str], dot: str) -> list[Line]:
     return _labeled_rows(label, joined(pieces, dot=dot, width=_NOTE_WIDTH, indent=0))
 
 
-def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | None) -> list[Line]:
+@dataclass(frozen=True)
+class RunView:
+    """What the guided run adds to the terminal view (AP9-UX2): the pull names no row may claim (U4),
+    the room left on this machine (U8, `None` outside a guided run) and where each machine came from (U2)."""
+
+    install_for: str | None = None
+    ambiguous: frozenset[str] = frozenset()
+    free: tuple[str, ...] | None = None
+    origins: Mapping[str, str] = field(default_factory=dict)
+
+
+def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView) -> list[Line]:
     """Everything under one machine's table, in the order a reader reads it, each line labeled."""
+    lines = _labeled_rows(REPO_LABEL, repo_lines(block))
     shown = shown_pieces(block, dash)
     shown += _set_aside_pieces("not covered", block.not_covered)
     shown += _set_aside_pieces(NO_FIT, block.no_fit)
-    lines = _labeled(SHOWN_LABEL, shown, dot)
+    shown += collision_pieces(block, view.ambiguous)
+    lines += _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
     lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash))
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
@@ -503,7 +538,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, install_for: str | N
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
         lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
-    lines += _install_lines(block, install_for)
+    lines += _install_lines(block, view)
     return lines
 
 
@@ -511,35 +546,56 @@ def install_target(block: MachineRanking, install_for: str | None) -> tuple[Rank
     """The first row of the machine this run is on, and its local Ollama name -- or `None`.
 
     Only for that machine: the local Ollama name of a package is about the machine that would
-    install it. A package with no such name has none. The install line and the pull of step 5 both
-    stand on this one choice, so they cannot name two different rows.
+    install it. A package with no such name has none. The install line stands on this choice; the
+    pull of step 5 lets the user choose another row (`pull_choice`, U6).
     """
     if install_for is None or block.machine != install_for or not block.ranked:
         return None
     entry = block.ranked[0]
-    name = install_name(entry.package_identity, entry.quantization, entry.format)
+    name = entry_pull_name(entry)
     return None if name is None else (entry, name)
 
 
-def _install_lines(block: MachineRanking, install_for: str | None) -> list[Line]:
-    """The one line a reader copies to get the first package of the machine this run is on.
+def _install_lines(block: MachineRanking, view: RunView) -> list[Line]:
+    """The one line a reader copies to get the first package of a machine.
 
     Nothing is called and nothing is looked up for it, and a row without a local name has no line
     (CONTRACTS.md, "Guided mode", "The screen"). It stands behind a blank line and the command
     itself is drawn as a command: in running text under the table it went under (test round,
-    2026-09-25). It stays when step 5 offers the pull, for anyone who prefers to paste it.
+    2026-09-25). It stays when step 5 offers the pull, for anyone who prefers to paste it. A pull
+    name more than one package answers to has a note instead (U4); another machine of a guided run
+    gets its command with the machine named, and the reminder that this run pulls only here (U3).
     """
-    target = install_target(block, install_for)
+    own = view.install_for is not None and block.machine == view.install_for
+    target = install_target(block, block.machine if view.install_for is not None else None)
     if target is None:
         return []
     entry, name = target
-    # The one line of this view that may pass 100 characters: it is a command to copy, and a command
-    # that was cut is worse than a line that wraps (second-model round, 2026-09-24).
-    return [[], label_line(INSTALL_LABEL, install_pull_line(entry.rank, name))]
+    if name in view.ambiguous:
+        return [[], label_line(INSTALL_LABEL, [("class:note", f"#{entry.rank} {NOT_UNIQUE_INSTALL}")])]
+    if own:
+        # The one line of this view that may pass 100 characters: it is a command to copy, and a
+        # command that was cut is worse than a line that wraps (second-model round, 2026-09-24).
+        return [[], label_line(INSTALL_LABEL, install_pull_line(entry.rank, name))]
+    other = [("class:note", f"#{entry.rank} on {block.label}"), ("", "  "), ("class:command", f"ollama pull {name}")]
+    return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", OTHER_INSTALL_NOTE)])]
 
 
-def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot: str, install_for: str | None) -> list[Line]:
-    lines: list[Line] = [[("", _block_head(block, scenario, dot))]]
+def _free_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
+    """The room left, under the head of a block (U8): measured now for this machine, `unknown` for
+    another one, and `unknown` with its reason where no machine was read (`modelroom render`)."""
+    if view.free is None:
+        pieces: tuple[str, ...] = RENDER_FREE
+    elif block.machine == view.install_for:
+        pieces = view.free
+    else:
+        pieces = (ANOTHER_COMPUTER_FREE,)
+    return _labeled(FREE_LABEL, list(pieces), dot)
+
+
+def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot: str, view: RunView) -> list[Line]:
+    origin = view.origins.get(block.machine)
+    lines: list[Line] = [[("", _block_head(block, scenario, dot, origin))], *_free_lines(block, view, dot)]
     if block.reason is not None:
         lines.append([("", block.reason)])
     if not block.ranked:
@@ -560,26 +616,30 @@ def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot:
                                 fit_word(entry.fit.fit_class, entry.fit.mode),
                                 _terminal_speed(entry, dash),
                                 f"{entry.fit.need_gib:.1f} GB",
+                                f"{entry.weights_gib:.1f} GB",
                             ]
                         ),
                     )
                 ]
             )
-    lines += _note_lines(block, dash, dot, install_for)
+    lines += _note_lines(block, dash, dot, view)
     return lines
 
 
 def show_result(
-    screen, document: RenderDocument, facts, config, folder: Path, now: datetime, install_for: str | None = None, extra=()
+    screen, document: RenderDocument, facts, config, folder: Path, now: datetime, install_for: str | None = None, extra=(),
+    view: RunView | None = None,
 ) -> None:
     """Draw step 5 of the guided mode: the card of the whole run, then one table per machine.
 
     The head of the step is already on screen, so what is left is the report: the card, the tables
     under it, and the line that says where the document went (CONTRACTS.md, "Guided mode", "The
-    screen"). `install_for` is the machine this run is on, the only one an install line may be
-    about; `extra` the card rows of the local servers. Every line goes through the screen, so the
-    labels, the notes and the install command carry the colors of the card (decided 2026-09-25).
+    screen"). `install_for` is the machine this run is on, the only one the pull may be about;
+    `extra` the card rows of the local servers; `view` what the run adds (`RunView`). Every line goes
+    through the screen, so the labels, the notes and the install command carry the colors of the card
+    (decided 2026-09-25).
     """
+    view = RunView(install_for=install_for) if view is None else replace(view, install_for=install_for)
     screen.blank()
     screen.card(
         result_card(
@@ -592,15 +652,16 @@ def show_result(
             now=now,
             machine=install_for,
             extra=extra,
+            origins=view.origins,
         )
     )
-    for line in terminal_blocks(document, install_for=install_for):
+    for line in terminal_blocks(document, install_for=install_for, view=view):
         screen.write(line)
     screen.blank()
     screen.done(STEP_COUNT, relative_path(config.paths.markdown, folder))
 
 
-def show_nothing(screen, config, folder: Path, scenario: Scenario, now: datetime, extra=()) -> None:
+def show_nothing(screen, config, folder: Path, scenario: Scenario, now: datetime, extra=(), origins=None) -> None:
     """Draw step 5 where there is nothing to rank: the reason, the card, and a dash for a balance.
 
     A head with nothing under it was the last step of a run that chose nothing (test round,
@@ -615,30 +676,38 @@ def show_nothing(screen, config, folder: Path, scenario: Scenario, now: datetime
         return
     screen.note(NOTHING_TO_RANK)
     screen.blank()
-    screen.card(empty_card(config, folder=folder, scenario=scenario, now=now, extra=extra))
+    screen.card(empty_card(config, folder=folder, scenario=scenario, now=now, extra=extra, origins=origins))
     screen.blank()
     screen.skipped(STEP_COUNT, NOTHING_RANKED_SUMMARY)
 
 
-def terminal_blocks(document: RenderDocument, install_for: str | None = None) -> list[Line]:
+def terminal_blocks(
+    document: RenderDocument, install_for: str | None = None, *, ambiguous: frozenset[str] = frozenset(), view: RunView | None = None
+) -> list[Line]:
     """One machine's block after another, each behind a blank line -- the table and its notes.
 
     Without the head of step 5 and without the card: those two belong to the guided mode, which
     draws them itself and then prints these lines (CONTRACTS.md, "Guided mode", "The screen").
+    `ambiguous` are the pull names no row may claim (`pull_choice.pull_collisions`, U4).
     """
+    view = view if view is not None else RunView(install_for=install_for, ambiguous=ambiguous)
     marks = glyphs()
     lines: list[Line] = []
     for block in document.machines:
-        lines += [[], *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, install_for)]
+        lines += [[], *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, view)]
     return lines
 
 
-def terminal_lines(document: RenderDocument, install_for: str | None = None) -> list[str]:
+def terminal_lines(
+    document: RenderDocument, install_for: str | None = None, *, ambiguous: frozenset[str] = frozenset()
+) -> list[str]:
     """The same blocks as plain text, for `modelroom render` and for a log of a run."""
-    return [plain(line) for line in terminal_blocks(document, install_for)]
+    return [plain(line) for line in terminal_blocks(document, install_for, ambiguous=ambiguous)]
 
 
-def document_terminal(document: RenderDocument, install_for: str | None = None) -> str:
+def document_terminal(
+    document: RenderDocument, install_for: str | None = None, *, ambiguous: frozenset[str] = frozenset()
+) -> str:
     """A compact terminal view of the same document: the ranking and the notes under it.
 
     It shows fewer columns than the Markdown table on purpose (a terminal is narrow), never
@@ -652,13 +721,14 @@ def document_terminal(document: RenderDocument, install_for: str | None = None) 
     lines = [plain(head_line(RESULTS_STEP, glyphs()))]
     if document.rating_unavailable is not None:
         lines.append(f"{_INDENT}Market rating unavailable: {document.rating_unavailable}")
-    lines += terminal_lines(document, install_for)
+    lines += terminal_lines(document, install_for, ambiguous=ambiguous)
     return "\n".join(lines)
 
 
 __all__ = [
     "NOTHING_RANKED_SUMMARY",
     "NOTHING_TO_RANK",
+    "RunView",
     "context_fact",
     "context_short",
     "document_markdown",

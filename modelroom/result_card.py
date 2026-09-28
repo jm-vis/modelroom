@@ -21,6 +21,23 @@ from .scenario_text import load_hint, never_measured, never_measured_of, scenari
 from .screen import NO_FIT, machine_fact, models_fact, result_fact, speed_fact
 
 _DASH = "–"
+# The line under a machine that is not the one of this run (AP9-UX2 U2), by where its profile came
+# from; a machine entered by hand says so in its own row already (`screen.entered_hardware`).
+ORIGIN_WORDS = {
+    "imported": "imported profile · not this computer",
+    "folder": "profile from this folder · not this computer",
+}
+
+
+def _machine_facts(rows, now: datetime, origins) -> list[Fact]:
+    """One machine row per `(machine, label, profile, reason)`, and its origin line under it (U2)."""
+    facts = []
+    for machine, label, profile, reason in rows:
+        facts.append(machine_fact(label, profile, now, reason))
+        words = ORIGIN_WORDS.get((origins or {}).get(machine, "this"))
+        if words is not None:
+            facts.append(Fact("", words, ""))
+    return facts
 
 
 def context_short(context: int) -> str:
@@ -98,7 +115,9 @@ def _folder_is_empty(config) -> bool:
         return False
 
 
-def empty_card(config, *, folder: Path, scenario: Scenario, now: datetime, extra: Sequence[Fact] = ()) -> list[Fact]:
+def empty_card(
+    config, *, folder: Path, scenario: Scenario, now: datetime, extra: Sequence[Fact] = (), origins=None
+) -> list[Fact]:
     """The card of a step 5 that had nothing to rank: the same rows, and a dash for the result.
 
     Everything a run without a snapshot still knows: the folder, the machines the configuration
@@ -113,8 +132,10 @@ def empty_card(config, *, folder: Path, scenario: Scenario, now: datetime, extra
 
     scan = scan_profiles(config.paths.hardware_dir)
     facts = [Fact("folder", str(folder), "")]
-    found = [machine_profile(name, machine, scan) for name, machine in config.machines.items()]
-    facts += [machine_fact(entry.label, entry.profile, now, entry.reason or entry.status) for entry in found]
+    named = [(name, machine_profile(name, machine, scan)) for name, machine in config.machines.items()]
+    found = [entry for _name, entry in named]
+    rows = [(name, entry.label, entry.profile, entry.reason or entry.status) for name, entry in named]
+    facts += _machine_facts(rows, now, origins)
     snapshot = snapshot_facts(config)
     facts.append(models_fact(snapshot.model_names, snapshot.packages, snapshot.accounts))
     facts.append(context_fact(scenario.context_requested))
@@ -135,6 +156,7 @@ def result_card(
     now: datetime,
     machine: str | None = None,
     extra: Sequence[Fact] = (),
+    origins=None,
 ) -> list[Fact]:
     """The whole run in six kinds of row: folder, machine, models, context, speed, result.
 
@@ -144,9 +166,8 @@ def result_card(
     """
     block = _card_block(document, machine)
     facts = [Fact("folder", str(folder), "")]
-    facts += [
-        machine_fact(entry.label, entry.profile, now, entry.reason or entry.status) for entry in document.machines
-    ]
+    rows = [(entry.machine, entry.label, entry.profile, entry.reason or entry.status) for entry in document.machines]
+    facts += _machine_facts(rows, now, origins)
     measured, fastest = _measured_speeds(block)
     facts.append(models_fact(model_names, packages, accounts))
     # The scenario sentence of the Markdown head, its first word being the row's own label; the hint

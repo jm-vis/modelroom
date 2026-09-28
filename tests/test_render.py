@@ -652,10 +652,10 @@ def test_the_terminal_table_reads_as_the_mockup_does():
     lines = document_terminal(document).splitlines()
 
     head = next(line for line in lines if "Model" in line and "Package" in line)
-    assert head.split() == ["#", "Model", "Package", "Fit", "Speed", "Memory"]
+    assert head.split() == ["#", "Model", "Package", "Fit", "Speed", "Memory", "Download"]  # U8: the weights
     row = lines[lines.index(head) + 2]
     entry = document.machines[0].ranked[0]
-    assert row.split() == ["1", "Nova-8B", "packager", "·", "Q4_K_M", entry.fit.fit_class, "41.1", "tok/s", f"{entry.fit.need_gib:.1f}", "GB"]
+    assert row.split() == ["1", "Nova-8B", "packager", "·", "Q4_K_M", entry.fit.fit_class, "41.1", "tok/s", f"{entry.fit.need_gib:.1f}", "GB", f"{entry.weights_gib:.1f}", "GB"]
 
 
 def test_a_fit_in_system_memory_says_ram_and_never_from_size():
@@ -755,7 +755,7 @@ def test_the_notes_of_the_ranking_are_bundled_by_memory_pool_with_their_rank_ran
     pool = next(line for line in lines if "graphics memory" in line)
     assert pool.split(maxsplit=1)[0] == "memory"
     assert "#1–3 fit into graphics memory, " in pool
-    assert pool.rstrip().endswith("GB free after the reserve")
+    assert pool.rstrip().endswith("GB (card minus reserve, from the profile)")  # the budget, labeled (U8)
     assert len([line for line in lines if "graphics memory" in line]) == 1
 
 
@@ -808,7 +808,7 @@ def test_the_install_line_stands_apart_with_the_command_to_copy():
     assert lines[lines.index(next(line for line in lines if "ollama pull" in line)) - 1] == ""
     # Without the machine of the run there is no line: `render` cannot know which writer it is on.
     assert "ollama pull" not in document_terminal(_document([_hf_package()]))
-    assert "ollama pull" not in document_terminal(_document([_hf_package()]), install_for="another")
+    assert "#1 on workstation  ollama pull hf.co/" in document_terminal(_document([_hf_package()]), install_for="another")  # U3
 
 
 def test_a_set_aside_piece_names_fewer_packages_where_the_room_is_not_there():

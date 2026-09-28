@@ -1633,8 +1633,8 @@ def test_apply_hits_writes_the_base_model_as_a_family_and_the_repo_as_an_owner_b
     assert [family.name for family in updated.families] == ["qwen3.5", "deepseek-r1"]
     base_model = _base_model_of(updated, "Qwen/Qwen3.5-9B")
     assert base_model.hf_repo == "Qwen/Qwen3.5-9B"
-    # the order of the groups: the publisher's own repository first, then the packager's
-    assert base_model.repos == ["Qwen/Qwen3.5-9B-GGUF", "unsloth/Qwen3.5-9B-GGUF"]
+    # the order of the groups: the publisher's first, then the packager's; the base model's own behind the first (P3)
+    assert base_model.repos == ["Qwen/Qwen3.5-9B-GGUF", "Qwen/Qwen3.5-9B", "unsloth/Qwen3.5-9B-GGUF"]
     assert updated.publishers == ["Qwen", "deepseek-ai"]
     assert (base_model.ollama_base, base_model.ollama_tag) == ("qwen3.5", "9b")
     assert "unsloth/Qwen3.5-9B-GGUF" in package_targets(updated, base_model)

@@ -169,12 +169,13 @@ def test_a_bigger_context_can_make_a_package_fit_again_off_the_graphics_card():
     """The count of the scale is not a falling line, and it must not be made into one.
 
     Fit v1 judges a package against the graphics memory as long as it fits there, and against
-    system memory once it does not (`fit._choose_pool`). The 9 GiB package is no fit on the
-    card by a hair at 4k; at 8k it no longer fits the card at all, is judged against the much
-    larger system memory, and comes out `fits`. The scale shows what the ranking of this same
-    folder will show, whatever that is -- it has no second opinion of its own.
+    system memory once it does not (`fit._choose_pool`). The 9 GiB package takes between 98 and
+    100 % of the card at 4k: until AP9-UX2 that was `no_fit` on the card, since then (P2) the
+    card is chosen only up to 98 % and the package is judged against the much larger system
+    memory at 4k already, as at 8k, and comes out `fits`. The scale shows what the ranking of
+    this same folder will show, whatever that is -- it has no second opinion of its own.
     """
-    assert count_fitting(_profile(), MACHINE, PACKAGES, BY_REPO, 4096) == 2
+    assert count_fitting(_profile(), MACHINE, PACKAGES, BY_REPO, 4096) == 3
     assert count_fitting(_profile(), MACHINE, PACKAGES, BY_REPO, 8192) == 3
 
 

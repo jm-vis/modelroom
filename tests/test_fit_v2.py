@@ -8,6 +8,7 @@ need = weights x 1.10 + kv + 0.50.
 from __future__ import annotations
 
 import copy
+import json
 from datetime import datetime, timezone
 from typing import get_args
 
@@ -19,6 +20,8 @@ from modelroom.examples import EXAMPLES
 from modelroom.fit import compute_fit, compute_fit_v2
 from modelroom.measurements import Scenario, default_scenario
 from modelroom.profile import FIT_GPU_STATES, GpuState, HardwareProfile
+
+from fixture_support import FIXTURES
 
 GIB = 1024**3
 NOW = datetime(2026, 9, 23, 8, 0, 0, tzinfo=timezone.utc)
@@ -203,3 +206,52 @@ def test_the_v1_package_rules_still_apply():
     incomplete = Package.model_validate(payload)
     fit = compute_fit_v2(_profile(), incomplete, _base_model(), default_scenario(), MACHINE)
     assert fit.reason == "only a complete gguf package is judged by fit contract v1"
+
+
+# --- a hybrid architecture (AP9-UX2 P1, ADR 0010) ---------------------------------------------------
+
+QWEN35_KV_TOKEN_BYTES = 32_768
+QWEN35_STATE_BYTES = 52_690_944
+QWEN35_Q4_K_M_BYTES = 5_680_522_464  # `Qwen3.5-9B-Q4_K_M.gguf` of the fixture chain
+
+
+def _qwen35_base_model() -> BaseModelSpec:
+    from modelroom.architecture import architecture_from_hf_config
+
+    config = json.loads((FIXTURES / "hf_qwen_qwen35_9b_config.json").read_text(encoding="utf-8"))
+    architecture = architecture_from_hf_config("Qwen/Qwen3.5-9B", None, config)
+    return BaseModelSpec.model_validate({**EXAMPLES["BaseModelSpec"], "architecture": architecture.model_dump()})
+
+
+def _laptop() -> HardwareProfile:
+    """The fixture laptop, measured through `windows_probes()` as a guided run measures it."""
+    from fixture_support import windows_probes
+    from modelroom.llmfit import read_llmfit_reference
+    from modelroom.measure import build_profile, measure_hardware
+
+    probes = windows_probes()
+    measured = measure_hardware(probes.platform, probes.runner, probes.read_text, probes.memory_bytes)
+    reference = read_llmfit_reference(probes.runner, "1.0.0")
+    return build_profile(measured, reference, "0123456789abcdef", "workstation", NOW)
+
+
+def test_a_hybrid_model_is_computed_on_architecture_basis_and_not_capped():
+    fit = compute_fit_v2(_profile(), _package(weights_gib=1.0), _qwen35_base_model(), _scenario(4096), MACHINE)
+    assert fit.basis == "architecture" and fit.reason is None
+    assert fit.fit_class == "ample"  # a size-basis fit would be capped at `fits`
+
+
+@pytest.mark.parametrize("context", [4096, 32768, 131072])
+@pytest.mark.parametrize("requests", [1, 3])
+def test_hybrid_kv_grows_with_context_and_requests(context, requests):
+    fit = compute_fit_v2(_profile(), _package(), _qwen35_base_model(), _scenario(context, requests), MACHINE)
+    assert fit.kv_gib == (QWEN35_KV_TOKEN_BYTES * context + QWEN35_STATE_BYTES) * requests / GIB
+
+
+def test_qwen35_9b_q4_k_m_at_32k_fits_the_laptop_card():
+    payload = copy.deepcopy(EXAMPLES["Package"])
+    payload["files"][0]["size_bytes"] = QWEN35_Q4_K_M_BYTES
+    fit = compute_fit_v2(_laptop(), Package.model_validate(payload), _qwen35_base_model(), _scenario(32768), MACHINE)
+    assert fit.mode == "gpu"
+    assert fit.fit_class != "no_fit"
+    assert fit.basis == "architecture"

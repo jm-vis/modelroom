@@ -17,3 +17,4 @@ One line per decision; an ADR is immutable, a changed situation gets a new one t
 | [0007](0007-identifiers-follow-the-words.md) | The identifiers follow the words: `from_metadata`, `no_fit`, `ample_reachable`, `cpu_caps_at_fits` | accepted, 2026-09-27 |
 | [0008](0008-local-servers-vllm-read-per-run.md) | Local servers as a list, vLLM read per run: start row, load test at once, fit on one card, nothing persisted | accepted, 2026-09-27; partly superseded by 0009 |
 | [0009](0009-largest-model-least-compression-first.md) | The largest model that fits, the least compression of it, the measurement appended, only the choice of the run | accepted, 2026-09-28 |
+| [0010](0010-hybrid-architecture-age-and-pull-choice.md) | A hybrid architecture read, the age of a line, the publisher's repository a target, the package chosen, the room read live | accepted, 2026-09-28 |
