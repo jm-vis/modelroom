@@ -62,7 +62,7 @@ def _word_list(tmp_path, monkeypatch, *found: str):
 
 def test_a_short_word_and_a_non_ascii_word_are_found_in_a_binary_file_as_bytes(tmp_path, monkeypatch):
     """Codex r4-1: a word shorter than a printable run, and one with an umlaut, in any encoding."""
-    short, umlaut = "zq" + "7", "zq" + "müller" + "7"
+    short, umlaut = "zq" + "7", "zq" + "m\u00fcller" + "7"
     lists_ = _word_list(tmp_path, monkeypatch, short, umlaut)
     for encoding in rc.WORD_ENCODINGS:
         for word in (short, umlaut):
@@ -71,8 +71,20 @@ def test_a_short_word_and_a_non_ascii_word_are_found_in_a_binary_file_as_bytes(t
             assert "private word" in classes(rc.distribution_findings(wheel, lists_)), (encoding, word)
 
 
+def test_a_non_ascii_word_in_mixed_case_is_found_in_every_encoding_and_in_archive_metadata(tmp_path, monkeypatch):
+    """Codex r5-1: the list says `m\u00fcller-s\u00fcd`, the file `M\u00fcller-S\u00dcD` -- a case no byte form of the list holds."""
+    lists_ = _word_list(tmp_path, monkeypatch, "zqm\u00fcller-s\u00fcd")
+    stored = "ZqM\u00fcller-S\u00dcD"
+    for encoding in rc.WORD_ENCODINGS:
+        for prefix in (b"\x89PNG\x00", b"\x89PNG"):  # an even and an odd offset
+            wheel = wheel_with(tmp_path, {"modelroom/icon.png": prefix + stored.encode(encoding) + b"\x00\x00"})
+            assert "private word" in classes(rc.distribution_findings(wheel, lists_)), (encoding, prefix)
+        wheel = wheel_with(tmp_path, {"modelroom/cli.py": b"x = 1\n"}, comment=b"by " + stored.encode(encoding))
+        assert any("<archive comment>" in f and f.endswith("private word") for f in rc.distribution_findings(wheel, lists_)), encoding
+
+
 def test_a_word_in_a_latin1_text_file_is_found(tmp_path, monkeypatch):
-    word = "zq" + "müller" + "7"
+    word = "zq" + "m\u00fcller" + "7"
     lists_ = _word_list(tmp_path, monkeypatch, word)
     wheel = wheel_with(tmp_path, {"modelroom/notes.txt": f"built by {word}\n".encode("latin-1")})
     assert "private word" in classes(rc.distribution_findings(wheel, lists_))
@@ -113,7 +125,7 @@ def test_a_json_escaped_word_in_a_tag_message_is_found(tmp_path, words):
 
 
 def test_a_word_in_a_latin1_commit_is_found_and_an_unknown_encoding_is_a_finding(tmp_path, monkeypatch):
-    word = "zq" + "würk" + "7"  # a real non-ASCII letter (Codex r4-5)
+    word = "zq" + "w\u00fcrk" + "7"  # a real non-ASCII letter (Codex r4-5)
     assert not word.isascii()
     path = tmp_path / "latin-words.txt"
     path.write_text(f"{word}\n", encoding="utf-8")

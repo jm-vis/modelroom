@@ -149,7 +149,7 @@ def test_one_registry_value_for_two_cards_is_unknown_and_the_line_says_why():
     first, _second = measure_gpu("win32", runner).graphics
     assert first.memory_gib is None
     assert adapter_line(first) == (
-        "graphics  NVIDIA GeForce RTX 3090 · memory not measured · windows · "
+        "graphics  NVIDIA GeForce RTX 3090 \u00b7 memory not measured \u00b7 windows \u00b7 "
         "not counted: nvidia-smi did not answer; the registry holds 2 entries for 2 adapters"
     )
 

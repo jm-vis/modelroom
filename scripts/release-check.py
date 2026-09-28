@@ -283,9 +283,17 @@ def text_variants(data: bytes, binary: bool = False) -> list[str]:
 
 def word_byte_findings(place: str, data: bytes, lists: NegativeList) -> list[str]:
     """The private words as the bytes they are stored as (`NegativeList.word_bytes`), at their line."""
-    if lists.word_bytes is None or PRIVATE_WORD not in lists.forbidden:
+    if PRIVATE_WORD not in lists.forbidden:
         return []
-    lines = {data.count(b"\n", 0, match.start()) + 1 for match in lists.word_bytes.finditer(data)}
+    lines = set()
+    if lists.word_bytes is not None:
+        lines |= {data.count(b"\n", 0, match.start()) + 1 for match in lists.word_bytes.finditer(data)}
+    # And as text, the whole decoded reading in each encoding (UTF-16 also from the odd byte), with a
+    # Unicode case-insensitive match: `Müller-SÜD` for the word `müller-süd` (Codex r5-1).
+    found = lists.forbidden[PRIVATE_WORD]
+    for encoding, start in (("utf-8", 0), ("latin-1", 0), ("utf-16-le", 0), ("utf-16-be", 0), ("utf-16-le", 1), ("utf-16-be", 1)):
+        text = data[start:].decode(encoding, "replace")
+        lines |= {line_no for line_no, line in enumerate(text.split("\n"), start=1) if found(line)}
     return [f"{place}:{line}: {PRIVATE_WORD}" for line in sorted(lines)]
 
 

@@ -133,9 +133,13 @@ def findings(paths: list[Path] | None = None, root: Path = REPO, words: list[str
         if path.suffix in SKIP_SUFFIXES or not path.exists():
             continue
         rel = path.relative_to(root).as_posix()
-        private = known is None or any(word.lower() in rel.lower() for word in known)
+        private = known is None or any(word.casefold() in rel.casefold() for word in known)
         shown = WITHHELD if private or classify(rel) else rel
-        text = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:  # its message names the full path: only the place, redacted (Codex r5-2)
+            hits.append(f"{shown}: unreadable file")
+            continue
         hits += [f"{shown}:{line_no}: {name}" for line_no, name in classify(text, rel)]
     return hits
 
@@ -206,6 +210,18 @@ def test_a_path_is_printed_only_where_the_private_words_are_known_and_absent(tmp
     known = findings([named, plain], tmp_path, words=[word.upper()])
     assert known == [f"{WITHHELD}:1: hardware subsystem id", "plain.txt:1: hardware subsystem id"]
     assert not any(word in hit for hit in without + known)
+
+
+def test_a_file_that_cannot_be_read_is_a_redacted_finding(tmp_path, capsys):
+    """Codex r5-2: a real read error (a folder where a file was listed) names no path and no word."""
+    word = "zq" + "workbench" + "7"
+    folder = tmp_path / f"notes-{word}.txt"
+    folder.mkdir()
+    hits = findings([folder], tmp_path, words=[word])
+    print("\n".join(hits))
+    captured = capsys.readouterr()
+    assert hits == [f"{WITHHELD}: unreadable file"]
+    assert word not in captured.out + captured.err and str(tmp_path) not in captured.out + captured.err
 
 
 if __name__ == "__main__":
