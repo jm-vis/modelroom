@@ -27,13 +27,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Sequence
 
+from .architecture import architecture_from_hf_config
 from .contracts import (
     Approval,
     Architecture,
     BaseModelSpec,
     Package,
     PackageFile,
-    architecture_from_hf_config,
     shards_complete,
 )
 from .fetch_types import AreaOutcome, error_text

@@ -1,19 +1,33 @@
-"""Where a model stands in its family when no statement says so: computed from its version numbers.
+"""Where a model stands in its family: computed from the version numbers of its line (GF F3, ADR 0010).
 
 `decide_age` (`search_age.py`) states `latest` and `legacy` from positive evidence only -- a
 `new_version` at the publisher's repository, or the shipped catalog -- and says `unknown` where
-neither speaks. For those rows the list reads one more thing off the names (decided 2026-09-25):
-within one family and variant of one publisher, the highest version is `latest` and every lower one
-`legacy`, with a highest one as its successor. Such a status is `computed`, the list marks it with
-`*`, and it reaches neither the catalog, the configuration nor the document.
+neither speaks. The list reads one more thing off the names (decided 2026-09-25, reworked by
+AP9-UX2 U5): within one **line** of one publisher's family, the highest version is `latest` and
+every member some other member stands over is `legacy`, with one highest member as its successor.
+Such a status is `computed`, the list marks it with `*`, and it reaches neither the catalog, the
+configuration nor the document.
 
-Two pure steps and no request of their own:
+A name has two kinds of words (GF F3):
 
-- `line_key` reads one repository name into publisher, family, variant, size, version and date --
-  or into `None` when a token of the name has no reading in the grammar below;
+- a **line** is a size step with its own name and its own version series, like Opus/Sonnet/Haiku:
+  the documented vocabulary `LINE_WORDS`, plus a word of the letter `r` and a number (`LINE_COUNTERS`,
+  `R1`), which is a line with its own counter. New line words come only with a GF decision and a test;
+- every other word is a **variation** (Base, Instruct, Mini, Flash, VL, Coder, Next ...). A
+  variation belongs to its version: a higher version, whatever its variation, makes every variation
+  of the lower one `legacy`.
+
+The group is `(publisher, family, line)`, the family the first word of the name. Two pure steps and
+no request of their own:
+
+- `line_key` reads one repository name into publisher, family, line, variation, size, version and
+  date -- or into `None` when a token of the name has no reading in the grammar below;
 - `compute_release` compares the keys of one search's population -- its resolved base models, every
-  model of the catalog and every successor the catalog names -- and gives a status to each resolved
-  base model whose `unknown` came from a silent catalog (`AgeVerdict.evidence == "catalog"`).
+  model of the catalog and every successor the catalog names, and the unresolved repositories of a
+  listed packager whose family is the family of exactly one publisher of the population -- and gives
+  a status to each resolved base model: a silent catalog's `unknown` is computed; a catalog's
+  `latest` gives way to a higher version; a fault's `unknown` becomes `legacy` where a higher version
+  is seen, and says its fault as a note (`release_notes`); a stated `legacy` stays.
 
 What the search does not see and the catalog does not know is not compared: each account answers
 two pages of twenty repositories, filtered by the search word. That is why the status says
@@ -23,13 +37,21 @@ two pages of twenty repositories, filtered by the search word. That is why the s
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Literal, Mapping, Sequence
 
 from .catalog import Catalog
 from .guided_contracts import SearchHit
-from .parameters import parameters_from_name
+from .parameters import _GGUF_SUFFIX, parameters_from_name
 from .search_age import AgeVerdict
+
+# The line vocabulary (GF F3, ADR 0010): size steps with their own name and version series. A word
+# of exactly the letter of `LINE_COUNTERS` and a number (`r1`) is a line with its own counter.
+LINE_WORDS = frozenset({"small", "medium", "large"})
+LINE_COUNTERS = frozenset({"r"})
+_LINE_COUNTER = re.compile(r"([a-z])(\d+(?:\.\d+)*)")
+# A note of step 2 is cut to this many characters (the 100 columns of the table, less the indent).
+NOTE_WIDTH = 97
 
 # The token classes, in the order they are tried; the first that matches a lowercase token wins.
 _PRECISION = re.compile(r"(?:bf|fp|int|q|iq)\d+")
@@ -73,18 +95,23 @@ class LineDate:
 
 @dataclass(frozen=True)
 class LineKey:
-    """What a name says about where its model stands: its group, its size, its version and date."""
+    """What a name says about where its model stands: its group, its size, its version and date.
+
+    The group is `(publisher, family, line)` (GF F3); `variant` -- the variations -- only helps to
+    choose a successor.
+    """
 
     publisher: str
     family: str
+    line: str
     variant: frozenset[str]
     size: float | None
     version: tuple[int, ...]
     date: LineDate | None
 
     @property
-    def group(self) -> tuple[str, str, frozenset[str]]:
-        return (self.publisher, self.family, self.variant)
+    def group(self) -> tuple[str, str, str]:
+        return (self.publisher, self.family, self.line)
 
     def stands_over(self, other: "LineKey") -> bool:
         """A strict partial order: a higher version, else a date against none, else a later date.
@@ -127,31 +154,59 @@ def line_key(hf_repo: str, parameters_b: float | None) -> LineKey | None:
     """
     owner, _, name = hf_repo.partition("/")
     tokens = _classified(_TOKEN_SPLIT.split(name.lower()))
-    if tokens is None:
+    if not tokens or tokens[0].kind not in (_PLAIN, _WORD_NUMBER):
+        # A name that starts with a size, a version, a date or a precision has no family word.
         return None
     boundary = next((i for i, token in enumerate(tokens) if token.kind not in (_IGNORED, _PLAIN)), len(tokens))
-    family = [token.text for token in tokens[:boundary] if token.kind == _PLAIN and token.text not in _PLAIN_WORDS]
-    if boundary < len(tokens) and tokens[boundary].kind == _WORD_NUMBER:
-        family.append(tokens[boundary].word)
     parts = _after_boundary(tokens, boundary)
-    if not family or parts is None:
+    if parts is None:
         return None
-    variant, version, dated = parts
+    version, dated = parts
+    family = tokens[0].word if tokens[0].kind == _WORD_NUMBER else tokens[0].text
+    line, counter, variant = _line_and_variant(tokens, boundary)
+    if not version and counter:
+        version = counter
     size = parameters_from_name(name)
-    return LineKey(owner.lower(), "-".join(family), variant, size if size is not None else parameters_b, version, dated)
+    return LineKey(
+        owner.lower(), family, line, variant, size if size is not None else parameters_b, version, dated
+    )
 
 
-def _after_boundary(
-    tokens: list[_Token], boundary: int
-) -> tuple[frozenset[str], tuple[int, ...], LineDate | None] | None:
-    """Variant, version and date from the boundary token on; `None` for a second version or date."""
+def _after_boundary(tokens: list[_Token], boundary: int) -> tuple[tuple[int, ...], LineDate | None] | None:
+    """Version and date from the boundary token on; `None` for a second version or date."""
     versions = [token.number for token in tokens[boundary:boundary + 1] if token.kind == _WORD_NUMBER]
     versions += [token.number for token in tokens[boundary:] if token.kind == _NUMBER]
     dates = [token.date for token in tokens[boundary:] if token.kind == _DATE]
     if len(versions) > 1 or len(dates) > 1:
         return None
-    words = {token.text for token in tokens[boundary + 1:] if token.kind in (_PLAIN, _WORD_NUMBER)}
-    return frozenset(words - _PLAIN_WORDS), (versions[0] if versions else ()), (dates[0] if dates else None)
+    return (versions[0] if versions else ()), (dates[0] if dates else None)
+
+
+def _line_and_variant(tokens: list[_Token], boundary: int) -> tuple[str, tuple[int, ...], frozenset[str]]:
+    """The first line word of the name (with a counter's version), and every other word as a variation.
+
+    The family token is neither. A word with a version at the boundary gives its word (`mt2` ->
+    `mt`); one behind the boundary stays whole (`qwen3`), as before. `instruct`, `it` and `chat`
+    say nothing (`_PLAIN_WORDS`).
+    """
+    line, counter = "", ()
+    words: list[str] = []
+    for index, token in enumerate(tokens[1:], start=1):
+        if token.kind == _WORD_NUMBER:
+            words.append(token.word if index == boundary else token.text)
+        elif token.kind == _PLAIN:
+            words.append(token.text)
+    variant: set[str] = set()
+    for word in words:
+        counted = _LINE_COUNTER.fullmatch(word)
+        if not line and word in LINE_WORDS:
+            line = word
+        elif not line and counted and counted.group(1) in LINE_COUNTERS:
+            numbers = _numbers(counted.group(2))
+            line, counter = counted.group(1), numbers or ()
+        elif word not in _PLAIN_WORDS:
+            variant.add(word)
+    return line, counter, frozenset(variant)
 
 
 def _classified(texts: list[str]) -> list[_Token] | None:
@@ -218,32 +273,69 @@ def _numbers(text: str) -> tuple[int, ...] | None:
 def compute_release(
     hits: Sequence[SearchHit], catalog: Catalog, ages: Mapping[str, AgeVerdict]
 ) -> dict[str, Release]:
-    """A computed status for every resolved base model whose `unknown` a silent catalog decided.
+    """A computed status for every resolved base model the version rule decides (GF F3, ADR 0010).
 
-    `ages` are the verdicts of `decide_age`, one per resolved base model. Only an `unknown` whose
-    evidence is the catalog is computed: an `unknown` from a broken `new_version` or from a budget
-    that ended is a fault, not silence, and stays as it is. A stated `latest` or `legacy` keeps its
-    status and still counts as a member of its group -- a maximal one is a candidate successor.
-    A base model this returns nothing for keeps what `decide_age` said.
+    `ages` are the verdicts of `decide_age`, one per resolved base model. By the evidence it came
+    from (U5 rule 4):
+
+    - a stated `legacy` stays as it is, always (it agrees with the rule);
+    - a silent catalog's `unknown` is computed: `latest` for a highest member, else `legacy`;
+    - a catalog's `latest` gives way to a computed `legacy` where another member stands over it;
+    - a fault's `unknown` (a broken `new_version`, a budget) becomes `legacy` where another member
+      stands over it, and stays `unknown` otherwise; its fault is a note either way (`release_notes`).
+
+    Every member of the population counts -- a stated one too; a highest one is a candidate
+    successor. A base model this returns nothing for keeps what `decide_age` said.
     """
+    return _releases(hits, catalog, ages)[0]
+
+
+def release_notes(hits: Sequence[SearchHit], catalog: Catalog, ages: Mapping[str, AgeVerdict]) -> list[str]:
+    """The notes of step 2 the rule leaves: a statement that did not read, successors that contradict."""
+    return _releases(hits, catalog, ages)[1]
+
+
+def _releases(
+    hits: Sequence[SearchHit], catalog: Catalog, ages: Mapping[str, AgeVerdict]
+) -> tuple[dict[str, Release], list[str]]:
     keys = _population(hits, catalog)
     maximal = _maximal_members(keys)
-    proposed: dict[str, Release] = {}
+    stated = _stated_edges(hits, catalog, ages)
+    releases: dict[str, Release] = {}
+    notes: list[str] = []
     for base in _resolved_bases(hits):
         verdict = ages.get(base)
         key = keys.get(base)
-        if verdict is None or key is None or (verdict.age, verdict.evidence) != ("unknown", "catalog"):
+        if verdict is None or verdict.age == "legacy":
+            continue
+        fault = verdict.age == "unknown" and verdict.evidence != "catalog"
+        if fault:
+            notes.append(_note(f"{_short(base)}: its own statement did not read ({verdict.evidence})"))
+        if key is None:
             continue
         tops = maximal[key.group]
         if base in tops:
-            proposed[base] = Release("latest", None)
+            if (verdict.age, verdict.evidence) == ("unknown", "catalog"):
+                releases[base] = Release("latest", None)
             continue
-        successor = _successor(key, [(top, keys[top]) for top in tops])
-        if successor is not None:
-            proposed[base] = Release("legacy", successor)
-    stated = _stated_edges(hits, catalog, ages)
-    cycled = _on_a_cycle(proposed, stated)
-    return {base: release for base, release in proposed.items() if base not in cycled}
+        if verdict.age == "latest" and verdict.evidence != "catalog":
+            continue
+        candidates = _ordered_successors(key, [(top, keys[top]) for top in tops])
+        free = [name for name in candidates if not _reaches(_following(stated), name, base)]
+        if not free:
+            notes.append(_note(f"{_short(base)}: the successor statements around it contradict each other"))
+        releases[base] = Release("legacy", (free or candidates)[0])
+    return releases, notes
+
+
+def _short(repo: str) -> str:
+    """What a reader calls a model in a note: the part behind the account."""
+    return repo.partition("/")[2] or repo
+
+
+def _note(text: str) -> str:
+    """A note of step 2, cut to `NOTE_WIDTH` characters."""
+    return text if len(text) <= NOTE_WIDTH else text[: NOTE_WIDTH - 3] + "..."
 
 
 def with_release(hits: Sequence[SearchHit], catalog: Catalog, ages: Mapping[str, AgeVerdict]) -> list[SearchHit]:
@@ -288,7 +380,8 @@ def _resolved_bases(hits: Iterable[SearchHit]) -> list[str]:
 
 
 def _population(hits: Sequence[SearchHit], catalog: Catalog) -> dict[str, LineKey]:
-    """Every interpretable name of this search: its resolved base models and the whole catalog.
+    """Every interpretable name of this search: its resolved base models, the whole catalog, and
+    the unresolved repositories of a listed packager that belong to exactly one publisher's family.
 
     The size of a base model the name does not state is the parameter count of a hit that is that
     very repository -- never the count of a packager's repository, which may be another build.
@@ -303,7 +396,31 @@ def _population(hits: Sequence[SearchHit], catalog: Catalog) -> dict[str, LineKe
         key = line_key(name, counts.get(name))
         if key is not None:
             keys[name] = key
+    keys.update(_packager_members(hits, keys))
     return keys
+
+
+def _packager_members(hits: Sequence[SearchHit], keys: Mapping[str, LineKey]) -> dict[str, LineKey]:
+    """The unresolved repositories of a listed packager, each under the one publisher of its family.
+
+    Read by the name without `-GGUF` (U5 rule 2): they prove "there is a higher version" and can be
+    the successor -- the packager's repository then. A family two publishers of the population share
+    counts for none of them.
+    """
+    publishers: dict[str, set[str]] = {}
+    for key in keys.values():
+        publishers.setdefault(key.family, set()).add(key.publisher)
+    members: dict[str, LineKey] = {}
+    for hit in hits:
+        if hit.resolved or hit.publisher_status != "listed packager" or hit.repo in keys:
+            continue
+        owner, _, name = hit.repo.partition("/")
+        stem = name[: -len(_GGUF_SUFFIX)] if name.upper().endswith(_GGUF_SUFFIX) else name
+        key = line_key(f"{owner}/{stem}", hit.parameters_b)
+        owners = publishers.get(key.family, set()) if key is not None else set()
+        if len(owners) == 1:
+            members[hit.repo] = replace(key, publisher=next(iter(owners)))
+    return members
 
 
 def _maximal_members(keys: Mapping[str, LineKey]) -> dict[tuple, list[str]]:
@@ -317,28 +434,30 @@ def _maximal_members(keys: Mapping[str, LineKey]) -> dict[tuple, list[str]]:
     }
 
 
-def _successor(key: LineKey, candidates: list[tuple[str, LineKey]]) -> str | None:
-    """The one candidate of the nearest size: the same, else the next larger, else the next smaller.
+def _ordered_successors(key: LineKey, candidates: list[tuple[str, LineKey]]) -> list[str]:
+    """Every candidate, the one to take first (U5 rule 3): never none where there is one.
 
-    A candidate without a size drops out as soon as one with a size fits. More than one left, or an
-    unknown size of the `legacy` row with more than one candidate: no successor -- the rule does not
-    pick one at random.
+    The nearest size first -- the same, else the next larger, else the next smaller, a candidate
+    without a size after every one with a size; for a row of unknown size the largest known one --
+    then the same variation before another, then the fewest variations, then the name. The same size
+    is the same number: two sizes that differ are two sizes, however close.
     """
-    if len(candidates) == 1:
-        return candidates[0][0]
-    sized = [(name, candidate.size) for name, candidate in candidates if candidate.size is not None]
-    if key.size is None or not sized:
-        return None
-    # The same size is the same number: two sizes that differ are two sizes, however close.
-    same = [name for name, size in sized if size == key.size]
-    larger = [size for _name, size in sized if size > key.size]
-    smaller = [size for _name, size in sized if size < key.size]
-    if same:
-        chosen = same
-    else:
-        nearest = min(larger) if larger else max(smaller)
-        chosen = [name for name, size in sized if size == nearest]
-    return chosen[0] if len(chosen) == 1 else None
+
+    def order(item: tuple[str, LineKey]) -> tuple:
+        name, candidate = item
+        if candidate.size is None:
+            nearness: tuple = (3, 0.0)
+        elif key.size is None:
+            nearness = (0, -candidate.size)
+        elif candidate.size == key.size:
+            nearness = (0, 0.0)
+        elif candidate.size > key.size:
+            nearness = (1, candidate.size - key.size)
+        else:
+            nearness = (2, key.size - candidate.size)
+        return (*nearness, candidate.variant != key.variant, len(candidate.variant), name)
+
+    return [name for name, _candidate in sorted(candidates, key=order)]
 
 
 def _stated_edges(hits: Sequence[SearchHit], catalog: Catalog, ages: Mapping[str, AgeVerdict]) -> set[tuple[str, str]]:
@@ -351,18 +470,14 @@ def _stated_edges(hits: Sequence[SearchHit], catalog: Catalog, ages: Mapping[str
     return edges
 
 
-def _on_a_cycle(proposed: Mapping[str, Release], stated: set[tuple[str, str]]) -> set[str]:
-    """The sources of every computed edge that lies on a cycle of all edges together.
-
-    All edges are drawn first -- the stated ones and every computed one -- and each computed edge is
-    checked against that whole graph; the ones on a cycle fall together, so the result does not
-    depend on an order. A stated edge never falls.
-    """
-    computed = {(base, release.successor) for base, release in proposed.items() if release.successor is not None}
+def _following(stated: set[tuple[str, str]]) -> dict[str, set[str]]:
+    """The stated successor edges as a graph. A computed edge `base -> candidate` closes a cycle when
+    the candidate reaches the base over stated edges alone (U5 rule 4): the check chooses only the
+    successor, never the status, and it depends on no order because no computed edge takes part."""
     following: dict[str, set[str]] = {}
-    for source, target in stated | computed:
+    for source, target in stated:
         following.setdefault(source, set()).add(target)
-    return {source for source, target in computed if _reaches(following, target, source)}
+    return following
 
 
 def _reaches(following: Mapping[str, set[str]], start: str, goal: str) -> bool:
@@ -379,4 +494,15 @@ def _reaches(following: Mapping[str, set[str]], start: str, goal: str) -> bool:
     return False
 
 
-__all__ = ["LineDate", "LineKey", "Release", "compute_release", "line_key", "release_log", "with_release"]
+__all__ = [
+    "LINE_COUNTERS",
+    "LINE_WORDS",
+    "LineDate",
+    "LineKey",
+    "Release",
+    "compute_release",
+    "line_key",
+    "release_log",
+    "release_notes",
+    "with_release",
+]

@@ -1,16 +1,18 @@
-"""Step 5, its last question: pull the first row of this machine into the local Ollama daemon.
+"""Step 5, its last question: pull a package of this machine's table into the local Ollama daemon.
 
-The README promised it for the release after 0.1.0 (decided 2026-09-25): the run offers to pull
-the package its install line names, instead of only printing the command -- and the command stays
-for anyone who prefers to paste it. `guided.py` calls `pull_step` once the render has drawn its
-card; the choice of the row is `views.install_target`'s, the one the install line stands on.
+The README promised it for the release after 0.1.0 (decided 2026-09-25): the run offers to pull a
+package instead of only printing the command -- and the command stays for anyone who prefers to
+paste it. `guided.py` calls `pull_step` once the render has drawn its card.
 
-Three conditions, all of them: a document was written, this machine's first row has an Ollama
-name, and the start screen knew the daemon as reachable. A first row the daemon provably has
-already -- by the digest rule of the load test, `loadtest.installed_candidates` -- is a note, not
-a question. The pull changes the daemon and nothing else: no configuration, no state, no document.
-What it does not check -- disk space, whose daemon answers, another process pulling the same name
--- is CONTRACTS.md, "Guided mode", "The pull".
+Since AP9-UX2 (U6, GF F4) the user chooses the package: a list of the rows shown for this machine
+(`pull_choice.pull_rows`), the command of the choice, a check of the disk (U8), then the question.
+An answer file without `pull_package` takes `#1` where it has a pull name of its own, as before.
+Three conditions, all of them: a document was written, a shown row of this machine has an Ollama
+name, and the start screen knew the daemon as reachable. A row the daemon provably has already --
+by the digest rule of the load test, `loadtest.installed_candidates` -- is a note, not a question.
+The pull changes the daemon and nothing else: no configuration, no state, no document. What it
+does not check -- whose daemon answers, another process pulling the same name -- is CONTRACTS.md,
+"Guided mode", "The pull".
 """
 
 from __future__ import annotations
@@ -24,22 +26,29 @@ from typing import TYPE_CHECKING, Sequence, TextIO
 
 from .contracts import InstalledModel, Package
 from .daemon import PULL_PATH, DaemonError
-from .dialog import AnswerMissingError, FileAsker
+from .dialog import AnswerMissingError, Choice, FileAsker
 from .document import RenderDocument
 from .http import Response
 from .intro import label_line
 from .loadtest import installed_candidates, installed_models, weight_digest
+from .pull_choice import KEY as CHOICE_KEY
+from .pull_choice import LOCAL_ALREADY, NONE_VALUE, QUESTION as CHOICE_QUESTION
+from .pull_choice import PullRow, default_row, package_of, pull_rows
 from .quantization import package_identity_key
+from .room import PULL_DISK_MARGIN_BYTES, free_disk, gb
 from .screen import PULL_CANCELED as CANCELED_LINE
-from .screen import PULL_LABEL, install_local_note, plain, pull_progress_text, pull_question, pulled_line, yes_no
+from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
+from .screen import pulled_line, yes_no
 from .views import INSTALL_LABEL, install_target
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
 
 KEY = "pull"
-# The answer file's table of keys; the question on the screen carries the size of the row as well.
-QUESTIONS: dict[str, str] = {KEY: "Pull #1 into Ollama now?"}
+# The answer file's table of keys; the question on the screen carries the row and its size as well.
+QUESTIONS: dict[str, str] = {CHOICE_KEY: CHOICE_QUESTION, KEY: "Pull #1 into Ollama now?"}
+NONE_WORDS = "none, do not pull"
+DISK_UNKNOWN = "disk space where Ollama keeps its models is not known"
 NOT_LISTED = "pulled, but the daemon does not list it"
 _BEFORE_SUCCESS = "the daemon ended its answer before success"
 _MAX_COUNT = 2**63
@@ -72,19 +81,95 @@ def first_row(document: RenderDocument, machine: str, packages: Sequence[Package
     return None
 
 
-def pull_step(run: "GuidedRun", first: FirstRow | None, reachable: bool) -> None:
-    """Ask for the pull of the first row, and pull it on a yes; a fault is `run.failed`, exit `1`."""
-    if first is None or not reachable:
+@dataclass(frozen=True)
+class PullContext:
+    """What the pull of step 5 chooses from: the document, this machine, the run's packages (before any
+    filter) and the pull names no row may claim (`pull_choice.pull_collisions`)."""
+
+    document: RenderDocument
+    machine: str
+    packages: Sequence[Package]
+    ambiguous: frozenset[str] = frozenset()
+
+
+def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) -> None:
+    """The list of the rows shown, the command of the choice, the disk, the question; a fault is `run.failed`."""
+    if context is None or not reachable:
+        return
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot)
+    if not any(row.name is not None for row in rows):
         return
     run.screen.blank()
-    if _is_local(run, first):
+    installed, _reason = installed_models(run.daemon, run.now)
+    locals_ = {
+        row.rank for row in rows if row.locked is None and _holds(run, installed, package_of(row, context.packages))
+    }
+    row = _choose(run, rows, locals_)
+    if row is None:
+        return
+    package = package_of(row, context.packages)
+    if package is None:
+        return
+    pull_chosen(run, FirstRow(row.rank, str(row.name), row.weights_gib, package), local=row.rank in locals_)
+
+
+def pull_chosen(run: "GuidedRun", first: FirstRow, *, local: bool | None = None) -> None:
+    """The chosen row: a note where it is local, else its command, the disk check (U8), the question."""
+    if _is_local(run, first) if local is None else local:
         run.screen.write(label_line(INSTALL_LABEL, install_local_note(first.rank, run.screen.glyphs.dot)))
+        return
+    run.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name)))
+    if not _disk_allows(run, first):
         return
     question = pull_question(first.rank, first.weights_gib)
     wants = _wants_pull(run, question)
     run.screen.answer(question, yes_no(wants))
     if wants:
         _pull(run, first, live_line(run))
+
+
+def _disk_allows(run: "GuidedRun", first: FirstRow) -> bool:
+    """Measured again now (U8): enough disk asks; too little says so and asks nothing; unknown asks with a note."""
+    disk = free_disk(run.room)
+    if not disk.known:
+        run.screen.note(DISK_UNKNOWN)
+        return True
+    need = sum(file.size_bytes for file in first.package.files if file.role in ("weights", "weights_shard"))
+    need += PULL_DISK_MARGIN_BYTES
+    if disk.free_bytes >= need:
+        return True
+    said = f"not enough disk for #{first.rank}: needs {gb(need)}, {gb(disk.free_bytes)} free on {disk.drive}"
+    run.screen.write(label_line(INSTALL_LABEL, [("class:note", said)]))
+    return False
+
+
+def _choose(run: "GuidedRun", rows: Sequence[PullRow], locals_: set[int]) -> PullRow | None:
+    """The row the user chose from the list, or `None` for `none`. An answer file without the key takes
+    `#1` where it has a pull name of its own, else nothing (the behavior before U6)."""
+    choices = [
+        Choice(row.value, _row_words(row, row.rank in locals_), disabled=row.locked) for row in rows
+    ] + [Choice(NONE_VALUE, NONE_WORDS)]
+    try:
+        value = run.asker.select(CHOICE_KEY, CHOICE_QUESTION, choices)
+    except AnswerMissingError:
+        return default_row(rows)
+    chosen = next((row for row in rows if row.locked is None and row.value == value), None)
+    run.screen.answer(CHOICE_QUESTION, NONE_WORDS if chosen is None else f"#{chosen.rank}  {chosen.name}")
+    return chosen
+
+
+def _row_words(row: PullRow, local: bool) -> str:
+    """`#1  unsloth · Q4_K_S  5.0 GB  hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S`, the name last and whole."""
+    words = f"#{row.rank}  {row.cell}  {row.weights_gib:.1f} GB  {row.name or ''}".rstrip()
+    return f"{words}  {LOCAL_ALREADY}" if local else words
+
+
+def _holds(run: "GuidedRun", installed: Sequence[InstalledModel] | None, package: Package | None) -> bool:
+    """Whether the daemon's inventory provably holds `package` (the load test's digest rule)."""
+    if installed is None or package is None:
+        return False
+    inventory = installed_candidates([package], list(installed), lambda name: weight_digest(run.daemon, name))
+    return bool(inventory.candidates)
 
 
 def _is_local(run: "GuidedRun", first: FirstRow) -> bool:
@@ -95,10 +180,7 @@ def _is_local(run: "GuidedRun", first: FirstRow) -> bool:
     missing one: the pull brings the registry's build of that name, which for Ollama is an update.
     """
     installed, _reason = installed_models(run.daemon, run.now)
-    if installed is None:
-        return False
-    inventory = installed_candidates([first.package], installed, lambda name: weight_digest(run.daemon, name))
-    return bool(inventory.candidates)
+    return _holds(run, installed, first.package)
 
 
 def _wants_pull(run: "GuidedRun", question: str) -> bool:

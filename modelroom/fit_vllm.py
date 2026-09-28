@@ -6,12 +6,14 @@ runtime, and gives the rest to the KV cache. So:
 
     budget  = 0.92 x card_gib
     kv_gib  = budget - weights - 1.50
-    at_once = floor(kv_gib / per_token / context)
+    at_once = floor(kv_bytes / (per_token x context + state))
 
 `weights` is the sum of the safetensors files, with no overhead factor. 1.50 GiB is the runtime of
 the A100 recording (`0.5 x 80 - 0.920 - 37.58`, decided 2026-09-27); the L4 recording gave 1.31, the
-second measured value. `per_token` is the base model's architecture where fit v1 can read it, else
-the size basis of `fit.py` -- and then the class is capped at `fits`, as there.
+second measured value. `per_token` is the base model's architecture where it can be read (only the
+full-attention layers of a hybrid model), else the size basis of `fit.py` -- and then the class is
+capped at `fits`, as there. `state` is a hybrid model's linear-layer state per request, `0`
+otherwise (`architecture.state_bytes`, AP9-UX2 P1).
 
 The class says how the requests the ranking assumes stand against what the card holds: `no_fit`
 below one request, `tight` below the requests, `ample` at twice the requests or more on the
@@ -25,8 +27,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .architecture import kv_token_bytes, state_bytes
 from .contracts import Architecture
-from .fit import GIB, KV_BYTES_PER_ELEMENT, KV_PER_TOKEN_SIZE_BASIS
+from .fit import GIB, KV_PER_TOKEN_SIZE_BASIS
 from .profile import HardwareProfile
 
 VLLM_GPU_MEMORY_UTILIZATION = 0.92
@@ -51,30 +54,42 @@ class VllmFit:
 
 
 def kv_per_token_bytes(architecture: Architecture | None) -> tuple[int, str]:
-    """The 16-bit KV cache of one token in bytes, and its basis: `architecture`, else `size`."""
-    if architecture is not None and architecture.kind == "dense_classic":
-        width = architecture.num_hidden_layers * architecture.num_key_value_heads * architecture.head_dim
-        return 2 * width * KV_BYTES_PER_ELEMENT, "architecture"
+    """The 16-bit KV cache of one token in bytes, and its basis: `architecture`, else `size`.
+
+    A `hybrid_linear` model counts only its layers of full attention (`architecture.kv_token_bytes`).
+    """
+    per_token = kv_token_bytes(architecture) if architecture is not None else None
+    if per_token is not None:
+        return per_token, "architecture"
     return KV_PER_TOKEN_SIZE_BASIS, "size"
+
+
+def requests_at_once(kv_bytes: int, per_token: int, context: int, state: int) -> int:
+    """How many requests of `context` tokens `kv_bytes` hold: each needs its tokens and its state once."""
+    return kv_bytes // (per_token * context + state)
 
 
 def vllm_fit(
     card_gib: float, weights_bytes: int, *, context: int, requests: int, architecture: Architecture | None = None
 ) -> VllmFit:
-    """The fit of one served model on one card of `card_gib`, for `requests` of `context` tokens."""
+    """The fit of one served model on one card of `card_gib`, for `requests` of `context` tokens.
+
+    A hybrid model's linear-layer state (`architecture.state_bytes`) is counted once per request.
+    """
     per_token, basis = kv_per_token_bytes(architecture)
+    state = state_bytes(architecture) if basis == "architecture" else 0
     budget = VLLM_GPU_MEMORY_UTILIZATION * card_gib
     weights = weights_bytes / GIB
     kv_gib = budget - weights - VLLM_RUNTIME_OVERHEAD_GIB
-    kv_bytes = max(kv_gib, 0.0) * GIB
-    at_once = math.floor(kv_bytes / per_token / context)
+    kv_bytes = math.floor(max(kv_gib, 0.0) * GIB)
+    at_once = requests_at_once(kv_bytes, per_token, context, state)
     return VllmFit(
         card_gib=card_gib,
         budget_gib=budget,
         weights_gib=weights,
         runtime_gib=VLLM_RUNTIME_OVERHEAD_GIB,
         kv_gib=kv_gib,
-        kv_tokens=math.floor(kv_bytes / per_token),
+        kv_tokens=kv_bytes // per_token,
         at_once=at_once,
         context=context,
         requests=requests,
@@ -106,6 +121,7 @@ __all__ = [
     "VllmFit",
     "kv_per_token_bytes",
     "largest_card",
+    "requests_at_once",
     "vllm_fit",
     "vllm_fit_class",
 ]

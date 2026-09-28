@@ -41,6 +41,7 @@ from .state import (
     read_snapshot,
     release_lock,
 )
+from .pull_choice import ambiguous_names
 from .views import document_markdown, document_terminal
 
 
@@ -213,8 +214,8 @@ def _render_locked(
         on_document(document)
     if echo is not None:
         # No install line here: the local name of a package is about the machine the run is on, and
-        # `render` cannot know which of several writers that is (second-model round, 2026-09-24).
-        echo(document_terminal(document))
+        # `render` cannot know which writer that is (2026-09-24); no row claims a shared pull name (U4).
+        echo(document_terminal(document, ambiguous=ambiguous_names(snapshot.packages)))
     for note in [*(f"skipped {path.name}: {reason}" for path, reason in scan.unreadable), *notes]:
         print(f"note: {note}")
     return 0

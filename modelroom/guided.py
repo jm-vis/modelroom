@@ -42,7 +42,18 @@ from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import USERS_KEY, USERS_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
 from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES, enter_step
-from .guided_install import QUESTIONS as PULL_QUESTIONS, FirstRow, first_row, pull_step
+from . import room as room_module
+# The folder question moved to `guided_folder.py` (AP9-UX2 U1/U7); the names stay readable here.
+from .guided_folder import CONFIG_NAME, MARKDOWN_PATH, STATE_FOLDER  # noqa: F401
+from .guided_folder import QUESTIONS as FOLDER_QUESTIONS
+from .guided_folder import config_file as _config_file
+from .guided_folder import known_config as _known_config
+from .guided_folder import last_elsewhere
+from .guided_folder import looks_like_results_folder as _looks_like_results_folder
+from .guided_folder import remember_folder as _remember_folder
+from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, pull_step
+from .pull_choice import ambiguous_names, run_packages
+from .room import RoomProbes, free_words
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
 from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices, _measured_here  # noqa: F401
 from .guided_machines import chosen_machines, machine_answer_words
@@ -103,24 +114,20 @@ from .search import (
     apply_hits,
     run_search,
 )
-from .selection import NO_MACHINE_CHOSEN, NO_MODEL_CHOSEN, RunSelection, narrow_config
+from .selection import NO_MACHINE_CHOSEN, NO_MODEL_CHOSEN, RunSelection, machine_origins, narrow_config
 from .state import LockHeldError, write_search_log
-from .views import context_short, show_nothing, show_result
+from .views import RunView, context_short, show_nothing, show_result
 
-CONFIG_NAME = "modelroom.toml"
 # How this machine is measured, as `_clone_mode` answers it: the takeover rule as it stands, a new
 # profile ("a clone"), or the bound profile written again under its own id ("the same machine").
 MODE_NORMAL = "normal"
 MODE_NEW_IDENTITY = "new_identity"
 MODE_SAME_MACHINE = "same_machine"
-STATE_FOLDER = "state"
-MARKDOWN_PATH = ("docs", "models.md")
 _FRESH_ID_ATTEMPTS = 8
 _UNKNOWN = "unknown"
 
 QUESTIONS: dict[str, str] = {
-    "results": "Where should results live?",
-    "results_path": "Path to the results folder",
+    **FOLDER_QUESTIONS,  # `results`, `results_path` and `write_home` (`modelroom/guided_folder.py`)
     "write_config": "Write a configuration into this folder?",
     "machines": "Which machines should the result cover?",
     "import_file": "Path to the profile file to import",
@@ -171,6 +178,8 @@ class GuidedRun:
     # What steps 1 and 2 of this run chose; the steps after them and the result cover only this
     # (`selection.py`, AP9-UX B). In memory only, never written.
     selection: RunSelection = field(default_factory=lambda: RunSelection((), ()))
+    # The free graphics memory and disk of this machine, read live in step 5 (`room.py`, AP9-UX2 U8).
+    room: RoomProbes = field(default_factory=lambda: room_module.default_room_probes())
 
     def failed(self, message: str) -> None:
         """Say it once and remember it: the run continues, its exit code does not stay `0`."""
@@ -190,63 +199,6 @@ def _configuration_step(run: GuidedRun, config_arg: Path | None) -> tuple[Path, 
     config = _machines_step(run, config_file, config)
     run.screen.done(1, f"{config_file.parent}, {machines_summary(len(config.machines))}")
     return config_file, config
-
-
-def _known_config(run: GuidedRun, config_arg: Path | None) -> Path | None:
-    """The configuration this run can already read before its first question, for the start screen.
-
-    `--config` when it names a file, else the folder the pointer file remembers when it still
-    holds a configuration. Neither is decided here -- `_config_file` asks and says what it found;
-    this is only what the start screen may already show.
-    """
-    if config_arg is not None and config_arg.is_file():
-        return config_arg.resolve()
-    current = read_pointer(run.pointer_path).current
-    if current is None:
-        return None
-    candidate = Path(current) / CONFIG_NAME
-    return candidate.resolve() if candidate.is_file() else None
-
-
-def _ask_config_file(run: GuidedRun) -> Path:
-    """The configuration file the run works on, from the folder question."""
-    choice = run.asker.select(
-        "results",
-        QUESTIONS["results"],
-        [Choice("here", f"{THIS_FOLDER} ({run.here})"), Choice("path", "another path")],
-    )
-    if choice == "here":
-        folder = run.here
-        run.screen.answer(QUESTIONS["results"], THIS_FOLDER)
-    else:
-        answered = Path(run.asker.text("results_path", QUESTIONS["results_path"]).strip()).expanduser()
-        folder = answered if answered.is_absolute() else run.here / answered
-        run.screen.answer(QUESTIONS["results"], str(folder.resolve()), path=True)
-    return folder.resolve() / CONFIG_NAME
-
-
-def _config_file(run: GuidedRun, config_arg: Path | None) -> Path:
-    """`--config` wins over the pointer file; an unreachable target asks again, never guesses."""
-    if config_arg is not None:
-        if config_arg.is_file():
-            return config_arg.resolve()
-        run.screen.note(f"{config_arg}: there is no configuration at this path")
-        return _ask_config_file(run)
-    pointer = read_pointer(run.pointer_path)
-    if pointer.current is not None:
-        candidate = Path(pointer.current) / CONFIG_NAME
-        if candidate.is_file():
-            return candidate.resolve()
-        # Without the path in front of it: the answer to the question that follows says which
-        # folder this run works in, and it said the same path twice (test round, 2026-09-24).
-        run.screen.note(f"the results folder of the last run no longer holds a {CONFIG_NAME}")
-    return _ask_config_file(run)
-
-
-def _looks_like_results_folder(folder: Path) -> bool:
-    """Whether a folder already holds results, so writing a configuration into it is a question."""
-    state = folder / STATE_FOLDER
-    return state.is_dir() or (folder / MARKDOWN_PATH[0]).is_dir()
 
 
 def _machine_key(hostname: str) -> str:
@@ -303,22 +255,6 @@ def _write_config(run: GuidedRun, config_file: Path, change: Change | Configurat
         return update_config(config_file, change, now=run.now)
     except (ConfigError, OSError) as exc:
         raise GuidedError(f"{config_file}: the configuration could not be written ({exc})") from exc
-
-
-def _remember_folder(run: GuidedRun, folder: Path) -> None:
-    """Record the results folder in the pointer file, so the next run finds it without asking.
-
-    Written only when it really changes: the file is one per user for every results folder and is
-    replaced as a whole, without a lock (the trade-off `cli._bind_this_machine` documents), so even
-    a write that changes nothing could drop a binding a concurrent `hardware` run added in between.
-    """
-    pointer = read_pointer(run.pointer_path)
-    if pointer.current == str(folder):
-        return
-    try:
-        write_pointer(run.pointer_path, pointer.with_current(folder))
-    except (OSError, ValueError) as exc:
-        run.out(f"{run.pointer_path}: this folder could not be remembered ({exc}); the next run asks again")
 
 
 def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
@@ -578,18 +514,31 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound, name)))
     if "this-machine" in picked:
         config = _measure_this_machine(run, config_file, config, scan, _measured_here(bound))
-    arrived: set[str] = set()
+    imported: set[str] = set()
+    entered: set[str] = set()
     if "import" in picked:
-        config, arrived = _import_a_profile(run, config_file, config)
+        config, imported = _import_a_profile(run, config_file, config)
     if "enter" in picked:
         before = set(scan_profiles(config.paths.hardware_dir).profiles)
         config = enter_step(run, config_file, config)
-        arrived |= set(scan_profiles(config.paths.hardware_dir).profiles) - before
+        entered = set(scan_profiles(config.paths.hardware_dir).profiles) - before
     # An empty choice stays empty -- nothing marked in a file, or an import that failed: no machine the
     # run did not choose is added, the bound one included (Codex r2, finding 1). At a terminal `Enter`
     # takes the pointer row, so a terminal run always chooses one.
-    run.selection = replace(run.selection, machines=chosen_machines(config, picked, name, arrived))
+    machines = chosen_machines(config, picked, name, imported | entered)
+    run.selection = replace(run.selection, machines=machines, origins=_origins(run, config, config_file, machines, picked, imported, entered))
     return config
+
+
+def _origins(run: GuidedRun, config: Configuration, config_file: Path, machines, picked, imported, entered) -> dict:
+    """Where each chosen machine came from (U2): this machine by its measurement or its bound profile
+    measured here, then imported, then entered, then the folder (`selection.machine_origins`)."""
+    bound = _bound_profile(run, scan_profiles(config.paths.hardware_dir), config_file.parent)
+    own = bound.profile_id if _measured_here(bound) else None
+    name = _machine_key(run.probes.hostname())
+    this = {name} if "this-machine" in picked else set()
+    this |= {machine for machine in machines if own is not None and config.machines[machine].profile == own}
+    return machine_origins(config, machines, this=this, imported=imported, entered=entered)
 
 
 def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> HardwareProfile | None:
@@ -690,12 +639,12 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
 
 
-def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scenario: Scenario) -> tuple[int, FirstRow | None]:
+def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scenario: Scenario) -> tuple[int, PullContext | None]:
     """Step 5: render, then the card of the whole run (decided 2026-09-24) and one table per machine.
 
     Built from the document the render just wrote, so no number is computed twice; with nothing to
     render the card is drawn all the same (`views.show_nothing`, 2026-09-25). Returns the render's
-    exit code, and this machine's first row for the pull that follows (`None` without one).
+    exit code, and what the pull that follows chooses from (`None` without a document).
     """
     from .cli import render_with_config
 
@@ -711,17 +660,20 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
 
     def seen(document) -> None:
         # Read inside the callback, which runs while the render still holds the lock: the card, the
-        # table and the package of the first row rest on one snapshot (second-model round, 2026-09-24).
-        packages = snapshot_packages(config, chosen)[0]
-        written.append((document, snapshot_facts(config, chosen), first_row(document, here, packages)))
+        # table and the packages of the pull rest on one snapshot (second-model round, 2026-09-24).
+        packages = run_packages(config, chosen)  # before the eligibility filter (U4, Codex r3-1)
+        written.append((document, snapshot_facts(config, chosen), PullContext(document, here, packages, ambiguous_names(packages))))
 
     code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen)
     if not written:
         shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only
-        show_nothing(run.screen, shown, config_file.parent, scenario, run.now, card_facts(run))
+        show_nothing(run.screen, shown, config_file.parent, scenario, run.now, card_facts(run), chosen.origins)
         return code, None
-    show_result(run.screen, *written[0][:2], config, config_file.parent, run.now, here, card_facts(run))
-    return code, written[0][2]
+    document, facts, context = written[0]
+    own = next((block.profile for block in document.machines if block.machine == here), None)
+    view = RunView(ambiguous=context.ambiguous, free=free_words(run.room, own, run.screen.glyphs.dot), origins=chosen.origins)
+    show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
+    return code, context
 
 
 def run_guided(
@@ -738,6 +690,7 @@ def run_guided(
     daemon: Daemon | None = None,
     colored: bool | None = None,
     servers: dict | None = None,
+    room: RoomProbes | None = None,
 ) -> int:
     """Run the whole guided mode; returns the exit code (`0` when a document was written).
 
@@ -746,7 +699,8 @@ def run_guided(
     dependency injection: the transport, the daemon and the other local servers of this machine by
     key (`local_servers.py`), its probes, the clock, the pointer file and the shipped catalog.
     `colored` says whether the start screen may carry color; `modelroom --answers <file>` passes
-    `False`, `None` asks the stream (`intro.use_color`).
+    `False`, `None` asks the stream (`intro.use_color`). `room`: the free memory and disk of this
+    machine (`room.py`); `None` is the real one.
     """
     run = GuidedRun(
         asker=asker,
@@ -760,8 +714,11 @@ def run_guided(
         servers=ServerRun(servers if servers is not None else default_transports()),
         out=out,
         screen=Screen(out, colored=colored),
+        room=room if room is not None else room_module.default_room_probes(),
     )
-    intro = collect_intro(run.daemon, run.probes, run.pointer_path, _known_config(run, config_arg), run.servers)
+    known = _known_config(run, config_arg)
+    elsewhere = last_elsewhere(run, config_arg, known)
+    intro = collect_intro(run.daemon, run.probes, run.pointer_path, known, run.servers, last_elsewhere=elsewhere)
     print_intro(intro, run.out, colored=colored)
     config_file, config = _configuration_step(run, config_arg)
     config, packages, chose = _packages_step(run, config_file, config)

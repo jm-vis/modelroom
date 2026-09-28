@@ -180,7 +180,7 @@ class Architecture(BaseModel):
 
     source_repo: str
     source_revision: str | None = None
-    kind: Literal["dense_classic", "unknown"]
+    kind: Literal["dense_classic", "hybrid_linear", "unknown"]
     # R7-10 (fix-round 6): `le=2**31 - 1` bounds every numeric field -- `gt=0` alone never
     # bounded the top end, so an implausible value like `10**400` (which `json.loads` parses
     # without complaint) validated fine and then overflowed `fit.py::compute_fit`'s arithmetic
@@ -193,6 +193,14 @@ class Architecture(BaseModel):
     head_dim: int | None = Field(default=None, gt=0, le=2**31 - 1)
     layer_types: list[str] | None = None
     max_context: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    # `hybrid_linear` only (AP9-UX2 P1, ADR 0010): the linear-attention layers' state, read from
+    # `config.json`; `linear_state_bytes` is the byte width of one state element (`mamba_ssm_dtype`).
+    linear_num_key_heads: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    linear_num_value_heads: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    linear_key_head_dim: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    linear_value_head_dim: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    linear_conv_kernel_dim: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    linear_state_bytes: int | None = Field(default=None, gt=0, le=2**31 - 1)
 
     @field_validator("source_revision")
     @classmethod
@@ -202,78 +210,39 @@ class Architecture(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _check_dense_classic_completeness(self) -> "Architecture":
+    def _check_completeness(self) -> "Architecture":
+        linear = [getattr(self, name) for name in LINEAR_FIELDS]
+        if self.kind != "hybrid_linear" and any(value is not None for value in linear):
+            raise ValueError(f"{self.kind} carries none of the linear_* fields")
+        if self.kind == "unknown":
+            return self
+        if None in (self.num_hidden_layers, self.num_key_value_heads, self.head_dim):
+            raise ValueError(f"{self.kind} requires num_hidden_layers, num_key_value_heads and head_dim")
+        types = self.layer_types
         if self.kind == "dense_classic":
-            if None in (self.num_hidden_layers, self.num_key_value_heads, self.head_dim):
-                raise ValueError(
-                    "dense_classic requires num_hidden_layers, num_key_value_heads and head_dim"
-                )
-            if self.layer_types is not None and any(
-                layer != "full_attention" for layer in self.layer_types
-            ):
-                raise ValueError(
-                    "dense_classic requires layer_types to be None or all 'full_attention'"
-                )
+            if types is not None and any(layer != "full_attention" for layer in types):
+                raise ValueError("dense_classic requires layer_types to be None or all 'full_attention'")
+            return self
+        if types is None or len(types) != self.num_hidden_layers or set(types) != set(HYBRID_LAYER_TYPES):
+            raise ValueError(
+                "hybrid_linear requires layer_types of num_hidden_layers entries, "
+                "each full_attention or linear_attention and both present"
+            )
+        if None in linear:
+            raise ValueError("hybrid_linear requires every linear_* field")
         return self
 
 
-# Any of these fields, present at the top level or under `text_config` with a value other
-# than None, marks a mixture-of-experts config and rules out `dense_classic` regardless of the
-# plain numeric fields. A dense decoder does not carry them at all, so presence is the signal;
-# the value is not interpreted (a routed expert count of 1 is still a MoE layout).
-_MOE_FIELDS = (
-    "num_local_experts",
-    "num_experts",
-    "n_routed_experts",
-    "num_experts_per_tok",
-    "moe_intermediate_size",
+# The fields only a `hybrid_linear` architecture carries, and the two layer types it is made of.
+LINEAR_FIELDS = (
+    "linear_num_key_heads",
+    "linear_num_value_heads",
+    "linear_key_head_dim",
+    "linear_value_head_dim",
+    "linear_conv_kernel_dim",
+    "linear_state_bytes",
 )
-
-
-def _is_moe_config(config: dict, layer_config: dict) -> bool:
-    return any(source.get(field) is not None for source in (config, layer_config) for field in _MOE_FIELDS)
-
-
-def architecture_from_hf_config(
-    source_repo: str, source_revision: str | None, config: dict | None
-) -> Architecture:
-    """Build an `Architecture` from a publisher repo's parsed `config.json`.
-
-    Some publishers nest the language-model fields under a `text_config` key (multimodal
-    configs); this reads from there when present, otherwise from the top level. `kind` is
-    `dense_classic` only when the three numeric fields are all present, `layer_types` is
-    either absent or entirely `"full_attention"`, and none of the MoE fields (checked at both
-    the top level and in `text_config`) signal a mixture-of-experts model. A hybrid or MoE
-    config, or a missing file, resolves to `"unknown"` with the numeric fields left at `None`.
-    """
-    if config is None:
-        return Architecture(source_repo=source_repo, source_revision=source_revision, kind="unknown")
-
-    layer_config = config.get("text_config") if isinstance(config.get("text_config"), dict) else config
-
-    num_hidden_layers = layer_config.get("num_hidden_layers")
-    num_key_value_heads = layer_config.get("num_key_value_heads")
-    head_dim = layer_config.get("head_dim")
-    layer_types = layer_config.get("layer_types")
-    max_context = layer_config.get("max_position_embeddings") or config.get("max_position_embeddings")
-
-    has_numeric = None not in (num_hidden_layers, num_key_value_heads, head_dim)
-    all_full_attention = layer_types is None or all(t == "full_attention" for t in layer_types)
-    is_moe = _is_moe_config(config, layer_config)
-    kind: Literal["dense_classic", "unknown"] = (
-        "dense_classic" if has_numeric and all_full_attention and not is_moe else "unknown"
-    )
-
-    return Architecture(
-        source_repo=source_repo,
-        source_revision=source_revision,
-        kind=kind,
-        num_hidden_layers=num_hidden_layers if kind == "dense_classic" else None,
-        num_key_value_heads=num_key_value_heads if kind == "dense_classic" else None,
-        head_dim=head_dim if kind == "dense_classic" else None,
-        layer_types=layer_types if kind == "dense_classic" else None,
-        max_context=max_context,
-    )
+HYBRID_LAYER_TYPES = ("full_attention", "linear_attention")
 
 
 class BaseModelSpec(BaseModel):

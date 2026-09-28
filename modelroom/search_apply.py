@@ -26,6 +26,9 @@ def apply_hits(config: Configuration, hits: Iterable[SearchHit], *, catalog: Cat
     under `publishers`, and adds the hit's own repository as an owner-bound `repos` target of
     that base model -- the search finds repositories under accounts the packager list does not
     name, and `repos` is where such a target belongs (CONTRACTS.md, "BaseModelConfig").
+    The base model's **own** repository becomes a `repos` target too, once (AP9-UX2 P3, GF F8, ADR
+    0010): the fetch then reads the publisher's tensor package, so a vLLM server serving the base
+    model finds its package (`guided_vllm.match_served`) even when a packager's hit led to it.
     Unresolved hits are ignored: nothing unproven ever reaches the configuration. Repeating the
     same hits changes nothing. The result is validated like any other configuration, so a
     target two base models would claim raises `ConfigError` here rather than at fetch time.
@@ -47,8 +50,9 @@ def apply_hits(config: Configuration, hits: Iterable[SearchHit], *, catalog: Cat
             data["publishers"] = [*data["publishers"], publisher]
         family = _family_entry(data, base, catalog)
         base_entry = _base_model_entry(family, base)
-        if hit.repo not in base_entry["repos"]:
-            base_entry["repos"] = [*base_entry["repos"], hit.repo]
+        for repo in (hit.repo, base):
+            if repo not in base_entry["repos"]:
+                base_entry["repos"] = [*base_entry["repos"], repo]
         name = ollama_by_base.get(base)
         if name is not None:
             base_entry["ollama_base"], _, base_entry["ollama_tag"] = name.partition(":")

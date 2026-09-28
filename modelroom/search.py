@@ -52,7 +52,7 @@ from .search_pages import (
     typed_plan,
     word_plan,
 )
-from .search_release import release_log, with_release
+from .search_release import release_log, release_notes, with_release
 from .search_word import SearchWord, catalog_models, close_matches, latest_model_names, parse_search
 
 # The whole guided run -- search, resolution, successor lookups, tree pages and the fetch --
@@ -284,6 +284,7 @@ def run_search(
     groups = [typed_group] if typed_group is not None else []
     groups += _answer_plan(redirecting, plan, word, state, shared, notes)
     hits = _with_ollama_entries([hit for group in groups for hit in group.hits], ollama_entries or {})
+    notes += release_notes(hits, catalog, state.ages)  # a statement that did not read is a note (U5)
     hits = with_release(hits, catalog, state.ages)  # pure: every age lookup is done by now
     return SearchOutcome(
         query=word.text,
