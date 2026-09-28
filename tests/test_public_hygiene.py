@@ -107,14 +107,34 @@ def tracked_files() -> list[Path]:
     return [REPO / line for line in out.splitlines() if line]
 
 
-def findings(paths: list[Path] | None = None, root: Path = REPO) -> list[str]:
-    """Every hit by place and class only: never the line, and a path that is a hit itself withheld."""
+PRIVATE_WORDS_ENV = "MODELROOM_RELEASE_PRIVATE_WORDS"
+
+
+def private_words() -> list[str] | None:
+    """The release gate's private words (`scripts/release-check.py`), or `None` where the file is not
+    named or does not read. Only to decide whether a path may be printed; the words stay outside."""
+    import os
+
+    location = os.environ.get(PRIVATE_WORDS_ENV, "").strip()
+    try:
+        lines = Path(location).read_text(encoding="utf-8-sig").splitlines() if location else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return None if lines is None else [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+
+
+def findings(paths: list[Path] | None = None, root: Path = REPO, words: list[str] | None | bool = True) -> list[str]:
+    """Every hit by place and class only, never the line. A path is printed only where the private
+    words are known (`words`, by default read like the release gate reads them) and it holds none of
+    them and no hit of its own; otherwise it is withheld (Codex r4-4)."""
+    known = private_words() if words is True else words
     hits = []
     for path in paths if paths is not None else tracked_files():
         if path.suffix in SKIP_SUFFIXES or not path.exists():
             continue
         rel = path.relative_to(root).as_posix()
-        shown = WITHHELD if classify(rel) else rel
+        private = known is None or any(word.lower() in rel.lower() for word in known)
+        shown = WITHHELD if private or classify(rel) else rel
         text = path.read_text(encoding="utf-8", errors="replace")
         hits += [f"{shown}:{line_no}: {name}" for line_no, name in classify(text, rel)]
     return hits
@@ -169,9 +189,23 @@ def test_a_finding_names_place_and_class_and_withholds_a_leaking_path(tmp_path):
     named.write_text(f"ok\nthe device {leak}\n", encoding="utf-8")
     plain = tmp_path / "plain.json"
     plain.write_text('{"cpu_name": "' + "Intel Xeon" + '"}\n', encoding="utf-8")
-    hits = findings([named, plain], tmp_path)
+    hits = findings([named, plain], tmp_path, words=[])
     assert hits == [f"{WITHHELD}:2: hardware subsystem id", "plain.json:1: processor model"]
     assert not any(leak in hit or "Xeon" in hit for hit in hits)
+
+
+def test_a_path_is_printed_only_where_the_private_words_are_known_and_absent(tmp_path):
+    """Codex r4-4: this test runs without the gate's word list; a data path is withheld then."""
+    word = "zq" + "workbench" + "7"
+    named = tmp_path / f"notes-{word}.txt"
+    named.write_text("device SUBSYS_" + "1A2B3C4D\n", encoding="utf-8")
+    plain = tmp_path / "plain.txt"
+    plain.write_text("device SUBSYS_" + "1A2B3C4D\n", encoding="utf-8")
+    without = findings([named, plain], tmp_path, words=None)
+    assert without == [f"{WITHHELD}:1: hardware subsystem id"] * 2
+    known = findings([named, plain], tmp_path, words=[word.upper()])
+    assert known == [f"{WITHHELD}:1: hardware subsystem id", "plain.txt:1: hardware subsystem id"]
+    assert not any(word in hit for hit in without + known)
 
 
 if __name__ == "__main__":

@@ -53,6 +53,56 @@ def test_a_binary_file_is_read_in_its_printable_runs_not_its_noise(tmp_path, wor
     assert "e-mail address" in classes(loud)
 
 
+def _word_list(tmp_path, monkeypatch, *found: str):
+    path = tmp_path / "more-words.txt"
+    path.write_text("".join(f"{word}\n" for word in found), encoding="utf-8")
+    monkeypatch.setenv(rc.PRIVATE_WORDS_ENV, str(path))
+    return rc.with_private_words(rc.load_negative_list(), rc.private_words())
+
+
+def test_a_short_word_and_a_non_ascii_word_are_found_in_a_binary_file_as_bytes(tmp_path, monkeypatch):
+    """Codex r4-1: a word shorter than a printable run, and one with an umlaut, in any encoding."""
+    short, umlaut = "zq" + "7", "zq" + "müller" + "7"
+    lists_ = _word_list(tmp_path, monkeypatch, short, umlaut)
+    for encoding in rc.WORD_ENCODINGS:
+        for word in (short, umlaut):
+            data = b"\x89PNG\x00\x01" + word.encode(encoding) + b"\x02\x00"
+            wheel = wheel_with(tmp_path, {"modelroom/icon.png": data})
+            assert "private word" in classes(rc.distribution_findings(wheel, lists_)), (encoding, word)
+
+
+def test_a_word_in_a_latin1_text_file_is_found(tmp_path, monkeypatch):
+    word = "zq" + "müller" + "7"
+    lists_ = _word_list(tmp_path, monkeypatch, word)
+    wheel = wheel_with(tmp_path, {"modelroom/notes.txt": f"built by {word}\n".encode("latin-1")})
+    assert "private word" in classes(rc.distribution_findings(wheel, lists_))
+
+
+def test_an_address_in_a_utf16_file_deleted_later_is_found_in_the_history(tmp_path, words):
+    """Codex r4-2: the history reads a line of a UTF-16 file as HEAD would have read it."""
+    repo = make_repo(tmp_path)
+    address = "some" + "one@" + "example.org"
+    (repo / "notes.txt").write_bytes(f"hello\nwrite to {address}\n".encode("utf-16-le"))
+    commit_all(repo, "docs: notes")
+    (repo / "notes.txt").unlink()
+    commit_all(repo, "docs: drop")
+    findings = rc.history_findings(repo, lists())
+    assert any(f.endswith(": e-mail address") and ":notes.txt:" in f for f in findings)
+    assert not any(address in f for f in findings)
+
+
+def test_an_empty_file_named_with_a_word_and_deleted_later_is_found_in_the_history(tmp_path, words):
+    """Codex r4-3: the exception of the history is for its contents, not its names."""
+    repo = make_repo(tmp_path)
+    (repo / f"{WORD}.txt").write_bytes(b"")
+    commit_all(repo, "docs: empty")
+    (repo / f"{WORD}.txt").unlink()
+    commit_all(repo, "docs: drop")
+    findings = rc.history_findings(repo, lists())
+    assert any(f.endswith("private word in file name") for f in findings)
+    assert not any(WORD in f.lower() for f in findings)
+
+
 # --- r3-7: metadata in its declared encoding, with JSON escapes --------------------------------------------------
 
 
@@ -63,7 +113,8 @@ def test_a_json_escaped_word_in_a_tag_message_is_found(tmp_path, words):
 
 
 def test_a_word_in_a_latin1_commit_is_found_and_an_unknown_encoding_is_a_finding(tmp_path, monkeypatch):
-    word = "zq" + "wörk" + "7"
+    word = "zq" + "würk" + "7"  # a real non-ASCII letter (Codex r4-5)
+    assert not word.isascii()
     path = tmp_path / "latin-words.txt"
     path.write_text(f"{word}\n", encoding="utf-8")
     monkeypatch.setenv(rc.PRIVATE_WORDS_ENV, str(path))

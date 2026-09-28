@@ -105,6 +105,9 @@ class NegativeList(NamedTuple):
     skip_suffixes: set[str]
     documents: dict[str, Callable[[str], list[int]]] = {}
     redact_names: bool = False
+    # The private words as byte sequences in UTF-8, UTF-16 LE/BE and latin-1 (Codex r4-1): found in
+    # any file as they are stored, short and non-ASCII words included, without a text reading.
+    word_bytes: re.Pattern[bytes] | None = None
 
 
 def load_negative_list() -> NegativeList:
@@ -116,7 +119,33 @@ def load_negative_list() -> NegativeList:
 
 
 def private_words_pattern(repo: Path = REPO) -> re.Pattern[str]:
-    """The words of the file `MODELROOM_RELEASE_PRIVATE_WORDS` names, as one pattern, any case.
+    """The words of `private_words` as one pattern, any case."""
+    words = private_words(repo)
+    if not words:
+        return re.compile(r"(?!x)x")  # no word: a pattern that finds nothing
+    return re.compile("|".join(re.escape(word) for word in words), re.IGNORECASE)
+
+
+WORD_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be", "latin-1")
+
+
+def private_word_bytes(words: list[str]) -> re.Pattern[bytes] | None:
+    """Every word as the bytes it is stored as in each of `WORD_ENCODINGS`, in its cases."""
+    forms = set()
+    for word in words:
+        for variant in {word, word.lower(), word.upper(), word.capitalize()}:
+            for encoding in WORD_ENCODINGS:
+                try:
+                    forms.add(variant.encode(encoding))
+                except UnicodeEncodeError:  # a word latin-1 cannot hold is not stored as latin-1 either
+                    continue
+    if not forms:
+        return None
+    return re.compile(b"|".join(re.escape(form) for form in sorted(forms, key=len, reverse=True)), re.IGNORECASE)
+
+
+def private_words(repo: Path = REPO) -> list[str]:
+    """The words of the file `MODELROOM_RELEASE_PRIVATE_WORDS` names, the longest first.
 
     Blank lines and lines starting with `#` are left out; a byte order mark is not part of the first
     word (`utf-8-sig`). An unset variable, a file that cannot be read, or a file inside `repo` (it
@@ -133,17 +162,18 @@ def private_words_pattern(repo: Path = REPO) -> re.Pattern[str]:
         lines = path.read_text(encoding="utf-8-sig").splitlines()
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise UsageError(f"the file {PRIVATE_WORDS_ENV} names cannot be read") from exc
-    words = sorted({line.strip() for line in lines if line.strip() and not line.strip().startswith("#")}, key=len, reverse=True)
-    if not words:
-        return re.compile(r"(?!x)x")  # no word: a pattern that finds nothing
-    return re.compile("|".join(re.escape(word) for word in words), re.IGNORECASE)
+    return sorted({line.strip() for line in lines if line.strip() and not line.strip().startswith("#")}, key=len, reverse=True)
 
 
-def with_private_words(lists: NegativeList, pattern: re.Pattern[str] | None) -> NegativeList:
-    """The list with the private words; without them (`None`) every name from the data is withheld."""
-    if pattern is None:
+def with_private_words(lists: NegativeList, words: re.Pattern[str] | list[str] | None) -> NegativeList:
+    """The list with the private words -- as a pattern for the text readings and, given as a list,
+    as byte sequences for every file; without them (`None`) every name from the data is withheld."""
+    if words is None:
         return lists._replace(redact_names=True)
-    return lists._replace(forbidden={**lists.forbidden, PRIVATE_WORD: pattern.search})
+    if isinstance(words, re.Pattern):
+        return lists._replace(forbidden={**lists.forbidden, PRIVATE_WORD: words.search})
+    pattern = re.compile("|".join(re.escape(word) for word in words), re.IGNORECASE) if words else re.compile(r"(?!x)x")
+    return lists._replace(forbidden={**lists.forbidden, PRIVATE_WORD: pattern.search}, word_bytes=private_word_bytes(words))
 
 
 def current_state_only(lists: NegativeList) -> NegativeList:
@@ -242,6 +272,8 @@ def text_variants(data: bytes, binary: bool = False) -> list[str]:
         readings = [data.decode(encoding, "replace") for encoding in ("utf-8", "latin-1", "utf-16-le", "utf-16-be")]
         return [reading for text in readings for reading in unescaped(printable_runs(text))]
     variants = [data.decode("utf-8", "replace")]
+    if any(byte >= 0x80 for byte in data):  # a latin-1 text reads otherwise than UTF-8 (Codex r4-1)
+        variants.append(data.decode("latin-1"))
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         variants.append(data.decode("utf-16", "replace"))
     elif len(data) >= 4 and data.count(b"\x00") * 4 >= len(data):
@@ -249,12 +281,22 @@ def text_variants(data: bytes, binary: bool = False) -> list[str]:
     return [reading for text in variants for reading in unescaped(text)]
 
 
+def word_byte_findings(place: str, data: bytes, lists: NegativeList) -> list[str]:
+    """The private words as the bytes they are stored as (`NegativeList.word_bytes`), at their line."""
+    if lists.word_bytes is None or PRIVATE_WORD not in lists.forbidden:
+        return []
+    lines = {data.count(b"\n", 0, match.start()) + 1 for match in lists.word_bytes.finditer(data)}
+    return [f"{place}:{line}: {PRIVATE_WORD}" for line in sorted(lines)]
+
+
 def scan_data(place: str, path: str, data: bytes, lists: NegativeList) -> list[str]:
     """`scan_text` over every reading of a file (`text_variants`), every class, binary files included
-    (a skipped suffix is read byte for byte too, Codex r3-6)."""
+    (a skipped suffix is read byte for byte too, Codex r3-6), and the private words as byte sequences
+    in every file, whatever its reading (Codex r4-1)."""
     found: dict[str, None] = {}
     for text in text_variants(data, binary=skipped(path, lists)):
         found.update(dict.fromkeys(scan_text(place, path, text, lists)))
+    found.update(dict.fromkeys(word_byte_findings(place, data, lists)))
     return list(found)
 
 
@@ -365,31 +407,35 @@ class _PatchScanner:
         self.old_left = self.new_left = self.line_no = 0
         self.findings: dict[str, None] = {}
 
-    def feed(self, raw: str) -> None:
+    def feed(self, raw: bytes | str) -> None:
+        """One line of the log, as bytes: an added line keeps its own bytes for every reading."""
+        raw_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8")
         if self.old_left > 0 or self.new_left > 0:
-            self._hunk_line(raw)
-        elif raw.startswith("commit "):
-            self.commit, self.path = raw[7:19], ""
-        elif raw.startswith("+++ "):
-            self.path = patch_path(raw[4:])
-        elif match := HUNK_HEADER.match(raw):
+            self._hunk_line(raw_bytes)
+            return
+        text = raw_bytes.decode("utf-8", "replace")
+        if text.startswith("commit "):
+            self.commit, self.path = text[7:19], ""
+        elif text.startswith("+++ "):
+            self.path = patch_path(text[4:])
+        elif match := HUNK_HEADER.match(text):
             self.old_left = int(match[1] if match[1] is not None else 1)
             self.new_left = int(match[3] if match[3] is not None else 1)
             self.line_no = int(match[2])
 
-    def _hunk_line(self, raw: str) -> None:
+    def _hunk_line(self, raw: bytes) -> None:
         marker, content = raw[:1], raw[1:]
-        if marker == "+":
-            if self.path:  # a skipped suffix too, in its printable runs: `--text` shows it (Codex r3-6)
+        if marker == b"+":
+            if self.path:  # every reading HEAD gets, a skipped suffix in its printable runs (Codex r3-6, r4-2)
                 place = f"history:{self.commit}:{shown(self.path, self.names)}:{self.line_no}"
-                text = printable_runs(content) if skipped(self.path, self.lists) else content
-                for name in leak_classes(text, self.lists, self.path):
-                    self.findings[f"{place}: {name}"] = None
+                for text in text_variants(content, binary=skipped(self.path, self.lists)):
+                    for name in leak_classes(text, self.lists, self.path):
+                        self.findings[f"{place}: {name}"] = None
             self.new_left -= 1
             self.line_no += 1
-        elif marker == "-":
+        elif marker == b"-":
             self.old_left -= 1
-        elif marker == " " or raw == "":
+        elif marker == b" " or raw == b"":
             self.old_left, self.new_left, self.line_no = self.old_left - 1, self.new_left - 1, self.line_no + 1
 
 
@@ -398,12 +444,13 @@ def history_findings(repo: Path, lists: NegativeList) -> list[str]:
     # --diff-merges=separate: a merge against each parent, whatever log.diffMerges says; --text:
     # binary files as text; --no-renames: a renamed file is a full addition under its new name;
     # explicit prefixes: a repository's diff.noprefix/mnemonicPrefix cannot change them.
-    log = git_text(repo, "log", "--all", "--diff-merges=separate", "-p", "--text", "--no-renames", "--no-color", "--no-ext-diff",
-                   "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--format=commit %H")
+    log = git(repo, "log", "--all", "--diff-merges=separate", "-p", "--text", "--no-renames", "--no-color", "--no-ext-diff",
+              "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--format=commit %H").stdout
     scanner = _PatchScanner(lists, names)
-    for raw in log.split("\n"):
-        scanner.feed(raw.rstrip("\r"))
-    return list(scanner.findings) + history_name_findings(repo, lists)
+    for raw in log.split(b"\n"):
+        scanner.feed(raw.removesuffix(b"\r"))
+    # The names of the history against the whole list: the exception is for earlier contents only (Codex r4-3).
+    return list(scanner.findings) + history_name_findings(repo, names)
 
 
 def history_name_findings(repo: Path, lists: NegativeList) -> list[str]:
@@ -703,7 +750,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ensure_repository(args.repo)
         try:
-            words = private_words_pattern(args.repo)
+            words = private_words(args.repo)
         except UsageError as exc:  # every other check still runs and reports; the gate does not pass
             words, words_error = None, exc
         lists = with_private_words(load_negative_list(), words)

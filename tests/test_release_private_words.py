@@ -52,7 +52,7 @@ def words(tmp_path, monkeypatch) -> Path:
 
 
 def lists():
-    return rc.with_private_words(rc.load_negative_list(), rc.private_words_pattern())
+    return rc.with_private_words(rc.load_negative_list(), rc.private_words())
 
 
 def test_a_word_in_a_file_of_head_is_found_in_any_case_by_place_and_class(tmp_path, words):
