@@ -460,7 +460,11 @@ uv run --frozen python scripts/release-smoke.py
 
 The first is the release gate (clean tree, version and changelog, public hygiene over the files,
 the history and the commit metadata, content of wheel and sdist); with `--tag vX.Y.Z` it also
-checks the release tag. The second installs the built wheel into a fresh environment and runs
+checks the release tag. The gate needs `MODELROOM_RELEASE_PRIVATE_WORDS`: the path of a text file
+outside the repository with one word per line -- the maintainer's machine names and the like -- that
+must not be in the current state, the built packages or the commit metadata; a finding names the
+place and the class `private word`, never the word, and without the file the gate does not pass.
+The second installs the built wheel into a fresh environment and runs
 `hardware`, an offline `fetch` and `render` against it. Both must end with exit `0`; the full
 procedure is in `AGENTS.md`, "Versioning and releases".
 

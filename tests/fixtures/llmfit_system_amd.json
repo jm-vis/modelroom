@@ -12,7 +12,7 @@
     "available_ram_gb": 76.64,
     "backend": "ROCm",
     "cpu_cores": 14,
-    "cpu_name": "AMD Ryzen 9 7950X",
+    "cpu_name": "x86 CPU",
     "gpu_count": 1,
     "gpu_name": "AMD Radeon RX 7900 XTX",
     "gpu_vram_gb": 23.98,

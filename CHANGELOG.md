@@ -20,6 +20,11 @@ All notable changes to this project are documented in this file. The format foll
   without a card (before: `present_unmeasured` or `unsupported_platform`, no fit). The Markdown view
   gains the table "Graphics adapters". Schema 4 is extended, no new schema: an empty list is not
   written, so every older file stays as it was.
+- **Device and machine identifiers are kept out of the repository** (`tests/test_public_hygiene.py`,
+  `scripts/release-check.py`): a device subsystem id other than zeros and a processor name that is no
+  placeholder are findings of the negative list; the release gate reads a private word list from the
+  file `MODELROOM_RELEASE_PRIVATE_WORDS` names, outside the repository, and fails without it. The
+  recorded fixtures carry neutral values in their place.
 - **A local vLLM server, read per run** (`modelroom/local_servers.py`, `vllm_server.py`,
   `loadtest_vllm.py`, `fit_vllm.py`, `guided_vllm.py`; CONTRACTS.md, "Local servers and the vLLM
   load test"; ADR 0008; decided 2026-09-27). The local servers are a list, `LOCAL_SERVERS`, and

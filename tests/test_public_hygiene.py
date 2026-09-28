@@ -11,6 +11,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".lock"}
+# The placeholders a recording's `cpu_name` may carry instead of the processor it was taken on.
+NEUTRAL_CPU_NAMES = {"", "x86 CPU", "arm64 CPU", "Apple Silicon CPU"}
 
 FORBIDDEN = {
     "absolute user path": re.compile(r"(?i)(?:[a-z]:[\\/]+users[\\/]|/home/[a-z]|/Users/[A-Za-z])"),
@@ -20,6 +22,11 @@ FORBIDDEN = {
     "chronicle vocabulary": re.compile(r"\bGF-|Sitzung #\d"),
     "protected folder token": re.compile(r"(?i)[\\/]_lokal[\\/]|strict_confidential"),
     "api key prefix": re.compile(r"\b(sk-or-|sk-ant-|hf_[A-Za-z0-9]{20,})"),
+    # Device and machine identifiers of a recording (AP9-GPU, GF decision 2026-09-28): the subsystem
+    # id names the maker's board of one device model, the processor names the machine. A recording
+    # keeps what the detection needs (vendor, device id, card name, memory) and neutralizes the rest.
+    "hardware subsystem id": re.compile(r"(?i)SUBSYS_(?!00000000)[0-9a-f]{8}"),
+    "processor model": re.compile(r'"cpu_name"\s*:\s*"(?!(?:' + "|".join(map(re.escape, sorted(NEUTRAL_CPU_NAMES))) + r')")'),
 }
 # A global IPv4 address (AP9-UX): the address of a rented machine must not reach the repository.
 # No regex can say "global", so this one is a function next to the list, with a name of its own.
@@ -55,6 +62,8 @@ ALLOWED = {
     ("tests/test_public_hygiene.py", "api key prefix"): "the negative list names what it forbids",
     ("tests/test_public_hygiene.py", "absolute user path"): "the negative list names what it forbids",
     ("tests/test_public_hygiene.py", "e-mail address"): "the negative list names what it forbids",
+    ("tests/test_public_hygiene.py", "hardware subsystem id"): "the negative list names what it forbids",
+    ("tests/test_public_hygiene.py", "processor model"): "the negative list names what it forbids",
 }
 
 
@@ -99,6 +108,23 @@ def test_the_global_ipv4_check_catches_a_planted_address_and_nothing_else():
         assert not global_ipv4(f"listen on {quiet}:8000"), quiet
     assert global_ipv4("version 1.1.16.2")  # a version reads as an address: `ALLOWED` names the file
     assert ("tests/test_config.py", GLOBAL_IPV4) in ALLOWED
+
+
+def test_a_subsystem_id_other_than_zeros_is_a_finding_in_either_case():
+    """AP9-GPU: the maker's subsystem id of a recorded device; `00000000` is the neutral form."""
+    pattern = FORBIDDEN["hardware subsystem id"]
+    for leak in ("PCI\\VEN_10DE&DEV_2F38&SUBSYS_" + "1A2B3C4D&REV_A1", "pci\\ven_10de&dev_2f38&subsys_" + "1a2b3c4d"):
+        assert pattern.search(leak), leak
+    for quiet in ("PCI\\VEN_10DE&DEV_2F38&SUBSYS_00000000&REV_A1", "pci\\ven_10de&subsys_00000000", "SUBSYSTEM_ID"):
+        assert not pattern.search(quiet), quiet
+
+
+def test_a_processor_name_other_than_a_placeholder_is_a_finding():
+    pattern = FORBIDDEN["processor model"]
+    for leak in ('"cpu_name": "' + "AMD EPYC 7413" + '",', '"cpu_name":"' + "Intel Xeon" + '"', '"cpu_name": "x86 CPU (' + 'laptop)"'):
+        assert pattern.search(leak), leak
+    for quiet in ('"cpu_name": "x86 CPU",', '"cpu_name": "arm64 CPU"', '"cpu_name": ""', '"gpu_name": "NVIDIA L4"'):
+        assert not pattern.search(quiet), quiet
 
 
 if __name__ == "__main__":

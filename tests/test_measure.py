@@ -349,7 +349,7 @@ def test_the_display_only_vendor_list_is_exactly_the_eight_the_contract_names():
 
 @pytest.mark.parametrize("vendor", sorted(DISPLAY_ONLY_VENDORS))
 def test_every_listed_display_only_vendor_is_no_gpu_on_windows(vendor):
-    adapters = _windows_adapters(f"PCI\\VEN_{vendor.upper()}&DEV_1111&SUBSYS_11111234&REV_02\\3&2411e6fe&0&10")
+    adapters = _windows_adapters(f"PCI\\VEN_{vendor.upper()}&DEV_1111&SUBSYS_00000000&REV_02\\3&2411e6fe&0&10")
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), adapters=adapters)
     gpu = measure_gpu("win32", runner)
     assert gpu.gpu_state == "none" and gpu.vram_source == "none"
@@ -378,7 +378,7 @@ def test_no_windows_display_adapter_at_all_is_no_gpu():
 
 def test_a_measurable_vendor_wins_over_a_display_only_one_in_the_same_machine():
     adapters = _windows_adapters(
-        "PCI\\VEN_1234&DEV_1111&SUBSYS_11111234&REV_02\\3&2411e6fe&0&10",
+        "PCI\\VEN_1234&DEV_1111&SUBSYS_00000000&REV_02\\3&2411e6fe&0&10",
         f"PCI\\VEN_{INTEL_VENDOR.upper()}&DEV_7D51&SUBSYS_00000000&REV_08\\3&2411e6fe&0&10",
     )
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), adapters=adapters)

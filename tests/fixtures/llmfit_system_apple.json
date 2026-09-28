@@ -12,7 +12,7 @@
     "available_ram_gb": 96.0,
     "backend": "Metal",
     "cpu_cores": 14,
-    "cpu_name": "Apple M3 Max",
+    "cpu_name": "arm64 CPU",
     "gpu_count": 1,
     "gpu_name": "Apple M3 Max",
     "gpu_vram_gb": 128.0,

@@ -17,7 +17,12 @@ Checks, in this order:
    file of HEAD, over every line ever added in the history of every ref (binary files as text,
    renames as additions, merges against each parent), over every file name any commit held and
    over the raw commit and tag objects (every header, signatures included, every tag in a
-   chain); replace refs are ignored and a shallow clone is refused;
+   chain); replace refs are ignored and a shallow clone is refused. The private words of the
+   file `MODELROOM_RELEASE_PRIVATE_WORDS` names (outside the repository, one per line, any case,
+   blank lines and `#` lines left out) are the class `private word`; they, the device subsystem
+   id and the processor model are checked in HEAD, the distributions and the metadata, not in the
+   earlier file contents of the history (known and accepted, decided 2026-09-28). Without that
+   file the gate ends with a usage error after every other check has reported;
 3. `uv build --offline` of HEAD (exported with `git archive`, so the working tree cannot leak
    in); the wheel and the sdist are listed and checked against the negative list and against a
    short list of file classes that must never ship. The wheel must carry `modelroom/` and the
@@ -62,6 +67,15 @@ WITHHELD = "<withheld>"
 # The maintainer's address is never written into this repository.
 ALLOWED_META = r"[\w.+-]+@users\.noreply\.github\.com|noreply@anthropic\.com"
 MAINTAINER_ENV = "MODELROOM_RELEASE_MAINTAINER_EMAIL"
+# A text file outside the repository, one word per line: the maintainer's own words that must never
+# be published (machine names and the like). The words are never written into this repository and
+# never printed; a finding names place and class only. Without the file the gate cannot pass.
+PRIVATE_WORDS_ENV = "MODELROOM_RELEASE_PRIVATE_WORDS"
+PRIVATE_WORD = "private word"
+# Classes checked in the current state only -- HEAD, the distributions and the metadata -- and not
+# in the file contents of the history, whose earlier contents are known and accepted (decided
+# 2026-09-28: they are cleaned in the current state, the history is not rewritten).
+CURRENT_STATE_CLASSES = {PRIVATE_WORD, "hardware subsystem id", "processor model"}
 # Single metadata findings that were read and accepted, each bound to (full commit hash, field,
 # line, class): any other line, field, commit or class stays a finding.
 ALLOWED_META_FINDINGS = {
@@ -86,6 +100,35 @@ def load_negative_list() -> NegativeList:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return NegativeList(module.FORBIDDEN, module.ALLOWED, module.SKIP_SUFFIXES)
+
+
+def private_words_pattern() -> re.Pattern[str]:
+    """The words of the file `MODELROOM_RELEASE_PRIVATE_WORDS` names, as one pattern, any case.
+
+    Blank lines and lines starting with `#` are left out. An unset variable or a file that cannot be
+    read is a usage error: the gate would otherwise pass without the check. The message names
+    neither the file nor a word.
+    """
+    location = os.environ.get(PRIVATE_WORDS_ENV, "").strip()
+    if not location:
+        raise UsageError(f"{PRIVATE_WORDS_ENV} is not set: it names the file of private words")
+    try:
+        lines = Path(location).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UsageError(f"the file {PRIVATE_WORDS_ENV} names cannot be read") from exc
+    words = sorted({line.strip() for line in lines if line.strip() and not line.strip().startswith("#")}, key=len, reverse=True)
+    if not words:
+        return re.compile(r"(?!x)x")  # no word: a pattern that finds nothing
+    return re.compile("|".join(re.escape(word) for word in words), re.IGNORECASE)
+
+
+def with_private_words(lists: NegativeList, pattern: re.Pattern[str] | None) -> NegativeList:
+    return lists if pattern is None else lists._replace(forbidden={**lists.forbidden, PRIVATE_WORD: pattern})
+
+
+def current_state_only(lists: NegativeList) -> NegativeList:
+    """The list for the file contents of the history: without the classes of the current state."""
+    return lists._replace(forbidden={name: p for name, p in lists.forbidden.items() if name not in CURRENT_STATE_CLASSES})
 
 
 def git(repo: Path, *args: str, check: bool = True, stdin: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
@@ -259,6 +302,7 @@ class _PatchScanner:
 
 
 def history_findings(repo: Path, lists: NegativeList) -> list[str]:
+    lists = current_state_only(lists)
     # --diff-merges=separate: a merge against each parent, whatever log.diffMerges says; --text:
     # binary files as text; --no-renames: a renamed file is a full addition under its new name;
     # explicit prefixes: a repository's diff.noprefix/mnemonicPrefix cannot change them.
@@ -498,14 +542,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     findings: list[str] = []
+    words_error: UsageError | None = None
     try:
         ensure_repository(args.repo)
-        lists = load_negative_list()
+        try:
+            words = private_words_pattern()
+        except UsageError as exc:  # every other check still runs and reports; the gate does not pass
+            words, words_error = None, exc
+        lists = with_private_words(load_negative_list(), words)
         for check in source_checks(args.repo, "HEAD", args.tag, lists) + [lambda: dist_findings(args.repo, "HEAD", lists)]:
             findings += check()
         version = printable_version(ref_version(args.repo, "HEAD"))
+        if words_error is not None:
+            raise words_error
     except UsageError as exc:
-        print("\n".join(findings + [f"RELEASE-CHECK: error: {exc}"]))
+        errors = [exc] + ([words_error] if words_error is not None and words_error is not exc else [])
+        print("\n".join(findings + [f"RELEASE-CHECK: error: {error}" for error in errors]))
         return 2
     print("\n".join(findings + [summary_line(findings, version)]))
     return 1 if findings else 0

@@ -241,7 +241,9 @@ GUID and UUID.
 
 Recorded on **2026-09-27** by the maintainer on two rented Linux instances with two NVIDIA cards
 each, with the exact argument lists of `modelroom/measure.py` and `modelroom/llmfit.py` (llmfit
-1.1.16). Whole files, nothing shortened; no host name, address or machine identifier is in them.
+1.1.16). Whole files, nothing shortened but the processor name of the two `llmfit_system_*.json`
+files, set to `x86 CPU` on 2026-09-28 (see "Neutralizing a recording"); no host name, address or
+machine identifier is in them.
 The two instances: one at Verda (Helsinki), one at Scaleway (Paris).
 
 - `nvidia_smi_two_gpus.csv` -- recorded 2026-09-27 on Verda, 2 x NVIDIA A100-SXM4-80GB: two lines
@@ -289,6 +291,17 @@ same shape; the source stays `linux_machine_id`), `recorded_at` `2026-09-28T09:1
 `display_name` `server`, `machine_class` `unknown`, the RAM, the cross-check status, `llmfit_version`,
 no newline at the end. All three server profiles are called `server`, so a test finds a block by its
 `profile_id`, never by the label (the import puts the short id behind a shared name).
+
+## Neutralizing a recording
+
+Every recording that comes into this folder keeps what the tests read and nothing that names one
+machine (decided 2026-09-28): a device's subsystem id becomes `SUBSYS_00000000`, a `cpu_name`
+becomes a placeholder (`x86 CPU`, `arm64 CPU`), a machine or host name becomes a generic one
+(`laptop-1`, `server`), an instance path behind a `PNPDeviceID` is cut. Vendor, device id, card name
+and memory size stay: the detection is about them. `tests/test_public_hygiene.py` fails on a
+subsystem id other than zeros and on a processor name that is no placeholder; names of the
+maintainer's own machines are caught by the release gate's private word list, which lives outside
+this repository.
 
 ## Graphics adapters of every vendor (AP9-GPU)
 
