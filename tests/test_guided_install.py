@@ -54,9 +54,9 @@ RUN1 = datetime(2026, 9, 23, 8, 0, 0, tzinfo=timezone.utc)
 UNSLOTH = "unsloth/Qwen3.5-9B-GGUF"
 QWEN_GGUF = "Qwen/Qwen3.5-9B-GGUF"
 DEEPSEEK = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
-# The first row of this machine for the answers below, at 8192 tokens: the smallest Qwen3.5-9B build
-# (`tests/golden/guided-screen.txt` shows the same row at 32k).
-FIRST_NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS"
+# The first row of this machine for the answers below, at 8192 tokens: since ADR 0009 the least
+# compressed Qwen3.5-9B build the graphics card holds (`UD-Q6_K_XL`, `tight`, 10.6 of 11.0 GB).
+FIRST_NAME = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-Q6_K_XL"
 
 ANSWERS = {
     "results": "here",

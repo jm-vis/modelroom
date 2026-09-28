@@ -21,9 +21,33 @@ FORBIDDEN = {
     "protected folder token": re.compile(r"(?i)[\\/]_lokal[\\/]|strict_confidential"),
     "api key prefix": re.compile(r"\b(sk-or-|sk-ant-|hf_[A-Za-z0-9]{20,})"),
 }
+# A global IPv4 address (AP9-UX): the address of a rented machine must not reach the repository.
+# No regex can say "global", so this one is a function next to the list, with a name of its own.
+# Loopback, the private ranges and the documentation ranges of RFC 5737 stay quiet -- the code, the
+# documents and the tests use those. Hostnames of rental providers have no pattern here on purpose:
+# one would first have to write their naming rule into this public repository, and a general one
+# (word-word-digits) fires on model and product names; the protection sits at the source instead.
+GLOBAL_IPV4 = "global IPv4 address"
+_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def global_ipv4(line: str) -> bool:
+    """Whether `line` holds an IPv4 address that `ipaddress` reads and calls global."""
+    import ipaddress
+
+    for match in _IPV4.finditer(line):
+        try:
+            if ipaddress.ip_address(match.group(0)).is_global:
+                return True
+        except ValueError:
+            continue
+    return False
+
 
 # Places where a pattern is legitimate. Each line is (path, pattern name, reason).
 ALLOWED = {
+    ("tests/test_public_hygiene.py", GLOBAL_IPV4): "the negative list names what it forbids",
+    ("tests/test_config.py", GLOBAL_IPV4): "a four-part version string, not an address",
     ("tests/test_public_hygiene.py", "internal workspace name"): "the negative list names what it forbids",
     ("tests/test_public_hygiene.py", "persona name"): "the negative list names what it forbids",
     ("tests/test_public_hygiene.py", "chronicle vocabulary"): "the negative list names what it forbids",
@@ -46,11 +70,12 @@ def findings() -> list[str]:
             continue
         rel = path.relative_to(REPO).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
-        for name, pattern in FORBIDDEN.items():
+        checks = [(name, pattern.search) for name, pattern in FORBIDDEN.items()] + [(GLOBAL_IPV4, global_ipv4)]
+        for name, found in checks:
             if (rel, name) in ALLOWED:
                 continue
             for line_no, line in enumerate(text.splitlines(), start=1):
-                if pattern.search(line):
+                if found(line):
                     hits.append(f"{rel}:{line_no}: {name}: {line.strip()[:120]}")
     return hits
 
@@ -64,6 +89,16 @@ def test_negative_list_catches_a_planted_leak(tmp_path):
     """The guard has to go red on a real leak, otherwise its green means nothing."""
     planted = "notes for the maintainer at C:\\Users\\someone\\workspace\\file.md"
     assert any(p.search(planted) for p in FORBIDDEN.values())
+
+
+def test_the_global_ipv4_check_catches_a_planted_address_and_nothing_else():
+    """Its own assert: `any` over the other patterns would stay green on the path alone (AP9-UX)."""
+    planted = "ssh root@" + ".".join(["81", "23", "140", "7"]) + " -p 22"  # a fictitious global address, built here
+    assert global_ipv4(planted)
+    for quiet in ("127.0.0.1", "10.1.2.3", "192.168.178.20", "172.16.0.9", "192.0.2.10", "198.51.100.7", "203.0.113.5"):
+        assert not global_ipv4(f"listen on {quiet}:8000"), quiet
+    assert global_ipv4("version 1.1.16.2")  # a version reads as an address: `ALLOWED` names the file
+    assert ("tests/test_config.py", GLOBAL_IPV4) in ALLOWED
 
 
 if __name__ == "__main__":

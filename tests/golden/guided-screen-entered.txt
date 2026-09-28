@@ -11,7 +11,8 @@
 
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
- ? Which machines should the result cover?  this machine, a machine entered by hand
+   another computer: pick its profile below, or import the file made there
+ ? Which machines should the result cover?  this machine (workstation), a machine entered by hand
  ? What kind of machine is this?  laptop
    measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ? What is the machine called?  studio
@@ -35,7 +36,7 @@
  ✓ Context         L 32k
 
  ── Step 4 of 5  Measurement ────────────────────────────────────────────
- ? Measure the speed of the checked models that are already installed here?  No
+ ? Measure the speed on this machine now?  No
    no load test: cannot reach the Ollama daemon at http://127.0.0.1:11434: http://127.0.0.1:11434: the Ollama daemon did not answer (refused)
  – Measurement     none in this run
 
@@ -52,20 +53,11 @@
  workstation · context L 32k
  #    Model                     Package                 Fit                   Speed         Memory
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    Qwen3.5-9B                unsloth · UD-IQ2_XXS    fits                  –             8.3 GB
- 2    Qwen3.5-9B                unsloth · UD-IQ2_M      fits                  –             8.7 GB
- 3    Qwen3.5-9B                unsloth · UD-Q2_K_XL    fits                  –             9.2 GB
- 4    Qwen3.5-9B                unsloth · UD-IQ3_XXS    fits                  –             9.1 GB
- 5    Qwen3.5-9B                ollama · Q4_K_M         fits (RAM)            –             11.8 GB
- 6    Qwen3.5-9B                unsloth · UD-Q4_K_XL    fits (RAM)            –             11.1 GB
- 7    Qwen3.5-9B                unsloth · Q5_K_S        fits (RAM)            –             11.5 GB
- 8    Qwen3.5-9B                unsloth · Q5_K_M        fits (RAM)            –             11.7 GB
- 9    Qwen3.5-9B                unsloth · UD-Q5_K_XL    fits (RAM)            –             11.9 GB
- 10   Qwen3.5-9B                unsloth · Q6_K          fits (RAM)            –             12.6 GB
- shown     10 of 22 packages · 2 no fit (unsloth Q4_1, unsloth Q4_K_M)
- memory    #1–4 fit into graphics memory, 11.0 GB free after the reserve
-           #5–10 need system memory, the graphics card helps
- basis     #1–10 computed from the package size, not its architecture
+ 1    DeepSeek-R1-0528-Qwen3-8  unsloth · Q4_K_M        tight                 –             10.2 GB
+ 2    Qwen3.5-9B                unsloth · Q4_K_S        tight                 –             10.5 GB
+ shown     2 rows of 22 packages, one row per model · 2 no fit (unsloth Q4_1, unsloth Q4_K_M)
+ memory    #1–2 fit into graphics memory, 11.0 GB free after the reserve
+ basis     #2 computed from the package size, not its architecture
  speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
  key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
            fits: up to 85 % · tight: up to 98 % · no fit: more
@@ -73,26 +65,22 @@
            gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
            one memory shared by system and card counts as gpu, both reserves taken
            off the card, and for a fit from size, the best is fits
+           best: the least compression of the same model that fits
+           modelroom rates no model family against another
+           one row per model, its least compression that fits
+           a run with one model shows all its packages
            Speed is measured, see its column.
 
- install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS
+ install   #1  ollama pull hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
 
  studio (entered) · context L 32k
  #    Model                     Package                 Fit                   Speed         Memory
  ───────────────────────────────────────────────────────────────────────────────────────────────────
  1    DeepSeek-R1-0528-Qwen3-8  unsloth · Q4_K_M        ample                 –             10.2 GB
- 2    Qwen3.5-9B                unsloth · UD-IQ2_XXS    fits                  –             8.3 GB
- 3    Qwen3.5-9B                unsloth · UD-IQ2_M      fits                  –             8.7 GB
- 4    Qwen3.5-9B                unsloth · UD-Q2_K_XL    fits                  –             9.2 GB
- 5    Qwen3.5-9B                unsloth · UD-IQ3_XXS    fits                  –             9.1 GB
- 6    Qwen3.5-9B                unsloth · Q3_K_S        fits                  –             9.4 GB
- 7    Qwen3.5-9B                unsloth · Q3_K_M        fits                  –             9.8 GB
- 8    Qwen3.5-9B                unsloth · UD-Q3_K_XL    fits                  –             10.2 GB
- 9    Qwen3.5-9B                unsloth · IQ4_XS        fits                  –             10.3 GB
- 10   Qwen3.5-9B                unsloth · IQ4_NL        fits                  –             10.5 GB
- shown     10 of 23 packages · 1 no fit (unsloth BF16)
- memory    #1–10 fit into shared memory, 23.0 GB free after both reserves
- basis     #2–10 computed from the package size, not its architecture
+ 2    Qwen3.5-9B                unsloth · UD-Q8_K_XL    fits                  –             18.3 GB
+ shown     2 rows of 23 packages, one row per model · 1 no fit (unsloth BF16)
+ memory    #1–2 fit into shared memory, 23.0 GB free after both reserves
+ basis     #2 computed from the package size, not its architecture
  speed     nothing measured in the rows shown · a machine entered by hand is never measured
  key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
            fits: up to 85 % · tight: up to 98 % · no fit: more
@@ -100,6 +88,10 @@
            gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
            one memory shared by system and card counts as gpu, both reserves taken
            off the card, and for a fit from size, the best is fits
+           best: the least compression of the same model that fits
+           modelroom rates no model family against another
+           one row per model, its least compression that fits
+           a run with one model shows all its packages
            Speed is measured, see its column.
 
  ✓ Results         docs\models.md

@@ -1,14 +1,14 @@
-"""Step 4 of the guided mode: the load test of the packages this machine already has.
+"""Step 4 of the guided mode: the daemon's part of the load test of the packages this machine has.
 
-The step itself -- the two questions, the selection list, the progress and the result lines.
-The work is `modelroom/loadtest.py`'s, the dialog is `modelroom/dialog.py`'s, and the order of
-the steps stays in `modelroom/guided.py`, which calls `load_test_step` between the context and
-the render. It lives in its own module so `guided.py` keeps holding the run and nothing else; it
-never imports `guided.py` back (CONTRACTS.md, "Guided mode", step 4).
+The daemon's notes, its candidates, the progress and the result lines; the one question and the
+one list of step 4 are `local_servers.load_tests`' (AP9-UX E). The work is `modelroom/loadtest.py`'s,
+the dialog is `modelroom/dialog.py`'s, and the order of the steps stays in `modelroom/guided.py`.
+It never imports `guided.py` back (CONTRACTS.md, "Guided mode", step 4).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,7 +31,8 @@ from .loadtest import (
 from .measure import read_os_identity
 from .measurements import MeasurementExistsError, MeasurementRecord, Scenario
 from .profile import os_fingerprint
-from .screen import context_tokens_text, names_words, yes_no
+from .screen import context_tokens_text
+from .selection import narrow_snapshot
 from .state import LockHeldError, UnreadableStateFileError, read_snapshot
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -47,15 +48,19 @@ STEP = 4
 # the step's own summary from a measurement that was asked for and did not happen.
 NOTHING_MEASURED = "none in this run"
 
+# One question and one list for every local server (AP9-UX E): the question asks whether to measure
+# at all, the list which of what this machine offers.
 QUESTIONS: dict[str, str] = {
-    "load_test": "Measure the speed of the checked models that are already installed here?",
-    "load_test_packages": "Which of these installed models should be measured?",
+    "load_test": "Measure the speed on this machine now?",
+    "load_test_packages": "Which of these should be measured?",
 }
 
 NO_CANDIDATE_LINE = (
     "no ranked package is installed on this machine; the load test measures installed "
     "packages only (stage 1: no download)"
 )
+# Where another server offers a row, the daemon's side of the same fact names itself.
+NO_INSTALLED_LINE = "Ollama: no package of this run's models is installed here"
 # Said before anything else in step 4 when the ranking assumes more than one request: it explains
 # the note a measured row then carries in step 5 (`measured with 1 request, ranking assumes N`).
 ONE_REQUEST_LINE = "measurements run one request; this ranking assumes {requests}"
@@ -112,7 +117,8 @@ def _snapshot_packages(run: "GuidedRun", config: Configuration) -> list[Package]
     if snapshot is None:
         run.screen.note("no load test: nothing has been fetched into this folder yet")
         return None
-    return snapshot.packages
+    # The candidates are packages of this run's models alone (AP9-UX B).
+    return narrow_snapshot(snapshot, run.selection).packages
 
 
 def _candidate_rows(candidates: list[Candidate]) -> list[str]:
@@ -185,36 +191,6 @@ def _record_problem(record: MeasurementRecord) -> str | None:
     return None
 
 
-def _wants_load_test(run: "GuidedRun") -> bool:
-    """The `load_test` answer, with `no` for an answer file that does not mention it.
-
-    The one optional answer of the guided mode, and deliberately so: whether this question is
-    reached at all depends on the machine -- whether it runs a daemon, and which packages it
-    already has -- so one answer file has to work on a machine that would never be asked. A file
-    that wants a measurement says `load_test = true` (CONTRACTS.md, "Guided mode"). At a terminal
-    nothing is optional: the question is asked, with `no` as the default answer.
-    """
-    try:
-        return run.asker.confirm("load_test", QUESTIONS["load_test"], default=False)
-    except AnswerMissingError:
-        return False
-
-
-def _no_daemon(run: "GuidedRun", reason: str) -> None:
-    """The daemon could not be read: a user who asked for a measurement gets a fault, not a shrug.
-
-    The question comes first, so a run that never wanted a load test ends `0` on a machine with
-    no Ollama daemon at all -- the daemon is needed for this step and for nothing else. A yes
-    that cannot be honored is a step that did not finish (exit `1`).
-    """
-    if not _wants_load_test(run):
-        run.screen.answer(QUESTIONS["load_test"], yes_no(False))
-        run.screen.note(f"no load test: {reason}")
-        return
-    run.screen.answer(QUESTIONS["load_test"], yes_no(True))
-    run.failed(f"nothing measured: {reason}")
-
-
 def _measure_candidate(
     run: "GuidedRun", config: Configuration, candidate: Candidate, scenario: Scenario, profile_id: str
 ) -> bool:
@@ -250,60 +226,74 @@ def _measure_candidate(
     return True
 
 
-def load_test_step(
-    run: "GuidedRun", config: Configuration, scenario: Scenario, results_dir: Path, ranking_requests: int = 1, named: bool = False
-) -> str:
-    """Step 4: measure installed packages, with the context this ranking is computed for.
+@dataclass(frozen=True)
+class OllamaOffer:
+    """What the daemon offers step 4: its candidates, or why it has none (the one question is asked
+    for every server at once, `local_servers.load_tests`, AP9-UX E)."""
 
-    `scenario` is the one a measurement runs, always one request; `ranking_requests` is what the
-    ranking of this run assumes, and when that is more than one the step says so first (naming
-    Ollama where another local server is on the start screen, `named`).
+    candidates: tuple[Candidate, ...] = ()
+    profile_id: str | None = None
+    unavailable: str | None = None
 
-    Returns the one line the finished step leaves behind; stage 1 measures what the daemon has.
-    A folder this machine is not bound to a profile in, and one that holds no
-    snapshot, are lines and no more -- there is nothing a load test could even be about. From the
-    daemon on, a `load_test` yes that cannot be honored is a step that did not finish
-    (`run.failed`, exit `1`), and the document is still written (CONTRACTS.md, "Load test
-    (stage 1)").
+
+def installed_note(count: int) -> str:
+    """`Ollama: 2 installed packages of this run's models, one request each`, or none installed."""
+    if not count:
+        return NO_INSTALLED_LINE
+    packages = "1 installed package" if count == 1 else f"{count} installed packages"
+    return f"Ollama: {packages} of this run's models, one request each"
+
+
+def ollama_offer(
+    run: "GuidedRun", config: Configuration, results_dir: Path, ranking_requests: int = 1, named: bool = False
+) -> OllamaOffer:
+    """Step 4 of the daemon up to the question: its notes, and the candidates it offers.
+
+    A folder this machine is not bound to a profile in, and one that holds no snapshot, are lines
+    and no more -- there is nothing a load test could even be about. A daemon that does not answer
+    is `unavailable`: a `yes` that only it could honor is a step that did not finish.
     """
-    run.screen.blank()
-    run.screen.head(STEP)
     if ranking_requests > 1:
         run.screen.note(("Ollama " if named else "") + ONE_REQUEST_LINE.format(requests=ranking_requests))
     profile_id = _bound_profile_id(run, config, results_dir)
     if profile_id is None:
-        return NOTHING_MEASURED
+        return OllamaOffer()
     packages = _snapshot_packages(run, config)
     if packages is None:
-        return NOTHING_MEASURED
+        return OllamaOffer()
     installed, reason = installed_models(run.daemon, run.now)
     if installed is None:
-        _no_daemon(run, reason)
-        return NOTHING_MEASURED
+        return OllamaOffer(unavailable=reason)
     inventory = installed_candidates(packages, installed, lambda name: weight_digest(run.daemon, name))
     _report_set_aside(run, inventory, cloud=not inventory.candidates)
-    if not inventory.candidates:
-        run.screen.note(NO_CANDIDATE_LINE)
-        return NOTHING_MEASURED
-    wants = _wants_load_test(run)
-    run.screen.answer(QUESTIONS["load_test"], yes_no(wants))
-    if not wants:
-        return NOTHING_MEASURED
-    return _measure_picked(run, config, inventory, scenario, profile_id)
+    return OllamaOffer(tuple(inventory.candidates), profile_id)
 
 
-def _measure_picked(
-    run: "GuidedRun", config: Configuration, inventory: Inventory, scenario: Scenario, profile_id: str
-) -> str:
-    """Ask which of the candidates to measure, measure them, and say how many were measured."""
-    choices = _candidate_choices(inventory.candidates)
-    picked = run.asker.checkbox("load_test_packages", QUESTIONS["load_test_packages"], choices)
-    run.screen.answer(QUESTIONS["load_test_packages"], names_words(picked, "nothing"))
-    if not picked:
-        return NOTHING_MEASURED
+def ollama_rows(offer: OllamaOffer) -> list[Choice]:
+    """The daemon's rows of the one list: nothing marked (`_candidate_choices`)."""
+    return _candidate_choices(list(offer.candidates))
+
+
+def measure_ollama(run: "GuidedRun", config: Configuration, offer: OllamaOffer, scenario: Scenario, picked: list[str]) -> str | None:
+    """Measure the picked candidates; `<k> of <n> measured`, or `None` where none was picked."""
+    chosen = [candidate for candidate in offer.candidates if candidate.ollama_name in picked]
+    if not chosen or offer.profile_id is None:
+        return None
     run.screen.note(LOAD_NOTE_LINE)
-    measured = 0
-    for candidate in inventory.candidates:
-        if candidate.ollama_name in picked:
-            measured += _measure_candidate(run, config, candidate, scenario, profile_id)
-    return f"{measured} of {len(picked)} measured"
+    measured = sum(_measure_candidate(run, config, candidate, scenario, offer.profile_id) for candidate in chosen)
+    return f"{measured} of {len(chosen)} measured"
+
+
+def wants_load_test(run: "GuidedRun") -> bool:
+    """The `load_test` answer, with `no` for an answer file that does not mention it.
+
+    The one optional answer of the guided mode, and deliberately so: whether this question is
+    reached at all depends on the machine -- whether it runs a server, and which packages it
+    already has -- so one answer file has to work on a machine that would never be asked. At a
+    terminal nothing is optional: the question is asked, with `no` as the default answer.
+    """
+    try:
+        return run.asker.confirm("load_test", QUESTIONS["load_test"], default=False)
+    except AnswerMissingError:
+        return False
+

@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, Mapping
 
 from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package, Rating, Snapshot
@@ -36,7 +36,19 @@ from .importer import ProfileScan
 from .measurements import MeasurementRecord, Scenario
 from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
 from .quantization import package_identity_key
-from .ranking import RANKING_RULE, RankedPackage, Ranking, SetAside, rank_packages
+from .parameters import parameter_count
+from .ranking import (
+    RANKING_RULE,
+    RANKING_RULE_PER_MODEL,
+    ModelFacts,
+    RankedPackage,
+    Ranking,
+    SetAside,
+    ShownRow,
+    rank_packages,
+    row_sentence,
+    shown_rows,
+)
 
 RatingSource = Callable[[str], Rating | None]
 
@@ -354,13 +366,26 @@ def _row_note(ranked: RankedPackage, shared_memory: bool, cards: int = 1) -> Not
     return _computed_note(ranked.fit, shared_memory, cards)
 
 
-def _ranked_entries(ranking: Ranking, shared_memory: bool = False, cards: int = 1) -> list[RankedEntry]:
+def _with_rule_sentence(note: Note, row: ShownRow, per_model: bool) -> Note:
+    """The row note with the sentence the rule gives the row appended: it adds, never replaces."""
+    said = row_sentence(row, per_model)
+    if said is None:
+        return note
+    sentence, fact = said
+    return note.model_copy(update={"text": _clip(f"{note.text} {sentence}"), "facts": [*note.facts, fact]})
+
+
+def _ranked_entries(
+    ranking: Ranking, shared_memory: bool = False, cards: int = 1, per_model: bool = False
+) -> list[RankedEntry]:
+    """The rows of one machine (`ranking.shown_rows`); `rank` is the number of the row shown."""
     entries = []
-    for ranked in ranking.top:
-        note = _row_note(ranked, shared_memory, cards)
+    for number, row in enumerate(shown_rows(ranking, per_model), start=1):
+        ranked = row.ranked
+        note = _with_rule_sentence(_row_note(ranked, shared_memory, cards), row, per_model)
         entries.append(
             RankedEntry(
-                rank=ranked.rank,
+                rank=number,
                 fit=ranked.fit,
                 measurement_group=ranked.measurement_group,
                 measurement_id=ranked.measurement.measurement_id if ranked.measurement is not None else None,
@@ -388,6 +413,8 @@ def _machine_block(
     base_model_by_repo: dict[str, BaseModelSpec],
     measurements: list[MeasurementRecord],
     scenario: Scenario,
+    models: Mapping[str, ModelFacts] | None = None,
+    per_model: bool = False,
 ) -> MachineRanking:
     """One machine's block: its three lists, or its reason when no fit can be computed at all."""
     reserves = {
@@ -402,14 +429,14 @@ def _machine_block(
         (package, compute_fit_v2(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config))
         for package in packages
     ]
-    ranking = rank_packages(entries, measurements, scenario)
+    ranking = rank_packages(entries, measurements, scenario, models=models)
     shared = found.profile.gpu_state == "unified_memory"  # one memory, both reserves taken from it
     return MachineRanking(
         machine=machine,
         status="ranked",
         label=found.label,
         profile=found.profile,
-        ranked=_ranked_entries(ranking, shared_memory=shared, cards=len(found.profile.gpus)),
+        ranked=_ranked_entries(ranking, shared_memory=shared, cards=len(found.profile.gpus), per_model=per_model),
         ranked_total=len(ranking.ranked),
         not_covered=_set_aside_entries(ranking.not_covered, covered=False),
         no_fit=_set_aside_entries(ranking.no_fit, covered=True, shared_memory=shared),
@@ -444,6 +471,18 @@ def _collect_ratings(
     return ratings, None
 
 
+def snapshot_model_facts(snapshot: Snapshot) -> dict[str, ModelFacts]:
+    """What the snapshot alone says of its base models: the parameter count, and no `legacy`.
+
+    The same rule the list of step 2 uses (`parameters.parameter_count`), with the count the snapshot
+    keeps; a render without a guided run knows no release, so the parameters decide (ADR 0009).
+    """
+    return {
+        spec.hf_repo: ModelFacts(parameter_count(spec.parameters_b, spec.hf_repo.partition("/")[2]), False)
+        for spec in snapshot.base_models
+    }
+
+
 def build_render_document(
     config: Configuration,
     snapshot: Snapshot,
@@ -452,16 +491,22 @@ def build_render_document(
     scenario: Scenario,
     rendered_at: datetime,
     rating_source: RatingSource | None = None,
+    *,
+    models: Mapping[str, ModelFacts] | None = None,
 ) -> RenderDocument:
     """The one object a render produces; pure, no I/O and no clock read.
 
     `profiles` maps every `config.machines` key to the `MachineProfile` the results folder
     holds for it (`machine_profile`); `measurements` maps a `profile_id` to that profile's
     measurement records. Every fit is computed against `scenario`, one context for the whole
-    document (CONTRACTS.md, "Render (schema 2)").
+    document (CONTRACTS.md, "Render (schema 2)"). `models` is what the rule knows of each base
+    model (ADR 0009); without it the snapshot says it (`snapshot_model_facts`), and no model is
+    `legacy`. Several base models among the packages give one row per model (`ranking.shown_rows`).
     """
     base_model_by_repo = {bm.hf_repo: bm for bm in snapshot.base_models}
     packages = _eligible_packages(snapshot)
+    facts = models if models is not None else snapshot_model_facts(snapshot)
+    per_model = len({package.base_model_hf_repo for package in packages}) > 1
     blocks = [
         _machine_block(
             machine,
@@ -471,6 +516,8 @@ def build_render_document(
             base_model_by_repo,
             measurements.get(getattr(profiles[machine].profile, "profile_id", ""), []),
             scenario,
+            facts,
+            per_model,
         )
         for machine, machine_config in config.machines.items()
     ]
@@ -482,7 +529,7 @@ def build_render_document(
         base_model_count=len(snapshot.base_models),
         package_count=len(snapshot.packages),
         scenario=scenario,
-        ranking_rule=RANKING_RULE,
+        ranking_rule=RANKING_RULE_PER_MODEL if per_model else RANKING_RULE,
         rating_unavailable=rating_error,
         ratings=ratings,
         areas=snapshot.areas,

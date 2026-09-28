@@ -1,0 +1,44 @@
+# modelroom configuration, written by the guided mode.
+# Families and their owner-bound `repos` targets come from the search; everything else is
+# kept as it was. Edit it by hand at any time -- the guided mode reads it back.
+
+schema_version = 3
+packagers = []
+publishers = ["Qwen"]
+
+[machines.workstation]
+reserve_ram_gib = 8.0
+reserve_vram_gib = 1.0
+writer = true
+profile = "0000000000000002"
+
+[paths]
+state = "<results>/state"
+markdown = "<results>/docs/models.md"
+
+[llmfit]
+min_version = "1.1.16"
+
+[defaults]
+reserve_ram_gib = 8.0
+reserve_vram_gib = 1.0
+
+[updates]
+check = true
+
+[guided]
+results = "<results>"
+context = 8192
+users = 1
+requests = 1
+requests_origin = "from_users"
+
+[[families]]
+name = "qwen3.5"
+
+[[families.base_models]]
+hf_repo = "Qwen/Qwen3.5-9B"
+repo_aliases = []
+repos = ["unsloth/Qwen3.5-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]
+ollama_base = "qwen3.5"
+ollama_tag = "9b"

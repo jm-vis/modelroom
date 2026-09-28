@@ -320,3 +320,38 @@ def test_cpu_gpu_mode_when_some_vram_exists_but_package_does_not_fit_in_it():
 
     assert fit.mode == "cpu_gpu"
     assert fit.reserve_gib == pytest.approx(4.0)
+
+
+# --- the window of the model (AP9-UX, H) ------------------------------------------------------------
+
+
+def test_a_package_beyond_its_models_window_is_not_covered():
+    """A context beyond the window the model declares is no fit anybody computed: `unknown`, set aside."""
+    import copy
+
+    from modelroom.examples import EXAMPLES
+    from modelroom.measurements import Scenario
+    from modelroom.profile import HardwareProfile
+    from modelroom.ranking import rank_packages
+
+    payload = copy.deepcopy(EXAMPLES["BaseModelSpec"])
+    payload["architecture"]["max_context"] = 32768
+    small_window = BaseModelSpec.model_validate(payload)
+    package = Package.model_validate(EXAMPLES["Package"])
+    profile = HardwareProfile.model_validate(EXAMPLES["HardwareProfile"])
+    machine = MachineConfig(reserve_ram_gib=8.0, reserve_vram_gib=1.0, writer=True)
+
+    def scenario(context: int) -> Scenario:
+        return Scenario(context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1)
+
+    from modelroom.fit import compute_fit_v2
+
+    within = compute_fit_v2(profile, package, small_window, scenario(32768), machine)
+    beyond = compute_fit_v2(profile, package, small_window, scenario(65536), machine)
+
+    assert within.fit_class != "unknown"
+    assert (beyond.fit_class, beyond.reason) == ("unknown", "context beyond the window of this model (32k)")
+    ranking = rank_packages([(package, beyond)], [], scenario(65536))
+    assert (ranking.ranked, [item.reason for item in ranking.not_covered]) == ([], [beyond.reason])
+    silent = BaseModelSpec.model_validate({**payload, "architecture": {**payload["architecture"], "max_context": None}})
+    assert compute_fit_v2(profile, package, silent, scenario(131072), machine).fit_class != "unknown"

@@ -69,7 +69,9 @@ ANSWERS = {
     "select": [],
     "users": "20 requests",
     "context": "4096",
-    "load_test_vllm": True,
+    # One question and one list for every server since AP9-UX E; `load_test_vllm` is gone.
+    "load_test": True,
+    "load_test_packages": ["vllm"],
 }
 
 
@@ -156,7 +158,7 @@ def test_two_revisions_of_the_repository_are_no_answer_and_no_fit():
 # --- step 4 and the card (F) -------------------------------------------------------------------------
 
 
-def test_step_4_reads_the_lines_of_the_brief_at_load_test_vllm_true(tmp_path: Path):
+def test_step_4_reads_the_lines_of_the_brief_with_the_vllm_row_picked(tmp_path: Path):
     code, lines = _run(tmp_path)
 
     assert code == 0
@@ -167,7 +169,8 @@ def test_step_4_reads_the_lines_of_the_brief_at_load_test_vllm_true(tmp_path: Pa
         f"it states it serves {QWEN25_REPO}",
         "revision unknown (not stated)",
         "one warm-up request, then three batches of 20 requests, 128 tokens each",
-        "? Measure the vLLM server with 20 requests at once?  Yes",
+        "? Measure the speed on this machine now?  Yes",
+        "? Which of these should be measured?  vLLM server",
         "measured vLLM: <n> tok/s total (<n>–<n>), context 4k",
         "per request: <n> tok/s (<n>–<n>)",
         "identity stated by the server; not ranked, nothing written",
@@ -183,7 +186,7 @@ def test_the_start_screen_names_the_served_model_and_the_card_its_speed(tmp_path
 
     assert f"server    vLLM                    context 4096, serves (stated) {QWEN25_REPO}" in [line.strip() for line in lines]
     card = _card(lines)
-    assert " server    vLLM                    <n> tok/s measured (vLLM, 20 requests, total)" in card
+    assert " server    vLLM                    <n> tok/s total, 20 requests at once, counts for this run" in card
     assert "                                   identity stated · fit: 32 at once, fits" in card
     labels = [line.split()[0] for line in card if line[1:2].strip() and not line.startswith(" ──")]
     assert labels[labels.index("speed") : labels.index("result") + 1] == ["speed", "server", "result"]
@@ -245,15 +248,16 @@ def test_a_server_that_asks_for_a_key_measures_nothing_and_ends_0(tmp_path: Path
     assert not any("server    vLLM" in line for line in _card(lines))
 
 
-def test_an_answer_file_without_the_vllm_answer_measures_nothing(tmp_path: Path):
-    """`load_test_vllm` is the third optional answer key: missing, it is `no`."""
-    answers = {key: value for key, value in ANSWERS.items() if key != "load_test_vllm"}
+def test_an_answer_file_without_the_load_test_answer_measures_nothing(tmp_path: Path):
+    """`load_test` is the one optional answer key: missing, it is `no`, and no list is asked."""
+    answers = {key: value for key, value in ANSWERS.items() if key not in ("load_test", "load_test_packages")}
     servers = vllm_servers()
 
     code, lines = _run(tmp_path, answers, servers=servers)
 
     assert code == 0
-    assert "? Measure the vLLM server with 20 requests at once?  No" in _step(lines, 4)
+    assert "? Measure the speed on this machine now?  No" in _step(lines, 4)
+    assert not any(line.startswith("? Which of these") for line in _step(lines, 4))
     assert [call[1] for call in servers["vllm"].calls] == [MODELS_PATH]
     card = _card(lines)
     assert " server    vLLM                    not measured in this run" in card
@@ -289,9 +293,15 @@ def test_a_folder_with_nothing_to_rank_shows_the_row_without_a_speed(tmp_path: P
         colored=False,
     )
 
-    assert f"no package of this folder comes from {QWEN25_REPO}" in _step(lines, 4)
+    step = _step(lines, 4)
+    # No model of this run is the served one: said before the question, the package after the measurement.
+    reason = "the number will not count: the server serves Qwen2.5-0.5B-Instruct, this run chose nothing"
+    assert step.index(reason) < step.index("? Measure the speed on this machine now?  Yes")
+    assert f"no package of this folder comes from {QWEN25_REPO}" in step
+    assert step[-1] == "✓ Measurement     vLLM ran, not counted"
     card = _card(lines)
-    assert " server    vLLM                    no package of this folder" in card
+    assert " server    vLLM                    <n> tok/s total, 20 requests at once, not counted" in card
+    assert "                                   identity stated · no package of this folder" in card
     assert card[-1].strip().startswith("–")
 
 
@@ -309,7 +319,8 @@ def test_a_third_server_in_the_list_reaches_the_start_screen_step_4_and_both_car
         origin="http://127.0.0.1:9999",
         transport=lambda run: None,
         start_fact=lambda origins: Fact("server", "Third", "stated by nobody"),
-        step=lambda run, config, scenario, results_dir: run.screen.note("the third server was asked") or "Third measured",
+        offer=lambda run, config, scenario, results_dir: run.screen.note("the third server was asked") or local_servers.Offer(),
+        measure=lambda run, config, scenario, results_dir, offer, picked: "Third measured",
         card_facts=lambda run: (Fact("server", "Third", "on the card"),),
     )
     monkeypatch.setattr(local_servers, "LOCAL_SERVERS", (*local_servers.LOCAL_SERVERS, third))
@@ -327,9 +338,7 @@ def test_the_balance_puts_the_daemons_own_first_and_joins_with_a_dot(tmp_path: P
     from modelroom import local_servers
 
     first = local_servers.LOCAL_SERVERS[0]
-    measured = local_servers.LocalServer(
-        **{**first.__dict__, "step": lambda run, *args: run.screen.head(4) or "1 of 1 measured"}
-    )
+    measured = local_servers.LocalServer(**{**first.__dict__, "measure": lambda run, *args: "1 of 1 measured"})
     monkeypatch.setattr(local_servers, "LOCAL_SERVERS", (measured, *local_servers.LOCAL_SERVERS[1:]))
 
     _code, lines = _run(tmp_path)
@@ -376,3 +385,206 @@ def test_a_run_with_a_vllm_server_writes_the_same_bytes_as_one_without(tmp_path:
         assert fetched[0][key] == expected[key], key
     assert [f for f in fetched[0]["files"] if f["role"] == "weights"] == expected["files"]
     assert not (without / "results" / "state" / "measurements").exists()
+
+
+# --- step 4 from one mould (AP9-UX E) --------------------------------------------------------------------
+
+UNSLOTH_QWEN = "unsloth/Qwen3.5-9B-GGUF"
+DEEPSEEK_REPO = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
+FRESH = {
+    "results": "here",
+    "machines": ["this-machine"],
+    "machine_class": "laptop",
+    "search": "qwen",
+    "filter_owners": True,
+    "select": [UNSLOTH_QWEN],
+    "users": 1,
+    "context": "8192",
+}
+WITH_DEEPSEEK = {**FRESH, "select": [UNSLOTH_QWEN, DEEPSEEK_REPO]}
+
+
+class _Counting(FileAsker):
+    """A file asker that keeps every list it was asked, by key."""
+
+    def __init__(self, answers):
+        super().__init__(answers)
+        self.lists: dict[str, list] = {}
+
+    def checkbox(self, key, question, choices, instruction=None, header=None):
+        self.lists[key] = list(choices)
+        return super().checkbox(key, question, choices, instruction)
+
+
+def _fresh(tmp_path: Path, answers: dict, *, daemon=None, servers=None) -> tuple[int, list[str], _Counting]:
+    """A first guided run in an empty folder: this machine measures itself, so Ollama is bound here."""
+    from fixture_support import loadtest_daemon  # noqa: F401 -- the callers pass it
+
+    results = tmp_path / "results"
+    results.mkdir(parents=True)
+    (tmp_path / "home").mkdir()
+    lines: list[str] = []
+    asker = _Counting(answers)
+    code = run_guided(
+        asker,
+        here=results,
+        pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=daemon if daemon is not None else offline_daemon(),
+        servers=servers if servers is not None else offline_servers(),
+        now=RUN_AT,
+        out=lines.append,
+        colored=False,
+    )
+    return code, lines, asker
+
+
+def test_step_four_asks_one_question_for_every_server(tmp_path: Path):
+    from fixture_support import DEEPSEEK_OLLAMA_NAME, loadtest_daemon
+
+    answers = {**WITH_DEEPSEEK, "load_test": True, "load_test_packages": [DEEPSEEK_OLLAMA_NAME, "vllm"]}
+    code, lines, asker = _fresh(tmp_path, answers, daemon=loadtest_daemon(), servers=vllm_servers(requests=1))
+
+    assert code == 0
+    assert asker.asked.count("load_test") == 1 and asker.asked.count("load_test_packages") == 1
+    rows = asker.lists["load_test_packages"]
+    assert [row.value for row in rows] == [DEEPSEEK_OLLAMA_NAME, "vllm"]
+    assert not any(row.checked for row in rows)
+    step = _step(lines, 4)
+    assert "Ollama: 1 installed package of this run's models, one request each" in step
+    assert step[-1] == "✓ Measurement     1 of 1 measured · vLLM ran, not counted"
+
+
+def test_the_reason_a_number_will_not_count_stands_before_the_question():
+    from modelroom.guided_vllm import not_counting_reason, wrapped
+
+    served = ServedModel(id=QWEN25_REPO, root=QWEN25_REPO, max_model_len=4096)
+    package = qwen25_tensor_package()
+    other = ("Qwen/Qwen3.5-9B",)
+
+    # The first reason that holds, in the order 1, 2, 3.
+    assert not_counting_reason(served, other, 32768, package) == (
+        "the number will not count: the server serves Qwen2.5-0.5B-Instruct, this run chose Qwen3.5-9B"
+    )
+    assert not_counting_reason(served, (QWEN25_REPO,), 32768, package) == (
+        "the number will not count: the server runs context 4k, this run asks for 32k"
+    )
+    assert not_counting_reason(served, (QWEN25_REPO,), 4096, "no package") == (
+        f"the number counts, no fit: no package of this folder comes from {QWEN25_REPO}"
+    )
+    assert not_counting_reason(served, (QWEN25_REPO,), 4096, package) is None
+    # Beyond 100 columns the line breaks before the name, and no name is cut.
+    long_name = "acme/" + "Nova-" * 16 + "9B"
+    lines = wrapped(not_counting_reason(ServedModel(id=long_name, root=long_name, max_model_len=4096), other, 4096, package))
+    assert lines[0] == "the number will not count: the server serves"
+    assert lines[1].startswith("Nova-Nova-") and lines[1].endswith(", this run chose Qwen3.5-9B")
+
+
+def test_the_balance_never_says_measured_when_nothing_counts(tmp_path: Path):
+    code, lines = _run(tmp_path, {**ANSWERS, "context": "8192"})
+
+    step = _step(lines, 4)
+    assert code == 0
+    assert "the number will not count: the server runs context 4k, this run asks for 8k" in step
+    assert step[-1] == "✓ Measurement     vLLM ran, not counted"
+    assert " server    vLLM                    <n> tok/s total, 20 requests at once, not counted" in _card(lines)
+
+
+def test_one_request_is_singular(tmp_path: Path):
+    from modelroom.fit_vllm import VllmFit
+    from modelroom.guided_vllm import fit_lines, vllm_rows, VllmOffer
+    from modelroom.scenario_text import requests_words
+
+    answers = {**FRESH, "context": "4096", "load_test": True, "load_test_packages": ["vllm"]}
+    code, lines, _asker = _fresh(tmp_path, answers, servers=vllm_servers(requests=1))
+
+    assert code == 0
+    assert "one warm-up request, then three batches of 1 request, 128 tokens each" in _step(lines, 4)
+    assert " server    vLLM                    <n> tok/s total, 1 request at once, not counted" in _card(lines)
+    row = vllm_rows(VllmOffer(SERVED, 1, "no package", False))[0]
+    assert row.label == f"vLLM server  context 4k  1 request at once  {QWEN25_REPO}"
+    assert (requests_words(1), requests_words(2)) == ("1 request", "2 requests")
+    fit = VllmFit(
+        card_gib=22.49, weights_gib=1.0, runtime_gib=1.5, kv_gib=10.0, context=4096, requests=1, at_once=1,
+        fit_class="tight", basis="size", budget_gib=20.7, kv_tokens=4096,
+    )
+    assert fit_lines(fit)[2].startswith("1 request of context 4k at once")
+
+
+@pytest.mark.parametrize(
+    "case, said, identity",
+    [
+        ("counts", "counts for this run", "identity stated · fit: 32 at once, fits"),
+        ("other context", "not counted", "identity stated · fit: 16 at once, tight"),
+        ("no package", "counts, no fit", "identity stated · no package of this folder"),
+    ],
+)
+def test_the_server_row_of_the_card_says_whether_the_number_counts(tmp_path: Path, case, said, identity):
+    """The three states of the server row (AP9-UX E), with the recordings of `vllm_servers()`."""
+    answers = {**ANSWERS, "context": "8192"} if case == "other context" else ANSWERS
+    if case == "no package":
+        results = _folder(tmp_path)
+        # The model of the folder is the served one, but no repository of it is configured: no package.
+        (results / "modelroom.toml").write_bytes(CONFIG.replace(f'  repos = ["{QWEN25_REPO}"]\n', "").encode("utf-8"))
+        lines: list[str] = []
+        code = run_guided(
+            FileAsker(answers),
+            here=results,
+            pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
+            transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping()}),
+            probes=windows_probes(host="workstation"),
+            daemon=offline_daemon(),
+            servers=vllm_servers(),
+            now=RUN_AT,
+            out=lines.append,
+            colored=False,
+        )
+    else:
+        code, lines = _run(tmp_path, answers)
+
+    card = _card(lines)
+    assert code == 0
+    assert f" server    vLLM                    <n> tok/s total, 20 requests at once, {said}" in card
+    assert f"                                   {identity}" in card
+
+
+STATES = [
+    # (folder, daemon, servers, answers, question asked, list, balance, exit)
+    ("unbound", "none", "offline", {}, False, None, "– Measurement     none in this run", 0),
+    ("unbound", "none", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM measured", 0),
+    ("unbound", "none", "vllm", {"load_test": False}, True, None, "– Measurement     none in this run", 0),
+    ("fresh", "offline", "offline", {"load_test": False}, True, None, "– Measurement     none in this run", 0),
+    ("fresh", "offline", "offline", {"load_test": True}, True, None, "– Measurement     none in this run", 1),
+    ("fresh", "offline", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM ran, not counted", 0),
+    ("fresh", "loadtest", "offline", {}, False, None, "– Measurement     none in this run", 0),
+    ("fresh", "loadtest", "vllm", {}, True, ["vllm"], "✓ Measurement     vLLM ran, not counted", 0),
+    ("deepseek", "loadtest", "offline", {}, True, ["ollama"], "✓ Measurement     1 of 1 measured", 0),
+    ("deepseek", "loadtest", "vllm", {}, True, ["ollama", "vllm"], "✓ Measurement     1 of 1 measured · vLLM ran, not counted", 0),
+]
+
+
+@pytest.mark.parametrize("folder, daemon, servers, extra, asked, rows, balance, exit_code", STATES)
+def test_every_state_of_step_four(tmp_path: Path, folder, daemon, servers, extra, asked, rows, balance, exit_code):
+    """The state table of AP9-UX E, one row each: the question, the list, the balance, the exit code."""
+    from fixture_support import DEEPSEEK_OLLAMA_NAME, loadtest_daemon
+
+    values = {"ollama": DEEPSEEK_OLLAMA_NAME, "vllm": "vllm"}
+    picked = [values[row] for row in rows or []]
+    answers = {"load_test": True, "load_test_packages": picked, **extra}
+    the_servers = vllm_servers() if servers == "vllm" else offline_servers()
+    if folder == "unbound":
+        code, lines = _run(tmp_path, {**ANSWERS, **answers}, servers=the_servers, bound=False)
+        asker_rows = None
+    else:
+        base = WITH_DEEPSEEK if folder == "deepseek" else FRESH
+        the_daemon = loadtest_daemon() if daemon == "loadtest" else offline_daemon()
+        code, lines, asker = _fresh(tmp_path, {**base, **answers}, daemon=the_daemon, servers=the_servers)
+        asker_rows = [row.value for row in asker.lists.get("load_test_packages", [])] or None
+
+    step = _step(lines, 4)
+    assert any(line.startswith("? Measure the speed on this machine now?") for line in step) is asked
+    if folder != "unbound":
+        assert asker_rows == (picked or None if rows else None)
+    assert step[-1] == balance
+    assert code == exit_code

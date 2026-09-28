@@ -115,11 +115,15 @@ def test_the_screen_of_a_run_that_measured_carries_the_speed(tmp_path: Path):
 
 
 def test_the_screen_of_a_run_that_pulls_the_first_row_ends_with_the_pull(tmp_path: Path):
-    """The daemon answers, the first row is not local: the question after the card, then the pull."""
-    first = "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS"
+    """The daemon answers, the first row is not local: the question after the card, then the pull.
+
+    Qwen3.5-9B alone since AP9-UX: with DeepSeek chosen too, its one package -- installed on the
+    fixture daemon -- is the first row (ADR 0009), and a local first row asks nothing.
+    """
+    first = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S"  # the least compression on the card at `L` (ADR 0009)
     daemon = pull_daemon(after_pull=tags_with(first))
 
-    _compare("guided-screen-pull.txt", _screen(tmp_path, {**CHOSEN, "pull": True}, daemon=daemon))
+    _compare("guided-screen-pull.txt", _screen(tmp_path, {**CHOSEN, "select": [QWEN], "pull": True}, daemon=daemon))
 
 
 def test_the_screen_of_a_run_with_a_machine_entered_by_hand_reads_as_the_golden_file(tmp_path: Path):
@@ -129,7 +133,11 @@ def test_the_screen_of_a_run_with_a_machine_entered_by_hand_reads_as_the_golden_
 
 @pytest.mark.parametrize(
     ("answers", "servers"),
-    [(CHOSEN, None), (ENTERED, None), ({**CHOSEN, "users": "20 requests", "load_test_vllm": True}, vllm_servers)],
+    [
+        (CHOSEN, None),
+        (ENTERED, None),
+        ({**CHOSEN, "users": "20 requests", "load_test": True, "load_test_packages": ["vllm"]}, vllm_servers),
+    ],
     ids=["measured", "entered", "vllm"],
 )
 def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path, answers, servers):
@@ -138,5 +146,25 @@ def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path
     for line in screen.splitlines():
         if "<results>" in line or "Hugging Face" in line or "no load test" in line or SERVED_ID in line:
             continue  # a path, a registry's own message and a served model's id are as long as they are
+        if "cannot reach the Ollama daemon" in line:
+            continue  # the daemon's own reason, since AP9-UX E also as `Ollama: <reason>` before the question
         assert len(line) <= 100, line
-    assert servers is None or "vLLM measured" in screen
+    # Step 4 since AP9-UX E: the reason the number will not count stands before the one question.
+    assert servers is None or "the number will not count: the server serves" in screen
+
+
+def test_a_reason_of_step_four_breaks_before_the_longest_name_of_the_catalog():
+    """Reasons 1 and 3 name a model; beyond 100 columns the line breaks before the name, never inside it."""
+    from modelroom.catalog import load_catalog
+    from modelroom.guided_vllm import not_counting_reason, wrapped
+    from modelroom.vllm_server import ServedModel
+
+    names = [model.hf_repo for family in load_catalog().families for model in family.models]
+    longest = max(names, key=len)
+    served = ServedModel(id=longest, root=longest, max_model_len=4096)
+    for reason in (not_counting_reason(served, (QWEN, DEEPSEEK), 4096, "none"), not_counting_reason(served, (longest,), 4096, "none")):
+        lines = wrapped(reason)
+        assert " ".join(lines) == reason  # nothing cut, nothing added
+        for line in lines:
+            # A line is at most 100 columns wide, unless it holds a name that is longer on its own.
+            assert len(f"   {line}") <= 100 or line.startswith(longest.partition("/")[2]) or line.endswith(longest), line

@@ -383,8 +383,13 @@ def hardware_with_config(
     same_machine: bool = False,
     summary: bool = True,
     machine_class: MachineClass | None = None,
+    note: Callable[[str], None] | None = None,
 ) -> int:
     """Run `hardware` against an already-loaded `Configuration` -- the programmatic entry point.
+
+    `note` receives every note of the measurement without its `note: ` prefix; the guided mode
+    passes its screen's own note, so the notes stand indented like their neighbors (AP9-UX G).
+    Without it they are printed as `note: <text>`, as `modelroom hardware` always did.
 
     Measures this machine itself (`modelroom/measure.py`), cross-checks the two comparable
     readings against `llmfit` and writes one schema-2 profile,
@@ -437,7 +442,7 @@ def hardware_with_config(
     try:
         return _hardware_locked(
             config, machine, active, measured, reference, recorded_at, pointer_file, new_identity,
-            _binding_key(config, results_dir), same_machine, summary,
+            _binding_key(config, results_dir), same_machine, summary, note,
         )
     finally:
         release_lock(handle)
@@ -455,6 +460,7 @@ def _hardware_locked(
     binding_key: Path,
     same_machine: bool = False,
     summary: bool = True,
+    note: Callable[[str], None] | None = None,
 ) -> int:
     """Pick this machine's profile, write it and bind it -- everything the lock has to cover.
 
@@ -517,7 +523,7 @@ def _hardware_locked(
         print(f"{profile_file}: the profile could not be written ({exc})", file=sys.stderr)
         return 1
     bound = _bind_this_machine(pointer_file, binding_key, profile.profile_id)
-    _print_hardware_summary(profile, measured, reference, summary)
+    _print_hardware_summary(profile, measured, reference, summary, note)
     return 0 if bound else 1
 
 
@@ -596,14 +602,20 @@ def _read_profile_file(path: Path) -> HardwareSnapshot | HardwareProfile:
 
 
 def _print_hardware_summary(
-    profile: HardwareProfile, measured: MeasuredHardware, reference: LlmfitReference, summary: bool = True
+    profile: HardwareProfile,
+    measured: MeasuredHardware,
+    reference: LlmfitReference,
+    summary: bool = True,
+    note: Callable[[str], None] | None = None,
 ) -> None:
     """One summary line, then every note the user has to read -- facts only, no advice.
 
     `summary` is `False` for the guided mode, which says in a note of its own what was measured and
     who confirmed it; the readings themselves are in the profile file (decided 2026-09-24). The
-    notes are printed either way -- they are what a reader has to act on.
+    notes are said either way -- they are what a reader has to act on -- through `note` where the
+    caller passes one (the guided mode's screen, AP9-UX G), else printed behind `note: `.
     """
+    say = note if note is not None else (lambda text: print(f"note: {text}"))
     checks = profile.llmfit_crosscheck
     cards = f", {len(profile.gpus)} cards" if len(profile.gpus) > 1 else ""
     if summary:
@@ -614,13 +626,13 @@ def _print_hardware_summary(
             f"class {profile.machine_class} ({profile.machine_class_source}), "
             f"llmfit ram {checks.ram_physical.status} / vram {checks.vram.status}"
         )
-    for note in measured.notes:
-        print(f"note: {note}")
+    for text in measured.notes:
+        say(text)
     if reference.reason is not None:
-        print(f"note: the llmfit cross-check is {reference.status}: {reference.reason}")
+        say(f"the llmfit cross-check is {reference.status}: {reference.reason}")
     blocked = fit_block_reason(profile)
     if blocked is not None:
-        print(f"note: no fit is computed for this profile -- {blocked}")
+        say(f"no fit is computed for this profile -- {blocked}")
 
 
 def _gib(value: float | None) -> str:

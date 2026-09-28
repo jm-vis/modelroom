@@ -16,8 +16,9 @@ of its own, because step 3 counts how many of the packages it found still fit.
 
 from __future__ import annotations
 
+import json
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
@@ -40,8 +41,11 @@ from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import USERS_KEY, USERS_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
-from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES, enter_step, entered_class
+from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES, enter_step
 from .guided_install import QUESTIONS as PULL_QUESTIONS, FirstRow, first_row, pull_step
+# `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
+from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices, _measured_here  # noqa: F401
+from .guided_machines import chosen_machines, machine_answer_words
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
 from .local_servers import QUESTIONS as SERVER_QUESTIONS, ServerRun, card_facts, default_transports, load_tests
@@ -72,7 +76,7 @@ from .importer import (
     import_profile,
     scan_profiles,
 )
-from .intro import STEP_COUNT, card_names, class_words, collect_intro, print_intro
+from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_machine_class, read_os_identity
 from .measurements import Scenario
 from .migrate import MigrationError, backup_suffix, migrate
@@ -99,6 +103,7 @@ from .search import (
     apply_hits,
     run_search,
 )
+from .selection import NO_MODEL_CHOSEN, RunSelection, narrow_config
 from .state import LockHeldError, write_search_log
 from .views import context_short, show_nothing, show_result
 
@@ -163,6 +168,9 @@ class GuidedRun:
     # goes on with what is there -- a failed measurement must not cost the ranking of the other
     # machines -- but the exit code says that something did not finish (`1`).
     problems: list[str] = field(default_factory=list)
+    # What steps 1 and 2 of this run chose; the steps after them and the result cover only this
+    # (`selection.py`, AP9-UX B). In memory only, never written.
+    selection: RunSelection = field(default_factory=lambda: RunSelection((), ()))
 
     def failed(self, message: str) -> None:
         """Say it once and remember it: the run continues, its exit code does not stay `0`."""
@@ -384,69 +392,6 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path) -> Configuratio
 # --- step 1, second half: the machines this result covers ---------------------------------------
 
 
-def _hardware_class(profile: HardwareProfile) -> str:
-    """What makes two machines the same to the user: the class, the cards, their memory, the system memory."""
-    if profile.ram_physical_source == "entered":
-        return entered_class(profile)
-    gpu = card_names(profile) if profile.gpus else profile.gpu_name or profile.gpu_state
-    return f"{class_words(profile)}{gpu} {_gib(profile.vram_gib)} VRAM / {_gib(profile.ram_physical_gib)} RAM"
-
-
-def _gib(value: float | None) -> str:
-    return _UNKNOWN if value is None else f"{value:.2f} GiB"
-
-
-def _profile_choices(scan: ProfileScan) -> list[Choice]:
-    """Every profile the results folder holds, grouped by hardware class, alphabetical, grayed out.
-
-    The group is a matter of operation only -- the ranking is computed per device, and every one
-    of these profiles is already part of the result, so none of them is an action to pick.
-    """
-    groups: dict[str, list[str]] = {}
-    for profile in scan.profiles.values():
-        groups.setdefault(_hardware_class(profile), []).append(profile.display_name)
-    choices = []
-    for hardware_class, names in sorted(groups.items(), key=lambda item: sorted(item[1])):
-        listed = ", ".join(sorted(names))
-        count = f"{len(names)} machine" if len(names) == 1 else f"{len(names)} machines"
-        choices.append(
-            Choice(
-                f"group:{hardware_class}",
-                f"{hardware_class} -- {count}: {listed}",
-                disabled="already in this results folder",
-            )
-        )
-    for path in sorted(scan.legacy):
-        choices.append(Choice(f"legacy:{path.name}", f"{path.name} (legacy)", disabled="run `modelroom migrate`"))
-    for path, reason in sorted(scan.unreadable):
-        choices.append(Choice(f"broken:{path.name}", f"{path.name}", disabled=f"does not read: {reason}"))
-    return choices
-
-
-def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None) -> list[Choice]:
-    """The machine list. `bound` is the profile this folder already holds for this machine.
-
-    A machine that is already measured here is **not** marked: measuring it again is a decision,
-    not the default, and the entry says when it was last measured so that the decision can be
-    made. A machine with no profile in this folder is marked, because that is the one thing a
-    first run is for -- and so is a machine bound by hand to a profile entered by hand: nothing of
-    this machine was measured here (decided 2026-09-26).
-    """
-    if bound is None:
-        this_machine = Choice("this-machine", "this machine (measure now)", checked=True)
-    elif not _measured_here(bound):
-        this_machine = Choice("this-machine", "this machine (measure now, the bound profile was entered by hand)", checked=True)
-    else:
-        measured = bound.recorded_at.date().isoformat()
-        this_machine = Choice("this-machine", f"this machine (measure again, last measured {measured})")
-    return [
-        this_machine,
-        *_profile_choices(scan),
-        Choice("import", "import a profile file"),
-        Choice("enter", "enter a machine by hand"),
-    ]
-
-
 def _ensure_this_machine(run: GuidedRun, config_file: Path, name: str) -> Configuration:
     """Make sure `[machines.<name>]` is there and is a writer -- this machine runs the fetch.
 
@@ -518,6 +463,7 @@ def _measure_this_machine(
         machine_class=_asked_class(run),
         # The readings are the profile file's business; this step says in one note what was measured.
         summary=False,
+        note=run.screen.note,  # every note of the measurement indented like its neighbors (AP9-UX G)
     )
     if code != 0:
         run.failed(
@@ -575,8 +521,12 @@ def _record_profile(
     return config
 
 
-def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
-    """`modelroom import-profile` from inside the guided mode; the binding is never changed."""
+def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, set[str]]:
+    """`modelroom import-profile` from inside the guided mode; the binding is never changed.
+
+    Returns the configuration and the profile ids this import brought or named: the result of the
+    run covers their machines (AP9-UX B).
+    """
     answered = Path(run.asker.text("import_file", QUESTIONS["import_file"]).strip()).expanduser()
     path = answered if answered.is_absolute() else run.here / answered
     run.screen.answer(QUESTIONS["import_file"], str(path), path=True)
@@ -595,38 +545,53 @@ def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) 
         # that are there -- it is one entry of the machine list, not the whole run. The exit code
         # still says that something did not finish.
         run.failed(f"nothing imported: {exc}")
-        return config
+        return config, set()
     except OSError as exc:
         run.failed(f"nothing imported: {path}: {exc}")
-        return config
+        return config, set()
     updated = _load(config_file)
     found = sorted(scan_profiles(updated.paths.hardware_dir).profiles.items())
     for note in import_notes([profile for key, profile in found if key not in before], report):
         run.screen.note(note)
-    return updated
+    arrived = {key for key, _profile in found if key not in before}
+    return updated, arrived | _exported_profile_id(path)
+
+
+def _exported_profile_id(path: Path) -> set[str]:
+    """The `profile_id` an export file names -- it was just imported, so it reads; else nothing."""
+    try:
+        profile_id = json.loads(path.read_text(encoding="utf-8"))["profile"]["profile_id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return set()
+    return {profile_id} if isinstance(profile_id, str) else set()
 
 
 def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> Configuration:
+    """The machine list (`guided_machines`), then what was marked: measured, imported, entered, or
+    an existing profile of the folder taken as it is; the run's result covers exactly these (B)."""
     scan = scan_profiles(config.paths.hardware_dir)
     bound = _bound_profile(run, scan, config_file.parent)
-    picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound))
-    run.screen.answer(QUESTIONS["machines"], machines_words(picked))
+    name = _machine_key(run.probes.hostname())
+    configured = [machine.profile for machine in config.machines.values() if machine.profile is not None]
+    run.screen.note(ANOTHER_COMPUTER)
+    picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound, name, configured))
+    run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound, name)))
     if "this-machine" in picked:
         config = _measure_this_machine(run, config_file, config, scan, _measured_here(bound))
+    arrived: set[str] = set()
     if "import" in picked:
-        config = _import_a_profile(run, config_file, config)
+        config, arrived = _import_a_profile(run, config_file, config)
     if "enter" in picked:
+        before = set(scan_profiles(config.paths.hardware_dir).profiles)
         config = enter_step(run, config_file, config)
+        arrived |= set(scan_profiles(config.paths.hardware_dir).profiles) - before
+    chosen = chosen_machines(config, picked, name, arrived)
+    if not chosen:
+        # Only an answer file marks nothing: then the machine the pointer binds this folder to.
+        checked = machine_checked(run.pointer_path, config, config_file.parent)
+        chosen = (checked.name,) if checked.name is not None else ()
+    run.selection = replace(run.selection, machines=chosen)
     return config
-
-
-def _measured_here(bound: HardwareProfile | None) -> bool:
-    """Whether this machine was measured in this folder: bound, and not to a profile entered by hand.
-
-    A binding to a profile entered by hand comes about only by hand; the list and the note of the
-    first measurement then say `measure now` and `measured`, never `again` (decided 2026-09-26).
-    """
-    return bound is not None and bound.ram_physical_source != "entered"
 
 
 def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> HardwareProfile | None:
@@ -674,7 +639,19 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tu
     updated = _write_config(run, config_file, change)
     # Base models, not answers: an answer file may name two repositories of one model, and the
     # configuration and the card then hold one (second-model round, 2026-09-24).
-    return updated, len({str(hit.resolved_base_model) for hit in chosen})
+    bases = {str(hit.resolved_base_model) for hit in chosen}
+    _remember_models(run, [model for model in step.models if model.base_model in bases])
+    return updated, len(bases)
+
+
+def _remember_models(run: GuidedRun, models: Sequence[ModelChoice]) -> None:
+    """The models of this run, with the release and the size the list showed (AP9-UX B, ADR 0009)."""
+    run.selection = replace(
+        run.selection,
+        models=tuple(model.base_model for model in models),
+        release={model.base_model: model.age for model in models},
+        parameters={model.base_model: model.parameters_b for model in models},
+    )
 
 
 def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, str, bool]:
@@ -687,7 +664,7 @@ def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
         return config, NOTHING_CHOSEN_SUMMARY, False
     # All three numbers about one thing -- the snapshot this folder now holds. `apply_hits` keeps
     # what was there, so a balance may not mix the two frames (second-model round, 2026-09-24).
-    facts = snapshot_facts(config)
+    facts = snapshot_facts(config, run.selection)
     return config, packages_summary(len(facts.model_names), facts.packages, facts.repositories), True
 
 
@@ -728,15 +705,20 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
     run.screen.head(STEP_COUNT)
     written: list = []
     here = _machine_key(run.probes.hostname())
+    chosen = run.selection
+    if not chosen.models:
+        run.screen.note(NO_MODEL_CHOSEN)
 
     def seen(document) -> None:
         # Read inside the callback, which runs while the render still holds the lock: the card, the
         # table and the package of the first row rest on one snapshot (second-model round, 2026-09-24).
-        written.append((document, snapshot_facts(config), first_row(document, here, snapshot_packages(config)[0])))
+        packages = snapshot_packages(config, chosen)[0]
+        written.append((document, snapshot_facts(config, chosen), first_row(document, here, packages)))
 
-    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen)
+    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen)
     if not written:
-        show_nothing(run.screen, config, config_file.parent, scenario, run.now, card_facts(run))
+        shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only
+        show_nothing(run.screen, shown, config_file.parent, scenario, run.now, card_facts(run))
         return code, None
     show_result(run.screen, *written[0][:2], config, config_file.parent, run.now, here, card_facts(run))
     return code, written[0][2]

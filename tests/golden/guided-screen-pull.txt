@@ -11,7 +11,8 @@
 
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
- ? Which machines should the result cover?  this machine
+   another computer: pick its profile below, or import the file made there
+ ? Which machines should the result cover?  this machine (workstation)
  ? What kind of machine is this?  laptop
    measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ✓ Configuration   <results>, 1 machine
@@ -21,8 +22,8 @@
  ? Show only repositories of a publisher or a listed packager?  Yes
    searched Hugging Face at the publisher Qwen and the five listed packagers
    4 repositories, 2 of them models you can pick from
- ? Which of these models should the result cover?  Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B
- ✓ Packages        2 models, 24 packages from 3 repositories
+ ? Which of these models should the result cover?  Qwen3.5-9B
+ ✓ Packages        1 model, 23 packages from 2 repositories
 
  ── Step 3 of 5  Context ────────────────────────────────────────────────
  ? How many people use it on a typical day?  1 (1 request)
@@ -30,34 +31,34 @@
  ✓ Context         L 32k
 
  ── Step 4 of 5  Measurement ────────────────────────────────────────────
- ? Measure the speed of the checked models that are already installed here?  No
+   1 installed model -- a cloud model, not a package on this machine
+   no ranked package is installed on this machine; the load test measures installed packages only (stage 1: no download)
  – Measurement     none in this run
 
  ── Step 5 of 5  Results ────────────────────────────────────────────────
 
  folder    <results>
  machine   workstation             laptop, 12 GB graphics, 128 GB memory, measured today
- models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
+ models    Qwen3.5-9B              23 packages from unsloth and Ollama
  context   32k (entered), KV cache f16 (assumed), 1 request (from 1 user)
  speed     not measured            say Yes in step 4 to measure an installed package
- result    docs\models.md          22 packages ranked, 2 no fit
+ result    docs\models.md          21 packages ranked, 2 no fit
 
  workstation · context L 32k
  #    Model                     Package                 Fit                   Speed         Memory
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    Qwen3.5-9B                unsloth · UD-IQ2_XXS    fits                  –             8.3 GB
- 2    Qwen3.5-9B                unsloth · UD-IQ2_M      fits                  –             8.7 GB
- 3    Qwen3.5-9B                unsloth · UD-Q2_K_XL    fits                  –             9.2 GB
- 4    Qwen3.5-9B                unsloth · UD-IQ3_XXS    fits                  –             9.1 GB
- 5    Qwen3.5-9B                ollama · Q4_K_M         fits (RAM)            –             11.8 GB
- 6    Qwen3.5-9B                unsloth · UD-Q4_K_XL    fits (RAM)            –             11.1 GB
- 7    Qwen3.5-9B                unsloth · Q5_K_S        fits (RAM)            –             11.5 GB
- 8    Qwen3.5-9B                unsloth · Q5_K_M        fits (RAM)            –             11.7 GB
- 9    Qwen3.5-9B                unsloth · UD-Q5_K_XL    fits (RAM)            –             11.9 GB
- 10   Qwen3.5-9B                unsloth · Q6_K          fits (RAM)            –             12.6 GB
- shown     10 of 22 packages · 2 no fit (unsloth Q4_1, unsloth Q4_K_M)
- memory    #1–4 fit into graphics memory, 11.0 GB free after the reserve
-           #5–10 need system memory, the graphics card helps
+ 1    Qwen3.5-9B                unsloth · Q4_K_S        tight                 –             10.5 GB
+ 2    Qwen3.5-9B                unsloth · Q4_0          tight                 –             10.5 GB
+ 3    Qwen3.5-9B                unsloth · IQ4_NL        tight                 –             10.5 GB
+ 4    Qwen3.5-9B                unsloth · IQ4_XS        tight                 –             10.3 GB
+ 5    Qwen3.5-9B                unsloth · UD-Q3_K_XL    tight                 –             10.2 GB
+ 6    Qwen3.5-9B                unsloth · Q3_K_M        tight                 –             9.8 GB
+ 7    Qwen3.5-9B                unsloth · Q3_K_S        tight                 –             9.4 GB
+ 8    Qwen3.5-9B                unsloth · UD-IQ3_XXS    fits                  –             9.1 GB
+ 9    Qwen3.5-9B                unsloth · UD-Q2_K_XL    fits                  –             9.2 GB
+ 10   Qwen3.5-9B                unsloth · UD-IQ2_M      fits                  –             8.7 GB
+ shown     10 of 21 packages · 2 no fit (unsloth Q4_1, unsloth Q4_K_M)
+ memory    #1–10 fit into graphics memory, 11.0 GB free after the reserve
  basis     #1–10 computed from the package size, not its architecture
  speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
  key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
@@ -66,12 +67,14 @@
            gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
            one memory shared by system and card counts as gpu, both reserves taken
            off the card, and for a fit from size, the best is fits
+           best: the least compression of the same model that fits
+           modelroom rates no model family against another
            Speed is measured, see its column.
 
- install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS
+ install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S
 
  ✓ Results         docs\models.md
 
- ? Pull #1 into Ollama now? (3.0 GB)  Yes
- pulling   hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS
- ✓ Pulled    hf.co/unsloth/Qwen3.5-9B-GGUF:UD-IQ2_XXS · 3.0 GB · say Yes in step 4 of the next run to measure it
+ ? Pull #1 into Ollama now? (5.0 GB)  Yes
+ pulling   hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S
+ ✓ Pulled    hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S · 5.0 GB · say Yes in step 4 of the next run to measure it

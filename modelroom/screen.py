@@ -20,7 +20,7 @@ that draws it (`modelroom/views.py`).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from .dialog import QUESTION_RULES
 from .fit import AMPLE_RATIO, FITS_RATIO, TIGHT_RATIO
@@ -64,7 +64,13 @@ FIT_POOL_HINT = (
     "one memory shared by system and card counts as gpu, both reserves taken",
     "off the card, and for a fit from size, the best is fits",
 )
-FIT_HINT = FIT_SCALE_HINT + FIT_POOL_HINT
+# What `best` means in a result, and what modelroom never does (ADR 0009, A5): the same model with
+# less compression -- no benchmark, no family rated against another.
+BEST_HINT = (
+    "best: the least compression of the same model that fits",
+    "modelroom rates no model family against another",
+)
+FIT_HINT = FIT_SCALE_HINT + FIT_POOL_HINT + BEST_HINT
 # Counts a sentence says in words rather than in digits; beyond ten the digits read better.
 _NUMBER_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 
@@ -238,9 +244,19 @@ def yes_no(answer: bool) -> str:
     return "Yes" if answer else "No"
 
 
-def machines_words(picked: Sequence[str]) -> str:
-    """What was marked in the machine list, in the words of its own entries."""
-    return ", ".join(_MACHINE_WORDS.get(value, value) for value in picked) or NO_MACHINE
+def machines_words(picked: Sequence[str], words: Mapping[str, str] | None = None) -> str:
+    """What was marked in the machine list, in the words of its own entries.
+
+    `words` names what the list alone knows: this machine with its name and class, a profile of the
+    folder with its label (AP9-UX F and C1); every other value takes the list's fixed words.
+    """
+    named = {**_MACHINE_WORDS, **(words or {})}
+    return ", ".join(named.get(value, value) for value in picked) or NO_MACHINE
+
+
+def this_machine_words(name: str, *details: str) -> str:
+    """`this machine (gpu-server, server, as measured 2026-09-28)`: the name, then what is known (AP9-UX F)."""
+    return f"{THIS_MACHINE} ({', '.join([name, *(detail for detail in details if detail)])})"
 
 
 def clone_words(answer: str) -> str:
@@ -628,6 +644,7 @@ __all__ = [
     "machine_fact",
     "machines_summary",
     "machines_words",
+    "this_machine_words",
     "measured_note",
     "measured_when",
     "models_fact",

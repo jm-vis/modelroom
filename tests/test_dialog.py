@@ -187,7 +187,8 @@ def test_a_dimmed_choice_is_handed_to_the_library_as_a_gray_title():
     built = _questionary_choices([Choice("a", "a legacy row", dim=True), Choice("b", "a plain row")])
 
     assert built[0].title == [("class:note", "a legacy row")]
-    assert built[1].title == "a plain row"
+    # Padded to the width of the list since AP9-UX C, so a marked row is colored to one edge.
+    assert built[1].title == "a plain row "
 
 
 # --- the answer line is the run's, not the library's --------------------------------------------
@@ -292,7 +293,98 @@ def test_a_long_instruction_line_wraps_instead_of_being_cut():
 def test_a_select_says_which_key_picks_behind_its_question():
     transcript = _transcript(ENTER, lambda asker: asker.select("results", "Where?", PICKS))
 
-    assert _rows(transcript)[0] == "? Where? ↑↓ move   Enter select   Esc leave"
+    # 84 characters: the transcript's window of 80 columns wraps the line, so it is read without blanks.
+    keys = "? Where? ↑↓ move   Space marks   Enter takes the marked row, or this one   Esc leave"
+    assert _rows(transcript)[0].startswith("? Where? ↑↓ move   Space marks")
+    assert "".join(keys.split()) in "".join(transcript.split())
+
+
+# --- the head of a list and the pointer row (AP9-UX D) ----------------------------------------------
+
+
+def test_the_column_head_is_no_row_of_the_scrolling_list():
+    """The head stood in the list and scrolled out of its window with the pointer (Bild 083916)."""
+    many = [Choice(f"row-{number}", f"row {number:02d}") for number in range(40)]
+
+    transcript = _transcript(DOWN * 30 + ENTER, lambda asker: asker.checkbox("select", "Which?", many, header="Model    Fit"))
+
+    rows = _rows(transcript)
+    assert rows[1] == "Model    Fit"  # under the keys, above the list, whatever the pointer does
+    assert rows[0].startswith("? Which?")
+    head_line = next(line for line in transcript.replace("\r", "\n").splitlines() if "Model    Fit" in line)
+    assert head_line.startswith(" " * 5 + "Model")
+
+
+def test_the_pointer_row_is_a_cursor_line():
+    """The row under the pointer is marked across the whole width, not only in bold (Befund 2)."""
+    import questionary
+
+    from modelroom.dialog import QUESTION_RULES, _list_window, _mark_pointer_line
+
+    with create_pipe_input() as pipe:
+        built = questionary.checkbox("Which?", choices=["a", "b"], input=pipe, output=DummyOutput())
+        _mark_pointer_line(built)
+        assert _list_window(built).cursorline() is True
+    assert any(name == "cursor-line" and "bg:" in rule for name, rule in QUESTION_RULES)
+
+
+# --- one rule for every list (AP9-UX C) ------------------------------------------------------------
+
+REMEMBERED = [Choice("here", "this folder"), Choice("path", "another path", checked=True), Choice("third", "a third")]
+
+
+def test_a_select_starts_with_nothing_marked():
+    """The remembered answer is where the pointer starts, not a mark: green stayed on it (Befund 3)."""
+    from modelroom.dialog import _bind_single_select, _list_window, _questionary_choices
+
+    import questionary
+
+    with create_pipe_input() as pipe:
+        built = questionary.select("Where?", choices=_questionary_choices(REMEMBERED), default="path", input=pipe, output=DummyOutput())
+        _bind_single_select(built)
+        control = _list_window(built).content
+
+    assert control.selected_options == []
+    assert control.get_pointed_at().value == "path"
+
+
+def test_space_marks_the_pointer_row_of_a_select_alone():
+    with _asker(" " + DOWN + " " + ENTER) as asker:
+        assert asker.select("results", "Where?", REMEMBERED) == "third"
+
+
+def test_enter_takes_the_marked_row_of_a_select():
+    with _asker(" " + DOWN + ENTER) as asker:
+        assert asker.select("results", "Where?", REMEMBERED) == "path"
+
+
+@pytest.mark.parametrize("kind", ["select", "checkbox"])
+def test_enter_without_a_mark_takes_the_pointer_row(kind):
+    with _asker(DOWN + ENTER) as asker:
+        answer = getattr(asker, kind)("results", "Where?", PICKS)
+    assert answer == ("second" if kind == "select" else ["second"])
+
+
+def test_a_marked_dim_row_loses_its_gray_and_gets_it_back_when_unmarked():
+    from questionary.prompts.common import InquirerControl
+
+    from modelroom.dialog import _questionary_choices, _toggle_mark
+
+    control = InquirerControl(_questionary_choices([Choice("a", "a legacy row", dim=True), Choice("b", "a plain row")]))
+    gray = control.choices[0].title
+
+    _toggle_mark(control, {"a": gray})
+    assert (control.selected_options, control.choices[0].title) == (["a"], "a legacy row")
+    _toggle_mark(control, {"a": gray})
+    assert (control.selected_options, control.choices[0].title) == ([], gray)
+
+
+def test_a_marked_row_is_colored_as_a_whole():
+    from modelroom.dialog import QUESTION_RULES, _questionary_choices
+
+    assert any(name == "selected" and "reverse" in rule for name, rule in QUESTION_RULES)
+    labels = [choice.title for choice in _questionary_choices([Choice("a", "short"), Choice("b", "a longer row")])]
+    assert len(set(map(len, labels))) == 1
 
 
 # --- the size scale at the terminal (`select_or_text`) -------------------------------------------

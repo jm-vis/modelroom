@@ -31,6 +31,7 @@ from .render import (
     machine_profile,
     parse_header_line,
 )
+from .selection import RunSelection, model_facts, narrow
 from .state import (
     LockHeldError,
     UnreadableStateFileError,
@@ -86,8 +87,13 @@ def render_with_config(
     scenario: Scenario | None = None,
     echo: Callable[[str], None] | None = None,
     on_document: Callable[[RenderDocument], None] | None = None,
+    selection: RunSelection | None = None,
 ) -> int:
     """Run `render` against an already-loaded `Configuration` -- the programmatic entry point.
+
+    `selection` is what a guided run chose (`selection.RunSelection`): the document then covers only
+    its machines and its models, ranked with the release and the size its step 2 showed (AP9-UX B,
+    ADR 0009). `None` -- `modelroom render` -- covers the whole folder.
 
     A pure reader: acquires the same lock `fetch` uses (`modelroom/state.py::acquire_lock`),
     reads the snapshot and every configured machine's schema-2 hardware profile with its
@@ -137,7 +143,7 @@ def render_with_config(
 
     try:
         return _render_locked(
-            config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo, on_document
+            config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo, on_document, selection
         )
     finally:
         release_lock(handle)
@@ -151,6 +157,7 @@ def _render_locked(
     json_path: Path,
     echo: Callable[[str], None] | None,
     on_document: Callable[[RenderDocument], None] | None = None,
+    selection: RunSelection | None = None,
 ) -> int:
     """Read, build and write both views; a broken profile file is a note, never the whole render.
 
@@ -173,10 +180,16 @@ def _render_locked(
         print(refusal, file=sys.stderr)
         return 1
 
+    shown, models = config, None
+    if selection is not None:
+        # First the selection, then the rule's facts from it (AP9-UX B, ADR 0009).
+        shown, snapshot = narrow(config, snapshot, selection)
+        models = model_facts(selection) if selection.models else None
     scan = scan_profiles(config.paths.hardware_dir)
-    profiles = _machine_profiles(config, scan)
+    profiles = _machine_profiles(shown, scan)
     measurements, notes = _measurements_of(config, profiles)
-    document = with_requests_origin(build_render_document(config, snapshot, profiles, measurements, scenario, rendered_at, rating), config)
+    built = build_render_document(shown, snapshot, profiles, measurements, scenario, rendered_at, rating, models=models)
+    document = with_requests_origin(built, config)
     # Each file is replaced atomically, but two files cannot be replaced as one: between the two
     # writes a reader can see the new JSON view next to the old Markdown one. The JSON view goes
     # first on purpose -- the Markdown header is the promise "this render happened", and a later

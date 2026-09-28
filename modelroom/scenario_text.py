@@ -113,10 +113,16 @@ def never_measured_of(profiles: Iterable[HardwareProfile | None]) -> str | None:
     return ENTERED_NEVER_MEASURED if entered else None
 
 
+def requests_words(requests: int) -> str:
+    """`1 request`, `20 requests`: the one place step 4 and the card say a number of requests (AP9-UX E)."""
+    return f"{requests} request" if requests == 1 else f"{requests} requests"
+
+
 __all__ = [
     "ENTERED_NEVER_MEASURED",
     "ONE_REQUEST_NOTE",
     "context_words",
+    "requests_words",
     "document_scenario",
     "load_hint",
     "never_measured",

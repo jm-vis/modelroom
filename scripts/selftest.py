@@ -83,6 +83,8 @@ UNSLOTH_GGUF = "unsloth/Qwen3.5-9B-GGUF"
 # test itself runs against the real local daemon -- that is what criterion 5 is about.
 DEEPSEEK_GGUF = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF"
 DEEPSEEK_OLLAMA_NAME = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
+# Its quantization: criteria 5 and 6 find the row by repository **and** quantization (ADR 0009, AP9-UX).
+DEEPSEEK_QUANT = "Q4_K_M"
 # The scale's level `S`, 8192 tokens, `8k` in the scenario sentence: criteria 4 and 5 keep the numbers
 # they were pinned with, and the answer file shows that a level is a valid answer (CONTRACTS.md).
 ANSWERED_LEVEL, ANSWERED_CONTEXT, ANSWERED_SHOWN = "S", 8192, "8k"
@@ -271,10 +273,11 @@ def load_test_problems(records: list[dict], row: dict | None) -> list[str]:
         problems.append(f"the measurement is not comparable: {record['comparable_reason']}")
     if record["package"].get("hf_repo") != DEEPSEEK_GGUF:
         problems.append(f"the measurement names {record['package'].get('hf_repo')!r}, expected {DEEPSEEK_GGUF}")
+    # A rule row or a row appended for its measurement (ADR 0009): either way in group 0 with its speed.
     if row is None:
-        problems.append(f"{DEEPSEEK_GGUF} stands in no ranking of this machine")
-    elif row["measurement_group"] != 0 or row["speed_tps"] is None:
-        problems.append(f"the ranked row is group {row['measurement_group']} with speed {row['speed_tps']!r}")
+        problems.append(f"{DEEPSEEK_GGUF} {DEEPSEEK_QUANT} stands in no ranking of this machine")
+    elif row.get("measurement_group") != 0 or row.get("speed_tps") is None:
+        problems.append(f"the ranked row is group {row.get('measurement_group')} with speed {row.get('speed_tps')!r}")
     return problems
 
 
@@ -533,10 +536,19 @@ def _measurement_records(results: Path) -> list[dict]:
     return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(folder.rglob("*.json"))]
 
 
-def _ranked_row(block: dict, repo: str) -> dict | None:
-    """The row of one packaging repository in a machine's block, wherever it was sorted to."""
+def _ranked_row(block: dict, repo: str, quantization: str) -> dict | None:
+    """The row of one package -- its repository **and** its quantization -- wherever it stands.
+
+    Since ADR 0009 a repository may have more than one row, and a measured package the rule does not
+    show is appended behind the rule's rows; the repository alone could find the wrong one.
+    """
     rows = block["ranked"] + block["no_fit"]
-    return next((row for row in rows if row["package_identity"][1] == repo), None)
+    return next((row for row in rows if row["package_identity"][1] == repo and row["quantization"] == quantization), None)
+
+
+def row_kind(row: dict) -> str:
+    """`measured` for a row appended for its measurement (ADR 0009), else `rule`."""
+    return "measured" if "ranking.shown_for_measurement" in row.get("note", {}).get("facts", []) else "rule"
 
 
 def _machine_name(config_text: str) -> str:
@@ -608,13 +620,14 @@ def _load_test_step(results: Path, machine: str) -> Step:
     """
     records = _measurement_records(results)
     _text, payload = _document(results)
-    row = _ranked_row(_machine_block(payload, machine), DEEPSEEK_GGUF)
+    row = _ranked_row(_machine_block(payload, machine), DEEPSEEK_GGUF, DEEPSEEK_QUANT)
     problems = load_test_problems(records, row)
     if problems:
         return Step("(5) the prepared package is measured and ranked", False, "\n".join(problems))
     record = records[0]
     detail = (f"{record['ollama_name']}: {record['tps_mean']:.1f} tok/s ({record['tps_min']:.1f}-{record['tps_max']:.1f}), context "
-              f"{record['scenario']['context_requested']}, daemon {record['daemon_version']}, rank {row['rank']} in measurement group {row['measurement_group']}")
+              f"{record['scenario']['context_requested']}, daemon {record['daemon_version']}, row {row['rank']} "
+              f"({row_kind(row)}) in measurement group {row['measurement_group']}")
     return Step("(5) the prepared package is measured and ranked", True, detail)
 
 
@@ -705,12 +718,12 @@ def _second_run(results: Path, transport, now: datetime, machine: str) -> list[S
     after = tomllib.loads(config_file.read_text(encoding="utf-8"))
     names = [path.name for path in _profile_files(results)]
     records = _measurement_records(results)
-    row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF)
+    row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF, DEEPSEEK_QUANT)
     problems = second_start_problems(before, after, names, lines, records, row)
     render_code, header = _standalone_render(results, config_file, now + timedelta(minutes=1))
     if render_code != 0:
         problems.append(f"the standalone render ended with exit {render_code}")
-    render_row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF)
+    render_row = _ranked_row(_machine_block(_document(results)[1], machine), DEEPSEEK_GGUF, DEEPSEEK_QUANT)
     problems += stored_context_problems(before, offered, header, render_row, level)
     return [
         Step("guided run 2 ended with exit 0", code == 0, f"exit {code}"),

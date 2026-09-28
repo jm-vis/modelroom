@@ -137,6 +137,11 @@ def compute_fit_v2(
     package_reason = _package_reason(package)
     if package_reason is not None:
         return unknown_fit(package_reason)
+    window = base_model.architecture.max_context
+    if window is not None and window < scenario.context_requested:
+        # A context the model cannot hold is no fit anybody computed (ADR 0009, AP9-UX H); a window
+        # nobody knows checks nothing.
+        return unknown_fit(f"context beyond the window of this model ({_tokens_text(window)})")
     if base_model.architecture.kind != "dense_classic":
         # The architecture is no reason to say nothing any more: the size of the package
         # answers instead, on its own basis (decided 2026-09-24).
@@ -153,6 +158,11 @@ def compute_fit_v2(
         context_assumed=False,
         requests=scenario.requests,
     )
+
+
+def _tokens_text(context: int) -> str:
+    """A window as a reader keeps it: `32k` in whole thousands, else the number (`screen.context_tokens_text`)."""
+    return f"{context // 1024}k" if context % 1024 == 0 else f"{context} tokens"
 
 
 def profile_memory(profile: HardwareProfile) -> GpuPool:
