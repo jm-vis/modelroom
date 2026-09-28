@@ -294,8 +294,9 @@ no newline at the end. All three server profiles are called `server`, so a test 
 
 **Recorded on the maintainer's laptop, 2026-09-28** (Windows, NVIDIA + Intel graphics), with the
 argument lists of `modelroom/gpu_windows.py` and `modelroom/gpu_nvidia.py`, shortened to the fields
-the package reads; every `PNPDeviceID` is cut after its second `\` (replaced by `X`), no serial,
-host or user name is in them:
+the package reads; every `PNPDeviceID` is cut after its second `\` (replaced by `X`), the subsystem
+id of the device maker is set to `SUBSYS_00000000` (GF decision 2026-09-28: anonymized as far as the
+tests allow), no serial, host or user name is in them:
 
 - `win_video_controllers_laptop.json.txt` -- `Win32_VideoController` `Name` and `PNPDeviceID`:
   `Intel(R) Graphics` (`VEN_8086&DEV_7D67`) and the NVIDIA RTX PRO 3000 Blackwell Generation Laptop
@@ -304,7 +305,8 @@ host or user name is in them:
   `MatchingDeviceId` and `HardwareInformation.qwMemorySize`: `null` for the Intel graphics,
   `12820938752` bytes (11.94 GiB, above the 4-GiB cap of `AdapterRAM`) for the NVIDIA card, whose
   id the driver writes in lower case.
-- `nvidia_smi_compute_cap_laptop.csv` -- `nvidia-smi --query-gpu=index,compute_cap`: `0, 12.0`.
+- `nvidia_smi_compute_cap_laptop.csv` -- `nvidia-smi --query-gpu=index,compute_cap`: `0, 12.0` (recorded
+  before the query read the PCI address as well; a line without it reads).
 
 **Derived from the recordings above:** the `lspci_nnD_*.txt` files are the `lspci_nn_*.txt`
 recordings and syntheses of the same name with the PCI domain `0000:` in front of every address
@@ -332,7 +334,8 @@ line, as `lspci -nnD` prints it, and nothing else changed.
 - `llmfit_system_amd.json`, `llmfit_system_apple.json`, `llmfit_system_intel_arc.json`,
   `llmfit_system_zero_memory.json` -- `llmfit_system_laptop.json` with the `system` block changed:
   one `ROCm` card; Apple Silicon (`Metal`, `unified_memory` true); one `Vulkan` Intel Arc A770; a
-  `CUDA` and a `SYCL` entry with `vram_gb` 0, which llmfit allows. The backends are llmfit's own
+  `CUDA` and a `SYCL` entry with `vram_gb` 0, which llmfit allows. In the two files that keep the laptop's
+  other values the processor name is set to `x86 CPU`. The backends are llmfit's own
   names (`llmfit-core/src/hardware.rs`, read 2026-09-28).
 
 Not read and not in any fixture: an Intel memory on Linux. Neither the xe file

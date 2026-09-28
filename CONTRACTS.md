@@ -2035,14 +2035,15 @@ is entered by the guided mode, step 1 (`enter a machine by hand`, "Guided mode")
 | Field | Type | Rule |
 |---|---|---|
 | `gpus` | `list[GpuAdapter]` | not empty exactly for `gpu_state` `measured`, `entered` and `multi_gpu`; `measured`/`entered`: one card, index 0, with the profile's `vram_gib` and `gpu_name`; `multi_gpu`: two or more, indexes `0 ... n-1`, their sizes adding up to `vram_gib` (within 0.01); every card has the profile's `vram_source`. An empty list says nothing about `vram_gib`: a profile migrated from schema 1 keeps llmfit's VRAM next to an empty list |
-| `GpuAdapter.index` | `int` | `>= 0`, the card's place in `nvidia-smi`'s list |
+| `GpuAdapter.index` | `int` | `>= 0`, the place of the card among the counted cards, `0 ... n-1` in order (ADR 0011); it is the card's index in `nvidia-smi`'s list only while no card of that list is shut out -- where one is, the free graphics memory of the card of step 5 is `unknown` |
 | `GpuAdapter.name` | `str \| None` | no length rule, like `gpu_name`; `None` for a card entered by hand and for a card read from schema 3 without a name; a view says "graphics card" for `None` or an empty name |
 | `GpuAdapter.vram_gib` | `float` | `> 0`, MiB / 1024, two decimals |
 | `GpuAdapter.vram_source` | `nvidia-smi \| sysfs \| sysctl \| llmfit \| entered` | the profile's `vram_source`: the source that counted the card (ADR 0011), `entered` by hand |
 | `machine_class` | `laptop \| workstation \| server \| unknown` | `unknown` exactly when `machine_class_source` is `unknown`; changes no number of the fit |
 | `machine_class_source` | `chassis \| entered \| unknown` | `chassis` requires a memory not entered by hand (measured, or `--cpu-only`); `entered` from `hardware --machine-class`, or from the guided question where the answer differs from the class the chassis reads (an answer equal to it keeps `chassis`, decided 2026-09-27) |
 
-A measured `multi_gpu` has `vram_source` `nvidia-smi`; one entered by hand has `entered`, an
+A measured `multi_gpu` has the `vram_source` of the source that counted its cards (`nvidia-smi`,
+`sysfs` or, in the fallback, `llmfit`; ADR 0011); one entered by hand has `entered`, an
 entered memory and no llmfit check, like `entered`. `binding.KnownProfile` still tells a machine
 entered by hand by `origin` and `ram_physical_source`, which schema 4 does not change.
 
@@ -2133,16 +2134,16 @@ never counted (ADR 0011).
 | physical RAM | Linux | `/proc/meminfo`, `MemTotal` | kB | `ram_physical_gib`, source `os` |
 | physical RAM | macOS | `sysctl -n hw.memsize` | bytes | `ram_physical_gib`, source `os`; on Apple Silicon also the unified memory (`vram_gib`, source `sysctl`) |
 | VRAM | Windows, Linux | `nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits`, every line | MiB | the NVIDIA adapters; counted: `gpus`, `vram_gib` (their sum), source `nvidia-smi`, `gpu_name` |
-| compute capability | Windows, Linux | `nvidia-smi --query-gpu=index,compute_cap --format=csv,noheader,nounits` | version | below 5.0 the card is not usable; unread shuts nothing out |
+| compute capability, PCI address | Windows, Linux | `nvidia-smi --query-gpu=index,compute_cap,pci.bus_id --format=csv,noheader,nounits` | version, address | below 5.0 the card is not usable, unread shuts nothing out; the address ties the card to its `lspci` line |
 | AMD memory | Linux | `/sys/class/drm/card*/device/mem_info_vram_total` (and `_used` for the free memory), the card found by `PCI_SLOT_NAME` in `card*/device/uevent` | bytes | the adapter's memory, source `sysfs`; counted only with exactly one match |
 | ROCm compute driver | Linux | `/sys/class/kfd/kfd/topology/nodes/*/properties`, `domain` and `location_id` (bus * 256 + device * 8 + function) | address | `usable` `yes (ROCm)` for the card at that address |
 | Apple Silicon | macOS | `sysctl -n hw.optional.arm64` = `1`, else an llmfit entry `Metal` with unified memory; the name from `sysctl -n machdep.cpu.brand_string` | -- | `gpu_state` `unified_memory`, one adapter `unified` |
 | graphics units | macOS (Intel) | `system_profiler SPDisplaysDataType -json` (`sppci_model`, `spdisplays_vram`) | -- | adapters, none usable |
 | chassis type | Windows | `powershell -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_SystemEnclosure).ChassisTypes"`, the first number | SMBIOS type | `machine_class`, source `chassis` |
 | chassis type | Linux | `/sys/class/dmi/id/chassis_type` | SMBIOS type | `machine_class`, source `chassis` |
-| display adapters | Linux | `lspci -nnD`, PCI class `03xx`: address, vendor and device id, name | -- | adapters (the NVIDIA ones left to `nvidia-smi` where it answered) |
+| display adapters | Linux | `lspci -nnD`, PCI class `03xx`: address, vendor and device id, name | -- | adapters; an NVIDIA line that is certainly a card of `nvidia-smi` is left to it (below) |
 | WSL | Linux | `/proc/sys/kernel/osrelease` contains `microsoft` | -- | the Hyper-V id `1414` is the stand-in of the Windows card, no display adapter |
-| display adapters | Windows | `Get-CimInstance Win32_VideoController \| Select-Object Name, PNPDeviceID \| ConvertTo-Json -Compress`, read with `powershell -NoProfile -NonInteractive -Command` | -- | adapters (the NVIDIA ones left to `nvidia-smi` where it answered) |
+| display adapters | Windows | `Get-CimInstance Win32_VideoController \| Select-Object Name, PNPDeviceID \| ConvertTo-Json -Compress`, read with `powershell -NoProfile -NonInteractive -Command` | -- | adapters; an NVIDIA entry that is certainly a card of `nvidia-smi` is left to it (below) |
 | graphics memory shown | Windows | `HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*`, `HardwareInformation.qwMemorySize` (a number, or exactly 8 bytes little-endian, at least 64 MiB), matched by `VEN_xxxx&DEV_yyyy` | bytes | the adapter's memory, source `registry`, never counted; several different values for one id are unknown |
 | memory limit | Linux | cgroup v2: `/proc/self/cgroup`, then `memory.max` from this cgroup up to the root; the effective limit is the smallest numeric value | bytes | `ram_limit_gib` + `ram_limit_scope` `cgroup` -- a note, never a fit input |
 | machine identifier | Windows | `reg query HKLM\SOFTWARE\Microsoft\Cryptography /v MachineGuid` | string | `os_fingerprint` (salted digest only) |
@@ -2183,7 +2184,13 @@ goes to CUDA; the others say `another driver than the counted cards`. The first 
 
 A unit is recognized when it is no display adapter and its vendor or its name is known. An Intel
 Mac is a CPU machine (`none`, every unit `not usable`). `nvidia-smi` lines that do not read, a card
-without memory, or indexes other than `0 ... n-1` still make the whole reading `present_unmeasured`.
+without memory, or indexes other than `0 ... n-1` make `nvidia-smi` a failed source: its reason stays in
+the note, and every other source and llmfit are still asked (a card of another vendor may count).
+An NVIDIA entry of the platform's list is left out only where it is certainly a card `nvidia-smi`
+lists: the same PCI address; as many NVIDIA entries as `nvidia-smi` cards; else the same name, one
+entry per card. Every other NVIDIA entry stays, not counted (`nvidia-smi does not list this card`),
+and keeps the cross-check `not_comparable`. On macOS a valid `hw.optional.arm64` of `0` is an Intel
+Mac whatever llmfit says; llmfit's `Metal` entry proves Apple Silicon only where that reading failed.
 
 **The machine class (since 2026-09-26).** The SMBIOS chassis type, mapped by a positive list per
 class; every other number is `unknown`:
@@ -3953,8 +3960,8 @@ computer says so in its head too (U2): `server (a1b2c3d4) · imported · context
 computer` for an entered machine or another profile of the folder.
 
 Above each machine's table stands `<label> · context L 32k`, and `<label> · <status>` with its
-reason for a machine that is not `ranked` (decided 2026-09-24: `Ranking: dellpromax-jv
-(DellProMax_JV)` said the machine's key, its name and a word nobody asked about, and the scenario
+reason for a machine that is not `ranked` (decided 2026-09-24: `Ranking: laptop-1
+(Laptop_1)` said the machine's key, its name and a word nobody asked about, and the scenario
 stood on a line of its own); where llmfit read the profile otherwise, the deviation clause follows
 (`; llmfit reads RAM X GiB, this measurement Y GiB`, "Hardware profile v2"). **Fit** is the class
 with ` (RAM)` behind it where the pool is system

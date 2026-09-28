@@ -38,8 +38,10 @@ package an installer fetches.
 - `llmfit` 1.1.16 or newer on `PATH` is optional: `hardware` measures the machine itself and
   uses `llmfit` to cross-check the physical RAM and the graphics memory, and as the fallback
   where it counts no card of its own -- a card llmfit counts says so with the source `llmfit`.
-  Without it the profile records both checks as `absent` and the command still succeeds. The
-  minimum version is set in the configuration (`[llmfit] min_version`).
+  Without it the command still succeeds: the RAM check is `absent`, and so is the graphics check,
+  except where no comparison could be made anyway (cards of different sizes, or cards named but
+  none counted: `not_comparable`, `CONTRACTS.md`, "Cross-check with llmfit"). The minimum version
+  is set in the configuration (`[llmfit] min_version`).
 - The graphics cards are read from each vendor's own source: NVIDIA from `nvidia-smi` (one card or
   several), AMD on Linux from the kernel (sysfs, with the ROCm compute driver), Apple Silicon from
   `sysctl` as one pool of unified memory, and every other unit from the system's list of display
