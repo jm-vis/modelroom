@@ -63,7 +63,7 @@ def _profile(**changes) -> dict:
         "llmfit_crosscheck": {"ram_physical": {"status": "confirmed"}, "vram": {"status": "confirmed"}},
     }
     data.update(changes)
-    return data
+    return {"adapters": [{"counted": True}] * len(data["gpus"]) + [{"counted": False}], **data}  # AP9-GPU F18, in form
 
 
 # --- the answer file ------------------------------------------------------------------------------

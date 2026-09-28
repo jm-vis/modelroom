@@ -261,8 +261,8 @@ The two instances: one at Verda (Helsinki), one at Scaleway (Paris).
 - `lspci_nn_two_a100_server.txt` -- recorded 2026-09-27 on Verda, 2 x NVIDIA A100-SXM4-80GB: the
   two cards as `3D controller [0302]` `[10de:20b2]`, two NVSwitch bridges of class `0680`, and the
   QEMU/Bochs display controller `[1234:1111]` of class `0380`, a vendor of the positive list in
-  `measure.DISPLAY_ONLY_VENDORS`. `lspci` is read only when `nvidia-smi` does not answer; then this
-  machine is `present_unmeasured`, naming vendor `10de`.
+  `measure.DISPLAY_ONLY_VENDORS`. Without `nvidia-smi` this machine is `none` since AP9-GPU: both
+  cards named, neither counted, the NVIDIA driver tools named (until then `present_unmeasured`).
 - `lspci_nn_two_l4_server.txt` -- recorded 2026-09-27 on Scaleway, 2 x NVIDIA L4: the two cards as
   `3D controller [0302]` `[10de:27b8]`, and no other class-03 device.
 - `profiles_v4/two_a100_server.json`, `profiles_v4/two_l4_server.json` -- recorded 2026-09-27 on
@@ -289,6 +289,56 @@ same shape; the source stays `linux_machine_id`), `recorded_at` `2026-09-28T09:1
 `display_name` `server`, `machine_class` `unknown`, the RAM, the cross-check status, `llmfit_version`,
 no newline at the end. All three server profiles are called `server`, so a test finds a block by its
 `profile_id`, never by the label (the import puts the short id behind a shared name).
+
+## Graphics adapters of every vendor (AP9-GPU)
+
+**Recorded on the maintainer's laptop, 2026-09-28** (Windows, NVIDIA + Intel graphics), with the
+argument lists of `modelroom/gpu_windows.py` and `modelroom/gpu_nvidia.py`, shortened to the fields
+the package reads; every `PNPDeviceID` is cut after its second `\` (replaced by `X`), no serial,
+host or user name is in them:
+
+- `win_video_controllers_laptop.json.txt` -- `Win32_VideoController` `Name` and `PNPDeviceID`:
+  `Intel(R) Graphics` (`VEN_8086&DEV_7D67`) and the NVIDIA RTX PRO 3000 Blackwell Generation Laptop
+  GPU (`VEN_10DE&DEV_2F38`).
+- `win_registry_display_laptop.json.txt` -- the display class of the registry, `DriverDesc`,
+  `MatchingDeviceId` and `HardwareInformation.qwMemorySize`: `null` for the Intel graphics,
+  `12820938752` bytes (11.94 GiB, above the 4-GiB cap of `AdapterRAM`) for the NVIDIA card, whose
+  id the driver writes in lower case.
+- `nvidia_smi_compute_cap_laptop.csv` -- `nvidia-smi --query-gpu=index,compute_cap`: `0, 12.0`.
+
+**Derived from the recordings above:** the `lspci_nnD_*.txt` files are the `lspci_nn_*.txt`
+recordings and syntheses of the same name with the PCI domain `0000:` in front of every address
+line, as `lspci -nnD` prints it, and nothing else changed.
+
+**Synthetic after the documentation** (the format of the source, values chosen; fetched
+2026-09-28):
+
+- `lspci_nnD_two_amd.txt` -- two Navi 31 cards and a Raphael unit, in the `lspci -nnD` line format
+  (`pciutils`, `lspci.c`, `-D`, `-nn`).
+- `lspci_nnD_wsl.txt` -- the Hyper-V stand-in `[1414:008e]` of WSL (`Microsoft Corporation Basic
+  Render Driver`).
+- `amdgpu_mem_info_vram_total.txt`, `amdgpu_mem_info_vram_used.txt` -- one byte count each, `%llu\n`
+  (`drivers/gpu/drm/amd/amdgpu/amdgpu_vram_mgr.c`, the DOC comments `mem_info_vram_total` and
+  `mem_info_vram_used`, documented in `Documentation/gpu/amdgpu/driver-misc.rst`; kernel tag
+  v6.16).
+- `kfd_node_gpu_properties.txt`, `kfd_node_cpu_properties.txt` -- the `properties` file of a GPU
+  node (`location_id` 768 = bus 3, device 0, function 0; `domain` 0) and of a CPU node
+  (`location_id` 0): `sysfs_show_32bit_prop(..., "location_id", ...)` and `"domain"`, set from
+  `pci_dev_id()` and `pci_domain_nr()` (`drivers/gpu/drm/amd/amdkfd/kfd_topology.c`, tag v6.16).
+- `macos_sysctl_arm64.txt`, `macos_sysctl_brand_string.txt` -- `sysctl -n hw.optional.arm64` and
+  `sysctl -n machdep.cpu.brand_string` of an Apple Silicon Mac (`1`, `Apple M3 Max`).
+- `system_profiler_intel_mac.json.txt` -- `system_profiler SPDisplaysDataType -json` of an Intel
+  Mac with integrated and AMD graphics, the keys `sppci_model` and `spdisplays_vram`.
+- `llmfit_system_amd.json`, `llmfit_system_apple.json`, `llmfit_system_intel_arc.json`,
+  `llmfit_system_zero_memory.json` -- `llmfit_system_laptop.json` with the `system` block changed:
+  one `ROCm` card; Apple Silicon (`Metal`, `unified_memory` true); one `Vulkan` Intel Arc A770; a
+  `CUDA` and a `SYCL` entry with `vram_gb` 0, which llmfit allows. The backends are llmfit's own
+  names (`llmfit-core/src/hardware.rs`, read 2026-09-28).
+
+Not read and not in any fixture: an Intel memory on Linux. Neither the xe file
+`tile*/physical_vram_size_bytes` nor an i915 `lmem_total_bytes` is in a tagged kernel (checked
+against `drivers/gpu/drm/xe/xe_tile_sysfs.c`, `xe_vram_freq.c` and
+`drivers/gpu/drm/i915/i915_sysfs.c` on 2026-09-28), so the package reads neither.
 
 ## Local servers (AP9-SV1)
 

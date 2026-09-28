@@ -1,0 +1,1 @@
+[{"DriverDesc":"Intel(R) Graphics","MatchingDeviceId":"PCI\\VEN_8086&DEV_7D67&SUBSYS_0D121028","HardwareInformation.qwMemorySize":null},{"DriverDesc":"NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU","MatchingDeviceId":"pci\\ven_10de&dev_2f38&subsys_0d121028","HardwareInformation.qwMemorySize":12820938752}]

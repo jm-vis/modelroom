@@ -14,6 +14,8 @@
    another computer: pick its profile below, or import the file made there
  ? Which machines should the result cover?  this machine (workstation)
  ? What kind of machine is this?  laptop
+   graphics  NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU · 12.0 GB · nvidia-smi · usable (CUDA)
+   graphics  Intel(R) Graphics · shared memory · windows · not counted: integrated graphics shares the system memory
    measured: laptop, one graphics card, 12 GB, 128 GB memory, confirmed by llmfit
  ✓ Configuration   <results>, 1 machine
 

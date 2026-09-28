@@ -1,0 +1,16 @@
+{
+  "SPDisplaysDataType": [
+    {
+      "_name": "Intel Iris Plus Graphics",
+      "sppci_model": "Intel Iris Plus Graphics",
+      "spdisplays_vram": "1536 MB",
+      "spdisplays_vendor": "sppci_vendor_intel"
+    },
+    {
+      "_name": "AMD Radeon Pro 5500M",
+      "sppci_model": "AMD Radeon Pro 5500M",
+      "spdisplays_vram": "8 GB",
+      "spdisplays_vendor": "sppci_vendor_amd"
+    }
+  ]
+}

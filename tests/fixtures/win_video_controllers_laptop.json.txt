@@ -1,0 +1,1 @@
+[{"Name":"Intel(R) Graphics","PNPDeviceID":"PCI\\VEN_8086&DEV_7D67&SUBSYS_0D121028&REV_06\\X"},{"Name":"NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU","PNPDeviceID":"PCI\\VEN_10DE&DEV_2F38&SUBSYS_0D121028&REV_A1\\X"}]
