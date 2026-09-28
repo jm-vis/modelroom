@@ -3080,6 +3080,45 @@ def test_step_four_measures_this_machine_only_where_the_run_chose_it(tmp_path: P
     assert [block["profile"]["profile_id"] for block in payload["machines"]] == [FOUR_L4_ID]
 
 
+def _second_run(tmp_path: Path, answers: dict) -> tuple[int, list[str], FileAsker]:
+    """A run in a folder the first run bound this machine to, with a daemon that could measure."""
+    asker = FileAsker(answers)
+    lines: list[str] = []
+    code = run_guided(
+        asker,
+        here=_results(tmp_path),
+        pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=loadtest_daemon(),
+        servers=offline_servers(),
+        now=RUN2,
+        out=lines.append,
+    )
+    return code, [line.strip() for line in lines], asker
+
+
+@pytest.mark.parametrize(
+    "machines, extra, exit_code",
+    [([], {}, 0), (["import"], {"import_file": "missing.export.json"}, 1)],
+    ids=["nothing marked", "an import that failed"],
+)
+def test_an_empty_machine_choice_stays_empty(tmp_path: Path, machines, extra, exit_code):
+    """Codex r2, finding 1: no machine the run did not choose is added -- not even the bound one."""
+    assert _run(tmp_path)[0] == 0
+    assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) is not None  # there is one to add
+
+    answers = {**_answers_without_folder(LOAD_TEST_ANSWERS), "machines": machines, **extra}
+    code, lines, asker = _second_run(tmp_path, answers)
+
+    assert code == exit_code
+    assert "this run chose no machine, so the result ranks none" in lines
+    assert "load_test" not in asker.asked
+    assert not (_results(tmp_path) / "state" / "measurements").exists()
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert payload["machines"] == []
+
+
 def test_a_run_that_chose_no_model_shows_no_model_of_the_folder(tmp_path: Path):
     """Codex F1: a second run that marks no model shows none of the models the folder holds -- an
     empty result that says why; `modelroom render` of the same folder still shows all of them."""

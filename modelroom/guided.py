@@ -103,7 +103,7 @@ from .search import (
     apply_hits,
     run_search,
 )
-from .selection import NO_MODEL_CHOSEN, RunSelection, narrow_config
+from .selection import NO_MACHINE_CHOSEN, NO_MODEL_CHOSEN, RunSelection, narrow_config
 from .state import LockHeldError, write_search_log
 from .views import context_short, show_nothing, show_result
 
@@ -585,12 +585,10 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
         before = set(scan_profiles(config.paths.hardware_dir).profiles)
         config = enter_step(run, config_file, config)
         arrived |= set(scan_profiles(config.paths.hardware_dir).profiles) - before
-    chosen = chosen_machines(config, picked, name, arrived)
-    if not chosen:
-        # Only an answer file marks nothing: then the machine the pointer binds this folder to.
-        checked = machine_checked(run.pointer_path, config, config_file.parent)
-        chosen = (checked.name,) if checked.name is not None else ()
-    run.selection = replace(run.selection, machines=chosen)
+    # An empty choice stays empty -- nothing marked in a file, or an import that failed: no machine the
+    # run did not choose is added, the bound one included (Codex r2, finding 1). At a terminal `Enter`
+    # takes the pointer row, so a terminal run always chooses one.
+    run.selection = replace(run.selection, machines=chosen_machines(config, picked, name, arrived))
     return config
 
 
@@ -706,6 +704,8 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
     written: list = []
     here = _machine_key(run.probes.hostname())
     chosen = run.selection
+    if not chosen.machines:
+        run.screen.note(NO_MACHINE_CHOSEN)
     if not chosen.models:
         run.screen.note(NO_MODEL_CHOSEN)
 

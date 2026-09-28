@@ -410,7 +410,8 @@ def _bind_single_select(question) -> None:
     `questionary` puts its `default` into the marked options and draws it green, so the green stayed
     on the remembered answer while the pointer moved (Befund 3, 2026-09-28). The marks are emptied
     after the question is built; the pointer stays on the remembered answer. The space bar marks the
-    row under the pointer and drops every other mark; `Enter` takes the marked row, else the pointer
+    row under the pointer and drops every other mark, and on the marked row it unmarks it, as in a list
+    that marks; `Enter` takes the marked row, else the pointer
     row. Bound after the build like `_bind_escape`, so the library itself is unchanged.
     """
     from prompt_toolkit.keys import Keys
@@ -421,8 +422,10 @@ def _bind_single_select(question) -> None:
     @question.application.key_bindings.add(" ", eager=True)
     def _mark(event) -> None:
         pointed = control.get_pointed_at()
-        if pointed.value is not None and not pointed.disabled:
-            control.selected_options = [pointed.value]
+        if pointed.value is None or pointed.disabled:
+            return
+        # The space bar on the marked row unmarks it, as in a list that marks (Codex r2, finding 2).
+        control.selected_options = [] if control.selected_options == [pointed.value] else [pointed.value]
 
     @question.application.key_bindings.add(Keys.ControlM, eager=True)
     def _take(event) -> None:

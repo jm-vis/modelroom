@@ -3081,13 +3081,17 @@ reader sees it in the row itself ("Fit from size").
 
 `selection.RunSelection(machines, models, release, parameters)`, frozen, in memory only (field
 `GuidedRun.selection`): the `[machines.<name>]` step 1 of this run chose -- measured, imported,
-entered, or a profile of the folder marked as it is; with nothing marked, the machine the pointer
-binds this folder to -- and the base models step 2 chose, with the release (`SearchHit.age`) and the
+entered, or a profile of the folder marked as it is -- and the base models step 2 chose, with the release (`SearchHit.age`) and the
 parameter count the list showed. `selection.narrow(config, snapshot, selection)` builds a filtered
 `Configuration` and `Snapshot` through their constructors; an empty `machines` or `models` is an
 empty choice, not "no filter" (Codex F1): a run that chose no model ranks none of the folder's models
-and says so -- `this run chose no model, so the result ranks none` -- and writes that empty result;
-only `modelroom render`, which passes no selection, shows the whole folder.
+and says so -- `this run chose no model, so the result ranks none` -- and writes that empty result.
+A run that chose no machine -- nothing marked in an answer file, or only an `import` that failed --
+names none, says `this run chose no machine, so the result ranks none` and measures nothing in step
+4; no machine it did not choose is added, the one the pointer binds this folder to included (Codex
+r2; this drops the fallback to the bound machine the AP9-UX brief had, a decision of the steering).
+At a terminal `Enter` alone takes the pointer row, so a terminal run always chooses a machine. Only
+`modelroom render`, which passes no selection, shows the whole folder.
 `selection.model_facts(selection)` hands the
 rule `ModelFacts(parameters, release == "legacy")`. `render_with_config(..., selection=None)` narrows
 first, then ranks with those facts; the card, the tables and `docs/models.md/json` name only the
@@ -4496,7 +4500,8 @@ other module:
   anywhere. An answer file still answers it with `true`/`false`.
 - **One rule for every list** (AP9-UX C, 2026-09-28): nothing is marked in advance; the arrows move;
   the space bar marks and colors the whole row (`selected`: green, reversed; the labels of one list
-  are padded to one width); `Enter` takes what is marked, and the row under the pointer where nothing
+  are padded to one width) and, on a marked row, unmarks it -- in both kinds of list alike (Codex
+  r2); `Enter` takes what is marked, and the row under the pointer where nothing
   is marked. The pointer starts on the first row, unless a list that takes one row has a remembered
   answer: then it starts there, unmarked. `questionary` put a `select`'s default among the marked
   options and drew it green while the pointer moved on (Befund 3); `dialog._bind_single_select` empties

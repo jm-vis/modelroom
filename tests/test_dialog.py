@@ -353,6 +353,14 @@ def test_space_marks_the_pointer_row_of_a_select_alone():
         assert asker.select("results", "Where?", REMEMBERED) == "third"
 
 
+@pytest.mark.parametrize("kind", ["select", "checkbox"])
+def test_space_twice_unmarks_and_enter_then_takes_the_pointer_row(kind):
+    """Codex r2, finding 2: one key sequence, one answer in both kinds of list."""
+    with _asker(" " + " " + DOWN + ENTER) as asker:
+        answer = getattr(asker, kind)("results", "Where?", PICKS)
+    assert answer == ("second" if kind == "select" else ["second"])
+
+
 def test_enter_takes_the_marked_row_of_a_select():
     with _asker(" " + DOWN + ENTER) as asker:
         assert asker.select("results", "Where?", REMEMBERED) == "path"

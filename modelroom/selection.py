@@ -23,6 +23,8 @@ from .ranking import ModelFacts
 # The note of a run that chose no model (Codex F1): an empty choice is a choice, and the result of
 # the run shows none of the folder's models; `modelroom render` without a run still shows them all.
 NO_MODEL_CHOSEN = "this run chose no model, so the result ranks none"
+# The same for machines (Codex r2, finding 1): no machine the run did not choose is added.
+NO_MACHINE_CHOSEN = "this run chose no machine, so the result ranks none"
 
 
 @dataclass(frozen=True)
@@ -77,4 +79,4 @@ def model_facts(selection: RunSelection) -> dict[str, ModelFacts]:
     }
 
 
-__all__ = ["NO_MODEL_CHOSEN", "RunSelection", "model_facts", "narrow", "narrow_config", "narrow_snapshot"]
+__all__ = ["NO_MACHINE_CHOSEN", "NO_MODEL_CHOSEN", "RunSelection", "model_facts", "narrow", "narrow_config", "narrow_snapshot"]

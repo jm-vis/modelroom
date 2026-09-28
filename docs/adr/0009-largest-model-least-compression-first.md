@@ -50,7 +50,8 @@ family is rated against another.**
    machines step 1 chose -- measured, imported, entered, or a profile of the folder marked as it is --
    and the models step 2 chose, with the release and the size the list showed. Steps 3 and 4, the
    balance of step 2, the card and `docs/models.md/json` read the same selection. An empty choice is
-   a choice: a run that chose no model ranks none of the folder's, and says so. Step 4 measures this
+   a choice: a run that chose no model ranks none of the folder's, and one that chose no machine
+   names none -- no machine the run did not choose is added, the bound one included -- and says so. Step 4 measures this
    machine only where the run chose it. Nothing of it is written; a later `modelroom render` shows the
    whole folder, one row per model.
 5. **Two inputs for the parameter count, one function** (`parameters.parameter_count`): the list of
