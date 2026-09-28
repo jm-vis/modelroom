@@ -335,7 +335,8 @@ line, as `lspci -nnD` prints it, and nothing else changed.
   `llmfit_system_zero_memory.json` -- `llmfit_system_laptop.json` with the `system` block changed:
   one `ROCm` card; Apple Silicon (`Metal`, `unified_memory` true); one `Vulkan` Intel Arc A770; a
   `CUDA` and a `SYCL` entry with `vram_gb` 0, which llmfit allows. In the two files that keep the laptop's
-  other values the processor name is set to `x86 CPU`. The backends are llmfit's own
+  other values the processor name is set to `x86 CPU`, as in `llmfit_system_laptop.json` itself
+  (neutralized 2026-09-28, GF decision). The backends are llmfit's own
   names (`llmfit-core/src/hardware.rs`, read 2026-09-28).
 
 Not read and not in any fixture: an Intel memory on Linux. Neither the xe file
