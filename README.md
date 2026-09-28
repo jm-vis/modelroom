@@ -36,11 +36,17 @@ package an installer fetches.
 
 - Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
 - `llmfit` 1.1.16 or newer on `PATH` is optional: `hardware` measures the machine itself and
-  uses `llmfit` only to cross-check the physical RAM and the VRAM. Without it the profile
-  records both checks as `absent` and the command still succeeds. The minimum version is set
-  in the configuration (`[llmfit] min_version`).
-- `nvidia-smi` on `PATH` for a machine with NVIDIA cards, one or several; without it the profile
-  records that an adapter is present but unmeasured, and no fit is computed for it.
+  uses `llmfit` to cross-check the physical RAM and the graphics memory, and as the fallback
+  where it counts no card of its own -- a card llmfit counts says so with the source `llmfit`.
+  Without it the profile records both checks as `absent` and the command still succeeds. The
+  minimum version is set in the configuration (`[llmfit] min_version`).
+- The graphics cards are read from each vendor's own source: NVIDIA from `nvidia-smi` (one card or
+  several), AMD on Linux from the kernel (sysfs, with the ROCm compute driver), Apple Silicon from
+  `sysctl` as one pool of unified memory, and every other unit from the system's list of display
+  adapters (`lspci` on Linux, `Win32_VideoController` and the registry on Windows). `hardware`
+  prints one line per unit: vendor and model, memory, source, and whether it is usable for
+  Ollama and counted. A card that is not counted -- integrated graphics, a card only Vulkan can
+  use, a card whose driver tool is missing -- computes as a machine without a card.
 - An Ollama daemon on `http://127.0.0.1:11434` for the load test only. Without one the guided
   mode says so in one line and goes on; nothing else in the tool needs it.
 - Internet access for the search and the fetch.
@@ -405,10 +411,9 @@ labeled "fit (computed, v1)" in the output for that reason.
 - Only complete GGUF packages are judged; other formats are `unknown`.
 - A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
 - Unified memory is computed as one pool -- the memory minus both reserves, since the system and
-  the model share it -- but the rule has not been measured on a real machine yet: we have no such
-  machine to measure it on. Such a machine comes in by hand, from its data sheet; the automatic
-  graphics measurement still covers NVIDIA cards only, and on other platforms the graphics side
-  of the profile is recorded as `unsupported_platform` (`CONTRACTS.md`, "Hardware profile").
+  the model share it. Apple Silicon is read as such a pool (its memory from `sysctl hw.memsize`);
+  macOS keeps part of that memory for the system, which the reserves are there for. An Intel Mac
+  computes as a machine without a card (`CONTRACTS.md`, "Hardware profile").
 
 ## Exit codes
 

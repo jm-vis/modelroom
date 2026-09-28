@@ -69,7 +69,7 @@ documented decision (`docs/adr/`), never a side effect.
 |---|---|---|---|---|
 | Snapshot | 1 | `[1, 2)` | the value `metadata_ok` of 0.1.0 reads as `from_metadata` | ADR 0007, 2026-09-27 |
 | Configuration (`modelroom.toml`) | 3 | `[1, 4)` | 1 and 2 read as 3 in memory; `migrate` and the guided mode write 1 and 2 back, `import-profile` writes 2 back (1 needs `migrate`) | ADR 0002, 2026-09-25 |
-| Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26; ADR 0006, 2026-09-27 |
+| Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26; ADR 0006, 2026-09-27; ADR 0011, 2026-09-28 (`adapters`, no step) |
 | Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26; ADR 0006, 2026-09-27 (the fit words) |
 | Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
 | Measurement file | 2 | 2 | -- | -- |
@@ -80,7 +80,10 @@ selection of a run (`RunSelection`) lives in memory, and the render document kee
 `ranked` carries other rows, and `rank` is the number of the row shown. AP9-UX2 (ADR 0010) keeps
 snapshot schema 1 while `Architecture` gains the kind `hybrid_linear` and six `linear_*` fields,
 by the precedent of ADR 0007 (see "Architecture"); the origins of a run's machines, the free memory
-and disk and the pull choice live in memory; `search.json` keeps schema 3.
+and disk and the pull choice live in memory; `search.json` keeps schema 3. AP9-GPU (ADR 0011) extends
+hardware profile schema 4 without a step, by the precedent of ADR 0006: the list `adapters` and the
+graphics memory sources `sysfs` and `sysctl`. An empty list is not written, so every file of an
+earlier shape stays as it was; a file that says schema 2 or 3 and carries either is refused.
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -1989,21 +1992,22 @@ readable, or an `entered` profile) and `legacy` (migrated) store the fingerprint
 Every memory value says where it came from. `ram_physical_gib` is physical RAM (`os`,
 `llmfit`, or `entered` by hand); `ram_limit_gib` with `ram_limit_scope` is a process or
 container limit (cgroup, job object), a note only and never a fit input; `vram_gib` is
-`nvidia-smi`, `llmfit`, `entered` by hand, `none` (no GPU: `0`) or `unknown` (`None`). A
-graphics adapter's own reported memory is never taken as VRAM.
+`nvidia-smi`, `sysfs` (an AMD card on Linux), `sysctl` (the unified memory of Apple Silicon),
+`llmfit`, `entered` by hand, `none` (no counted GPU: `0`) or `unknown` (`None`). A graphics
+adapter's own reported memory (`AdapterRAM`) is never taken as VRAM.
 
 `gpu_state` decides whether the fit computes at all:
 
 | `gpu_state` | Meaning | Fit |
 |---|---|---|
-| `none` | no GPU; `vram_source` `none`, `vram_gib` `0` | computes, CPU mode |
+| `none` | no counted GPU (none, none usable, or `--cpu-only`); `vram_source` `none`, `vram_gib` `0` | computes, CPU mode |
 | `measured` | one GPU, VRAM measured (`> 0`) | computes |
 | `entered` | schema 3: one GPU whose memory was entered by hand (`> 0`) | computes, like `measured` |
 | `multi_gpu` | schema 4: two graphics cards or more, measured or entered by hand; `vram_gib` their sum | computes: one card first, then all cards ("Several graphics cards") |
 | `present_unmeasured` | an adapter is present, its memory was not measured | `unknown` |
 | `multi_gpu_not_covered` | more than one GPU, measured before schema 4 covered it; no path writes it any more, a file of 0.1.0 still reads | `unknown` until measured again |
 | `unified_memory` | CPU and GPU share memory | computes since schema 3: one pool, RAM minus both reserves, mode `gpu` ("Fit contract v1", "Unified memory"); a profile migrated from schema 1 stays `unknown` until measured again |
-| `unsupported_platform` | this platform is not measured yet | `unknown` |
+| `unsupported_platform` | a platform other than Windows, Linux and macOS | `unknown` |
 | `legacy_unknown` | migrated from schema 1, GPU layout not recorded | `unknown` until measured again |
 
 **A machine entered by hand (schema 3, decided 2026-09-25, ADR 0001).** A profile whose memory
@@ -2034,7 +2038,7 @@ is entered by the guided mode, step 1 (`enter a machine by hand`, "Guided mode")
 | `GpuAdapter.index` | `int` | `>= 0`, the card's place in `nvidia-smi`'s list |
 | `GpuAdapter.name` | `str \| None` | no length rule, like `gpu_name`; `None` for a card entered by hand and for a card read from schema 3 without a name; a view says "graphics card" for `None` or an empty name |
 | `GpuAdapter.vram_gib` | `float` | `> 0`, MiB / 1024, two decimals |
-| `GpuAdapter.vram_source` | `nvidia-smi \| llmfit \| entered` | the profile's `vram_source` (`llmfit` only from a profile of an earlier schema) |
+| `GpuAdapter.vram_source` | `nvidia-smi \| sysfs \| sysctl \| llmfit \| entered` | the profile's `vram_source`: the source that counted the card (ADR 0011), `entered` by hand |
 | `machine_class` | `laptop \| workstation \| server \| unknown` | `unknown` exactly when `machine_class_source` is `unknown`; changes no number of the fit |
 | `machine_class_source` | `chassis \| entered \| unknown` | `chassis` requires a memory not entered by hand (measured, or `--cpu-only`); `entered` from `hardware --machine-class`, or from the guided question where the answer differs from the class the chassis reads (an answer equal to it keeps `chassis`, decided 2026-09-27) |
 
@@ -2042,15 +2046,29 @@ A measured `multi_gpu` has `vram_source` `nvidia-smi`; one entered by hand has `
 entered memory and no llmfit check, like `entered`. `binding.KnownProfile` still tells a machine
 entered by hand by `origin` and `ram_physical_source`, which schema 4 does not change.
 
-**What the card list does not know.** It lists what `nvidia-smi` lists. A card of another vendor
-next to an NVIDIA card is not in it (`nvidia-smi` answers, so the adapter rule is not asked);
-`CUDA_VISIBLE_DEVICES` can hide cards from a daemon the list still shows; MIG instances are not
-cards of their own here. Each of these is a stated limit, not a measurement.
+**What the card list does not know.** It lists the counted cards, from one source (ADR 0011). A
+unit that is not counted -- integrated graphics, a card of another driver, a card only Vulkan can
+use -- is in `adapters`, not here. `CUDA_VISIBLE_DEVICES` can hide cards from a daemon the list
+still shows; MIG instances are not cards of their own here. Each of these is a stated limit, not a
+measurement.
 
-**Cross-check with llmfit.** Only like with like: physical RAM against llmfit `total_ram_gb`,
-VRAM against llmfit `gpu_vram_gb` -- and, for `multi_gpu`, the sum of the cards against the sum of
-llmfit's own `system.gpus[]` entries of backend `CUDA`, `vram_gb x count` each, the way llmfit
-counts them (`LlmfitReference.cuda_vram_gib`; a missing or unreadable list is `absent`). `crosscheck(own, llmfit)` is `confirmed` when
+**Cross-check with llmfit.** Only like with like: physical RAM against llmfit `total_ram_gb`, the
+graphics memory by the first row of this table that applies (ADR 0011, `gpu_llmfit.vram_crosscheck`):
+
+| # | Case | Status |
+|---|---|---|
+| 1 | `--cpu-only` | `absent` |
+| 2 | the own `vram_gib` is `None` (unmeasured, a Mac whose RAM did not read) | `absent`, or `error` when llmfit failed |
+| 3 | the counted cards are llmfit's own (the fallback) | `not_comparable`, `llmfit_gib` the same value |
+| 4 | counted cards of different sizes | `not_comparable`, llmfit's CUDA sum kept where it said one |
+| 4a | one card or cards of one size, llmfit `absent`/`error` | `absent`/`error` |
+| 5 | llmfit's entries of the counted backend hold exactly as many cards (`sum(count)`) as are counted, and no own unit of that vendor is left uncounted | the own sum against `sum(vram_gb x count)` of those entries |
+| 6 | any other counted case | `not_comparable`, `llmfit_gib` = `system.gpu_vram_gb` |
+| 7 | `unified_memory` with a known RAM | `vram_gib` against `system.gpu_vram_gb` |
+| 8 | `none` with adapters (`vram_gib` 0) | `not_comparable`, `own_gib` 0 |
+| 9 | `none` without adapters | `0` against llmfit's |
+
+`crosscheck(own, llmfit)` is `confirmed` when
 `|own - llmfit| / max(own, llmfit) <= 0.05` (both zero is `confirmed`), `deviation` otherwise,
 `absent` when llmfit gave no reading, `error` when llmfit failed. Cards of different sizes are
 `not_comparable` (schema 4, decided 2026-09-27): llmfit multiplies one card's size by the count,
@@ -2090,7 +2108,8 @@ laptop|workstation|server] [--new-identity]` measures the machine it runs on and
 profile of the current schema (4),
 `<state>/hardware/<profile_id>.json`
 (`modelroom/measure.py`, `modelroom/cli.py`). modelroom measures the machine itself; `llmfit` is
-a cross-check of two quantities, never the source and never a requirement -- a machine without
+a cross-check of two quantities and, where modelroom counts no card of its own, the fallback whose
+cards may count with the source `llmfit` (ADR 0011) -- never a requirement: a machine without
 `llmfit` is measured and written all the same. `--machine` is optional and only names the
 configuration entry whose `profile` the takeover rule may adopt. The schema-1 writer
 (`write_hardware_snapshot`, `<machine>.json`) stays readable for `render` until the renderer
@@ -2104,18 +2123,27 @@ a profile.
 
 **Sources.** Every source is a fixed argument list or a fixed file path, run through the
 injected command layer (`Runner`, 10 s timeout) or file layer -- no user-controlled string ever
-reaches a command line, and `AdapterRAM`/`adapter memory` is never read as VRAM.
+reaches a command line. `AdapterRAM` and the registry's 32-bit `MemorySize` are never read: both
+stop at 4 GiB. The registry's 64-bit `HardwareInformation.qwMemorySize` is a source that is shown,
+never counted (ADR 0011).
 
 | Quantity | Platform | Source | Unit | Stored as |
 |---|---|---|---|---|
 | physical RAM | Windows | `GlobalMemoryStatusEx().ullTotalPhys` (ctypes, `kernel32`) | bytes | `ram_physical_gib`, source `os` |
 | physical RAM | Linux | `/proc/meminfo`, `MemTotal` | kB | `ram_physical_gib`, source `os` |
-| physical RAM | macOS | `sysctl -n hw.memsize` | bytes | `ram_physical_gib`, source `os` (display only: macOS has no fit) |
-| VRAM | Windows, Linux | `nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits`, every line | MiB | `gpus` (one card per line), `vram_gib` (their sum), source `nvidia-smi`, `gpu_name` |
+| physical RAM | macOS | `sysctl -n hw.memsize` | bytes | `ram_physical_gib`, source `os`; on Apple Silicon also the unified memory (`vram_gib`, source `sysctl`) |
+| VRAM | Windows, Linux | `nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits`, every line | MiB | the NVIDIA adapters; counted: `gpus`, `vram_gib` (their sum), source `nvidia-smi`, `gpu_name` |
+| compute capability | Windows, Linux | `nvidia-smi --query-gpu=index,compute_cap --format=csv,noheader,nounits` | version | below 5.0 the card is not usable; unread shuts nothing out |
+| AMD memory | Linux | `/sys/class/drm/card*/device/mem_info_vram_total` (and `_used` for the free memory), the card found by `PCI_SLOT_NAME` in `card*/device/uevent` | bytes | the adapter's memory, source `sysfs`; counted only with exactly one match |
+| ROCm compute driver | Linux | `/sys/class/kfd/kfd/topology/nodes/*/properties`, `domain` and `location_id` (bus * 256 + device * 8 + function) | address | `usable` `yes (ROCm)` for the card at that address |
+| Apple Silicon | macOS | `sysctl -n hw.optional.arm64` = `1`, else an llmfit entry `Metal` with unified memory; the name from `sysctl -n machdep.cpu.brand_string` | -- | `gpu_state` `unified_memory`, one adapter `unified` |
+| graphics units | macOS (Intel) | `system_profiler SPDisplaysDataType -json` (`sppci_model`, `spdisplays_vram`) | -- | adapters, none usable |
 | chassis type | Windows | `powershell -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_SystemEnclosure).ChassisTypes"`, the first number | SMBIOS type | `machine_class`, source `chassis` |
 | chassis type | Linux | `/sys/class/dmi/id/chassis_type` | SMBIOS type | `machine_class`, source `chassis` |
-| display adapters | Linux | `lspci -nn`, PCI class `03xx` | vendor id | `gpu_state` (adapter rule below) |
-| display adapters | Windows | `Win32_VideoController.PNPDeviceID` (`VEN_xxxx`), read with `powershell -NoProfile -NonInteractive -Command` | vendor id | `gpu_state` (adapter rule below) |
+| display adapters | Linux | `lspci -nnD`, PCI class `03xx`: address, vendor and device id, name | -- | adapters (the NVIDIA ones left to `nvidia-smi` where it answered) |
+| WSL | Linux | `/proc/sys/kernel/osrelease` contains `microsoft` | -- | the Hyper-V id `1414` is the stand-in of the Windows card, no display adapter |
+| display adapters | Windows | `Get-CimInstance Win32_VideoController \| Select-Object Name, PNPDeviceID \| ConvertTo-Json -Compress`, read with `powershell -NoProfile -NonInteractive -Command` | -- | adapters (the NVIDIA ones left to `nvidia-smi` where it answered) |
+| graphics memory shown | Windows | `HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*`, `HardwareInformation.qwMemorySize` (a number, or exactly 8 bytes little-endian, at least 64 MiB), matched by `VEN_xxxx&DEV_yyyy` | bytes | the adapter's memory, source `registry`, never counted; several different values for one id are unknown |
 | memory limit | Linux | cgroup v2: `/proc/self/cgroup`, then `memory.max` from this cgroup up to the root; the effective limit is the smallest numeric value | bytes | `ram_limit_gib` + `ram_limit_scope` `cgroup` -- a note, never a fit input |
 | machine identifier | Windows | `reg query HKLM\SOFTWARE\Microsoft\Cryptography /v MachineGuid` | string | `os_fingerprint` (salted digest only) |
 | machine identifier | Linux | `/etc/machine-id` | string | `os_fingerprint` |
@@ -2133,21 +2161,29 @@ so is a blank machine identifier, because the fingerprint of an empty identifier
 rule above: absent or unreadable means "no limit", not a failure to report -- a machine without
 cgroups is the normal case, and the limit is a hint that never enters the fit anyway.
 
-**`gpu_state`.** `nvidia-smi` decides first; when it is not installed or cannot answer, the
-adapter rule does.
+**`gpu_state`** (ADR 0011). Every unit a source names becomes an adapter (see "Graphics
+adapters"). A card counts where it is usable (`yes`), a card of its own (`discrete`), and its memory
+comes from the one countable source of its backend: CUDA from `nvidia-smi`, ROCm from sysfs with
+one unique match. Where no card of modelroom's own counts, llmfit's `CUDA`/`ROCm` cards may count
+(the fallback, llmfit alone). Of the counted backends the one with the largest sum counts, a tie
+goes to CUDA; the others say `another driver than the counted cards`. The first row that applies:
 
-| Observation | `gpu_state` | VRAM |
-|---|---|---|
-| `nvidia-smi` lists exactly one adapter at index 0 with memory above 0 | `measured` | MiB / 1024, source `nvidia-smi` |
-| `nvidia-smi` lists two adapters or more at indexes `0 ... n-1`, each with memory above 0 (since 2026-09-26) | `multi_gpu` | the sum, source `nvidia-smi`; `gpu_name` the name all cards carry, else `None`; a note lists the cards (`nvidia-smi lists 2 adapters: 2 x NVIDIA A100-SXM4-40GB`) |
-| `nvidia-smi` lists adapters that are not at indexes `0 ... n-1`, one without memory, or a line that cannot be read -- a card without a number makes the whole reading unmeasured | `present_unmeasured` | `unknown` |
-| no `nvidia-smi`, and no PCI class-03 device at all | `none` | `0`, source `none` |
-| no `nvidia-smi`, and every class-03 device is from the display-only list below | `none` | `0`, source `none`, note `display adapter only` |
-| no `nvidia-smi`, and at least one class-03 device is from any other vendor | `present_unmeasured` | `unknown` |
-| no `nvidia-smi`, and the adapters could not be listed at all | `present_unmeasured` | `unknown` (a GPU cannot be ruled out) |
-| macOS, or any platform that is not Windows or Linux | `unsupported_platform` | `unknown` (no unified-memory statement is invented) |
-| `--cpu-only` on Windows or Linux | `none` | `0`, source `none`, profile `origin` `entered` |
-| `--cpu-only` on any other platform | `unsupported_platform` | `unknown`: the flag speaks about the GPU, not about the platform, and the RAM there is display only |
+| # | Observation | `gpu_state` | VRAM / note |
+|---|---|---|---|
+| 1 | a platform other than Windows, Linux and macOS | `unsupported_platform` | `unknown` |
+| 2 | `--cpu-only` | `none` | `0`, source `none`, `adapters` empty, profile `origin` `entered`; no graphics source is asked |
+| 3 | one counted card / two or more | `measured` / `multi_gpu` | the sum, the source of the counted cards; a note lists two or more (`nvidia-smi lists 2 adapters: 2 x NVIDIA A100-SXM4-40GB`); counted by llmfit, a note says so |
+| 4 | Apple Silicon | `unified_memory` | the RAM, source `sysctl`; unknown RAM: `unknown`; note `macOS keeps part of the memory for the system` |
+| 5 | WSL: the own list is only the Hyper-V stand-in, no counted card, no llmfit adapter | `present_unmeasured` | `unknown`, note `WSL shows the Windows card only through its driver; nvidia-smi did not answer` |
+| 6 | at least one recognized adapter (own or llmfit), none counted | `none` | `0`, source `none`, a note per adapter (`no counted graphics card: ...`), with `install the NVIDIA driver tools (nvidia-smi)` where they did not answer |
+| 7 | display adapters only | `none` | `0`, note `display adapter only` |
+| 8 | beside the display adapters at least one unit, none recognized | `present_unmeasured` | `unknown`, note `a graphics adapter is present but nothing about it could be read` |
+| 9 | no list could be read and llmfit names no adapter | `present_unmeasured` | `unknown`, note `not recognized: ` and every source that failed |
+| 10 | no PCI class-03 device | `none` | `0`, source `none` |
+
+A unit is recognized when it is no display adapter and its vendor or its name is known. An Intel
+Mac is a CPU machine (`none`, every unit `not usable`). `nvidia-smi` lines that do not read, a card
+without memory, or indexes other than `0 ... n-1` still make the whole reading `present_unmeasured`.
 
 **The machine class (since 2026-09-26).** The SMBIOS chassis type, mapped by a positive list per
 class; every other number is `unknown`:
@@ -2167,11 +2203,62 @@ the class: source `entered`, and the chassis is not read. The class changes no n
 
 **The display-only vendor list.** A positive list, so an unknown vendor is never declared
 harmless: QEMU/Bochs `1234`, virtio `1af4`, VMware `15ad`, Red Hat `1b36`, VirtualBox `80ee`,
-Microsoft Hyper-V `1414`, Xen `5853`, Amazon `1d0f`. Every other vendor -- NVIDIA `10de`, AMD
-`1002`, Intel `8086`, or none readable at all -- is `present_unmeasured` with a note naming the
-vendors. When the *only* measurable vendor is Intel, the note adds "Ollama uses the CPU on Intel
-graphics; run `hardware --cpu-only` for the CPU fit"; on a machine that also carries a discrete
-card that advice would be wrong, so it is not given there.
+Microsoft Hyper-V `1414` (except on WSL, where it stands in for the Windows card), Xen `5853`,
+Amazon `1d0f`; on Windows also a `PNPDeviceID` with `VEN_1414` and the `Microsoft Basic Display
+Adapter`. Such a unit is recognized with or without a name and is `not usable: display adapter
+only`, before any unknown unit is judged.
+
+**Graphics adapters (ADR 0011).** `HardwareProfile.adapters`, one `GraphicsAdapter` per unit, in
+the order the sources read them. Ollama's documentation of 2026-09-28 (`docs.ollama.com/gpu`) is
+the yardstick of `usable`: NVIDIA from compute capability 5.0 through CUDA, AMD on Linux through
+ROCm, Apple Silicon through Metal, Vulkan on Windows and Linux on by default. Exclusions come first:
+a display adapter, an Intel Mac and an NVIDIA card below compute capability 5.0 are `no`; AMD on
+Windows is `unconfirmed` (`ROCm on Windows needs a HIP7 driver; not checked`) whatever the source.
+Then the proofs: `nvidia-smi` lists the card (`yes`, CUDA); a kfd node of this card's address
+(`yes`, ROCm; without one `unconfirmed`, Vulkan); Intel is `unconfirmed` (`Ollama may use it
+through Vulkan`); Apple Silicon `yes` (Metal); llmfit's `CUDA`/`ROCm` in the fallback. An own
+exclusion of a vendor shuts llmfit's units of that vendor out as well, its Vulkan and SYCL entries
+included. The build is read from positive marks only, else `unknown`, which never counts:
+
+| Vendor | `discrete` | `integrated` |
+|---|---|---|
+| NVIDIA | always | -- |
+| AMD | the name holds `RX `, `PRO `, `Radeon W`, `Instinct` or `Radeon VII` | `Radeon <3 digits>M`, or `Radeon Graphics`/`Radeon(TM) Graphics` without a mark of the first column |
+| Intel | Windows and llmfit: `Arc(TM) [AB]<3 digits>` or `Arc Pro [AB]<2 digits>` | Linux: the address `0000:00:02.0`; elsewhere `UHD Graphics`, `Iris`, `HD Graphics`, exactly `Intel(R) Graphics`, or ending in `Arc(TM) Graphics` |
+| Apple | -- | -- (`unified`) |
+
+Integrated graphics never counts; no Intel memory is read on Linux (no kernel file for it could be
+shown in a tagged kernel). llmfit's entries become adapters only in the fallback: `count` units each;
+`Vulkan` and `SYCL` never count; on Windows a raw `vram_gb` of 4.0 or less never counts (llmfit reads
+`AdapterRAM` first); a `vram_gb` of 0 is unknown memory; `Metal` only proves Apple Silicon; CPU and
+NPU entries make none.
+
+| Field | Type | Rule |
+|---|---|---|
+| `vendor` | `nvidia \| amd \| intel \| apple \| other` | PCI `10de`, `1002`, `8086`, `106b`; llmfit by the first word of the name |
+| `name` | `str \| None` | the source's name; a view says the vendor where there is none, never `unknown` |
+| `pci_id` | `str \| None` | `vvvv:dddd`, lowercase |
+| `pci_slot` | `str \| None` | Linux: `dddd:bb:dd.f` |
+| `memory_gib` | `float \| None` | `> 0`; `None` for integrated graphics and where nothing was read |
+| `memory_kind` | `dedicated \| shared \| unified \| unknown` | -- |
+| `form` | `discrete \| integrated \| unified \| unknown` | -- |
+| `source` | `nvidia-smi \| sysfs \| registry \| sysctl \| system_profiler \| lspci \| windows \| llmfit` | where the memory came from, else the name |
+| `evidence` | `nvidia-smi \| kfd \| sysctl \| llmfit \| None` | where the proof of the backend came from |
+| `backend` | `cuda \| rocm \| metal \| vulkan \| none \| unknown` | -- |
+| `usable` | `yes \| no \| unconfirmed` | -- |
+| `counted` | `bool` | a counted unit is usable and has its memory |
+| `reason` | `str \| None` | set exactly when `usable` is not `yes`, or the unit is not counted and not `unified` |
+
+The list is checked only when it is not empty -- empty is valid for every profile (schema 1, 2
+and 3, a schema-4 file without the field, a machine entered by hand, `--cpu-only`, an export). Not
+empty: `origin` `measured` and a fingerprint source other than `legacy`; the counted units are the
+cards of `gpus` in number, order, name and size, all with the profile's `vram_source`; units count
+only for `measured` and `multi_gpu`; `unified_memory` is exactly one `unified` unit, with
+`vram_gib` = `ram_physical_gib` and `vram_source` `sysctl`, or both unknown.
+
+**The free graphics memory** of the card of step 5 follows the counting source: `nvidia-smi` as
+before; sysfs per counted card by its address (`mem_info_vram_total - mem_info_vram_used`, all or
+nothing); a card llmfit counted is `graphics unknown`.
 
 **The cross-check and `--cpu-only`.** An entered `0` VRAM is not a reading, so it is not
 compared with llmfit's: the VRAM check of a `--cpu-only` profile is `absent`, whatever llmfit
@@ -2181,7 +2268,8 @@ Comparing them on a machine that does have a card was a `deviation`, which block
 is about hardware the user has just said not to use. The physical RAM is still measured there,
 and still cross-checked.
 
-**Notes.** Facts only, printed after the summary line: the reason a reading is unknown, the GPU
+**Notes.** Facts only, printed after the summary line and one `graphics  ` line per adapter
+(`<name> · <memory> · <source> · <usable>`): the reason a reading is unknown, the GPU
 note, the reason the machine identifier could not be read (with its consequence: a clone of this
 machine cannot be told apart), and -- when a cgroup limit is *smaller* than the physical RAM --
 that the fit computes with the physical RAM and can be too optimistic here. The llmfit state and
@@ -2275,7 +2363,7 @@ The two cross-checked quantities of one profile.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `schema_version` | `int` | `3` (a schema-2 file is read as 3) |
+| `schema_version` | `int` | `4` (a schema-2 or schema-3 file is read as 4) |
 | `profile_id` | `str` | 16 lowercase hex |
 | `display_name` | `str` | 1 to 128 characters |
 | `os_fingerprint` | `str` | 16 lowercase hex, or `none` exactly when the source is `none` or `legacy` |
@@ -2287,11 +2375,12 @@ The two cross-checked quantities of one profile.
 | `ram_limit_gib` | `float \| None` | `> 0`; `None` exactly when `ram_limit_scope` is `none` |
 | `ram_limit_scope` | `str` | e.g. `none`, `cgroup`, `job_object` |
 | `vram_gib` | `float \| None` | `>= 0`; `None` exactly when the source is `unknown`; `0` for source `none` |
-| `vram_source` | `nvidia-smi \| llmfit \| entered \| none \| unknown` | `gpu_state` `none` requires `none`; `entered` exactly with `gpu_state` `entered` |
+| `vram_source` | `nvidia-smi \| sysfs \| sysctl \| llmfit \| entered \| none \| unknown` | `gpu_state` `none` requires `none`; `entered` exactly with `gpu_state` `entered`; `sysctl` the unified memory of Apple Silicon |
 | `gpu_state` | see the table above | `measured` requires a measured VRAM above 0; `entered` an entered VRAM above 0 and an entered memory; `legacy_unknown` only with source `legacy` |
 | `gpu_name` | `str \| None` | display only |
 | `llmfit_crosscheck` | `LlmfitCrosscheck` | -- |
 | `llmfit_version` | `str \| None` | -- |
+| `adapters` | `list[GraphicsAdapter]` | see "Graphics adapters"; not written when empty |
 
 ```json
 {
@@ -2333,6 +2422,47 @@ The two cross-checked quantities of one profile.
     }
   },
   "llmfit_version": "1.1.16"
+}
+```
+
+The example above is the shape every earlier version wrote, without `adapters` (an empty list is
+not written). The same machine measured by this version carries its adapters as well -- here the
+counted card and, beside it, integrated graphics that is shown and not counted:
+
+```json
+{
+  "adapters": [
+    {
+      "vendor": "nvidia",
+      "name": "Nova GPU",
+      "pci_id": null,
+      "pci_slot": null,
+      "memory_gib": 8.0,
+      "memory_kind": "dedicated",
+      "form": "discrete",
+      "source": "nvidia-smi",
+      "evidence": "nvidia-smi",
+      "backend": "cuda",
+      "usable": "yes",
+      "counted": true,
+      "reason": null
+    },
+    {
+      "vendor": "intel",
+      "name": "Intel(R) Graphics",
+      "pci_id": "8086:7d67",
+      "pci_slot": null,
+      "memory_gib": null,
+      "memory_kind": "shared",
+      "form": "integrated",
+      "source": "windows",
+      "evidence": null,
+      "backend": "vulkan",
+      "usable": "unconfirmed",
+      "counted": false,
+      "reason": "integrated graphics shares the system memory"
+    }
+  ]
 }
 ```
 

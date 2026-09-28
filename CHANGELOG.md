@@ -7,6 +7,19 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
+  `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).
+  `hardware` reads each vendor's own source -- NVIDIA from `nvidia-smi` with the compute
+  capability, AMD on Linux from sysfs with the ROCm compute driver, Apple Silicon from `sysctl`,
+  every other unit from `lspci -nnD` or `Win32_VideoController` with the registry -- and records
+  every unit in the profile's new list `adapters`: vendor, model, memory, build, source, whether
+  Ollama has a native backend for it, whether it is counted, and why not. It prints one line per
+  unit. Where modelroom counts no card of its own, llmfit's CUDA and ROCm cards count, with the
+  source `llmfit`. Apple Silicon is `unified_memory` from its own reading; an Intel Mac, a machine
+  with integrated graphics only and a machine whose NVIDIA tools are missing compute as machines
+  without a card (before: `present_unmeasured` or `unsupported_platform`, no fit). The Markdown view
+  gains the table "Graphics adapters". Schema 4 is extended, no new schema: an empty list is not
+  written, so every older file stays as it was.
 - **A local vLLM server, read per run** (`modelroom/local_servers.py`, `vllm_server.py`,
   `loadtest_vllm.py`, `fit_vllm.py`, `guided_vllm.py`; CONTRACTS.md, "Local servers and the vLLM
   load test"; ADR 0008; decided 2026-09-27). The local servers are a list, `LOCAL_SERVERS`, and
@@ -324,6 +337,9 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- **`OLLAMA_MODELS` with several separators after `~`** (`modelroom/room.py`): `~//models` joined a
+  root path onto the home folder and measured the disk of `/models`; every `/` and `\` behind `~`
+  is dropped now, and `~` followed only by separators is the home folder.
 - **Qwen3.5 is computed on its architecture** (`modelroom/architecture.py`, `fit.py`, `fit_vllm.py`;
   CONTRACTS.md, "Architecture", "Fit contract v1"; ADR 0010; AP9-UX2 P1): the new kind
   `hybrid_linear` counts the KV cache of the 8 full-attention layers and the state of the 24 linear
