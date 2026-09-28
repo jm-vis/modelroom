@@ -74,6 +74,7 @@ def pull_steps(results: Path, pointer: Path, machine: str, first_lines: list[str
 
 def _fixture_pull(results: Path, pointer: Path, machine: str, now: datetime) -> tuple[list[str], str]:
     """Pull the first row of `results` from a fixture daemon; the problems, and what was pulled."""
+    from fixture_room import fixed_room
     from fixture_support import build_transport, pull_daemon, tags_with
 
     from modelroom.catalog import load_catalog
@@ -82,21 +83,28 @@ def _fixture_pull(results: Path, pointer: Path, machine: str, now: datetime) -> 
     from modelroom.document import RenderDocument
     from modelroom.guided import GuidedRun
     from modelroom.guided_context import snapshot_packages
-    from modelroom.guided_install import first_row, pull_step
+    from modelroom.guided_install import PullContext, first_row, pull_step
     from modelroom.http import Response
     from modelroom.measure import Probes
+    from modelroom.pull_choice import ambiguous_names, run_packages
     from modelroom.screen import Screen
 
     config = load_config(results / "modelroom.toml")
     payload = json.loads(config.paths.markdown.with_suffix(".json").read_text(encoding="utf-8"))
-    first = first_row(RenderDocument.model_validate(payload), machine, snapshot_packages(config)[0])
+    document = RenderDocument.model_validate(payload)
+    first = first_row(document, machine, snapshot_packages(config)[0])
     if first is None:
         return [f"the document of the first run has no first row with an Ollama name for {machine}"], ""
+    # Since AP9-UX2 (U6) the pull goes through the list of step 5: the answer file names the first
+    # row's pull name, and the disk check reads a fixed room with room to spare -- this criterion is
+    # about the pull, not about the free disk of this machine.
+    packages = run_packages(config)
+    context = PullContext(document, machine, packages, ambiguous_names(packages))
     # Nothing is installed before the pull, so the row is asked for and pulled whatever it is.
     daemon = pull_daemon(tags=Response(status=200, body=b'{"models": []}'), after_pull=tags_with(first.name))
     lines: list[str] = []
     run = GuidedRun(
-        asker=FileAsker({"pull": True}),
+        asker=FileAsker({"pull_package": first.name, "pull": True}),
         here=results,
         pointer_path=pointer,
         transport=build_transport({}),
@@ -106,7 +114,8 @@ def _fixture_pull(results: Path, pointer: Path, machine: str, now: datetime) -> 
         daemon=daemon,
         out=lines.append,
         screen=Screen(lines.append, colored=False),
+        room=fixed_room(free_disk_bytes=1024**5),
     )
-    pull_step(run, first, True)
+    pull_step(run, context, True)
     problems = pulled_problems(lines, daemon.calls, first.name) + list(run.problems)
     return problems, f"{first.name}: {len(lines)} lines, last: {lines[-1].strip() if lines else '-'}"

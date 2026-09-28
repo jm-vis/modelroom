@@ -603,13 +603,13 @@ def _first_run(results: Path, pointer: Path, transport, now: datetime) -> tuple[
             + next(line.strip() for line in lines if "you can pick from" in line),
         ),
         Step(
-            "(4) the ranking carries rule and context, Qwen3.5 is judged from its size",
+            "(4) the ranking carries rule and context, Qwen3.5 is judged on its architecture",
             not ranking_problems(text, machine, block),
             "\n".join(ranking_problems(text, machine, block))
             or f"{len(block['ranked'])} ranked, {len(block['no_fit'])} no fit, "
             f"{len(block['not_covered'])} not covered; "
-            f"{sum(1 for e in block['ranked'] + block['no_fit'] if e['fit']['basis'] == 'size')} "
-            f"rows judged from the size",
+            f"{sum(1 for e in block['ranked'] + block['no_fit'] if e['fit']['basis'] == 'architecture')} "
+            f"rows judged on the architecture",
         ),
     ]
     return steps, lines

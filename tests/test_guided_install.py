@@ -597,6 +597,27 @@ def test_unknown_is_never_none(tmp_path: Path):
     assert "none" not in free
 
 
+def test_the_self_test_pull_criterion_goes_through_the_pull_list(tmp_path: Path):
+    """Criterion 9 of `scripts/selftest.py` calls `pull_step` with the context of step 5 (AP9-UX2 U6):
+    the wiring the self-test depends on, without the whole self-test."""
+    import importlib.util
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest_pull.py"
+    if not (script.parent.parent / ".git").exists():
+        pytest.skip("scripts/ is not shipped in the sdist; the self-test is tested from a clone")
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_pull_wiring", script)
+    selftest_pull = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(selftest_pull)
+    assert _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())[0] == 0
+
+    problems, detail = selftest_pull._fixture_pull(
+        tmp_path / "results", tmp_path / "home" / ".modelroom" / "guided.json", "workstation", RUN1
+    )
+
+    assert problems == [], problems
+    assert detail.startswith(f"{FIRST_NAME}: ") and "Pulled" in detail
+
+
 def test_the_download_column_is_the_weight_of_the_package(tmp_path: Path):
     _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
 
