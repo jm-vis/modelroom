@@ -14,9 +14,9 @@ from modelroom.gpu_windows import (
     registry_memory,
 )
 
-NVIDIA_PNP = "PCI\\VEN_10DE&DEV_2F38&SUBSYS_0D121028&REV_A1\\X"
-NVIDIA_KEY = "pci\\ven_10de&dev_2f38&subsys_0d121028"
-AMD_PNP = "PCI\\VEN_1002&DEV_744C&SUBSYS_0E3B1002&REV_C8\\X"
+NVIDIA_PNP = "PCI\\VEN_10DE&DEV_2F38&SUBSYS_00000000&REV_A1\\X"
+NVIDIA_KEY = "pci\\ven_10de&dev_2f38&subsys_00000000"
+AMD_PNP = "PCI\\VEN_1002&DEV_744C&SUBSYS_00000000&REV_C8\\X"
 LAPTOP = {"cim": fixture("win_video_controllers_laptop.json.txt"), "registry": fixture("win_registry_display_laptop.json.txt")}
 SMI = "0, NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 12227\n"
 

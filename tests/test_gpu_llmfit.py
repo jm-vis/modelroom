@@ -16,8 +16,8 @@ from modelroom.measure_base import FixtureFiles
 from modelroom.profile import fit_block_reason
 
 NOW = datetime(2026, 9, 28, 8, 0, 0, tzinfo=timezone.utc)
-NVIDIA_PNP = "PCI\\VEN_10DE&DEV_2F38&SUBSYS_0D121028&REV_A1\\X"
-INTEL_PNP = "PCI\\VEN_8086&DEV_7D67&SUBSYS_0D121028&REV_06\\X"
+NVIDIA_PNP = "PCI\\VEN_10DE&DEV_2F38&SUBSYS_00000000&REV_A1\\X"
+INTEL_PNP = "PCI\\VEN_8086&DEV_7D67&SUBSYS_00000000&REV_06\\X"
 L4 = LlmfitGpu("NVIDIA L4", "CUDA", 22.49, 1)
 ARC = llmfit_file("llmfit_system_intel_arc.json")
 

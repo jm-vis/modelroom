@@ -12,7 +12,7 @@
     "available_ram_gb": 76.64,
     "backend": "Vulkan",
     "cpu_cores": 14,
-    "cpu_name": "Intel(R) Core(TM) Ultra 5 245HX",
+    "cpu_name": "x86 CPU",
     "gpu_count": 1,
     "gpu_name": "Intel Arc A770",
     "gpu_vram_gb": 15.91,
