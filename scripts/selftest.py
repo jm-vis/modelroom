@@ -434,7 +434,7 @@ def result_table_problems(lines: list[str]) -> list[str]:
         problems.append("the result table says not how many of its rows are shown")
     if not any(line.strip().startswith("install ") for line in lines):
         problems.append("the result table carries no install line for the machine of this run")
-    pooled = [line for line in _outside_key_block(lines) if "graphics memory" in line or "system memory" in line]
+    pooled = [line for line in _outside_key_block(lines) if ("graphics memory" in line or "system memory" in line) and not line.strip().startswith("graphics  ")]  # an adapter line (AP9-GPU) is no pool note
     if pooled and not all("#" in line for line in pooled):
         problems.append(f"a note about the memory pool names no rank: {pooled}")
     if len(pooled) > 3:
