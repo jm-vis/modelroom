@@ -51,6 +51,8 @@ from .guided_folder import last_elsewhere
 from .guided_folder import looks_like_results_folder as _looks_like_results_folder
 from .guided_folder import remember_folder as _remember_folder
 from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, pull_step
+from .pull_other import KEY as PULL_OTHER_KEY, QUESTION as PULL_OTHER_QUESTION
+from .pull_other import eligible_other_machines, pull_other_skip, pull_other_step
 from .pull_choice import ambiguous_names, run_packages
 from .room import RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
@@ -145,8 +147,10 @@ QUESTIONS: dict[str, str] = {
     "context": CONTEXT_QUESTION,
     # Step 3 asks it before the scale: `N` people, or `N requests` named outright.
     USERS_KEY: USERS_QUESTION,
-    # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`).
+    # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`),
+    # then a package for another chosen machine (`pull_other.py`, A3).
     **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS, **SERVER_QUESTIONS,
+    PULL_OTHER_KEY: PULL_OTHER_QUESTION,
 }
 
 
@@ -688,7 +692,10 @@ def _render_step(
     document, facts, context = written[0]
     own = next((block.profile for block in document.machines if block.machine == here), None)
     live = {here: live_room(run.room, own, run.daemon if daemon_reachable else None, disk)}  # U10: this machine only
-    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins)
+    # A3 (AP9-FR): the other machines `pull_other_step` will list a row for, after this table --
+    # computed once, here, so the note under a table and the list that may follow never disagree.
+    other_machines = eligible_other_machines(document, here, context.ambiguous, pull_other_skip(run.pointer_path))
+    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 
@@ -747,6 +754,7 @@ def run_guided(
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
     code, first = _render_step(run, config_file, config, scenario, intro.daemon_reachable)
     pull_step(run, first, intro.daemon_reachable)
+    pull_other_step(run, first)
     if code == 0 and run.problems:
         # The document was written, but a step did not do what it was asked -- the pull included.
         # Exit `1` is the documented "a step reported it": an automated caller must not read this

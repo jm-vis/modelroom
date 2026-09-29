@@ -146,6 +146,9 @@ Since AP9-FR every writing command sweeps its folder of machine names first ("Ne
 sweep that cannot finish is exit `1` with nothing else written, and a broken
 `~/.modelroom/remote.json` is exit `3`.
 
+`modelroom pull <name>` (AP9-FR A4, no results folder and no configuration, so none of the codes
+above apply to it) has its own table under "`modelroom pull`", below "Guided mode".
+
 ## Models
 
 Every example below is `EXAMPLES["<ModelName>"]` from `modelroom/examples.py`, verbatim; a
@@ -4235,16 +4238,35 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    AP9-RM U11 the first row that also fits the free disk of that machine, see "A download larger
    than the free disk" --
    `hf.co/<repo>:<quant>` for a Hugging Face build, `<name>:<tag>` for one of the Ollama registry,
-   the two shapes the load test matches an installed model by. Nothing is called and nothing is
-   looked up; a package with no such name has no line. `modelroom render` draws no such line at all:
+   the two shapes the load test matches an installed model by, and (AP9-FR A2, "Neutral names")
+   `pull_choice.PULL_NAME_RE`: `screen.install_name` builds the name and checks it before it is ever
+   returned, so a Hub or registry answer outside the pattern never reaches a table row, an install
+   or handover line, an answer file's value, or a `POST` -- it is no name at all, the same as a
+   package with none of its own (below). `modelroom render` draws no such line at all:
    a configuration may name several writers, and which of them the command runs on it cannot know
    (second-model round, 2026-09-24). It is a command to copy, so it is never cut, and it is the one
    line of this view that may pass 100 characters. Installing is a work package of its own. Since
    AP9-UX2 (U3) every other machine of a guided run with an Ollama name in `#1` gets `install   #1 on
-   server (a1b2c3d4)  ollama pull <name>` and under it `run it on that computer; this run pulls only
-   onto this one` -- no pull, no question; a pull name that is not unique has the note `#1 has no
-   command: its pull name is not unique` instead (U4). Rows that look alike carry a `repo` line each
-   directly under the table (U4, "The pull").
+   server (a1b2c3d4)  ollama pull <name>` and under it, since AP9-FR A3, `run it on that computer, or
+   choose a package for it below` where that machine's table has at least one row with a pull name
+   **and** this machine has a row of its own here too (`pull_other.eligible_other_machines`, the one
+   place both this note and the `pull_other` list below read from, so the two never disagree); else
+   the note stays `run it on that computer; this run pulls only onto this one` -- no pull, no
+   question, no list. A pull name that is not unique has the note `#1 has no command: its pull name
+   is not unique` instead (U4). Rows that look alike carry a `repo` line each directly under the
+   table (U4, "The pull").
+7. `pull_other` -- AP9-FR A3, `modelroom/pull_other.py`. Where the note above promises a list, one
+   follows step 5's own pull question (`guided_install.pull_step`): one heading per other chosen
+   machine that has a shown row at all, its rows under it exactly as locked as in its own table (a
+   package too large for **this** machine's disk is never checked -- no disk of the other machine is
+   read here, FR reads no foreign disk without SSH), then `none, do not pull`, the pointer on it. A
+   machine this user already read over SSH (a stored alias in `~/.modelroom/remote.json`) is left out
+   entirely: FR-B1 offers it its own way. Choosing a row prints its **handover**, behind a blank
+   line: `install   #<rank> on <machine>  modelroom pull <name> --weights-bytes <n>`, then
+   `paste it there: it checks Ollama and the disk and asks before it pulls`, then
+   `without modelroom there: ollama pull <name>` -- no path, no machine name beyond the neutral one
+   (or SSH alias) the document already carries; nothing is called, nothing is sent anywhere. The
+   command is what `modelroom pull` (below) reads.
 
 Ten rows carried ten notes of the same two sentences and 41 lines of `not covered` said the same
 thing 41 times in the test rounds of 2026-09-24; a reader needs each statement once, with the ranks
@@ -5174,6 +5196,7 @@ matter, so the move is invisible to it.
 | 4 | `load_test_packages` | Which of these should be measured? | a list of local Ollama names and `vllm` for a vLLM server that states a model (only after `load_test` true, where a server offers a row) |
 | 5 | `pull_package` | Which package should be pulled into Ollama? | the Ollama name of a row of the list, or `none` (AP9-UX2 U6); optional: without it `#1` is taken where it has a pull name of its own, else nothing; a name the list does not offer, or a locked row, is exit 2 |
 | 5 | `pull` | Pull #1 into Ollama now? (the screen names the row chosen and adds its weight: `Pull #3 into Ollama now? (5.0 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a chosen row that has an Ollama name of its own and is not local already, enough disk or disk unknown, and a daemon the start screen reached) |
+| 5 | `pull_other` | Which package should go onto another computer? (AP9-FR A3, `pull_other.py`) | `<machine> <pull name>` (a value flat like every other, `answers.py:26-33`) out of the shown rows of every other **chosen** machine, or `none` -- optional: without it nothing is chosen, silently (one target machine at most, GF question 6); a value the list does not offer, or a locked row's, is exit 2; asked only where this machine has a row of its own in the document **and** at least one other chosen machine has a shown row with a pull name (A2); the chosen row's command (`modelroom pull <name> --weights-bytes <n>`) is printed, never sent anywhere -- `modelroom pull` (A4, below) is what runs it, pasted on the machine it names |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
@@ -5686,6 +5709,18 @@ pull <name>`, then checks the disk, then asks `Pull #3 into Ollama now? (5.0 GB)
 the note instead and no question; `none` is nothing. An answer file without `pull_package` takes
 `#1` where it has a name of its own, else nothing -- the behavior before.
 
+**Every name here already passed `PULL_NAME_RE`** (AP9-FR A2, "Guided mode", `install`, above): a
+row's name is `pull_choice.entry_pull_name`, and `pull_other`'s (below) is the same function --
+both go through `screen.install_name`, the one choke point that checks the pattern before any name
+is ever returned. A row this pattern rejects is indistinguishable from one with no name at all: `no
+pull name`, locked, no install line, no `POST`.
+
+**`PullTarget`** (AP9-FR, the Umbau of A4) carries what the choice, the disk check and the pull
+itself need -- `daemon`, `disk` (a callable), `now`, `screen`, `asker`, `failed`, `where` -- so
+`modelroom pull` (below) reuses the same disk check and the same pull, error and success handling
+with no results folder and no configuration of its own. Behavior here is unchanged; see
+"`modelroom pull`" for what it adds.
+
 **The disk, checked again before the pull** (U8, GF F6). Measured fresh after the choice, never the
 number of the table head: the place Ollama keeps its models is approximated (`room.py`:
 `OLLAMA_MODELS`, else the user default `~/.ollama/models` and on Linux the service default
@@ -5843,10 +5878,12 @@ question; an answer may be text, a whole number, `true`/`false` or a list of tex
 with no answer ends the run with exit `2` and names the question -- an answer file written for 0.1.0
 has no `users` and stops at step 3 until the key is added (`users = 1` keeps its old ranking); an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
-exit `3`. **The two exceptions are `load_test` and `pull`:** a file that does not mention
-`load_test` measures nothing -- on no server -- and one that does not mention `pull` does not pull,
-because whether either question is reached at all depends on the machine the file is run on -- its
-daemon, its servers, and what they already hold -- not on the file. The key `load_test_vllm` of
+exit `3`. **The three exceptions are `load_test`, `pull` and `pull_other`:** a file that does not
+mention `load_test` measures nothing -- on no server -- one that does not mention `pull` does not
+pull, and one that does not mention `pull_other` chooses nothing for another computer (AP9-FR A3),
+because whether any of the three questions is reached at all depends on the machine the file is run
+on -- its daemon, its servers, what they already hold, and (for `pull_other`) whether this machine
+and another chosen one both have a package of their own -- not on the file. The key `load_test_vllm` of
 AP9-SV1 is gone (AP9-UX E): the vLLM server is the row `vllm` of `load_test_packages`. An answer of the wrong shape (`pull = "yes"`) is still
 an error. A `load_test = true` without `load_test_packages` is a missing answer like any other.
 Since 2026-09-27 `machine_class` is asked on every measurement of this machine, so a file that
@@ -5883,3 +5920,48 @@ says which), `3` a stored file's `schema_version` is unsupported or a stored fil
 `130` Ctrl-C. A failure of a stored file keeps the exit code the command that owns it would give:
 the guided mode does not flatten `SchemaVersionError`, `MigrationError`, `PointerFileError` or a
 held lock into its own `2`.
+
+## `modelroom pull`
+
+`modelroom pull <name> [--weights-bytes N] [--yes]` (AP9-FR A4, `modelroom/cli_pull.py`) pulls one
+package straight into this computer's Ollama daemon -- no results folder, no configuration, no
+`--machine`. It is the command a guided run's `pull_other` handover line names (above), run *on*
+the machine that should get the package, whether or not modelroom ever measured that machine.
+
+**Steps, in order, each ending the command at the first one that fails:**
+
+1. `<name>` against `pull_choice.PULL_NAME_RE` (A2, "Guided mode", `install` above); outside it,
+   the command never looks at Ollama or the disk at all: exit `2`.
+2. `GET /api/version` against the local daemon (`daemon.LocalDaemon`, `127.0.0.1:11434` only, the
+   same origin every other command is held to); not reachable: `Ollama does not answer on this
+   computer at 127.0.0.1:11434`, exit `1`.
+3. `GET /api/tags`: the name already listed there gets a note, `Ollama lists <name> already;
+   pulling it again updates it`, and the run goes on -- without a package there is no digest to
+   prove it holds the *same* build, unlike the guided run's own check ("The pull", below), so this
+   is deliberately weaker and never skips the question.
+4. The free disk (`room.free_disk`, the same reading "A download larger than the free disk" uses)
+   against `--weights-bytes` plus the disk margin: too little says `not enough disk: needs <need>,
+   <free> free on <drive>` and pulls nothing, exit `1` (no `#<rank>` in the message: there is no
+   table row here, just this one name). Disk unknown, or `--weights-bytes` not given at all: a
+   note, and the run goes on regardless.
+5. `Pull <name> into Ollama now? (<size>)` (the size left out where `--weights-bytes` was not
+   given), default No: a terminal asks it, `--yes` skips it outright and answers Yes, and without
+   either: `no terminal to ask; add --yes`, exit `2`. **No** pulls nothing, exit `0`.
+6. **Yes** pulls it, with the same progress, success and error handling as the guided run's own
+   pull (`_send`, `_end_reason`, `pulled_problem` -- without a package known here, `pulled_problem`
+   checks only that the daemon lists the name afterwards, never a manifest digest: "ohne
+   Digestteil"). A fault is one line and exit `1`; success prints `✓ Pulled <name> (<size>)`.
+
+**`PullTarget`** (`guided_install.py`) is what steps 4 and 6 draw on either way: seven fields --
+`daemon`, `disk` (a callable, read fresh at the check, not a value), `now`, `screen`, `asker`,
+`failed`, `where` (empty here and for the guided run's own row; `" on <alias>"` is FR-B1's). The
+guided run builds one from itself; `modelroom pull` builds one from the local daemon and this
+machine's room alone. `pull_chosen` (the guided run's own last question) takes either a
+`PullTarget` or a `GuidedRun` and converts the latter; every helper under it (`_disk_allows`,
+`_is_local`, `_holds`, `_pull`, `_send`) takes only a `PullTarget`.
+
+**Exit codes**: `0` pulled, or the user (or the answer given) said No, `1` the daemon did not
+answer, the disk does not hold the download, or the pull itself faulted, `2` `<name>` is not a
+name `PULL_NAME_RE` allows, or there was no terminal and no `--yes`, `130` Ctrl-C (nothing left
+half pulled: the daemon's own pull is not resumed by this command, only Ollama's own retry of the
+same name does that).

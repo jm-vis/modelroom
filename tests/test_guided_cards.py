@@ -319,6 +319,8 @@ def test_another_computer_gets_its_install_line_and_no_pull(tmp_path: Path):
     card = _after(lines, "── Step 5 of 5")
     install = [line for line in card if line.startswith("install")]
     assert install and all(line.startswith(f"install   #1 on {SERVER}") and "ollama pull hf.co/" in line for line in install)
+    # This machine has no row of its own here (only the imported one is ranked): `pull_other`
+    # follows nothing of its own either (AP9-FR A3), so the note stays the plain one.
     assert "run it on that computer; this run pulls only onto this one" in card
     assert not any(line.startswith("? ") for line in card)  # no list, no question: nothing of this machine
     assert not any(call[1] == "/api/pull" for call in daemon.calls)

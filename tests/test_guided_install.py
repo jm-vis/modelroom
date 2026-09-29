@@ -9,6 +9,7 @@ the search and the fetch, fixture probes, a fixed clock, a pointer file inside `
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 from datetime import datetime, timezone
@@ -26,14 +27,21 @@ from modelroom.guided_install import (
     CANCELED_LINE,
     FirstRow,
     LiveLine,
+    PullTarget,
+    _disk_allows,
+    _is_local,
+    _pull,
     first_row,
+    live_line,
     pull_chosen,
+    pull_target_from_run,
     pulled_problem,
 )
 from modelroom.guided_context import snapshot_packages
 from modelroom.config import load_config
 from modelroom.http import Response
 from modelroom.loadtest import installed_models
+from modelroom.pull_choice import weights_bytes_of
 
 from fixture_servers import DEEPSEEK_WEIGHTS_BYTES
 from fixture_support import (
@@ -409,6 +417,35 @@ def test_a_registry_package_counts_as_pulled_only_with_its_manifest_digest():
     assert "does not list it" in pulled_problem([], registry)
     # `hf.co/…`: the manifest digest `/api/tags` shows is not the GGUF's, so the name decides.
     assert pulled_problem(installed, hugging_face) is None
+
+
+def test_pull_target_carries_every_field_the_helpers_read(tmp_path: Path):
+    """`_disk_allows`, `_is_local` and `_pull` read only `PullTarget`'s own seven fields -- a wrapper
+    that raises `AttributeError` for anything else still lets a whole pull through (AP9-FR, the
+    Umbau of A4: `pull_chosen`, `_disk_allows`, `_is_local`, `_holds`, `_pull`, `_send` take it)."""
+    field_names = {field.name for field in dataclasses.fields(PullTarget)}
+
+    class _OnlyDeclaredFields:
+        def __init__(self, target: PullTarget) -> None:
+            object.__setattr__(self, "_target", target)
+
+        def __getattr__(self, name: str):
+            if name not in field_names:
+                raise AttributeError(name)
+            return getattr(self._target, name)
+
+    daemon = pull_daemon(after_pull=tags_with(FIRST_NAME))
+    lines: list[str] = []
+    run = _bare_run(tmp_path, daemon, {}, lines)
+    package = granite_ollama_package()
+    first = FirstRow(1, "granite4.2:8b", 5.0, package, weights_bytes_of(package))
+    target = _OnlyDeclaredFields(pull_target_from_run(run))
+
+    _is_local(target, first)  # reads only `.daemon` and `.now`, both declared: no `AttributeError`
+    assert _disk_allows(target, first) is True
+    _pull(target, first, live_line(target))
+
+    assert lines and lines[-1].strip().startswith("✓ Pulled")
 
 
 class _Daemon:

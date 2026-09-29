@@ -530,14 +530,28 @@ def install_name(identity: Sequence[str], quantization: str, package_format: str
     `hf.co/<repo>:<quantization>` for a Hugging Face build and `<name>:<tag>` for one of the
     Ollama registry -- the two shapes the load test matches an installed model by
     (`loadtest.installed_candidates`). A package that is no GGUF build, or whose quantization the
-    registry never stated, has no such name, and then there is no line rather than a guess.
+    registry never stated, has no such name, and then there is no line rather than a guess. The
+    one choke point every reader of this name goes through (A2, Codex r1-1): a name a Hub or
+    registry answer built that does not read as one of the two shapes `pull_choice.PULL_NAME_RE`
+    allows is no name at all here either -- never a table row, never an install or handover line,
+    never the argument of a pull.
     """
     source, repo_or_name, _rest = identity
     if source == "ollama":
-        return repo_or_name or None
-    if package_format != "gguf" or not repo_or_name or quantization == "unknown":
-        return None
-    return f"hf.co/{repo_or_name}:{quantization}"
+        name = repo_or_name or None
+    elif package_format != "gguf" or not repo_or_name or quantization == "unknown":
+        name = None
+    else:
+        name = f"hf.co/{repo_or_name}:{quantization}"
+    return _safe_pull_name(name)
+
+
+def _safe_pull_name(name: str | None) -> str | None:
+    """`name` where `PULL_NAME_RE` allows it, else `None` (A2). Imported inside the function: the
+    module that holds the pattern (`pull_choice.py`) imports `install_name` from this one."""
+    from .pull_choice import PULL_NAME_RE
+
+    return name if name is not None and PULL_NAME_RE.fullmatch(name) is not None else None
 
 
 def install_pull_line(rank: int, name: str) -> Line:
@@ -562,9 +576,16 @@ PULL_CANCELED = "a canceled pull resumes with the same command"
 _GIB = 1024**3
 
 
-def pull_question(rank: int, weights_gib: float) -> str:
-    """The question after the card: the row, and what it weighs (the weights, not the memory need)."""
-    return f"Pull #{rank} into Ollama now? ({weights_gib:.1f} GB)"
+def pull_question(rank: int | None, weights_gib: float | None, name: str = "") -> str:
+    """The question after the card: the row, and what it weighs (the weights, not the memory need).
+
+    `rank` is `None` outside a table (`modelroom pull`, A4): the question then names `name` instead
+    of `#<rank>`. `weights_gib` is `None` where the download's size was never given at all (A4
+    without `--weights-bytes`), and the question then says nothing about its weight.
+    """
+    who = f"#{rank}" if rank is not None else name
+    size = f" ({weights_gib:.1f} GB)" if weights_gib is not None else ""
+    return f"Pull {who} into Ollama now?{size}"
 
 
 def pull_progress_text(line: dict) -> str:
@@ -579,9 +600,21 @@ def pull_progress_text(line: dict) -> str:
     return str(line.get("status", ""))
 
 
-def pulled_line(name: str, weights_gib: float, marks: Glyphs) -> Line:
-    """The line a pull that ended in `success` leaves behind, and what to do with the package next."""
-    said = f"{name} {marks.dot} {weights_gib:.1f} GB {marks.dot} say Yes in step 4 of the next run to measure it"
+DEFAULT_PULLED_HINT = "say Yes in step 4 of the next run to measure it"
+
+
+def pulled_line(
+    name: str, weights_gib: float | None, marks: Glyphs, hint: str | None = DEFAULT_PULLED_HINT
+) -> Line:
+    """The line a pull that ended in `success` leaves behind, and what to do with the package next.
+
+    `weights_gib` is `None` where no size was ever known (`modelroom pull` without
+    `--weights-bytes`, A4); `hint` is the guided run's own reminder of its next step, `None` for a
+    run with no next step of its own to point to (A4 again: `cli_pull.py` passes `None`).
+    """
+    size = f" {marks.dot} {weights_gib:.1f} GB" if weights_gib is not None else ""
+    tail = f" {marks.dot} {hint}" if hint else ""
+    said = f"{name}{size}{tail}"
     return [("class:done", marks.check), ("", " "), ("class:value", "Pulled".ljust(LABEL_WIDTH)), ("", GAP), ("", said)]
 
 
@@ -609,6 +642,7 @@ def fit_word(fit_class: str, mode: str | None) -> str:
 
 __all__ = [
     "CLONE_QUESTION",
+    "DEFAULT_PULLED_HINT",
     "FIT_HINT",
     "FIT_SCALE_HINT",
     "HEAD_WIDTH",

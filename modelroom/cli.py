@@ -42,6 +42,7 @@ from .binding import (
     resolve_profile_target,
     write_pointer,
 )
+from .cli_pull import run_pull
 from .config import ConfigError, Configuration, load_config
 from .contracts import HardwareSnapshot, SchemaVersionError
 from .daemon import Daemon
@@ -155,6 +156,15 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("file", type=Path, help="The export file to read")
     import_parser.add_argument("--config", required=True, type=Path, help="Path to modelroom.toml")
 
+    pull_parser = subparsers.add_parser(
+        "pull",
+        help="Pull one package into this machine's Ollama, checking Ollama and the disk first "
+        "(A4; the command a guided run's handover line names, no results folder needed).",
+    )
+    pull_parser.add_argument("name", help="The Ollama pull name (hf.co/<owner>/<repo>:<quant> or <name>:<tag>)")
+    pull_parser.add_argument("--weights-bytes", type=int, help="The download's size, for the disk check before it")
+    pull_parser.add_argument("--yes", action="store_true", help="Pull without asking (no terminal needs this)")
+
     return parser
 
 
@@ -193,6 +203,9 @@ def main(
         return _cmd_export_profile(args, pointer_path, host)
     if args.command == "import-profile":
         return _cmd_import_profile(args, now, pointer_path, host)
+    if args.command == "pull":
+        # No results folder and no configuration (A4): nothing here is swept, nothing bound.
+        return run_pull(args.name, args.weights_bytes, args.yes, daemon=daemon, room=room, now=now, out=out)
     parser.error(f"unknown command: {args.command}")
     return 2  # pragma: no cover - argparse.error already exits
 

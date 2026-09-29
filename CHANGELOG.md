@@ -24,6 +24,18 @@ All notable changes to this project are documented in this file. The format foll
   the name built from the package, never by the name the daemon holds it under. The host name of this
   computer stands only in the start line, read live.
 
+- **A package for another computer, and the command that installs it there** (AP9-FR, FR-A;
+  `modelroom/pull_other.py`, `modelroom/cli_pull.py`; CONTRACTS.md, "Guided mode", "`modelroom
+  pull`"). Step 5's own pull now checks every name it would ever print or send against
+  `pull_choice.PULL_NAME_RE` first -- a Hub or registry answer outside `hf.co/<owner>/<repo>:<quant>`
+  or `[<ns>/]<name>:<tag>` is no name at all, never a table row, a command or a `POST`. After the
+  local pull, the run also asks **Which package should go onto another computer?** for every other
+  chosen machine with a package of its own (only where this computer was measured or ranked too);
+  choosing one hands over `modelroom pull <name> --weights-bytes <n>` to paste there -- a new
+  subcommand, with no results folder and no configuration, that checks Ollama and the free disk on
+  that computer and asks before it pulls (`--yes` for a terminal-less run). A machine already read
+  over SSH is left to the SSH way (FR-B1, not yet built) instead.
+
 - **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
   `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).
   `hardware` reads each vendor's own source -- NVIDIA from `nvidia-smi` with the compute

@@ -534,12 +534,14 @@ def _labeled(label: str, pieces: list[str], dot: str) -> list[Line]:
 class RunView:
     """What the guided run adds to the terminal view (AP9-UX2): the pull names no row may claim (U4),
     what was read live per machine name (AP9-RM U10; `None` outside a guided run, which reads no
-    machine live) and where each machine came from (U2)."""
+    machine live), where each machine came from (U2), and the other machines `pull_other_step` will
+    list a row for (A3, AP9-FR) -- so a table's note never promises a list that will not follow."""
 
     install_for: str | None = None
     ambiguous: frozenset[str] = frozenset()
     live: Mapping[str, LiveRoom] | None = None
     origins: Mapping[str, str] = field(default_factory=dict)
+    pull_other_machines: frozenset[str] = frozenset()
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -559,7 +561,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
         lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
-    return lines + install_lines(block, view.install_for, view.ambiguous, _disk(block, view), dash)
+    return lines + install_lines(block, view.install_for, view.ambiguous, _disk(block, view), dash, view.pull_other_machines)
 
 
 def _disk(block: MachineRanking, view: RunView) -> Disk | None:

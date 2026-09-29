@@ -291,7 +291,12 @@ at the line to paste; step 4 of the next run measures it. Too little disk says s
 A row the daemon already has gets a note instead of the question. Rows that look alike name their
 repository under the table. A machine that is not this computer -- imported, entered by hand, or
 another profile of the folder -- says so on the card and in its table head, and gets its command to
-copy there: this run pulls only onto this one. The first row is the largest model
+copy there: this run pulls only onto this one. Where that other machine's table has a package of its
+own and this run measured or ranked this computer too, step 5 also asks **Which package should go
+onto another computer?** afterwards, with the rows of every other chosen machine under its own
+heading; choosing one hands over `modelroom pull <name> --weights-bytes <n>` to paste on that
+computer, which checks Ollama and the disk there and asks before it pulls -- so a machine reached
+only by copy-paste, not by this run's own daemon, still gets its package. The first row is the largest model
 that fits, in the least compression of it that fits -- "best" means the same model, less
 compressed; modelroom rates no model family against another. With several models the table shows
 one row per model, its best package; a package you measured here that the rule leaves out is added
@@ -318,7 +323,7 @@ from a TOML file instead (for a self-test or CI) -- `users` there is a number of
 needs `users` added (`users = 1` sizes for one person, as 0.1.0 did) -- and `modelroom --config <file>` works on that configuration rather than the
 remembered folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
 
-The six subcommands never ask anything; the guided mode is built on the same measurement, fetch
+Six of the subcommands never ask anything; the guided mode is built on the same measurement, fetch
 and render. From a clone of this repository, after `uv sync --frozen`:
 
 ```bash
@@ -358,7 +363,21 @@ cat docs/models.md
    with the reason, ones that do not fit under "No fit". Every computed number says
    `(computed)`, the measured speed says `(measured)`.
 
-`--config` is required by every subcommand; there is no default path.
+`--config` is required by every subcommand above; there is no default path.
+
+### `modelroom pull`
+
+A seventh subcommand, with no results folder and no configuration at all (AP9-FR A4): the command
+a `pull_other` handover line names, run on the computer that should get the package.
+
+```bash
+uv run --frozen modelroom pull hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M --weights-bytes 5680522464
+```
+
+It checks the name is safe to pull, that Ollama answers on this computer, notes where it lists the
+name already, checks the free disk against `--weights-bytes` where one was given, then asks **Pull
+`<name>` into Ollama now?** (default No) before it pulls -- `--yes` skips the question for a
+terminal-less run. See `CONTRACTS.md`, "`modelroom pull`", for its exit codes.
 
 ## Files
 
@@ -465,6 +484,9 @@ pull that did not finish.
 Those lines are printed as they happen; the run goes on with the machines that are there.
 
 Source: `CONTRACTS.md`, "Exit codes", and `AGENTS.md`.
+
+`modelroom pull` (AP9-FR A4) has no results folder and no configuration, so its exit codes are its
+own: see `CONTRACTS.md`, "`modelroom pull`".
 
 ## Network access
 

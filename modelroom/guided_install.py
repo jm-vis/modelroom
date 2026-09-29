@@ -22,21 +22,23 @@ import shutil
 import sys
 import unicodedata
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Sequence, TextIO
+from datetime import datetime
+from typing import TYPE_CHECKING, Callable, Sequence, TextIO
 
 from .contracts import InstalledModel, Package
-from .daemon import PULL_PATH, DaemonError
-from .dialog import AnswerMissingError, Choice, FileAsker
+from .daemon import PULL_PATH, Daemon, DaemonError
+from .dialog import AnswerMissingError, Asker, Choice, FileAsker
 from .document import RenderDocument
 from .http import Response
 from .intro import label_line
 from .loadtest import installed_candidates, installed_models, weight_digest
 from .pull_choice import KEY as CHOICE_KEY
 from .pull_choice import LOCAL_ALREADY, NONE_VALUE, QUESTION as CHOICE_QUESTION
-from .pull_choice import PullRow, default_row, package_of, pull_rows
+from .pull_choice import PullRow, default_row, package_of, pull_rows, weights_bytes_of
 from .quantization import package_identity_key
 from .room import Disk, free_disk, gb, pull_need_bytes
 from .screen import PULL_CANCELED as CANCELED_LINE
+from .screen import Screen
 from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
 from .screen import pulled_line, yes_no
 from .views import INSTALL_LABEL, install_target
@@ -56,12 +58,21 @@ _MAX_COUNT = 2**63
 
 @dataclass(frozen=True)
 class FirstRow:
-    """The row a pull is about: its rank, its local Ollama name, its weight, and its package."""
+    """The row a pull is about: its rank, its local Ollama name, its weight, and its package.
 
-    rank: int
+    `rank` and `weights_gib` are `None` outside a table row (`modelroom pull`, A4: no card, no
+    table, and a size only where `--weights-bytes` gave one). `package` is `None` there too -- A4
+    knows no snapshot, so `pulled_problem` checks no manifest digest for it (Codex, "ohne
+    Digestteil"). `weights_bytes` is what the disk check (`_disk_allows`) measures against: the
+    guided run computes it from `package.files` (`first_row`, `pull_step`), A4 takes it from
+    `--weights-bytes` directly, with no package to compute it from.
+    """
+
+    rank: int | None
     name: str
-    weights_gib: float
-    package: Package
+    weights_gib: float | None
+    package: Package | None = None
+    weights_bytes: float | None = None
 
 
 def first_row(document: RenderDocument, machine: str, packages: Sequence[Package]) -> FirstRow | None:
@@ -77,8 +88,37 @@ def first_row(document: RenderDocument, machine: str, packages: Sequence[Package
         entry, name = target
         wanted = tuple(entry.package_identity)
         package = next((package for package in packages if package_identity_key(package) == wanted), None)
-        return None if package is None else FirstRow(entry.rank, name, entry.weights_gib, package)
+        return None if package is None else FirstRow(entry.rank, name, entry.weights_gib, package, weights_bytes_of(package))
     return None
+
+
+@dataclass(frozen=True)
+class PullTarget:
+    """What a pull draws on, whether it is the last question of a guided run or `modelroom pull`
+    (A4, no results folder, no configuration) -- the seven fields `pull_chosen`, `_disk_allows`,
+    `_is_local`, `_holds`, `_pull` and `_send` read; no helper reads a `GuidedRun` any more.
+
+    `disk` is measured again right when it is checked (U8): a callable, not a value, so a target
+    built once still reads the free disk of the moment it is asked. `where` names the machine in a
+    message that is not about this one (`" on gpu1"`, FR-B1); the guided run's own row and A4 both
+    say nothing extra (`""`, the default).
+    """
+
+    daemon: Daemon
+    disk: Callable[[], Disk]
+    now: datetime
+    screen: Screen
+    asker: Asker | None
+    failed: Callable[[str], None]
+    where: str = ""
+
+
+def pull_target_from_run(run: "GuidedRun") -> PullTarget:
+    """A `PullTarget` out of a guided run's own fields -- `pull_chosen` builds one where it is
+    handed a `GuidedRun` instead (`test_pull_target_carries_every_field_the_helpers_read`)."""
+    return PullTarget(
+        daemon=run.daemon, disk=lambda: free_disk(run.room), now=run.now, screen=run.screen, asker=run.asker, failed=run.failed
+    )
 
 
 @dataclass(frozen=True)
@@ -115,35 +155,45 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     package = package_of(row, context.packages)
     if package is None:
         return
-    pull_chosen(run, FirstRow(row.rank, str(row.name), row.weights_gib, package), local=row.rank in locals_)
+    first = FirstRow(row.rank, str(row.name), row.weights_gib, package, weights_bytes_of(package))
+    pull_chosen(run, first, local=row.rank in locals_)
 
 
-def pull_chosen(run: "GuidedRun", first: FirstRow, *, local: bool | None = None) -> None:
-    """The chosen row: a note where it is local, else its command, the disk check (U8), the question."""
-    if _is_local(run, first) if local is None else local:
-        run.screen.write(label_line(INSTALL_LABEL, install_local_note(first.rank, run.screen.glyphs.dot)))
+def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: bool | None = None) -> None:
+    """The chosen row: a note where it is local, else its command, the disk check (U8), the question.
+
+    `target` is a `PullTarget`, or a `GuidedRun` (the guided run's own call, and every test that
+    still builds one directly): a `GuidedRun` carries the same seven fields under the same names
+    except `disk`, which it has as `room` instead -- `pull_target_from_run` bridges that one name.
+    """
+    target = target if isinstance(target, PullTarget) else pull_target_from_run(target)
+    if _is_local(target, first) if local is None else local:
+        target.screen.write(label_line(INSTALL_LABEL, install_local_note(first.rank, target.screen.glyphs.dot)))
         return
-    run.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name)))
-    if not _disk_allows(run, first):
+    target.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name)))
+    if not _disk_allows(target, first):
         return
-    question = pull_question(first.rank, first.weights_gib)
-    wants = _wants_pull(run, question)
-    run.screen.answer(question, yes_no(wants))
+    question = pull_question(first.rank, first.weights_gib, first.name)
+    wants = _wants_pull(target, question)
+    target.screen.answer(question, yes_no(wants))
     if wants:
-        _pull(run, first, live_line(run))
+        _pull(target, first, live_line(target))
 
 
-def _disk_allows(run: "GuidedRun", first: FirstRow) -> bool:
-    """Measured again now (U8): enough disk asks; too little says so and asks nothing; unknown asks with a note."""
-    disk = free_disk(run.room)
+def _disk_allows(target: PullTarget, first: FirstRow) -> bool:
+    """Measured again now (U8): enough disk asks; too little says so and asks nothing; unknown asks
+    with a note. `first.weights_bytes` is `None` only where A4 was given no `--weights-bytes` at
+    all (`cli_pull.py` skips this call then; its own note covers that case)."""
+    disk = target.disk()
     if not disk.known:
-        run.screen.note(DISK_UNKNOWN)
+        target.screen.note(DISK_UNKNOWN)
         return True
-    need = pull_need_bytes(sum(file.size_bytes for file in first.package.files if file.role in ("weights", "weights_shard")))
+    need = pull_need_bytes(first.weights_bytes or 0.0)
     if disk.free_bytes >= need:
         return True
-    said = f"not enough disk for #{first.rank}: needs {gb(need)}, {gb(disk.free_bytes)} free on {disk.drive}"
-    run.screen.write(label_line(INSTALL_LABEL, [("class:note", said)]))
+    which = f" for #{first.rank}" if first.rank is not None else ""
+    said = f"not enough disk{which}: needs {gb(need)}, {gb(disk.free_bytes)} free on {disk.drive}"
+    target.screen.write(label_line(INSTALL_LABEL, [("class:note", said)]))
     return False
 
 
@@ -176,11 +226,16 @@ def _row_words(row: PullRow, local: bool) -> str:
     return f"{words}  {LOCAL_ALREADY}" if local else words
 
 
-def _holds(run: "GuidedRun", installed: Sequence[InstalledModel] | None, package: Package | None, show=None) -> bool:
-    """Whether the daemon's inventory provably holds `package` (the load test's digest rule)."""
+def _holds(target: "PullTarget", installed: Sequence[InstalledModel] | None, package: Package | None, show=None) -> bool:
+    """Whether the daemon's inventory provably holds `package` (the load test's digest rule).
+
+    `held_identities` always passes its own `show`, so this never reads `target.daemon` there --
+    a plain `GuidedRun` (its only caller) satisfies it all the same, since the attribute is named
+    the same on both.
+    """
     if installed is None or package is None:
         return False
-    look = show if show is not None else (lambda name: weight_digest(run.daemon, name))
+    look = show if show is not None else (lambda name: weight_digest(target.daemon, name))
     return bool(installed_candidates([package], list(installed), look).candidates)
 
 
@@ -200,56 +255,56 @@ def held_identities(run: "GuidedRun", packages: Sequence[Package]) -> frozenset[
     return frozenset(package_identity_key(package) for package in packages if _holds(run, installed, package, show))
 
 
-def _is_local(run: "GuidedRun", first: FirstRow) -> bool:
+def _is_local(target: "PullTarget", first: FirstRow) -> bool:
     """Whether the daemon provably holds this package: the load test's rule, digest and not name.
 
     A registry package by its manifest digest, a `hf.co/…` name by its name **and** the digest of
     its weight file (`/api/show`). A name the daemon lists without that proof is asked like a
     missing one: the pull brings the registry's build of that name, which for Ollama is an update.
     """
-    installed, _reason = installed_models(run.daemon, run.now)
-    return _holds(run, installed, first.package)
+    installed, _reason = installed_models(target.daemon, target.now)
+    return _holds(target, installed, first.package)
 
 
-def _wants_pull(run: "GuidedRun", question: str) -> bool:
+def _wants_pull(target: "PullTarget", question: str) -> bool:
     """The `pull` answer, with `no` for an answer file that does not mention it.
 
     Optional like `load_test`, for the same reason: whether this question is reached depends on
     the machine -- its daemon, and what the daemon already holds -- not on the answer file.
     """
     try:
-        return run.asker.confirm(KEY, question, default=False)
+        return target.asker.confirm(KEY, question, default=False)
     except AnswerMissingError:
         return False
 
 
-def _pull(run: "GuidedRun", first: FirstRow, live: "LiveLine | None") -> None:
+def _pull(target: "PullTarget", first: FirstRow, live: "LiveLine | None") -> None:
     """Pull, then read `/api/tags` once to see the name there; every fault is one line."""
-    run.screen.write(label_line(PULL_LABEL, [("", first.name)]))
+    target.screen.write(label_line(PULL_LABEL, [("", first.name)]))
     try:
-        answer = _send(run, first, live)
+        answer = _send(target, first, live)
     except DaemonError as exc:
-        run.failed(_unfinished(first, str(exc)))
+        target.failed(_unfinished(first, str(exc)))
         return
     except KeyboardInterrupt:
         # The central handler says that the run was stopped and ends with 130; this line says what
         # happens to the part of the package that already arrived.
-        run.screen.note(CANCELED_LINE)
+        target.screen.note(CANCELED_LINE)
         raise
     reason = _end_reason(answer)
     if reason is not None:
-        run.failed(_unfinished(first, reason))
+        target.failed(_unfinished(first, reason))
         return
-    installed, why = installed_models(run.daemon, run.now)
+    installed, why = installed_models(target.daemon, target.now)
     problem = f"{first.name}: pulled, but its list did not arrive ({one_line(str(why))})" if installed is None else None
     problem = problem or pulled_problem(installed or [], first)
     if problem is not None:
-        run.failed(problem)
+        target.failed(problem)
         return
-    run.screen.write(pulled_line(first.name, first.weights_gib, run.screen.glyphs))
+    target.screen.write(pulled_line(first.name, first.weights_gib, target.screen.glyphs))
 
 
-def _send(run: "GuidedRun", first: FirstRow, live: "LiveLine | None") -> Response:
+def _send(target: "PullTarget", first: FirstRow, live: "LiveLine | None") -> Response:
     """The pull itself, with the live line erased however it ends -- before anything else is said."""
 
     def follow(line: dict) -> None:
@@ -258,7 +313,7 @@ def _send(run: "GuidedRun", first: FirstRow, live: "LiveLine | None") -> Respons
             live.show(plain(label_line(PULL_LABEL, [("", one_line(pull_progress_text(line)))])))
 
     try:
-        return run.daemon("POST", PULL_PATH, {"model": first.name, "stream": True}, progress=follow)
+        return target.daemon("POST", PULL_PATH, {"model": first.name, "stream": True}, progress=follow)
     finally:
         if live is not None:
             live.clear()
@@ -308,12 +363,14 @@ def pulled_problem(installed: Sequence[InstalledModel], first: FirstRow) -> str 
     """Whether the daemon now lists what was pulled: by name, and a registry package by its digest.
 
     The manifest digest `/api/tags` shows for a `hf.co/…` name is Ollama's own manifest, not the
-    digest of the GGUF file, so for those the name is what can be checked here.
+    digest of the GGUF file, so for those the name is what can be checked here. Without a package
+    (`modelroom pull`, A4) there is no manifest digest to compare against, so only the name is
+    checked ("ohne Digestteil", A4).
     """
     entry = next((model for model in installed if model.name == first.name), None)
     if entry is None:
         return f"{first.name}: {NOT_LISTED}"
-    if first.package.source == "ollama" and entry.digest != first.package.manifest_digest:
+    if first.package is not None and first.package.source == "ollama" and entry.digest != first.package.manifest_digest:
         return f"{first.name}: pulled, but the daemon lists it with another manifest than the fetch recorded"
     return None
 
@@ -354,12 +411,12 @@ def _cut(text: str, columns: int) -> tuple[str, int]:
     return text, taken
 
 
-def live_line(run: "GuidedRun", stream: TextIO | None = None) -> LiveLine | None:
+def live_line(target: "PullTarget", stream: TextIO | None = None) -> LiveLine | None:
     """A live line at a terminal; none under `--answers`, whose log keeps the first line and the last."""
-    target = sys.stdout if stream is None else stream
-    if isinstance(run.asker, FileAsker):
+    out = sys.stdout if stream is None else stream
+    if isinstance(target.asker, FileAsker):
         return None
     try:
-        return LiveLine(target) if target.isatty() else None
+        return LiveLine(out) if out.isatty() else None
     except (AttributeError, ValueError):  # a closed or replaced stream
         return None

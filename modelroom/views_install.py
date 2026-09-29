@@ -17,6 +17,10 @@ from .screen import Line, install_pull_line
 
 INSTALL_LABEL = "install"
 OTHER_INSTALL_NOTE = "run it on that computer; this run pulls only onto this one"
+# A3 (AP9-FR): said only for a block in `pull_other_machines` -- the guided run passes exactly the
+# machines `pull_other_step` will list a row for (`pull_other.eligible_other_machines`), so this
+# note never promises a list that does not follow.
+OTHER_INSTALL_NOTE_WITH_LIST = "run it on that computer, or choose a package for it below"
 NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 
 
@@ -36,7 +40,14 @@ def install_target(block: MachineRanking, install_for: str | None, disk: Disk | 
     return None if name is None else (entry, name)
 
 
-def install_lines(block: MachineRanking, install_for: str | None, ambiguous: frozenset[str], disk: Disk | None, dash: str) -> list[Line]:
+def install_lines(
+    block: MachineRanking,
+    install_for: str | None,
+    ambiguous: frozenset[str],
+    disk: Disk | None,
+    dash: str,
+    pull_other_machines: frozenset[str] = frozenset(),
+) -> list[Line]:
     """The install line of a block, behind a blank line; nothing where a row has no local name.
 
     Nothing is called and nothing is looked up for it (CONTRACTS.md, "Guided mode", "The screen").
@@ -63,7 +74,15 @@ def install_lines(block: MachineRanking, install_for: str | None, ambiguous: fro
         lines = [[], label_line(INSTALL_LABEL, install_pull_line(entry.rank, name))]
         return lines + ([label_line("", [("class:note", skipped_words(skipped, dash))])] if skipped else [])
     other = [("class:note", f"#{entry.rank} on {block.label}"), ("", "  "), ("class:command", f"ollama pull {name}")]
-    return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", OTHER_INSTALL_NOTE)])]
+    note = OTHER_INSTALL_NOTE_WITH_LIST if block.machine in pull_other_machines else OTHER_INSTALL_NOTE
+    return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", note)])]
 
 
-__all__ = ["INSTALL_LABEL", "NOT_UNIQUE_INSTALL", "OTHER_INSTALL_NOTE", "install_lines", "install_target"]
+__all__ = [
+    "INSTALL_LABEL",
+    "NOT_UNIQUE_INSTALL",
+    "OTHER_INSTALL_NOTE",
+    "OTHER_INSTALL_NOTE_WITH_LIST",
+    "install_lines",
+    "install_target",
+]

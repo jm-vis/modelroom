@@ -67,11 +67,22 @@ def entry(pkg: Package, rank: int) -> dict:
 
 def document(packages: list[Package], machine: str = "workstation", *, total: int | None = None) -> RenderDocument:
     """A document whose one machine shows `packages` in this order, ranks 1, 2, ..."""
+    return document_multi({machine: packages}, total=total)
+
+
+def document_multi(per_machine: dict[str, list[Package]], *, total: int | None = None) -> RenderDocument:
+    """A document with one block per key of `per_machine`, each showing that machine's packages in
+    this order, ranks 1, 2, ... (`pull_other`, A3: a run with more than one chosen machine)."""
     payload = copy.deepcopy(EXAMPLES["RenderDocument"])
-    block = payload["machines"][0]
-    block["machine"] = machine
-    block["ranked"] = [entry(pkg, rank) for rank, pkg in enumerate(packages, start=1)]
-    block["ranked_total"] = total if total is not None else len(packages)
-    block["not_covered"], block["no_fit"] = [], []
-    payload["machines"] = [block]
+    template = payload["machines"][0]
+    blocks = []
+    for machine, packages in per_machine.items():
+        block = copy.deepcopy(template)
+        block["machine"] = machine
+        block["label"] = machine
+        block["ranked"] = [entry(pkg, rank) for rank, pkg in enumerate(packages, start=1)]
+        block["ranked_total"] = total if total is not None else len(packages)
+        block["not_covered"], block["no_fit"] = [], []
+        blocks.append(block)
+    payload["machines"] = blocks
     return RenderDocument.model_validate(payload)
