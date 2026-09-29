@@ -7,11 +7,12 @@ check or pull for: the choice only ever hands back a **command to paste elsewher
 `modelroom pull` (A4) is what runs it, on the machine it names. A machine this user already read over
 SSH (`remote_store.aliases`) is left out: FR-B1 offers it its own way.
 
-The question is skipped outright where this machine has no row of its own in the document (a run
-that never measured or ranked it has nothing of its own for "also" to follow), or where no other
-chosen machine has a single named row (A2): the list would only ever offer `none`. `pull_other` is
-optional like `pull_package` -- an answer file without it chooses nothing, silently -- and one
-target machine at most, the same as the guided run's own pull (GF question 6).
+The question is skipped outright where no other chosen machine has a single named row (A2): the
+list would only ever offer `none`. It is asked whether or not this machine itself has a row here --
+an import-only run (no row of its own, `this-machine` not chosen) still asks it, so long as another
+chosen machine has a package of its own (Codex r1, finding 1). `pull_other` is optional like
+`pull_package` -- an answer file without it chooses nothing, silently -- and one target machine at
+most, the same as the guided run's own pull (GF question 6).
 """
 
 from __future__ import annotations
@@ -74,11 +75,10 @@ def eligible_other_machines(
     document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), skip: frozenset[str] = frozenset()
 ) -> frozenset[str]:
     """The other machines whose table gets the "or choose a package for it below" note, and that
-    `pull_other_step`'s list will show a row for -- both read this, under the same two conditions:
-    `machine` has a row of its own here at all, and the other machine has a shown row with a name.
-    Empty where `machine` has no row of its own: nothing of its own for "also" to follow (A3)."""
-    if not any(block.machine == machine for block in document.machines):
-        return frozenset()
+    `pull_other_step`'s list will show a row for -- both read this, under the one condition A3
+    names: the other machine has a shown row with a name. An import-only run (this machine has no
+    row of its own in the document at all) is asked all the same -- there is no "also" here, but
+    another chosen machine's own package still needs somewhere to go (Codex r1, finding 1)."""
     return frozenset(
         block.machine
         for block in document.machines

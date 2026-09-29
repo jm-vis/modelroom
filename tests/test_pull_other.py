@@ -156,6 +156,21 @@ def test_an_answer_outside_the_list_is_exit_2(tmp_path: Path):
         pull_other_step(run, context)
 
 
+def test_an_import_only_run_still_offers_another_machines_package(tmp_path: Path):
+    """This machine (`context.machine`) has no row of its own in the document at all -- an
+    import-only run, `this-machine` not chosen -- but another chosen machine still has a package:
+    `pull_other_step` asks and hands it over all the same (Codex r1-1; the extra condition the
+    first round added -- "this machine has a row here too" -- is gone)."""
+    doc = document_multi({"server-a": [Q8]})  # no block for "workstation" at all
+    context = PullContext(doc, "workstation", [Q8], ambiguous_names([Q8]))
+    asker = _Recording({KEY: f"server-a {NAME_Q8}"})
+    run, lines = _run(tmp_path, asker)
+
+    pull_other_step(run, context)
+
+    assert any("modelroom pull" in line and NAME_Q8 in line for line in lines)
+
+
 # --- the handover ---------------------------------------------------------------------------------
 
 

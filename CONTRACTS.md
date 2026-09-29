@@ -4249,12 +4249,12 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    AP9-UX2 (U3) every other machine of a guided run with an Ollama name in `#1` gets `install   #1 on
    server (a1b2c3d4)  ollama pull <name>` and under it, since AP9-FR A3, `run it on that computer, or
    choose a package for it below` where that machine's table has at least one row with a pull name
-   **and** this machine has a row of its own here too (`pull_other.eligible_other_machines`, the one
-   place both this note and the `pull_other` list below read from, so the two never disagree); else
-   the note stays `run it on that computer; this run pulls only onto this one` -- no pull, no
-   question, no list. A pull name that is not unique has the note `#1 has no command: its pull name
-   is not unique` instead (U4). Rows that look alike carry a `repo` line each directly under the
-   table (U4, "The pull").
+   (`pull_other.eligible_other_machines`, the one place both this note and the `pull_other` list
+   below read from, so the two never disagree) -- whether or not this machine has a row of its own
+   here (an import-only run asks `pull_other` too, Codex r1-1); else the note stays `run it on that
+   computer; this run pulls only onto this one` -- no pull, no question, no list. A pull name that
+   is not unique has the note `#1 has no command: its pull name is not unique` instead (U4). Rows
+   that look alike carry a `repo` line each directly under the table (U4, "The pull").
 7. `pull_other` -- AP9-FR A3, `modelroom/pull_other.py`. Where the note above promises a list, one
    follows step 5's own pull question (`guided_install.pull_step`): one heading per other chosen
    machine that has a shown row at all, its rows under it exactly as locked as in its own table (a
@@ -5196,7 +5196,7 @@ matter, so the move is invisible to it.
 | 4 | `load_test_packages` | Which of these should be measured? | a list of local Ollama names and `vllm` for a vLLM server that states a model (only after `load_test` true, where a server offers a row) |
 | 5 | `pull_package` | Which package should be pulled into Ollama? | the Ollama name of a row of the list, or `none` (AP9-UX2 U6); optional: without it `#1` is taken where it has a pull name of its own, else nothing; a name the list does not offer, or a locked row, is exit 2 |
 | 5 | `pull` | Pull #1 into Ollama now? (the screen names the row chosen and adds its weight: `Pull #3 into Ollama now? (5.0 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a chosen row that has an Ollama name of its own and is not local already, enough disk or disk unknown, and a daemon the start screen reached) |
-| 5 | `pull_other` | Which package should go onto another computer? (AP9-FR A3, `pull_other.py`) | `<machine> <pull name>` (a value flat like every other, `answers.py:26-33`) out of the shown rows of every other **chosen** machine, or `none` -- optional: without it nothing is chosen, silently (one target machine at most, GF question 6); a value the list does not offer, or a locked row's, is exit 2; asked only where this machine has a row of its own in the document **and** at least one other chosen machine has a shown row with a pull name (A2); the chosen row's command (`modelroom pull <name> --weights-bytes <n>`) is printed, never sent anywhere -- `modelroom pull` (A4, below) is what runs it, pasted on the machine it names |
+| 5 | `pull_other` | Which package should go onto another computer? (AP9-FR A3, `pull_other.py`) | `<machine> <pull name>` (a value flat like every other, `answers.py:26-33`) out of the shown rows of every other **chosen** machine, or `none` -- optional: without it nothing is chosen, silently (one target machine at most, GF question 6); a value the list does not offer, or a locked row's, is exit 2; asked whenever at least one other chosen machine has a shown row with a pull name (A2), whether or not this machine has a row of its own -- an import-only run is asked too (Codex r1-1); the chosen row's command (`modelroom pull <name> --weights-bytes <n>`) is printed, never sent anywhere -- `modelroom pull` (A4, below) is what runs it, pasted on the machine it names |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
@@ -5695,8 +5695,9 @@ its rule stay unchanged). Where a shown row of this machine has an Ollama name, 
 `Which package should be pulled into Ollama?` (key `pull_package`): one row per row of the table,
 regular and appended measured ones, in table order -- `#1  unsloth · Q4_K_S  5.0 GB
 hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S`, the name last and whole, `local already` behind a row the
-daemon provably holds -- then `none, do not pull`. A row without an Ollama name is locked (`no pull
-name`), so is every row whose name is not unique (below). Since AP9-RM U11 a row whose download is
+daemon provably holds -- then `none, do not pull`. A row without an Ollama name is locked (`no safe
+pull name`, AP9-FR A2 -- the same lock a name `PULL_NAME_RE` rejects gets, below), so is every row
+whose name is not unique (below). Since AP9-RM U11 a row whose download is
 larger than the free disk of this machine, as step 5 read it, stands in light red with what it needs
 in place of its name -- `#1  unsloth · Q6_K  94.1 GB  needs 94.1 GB plus 1 GB room, 26.4 GB free` -- and is locked
 too (an answer file that names it is exit 2; one without `pull_package` then pulls nothing). A
@@ -5713,7 +5714,7 @@ the note instead and no question; `none` is nothing. An answer file without `pul
 row's name is `pull_choice.entry_pull_name`, and `pull_other`'s (below) is the same function --
 both go through `screen.install_name`, the one choke point that checks the pattern before any name
 is ever returned. A row this pattern rejects is indistinguishable from one with no name at all: `no
-pull name`, locked, no install line, no `POST`.
+safe pull name`, locked, no install line, no `POST`.
 
 **`PullTarget`** (AP9-FR, the Umbau of A4) carries what the choice, the disk check and the pull
 itself need -- `daemon`, `disk` (a callable), `now`, `screen`, `asker`, `failed`, `where` -- so
@@ -5882,8 +5883,8 @@ exit `3`. **The three exceptions are `load_test`, `pull` and `pull_other`:** a f
 mention `load_test` measures nothing -- on no server -- one that does not mention `pull` does not
 pull, and one that does not mention `pull_other` chooses nothing for another computer (AP9-FR A3),
 because whether any of the three questions is reached at all depends on the machine the file is run
-on -- its daemon, its servers, what they already hold, and (for `pull_other`) whether this machine
-and another chosen one both have a package of their own -- not on the file. The key `load_test_vllm` of
+on -- its daemon, its servers, what they already hold, and (for `pull_other`) whether another
+chosen machine has a package of its own -- not on the file. The key `load_test_vllm` of
 AP9-SV1 is gone (AP9-UX E): the vLLM server is the row `vllm` of `load_test_packages`. An answer of the wrong shape (`pull = "yes"`) is still
 an error. A `load_test = true` without `load_test_packages` is a missing answer like any other.
 Since 2026-09-27 `machine_class` is asked on every measurement of this machine, so a file that
@@ -5948,9 +5949,12 @@ the machine that should get the package, whether or not modelroom ever measured 
    given), default No: a terminal asks it, `--yes` skips it outright and answers Yes, and without
    either: `no terminal to ask; add --yes`, exit `2`. **No** pulls nothing, exit `0`.
 6. **Yes** pulls it, with the same progress, success and error handling as the guided run's own
-   pull (`_send`, `_end_reason`, `pulled_problem` -- without a package known here, `pulled_problem`
-   checks only that the daemon lists the name afterwards, never a manifest digest: "ohne
-   Digestteil"). A fault is one line and exit `1`; success prints `✓ Pulled <name> (<size>)`.
+   pull (`_send`, `_end_reason`, `pulled_problem`, `screen.pulled_line` -- without a package known
+   here, `pulled_problem` checks only that the daemon lists the name afterwards, never a manifest
+   digest: "ohne Digestteil"). A fault is one line and exit `1`; success prints the same line the
+   guided run's own pull does, size included where one was known: `✓ Pulled    <name> · <size> ·
+   say Yes in step 4 of the next run to measure it` -- the sentence names the guided run because
+   this command reuses its success line unchanged (`cli_pull.py` passes no `hint` of its own).
 
 **`PullTarget`** (`guided_install.py`) is what steps 4 and 6 draw on either way: seven fields --
 `daemon`, `disk` (a callable, read fresh at the check, not a value), `now`, `screen`, `asker`,

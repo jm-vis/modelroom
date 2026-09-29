@@ -609,8 +609,11 @@ def pulled_line(
     """The line a pull that ended in `success` leaves behind, and what to do with the package next.
 
     `weights_gib` is `None` where no size was ever known (`modelroom pull` without
-    `--weights-bytes`, A4); `hint` is the guided run's own reminder of its next step, `None` for a
-    run with no next step of its own to point to (A4 again: `cli_pull.py` passes `None`).
+    `--weights-bytes`, A4); `hint` is the guided run's own reminder of its next step -- A4 passes no
+    `hint` of its own either (`cli_pull.py` reuses `guided_install._pull` unchanged, the same
+    progress, success and error handling the brief asks for), so a `modelroom pull` success line
+    reads exactly like the guided run's. `hint=None` remains for a caller with no next step of its
+    own to point to at all.
     """
     size = f" {marks.dot} {weights_gib:.1f} GB" if weights_gib is not None else ""
     tail = f" {marks.dot} {hint}" if hint else ""

@@ -4,6 +4,7 @@ with no results folder and no configuration -- only this machine's daemon and di
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
 
 import pytest
@@ -13,6 +14,7 @@ from prompt_toolkit.output import DummyOutput
 from modelroom.cli_pull import ALREADY_LISTED, NOT_REACHABLE, NO_TERMINAL, UNKNOWN_SIZE, run_pull
 from modelroom.daemon import PULL_PATH, TAGS_PATH, VERSION_PATH, FixtureDaemon
 from modelroom.dialog import TerminalAsker
+from modelroom.http import Response
 from modelroom.room import PULL_DISK_MARGIN_BYTES
 
 from fixture_room import FREE_DISK_BYTES, fixed_room
@@ -115,7 +117,11 @@ def test_yes_pulls_and_says_pulled(capsys):
 
     out = capsys.readouterr()
     assert code == 0
-    assert any(line.strip().startswith("✓ Pulled") for line in out.out.splitlines())
+    # The exact line the guided run's own pull leaves behind (Codex r1-6): `cli_pull.py` passes no
+    # `hint` of its own, so A4's success line reads identically, size and all.
+    weights_gib = 1024 / (1024**3)
+    expected = f"✓ Pulled    {NAME} · {weights_gib:.1f} GB · say Yes in step 4 of the next run to measure it"
+    assert any(line.strip() == expected for line in out.out.splitlines())
     assert any(call[1] == PULL_PATH for call in daemon.calls)
 
 
@@ -142,3 +148,81 @@ def test_a_pull_error_is_exit_1_one_line(capsys):
     assert code == 1
     assert len(err_lines) == 1
     assert "timed out" in err_lines[0]
+
+
+# --- Ctrl-C over the whole of it (Codex r1-3) ----------------------------------------------------
+
+
+class _InterruptingDaemon:
+    """Answers version/tags/pull plainly; raises `KeyboardInterrupt` for one named call."""
+
+    base_url = "http://127.0.0.1:11434"
+
+    def __init__(self, interrupt_on: tuple[str, str] | None = None) -> None:
+        self._interrupt_on = interrupt_on
+        self.calls: list[tuple[str, str, dict | None]] = []
+
+    def __call__(self, method: str, path: str, body: dict | None = None, progress=None) -> Response:
+        self.calls.append((method, path, body))
+        if (method, path) == self._interrupt_on:
+            raise KeyboardInterrupt
+        if path == VERSION_PATH:
+            return Response(status=200, body=b'{"version":"0.34.4"}')
+        if path == TAGS_PATH:
+            return Response(status=200, body=b'{"models": []}')
+        if path == PULL_PATH:
+            return Response(status=200, body=b'{"status":"success"}\n')
+        raise AssertionError(f"unexpected call: {method} {path}")
+
+
+class _InterruptingAsker:
+    """An `Asker` whose `confirm` is Ctrl-C itself, at the question."""
+
+    def confirm(self, key: str, question: str, default: bool = True) -> bool:
+        raise KeyboardInterrupt
+
+
+def test_ctrl_c_during_the_version_check_is_exit_130(capsys):
+    daemon = _InterruptingDaemon(interrupt_on=("GET", VERSION_PATH))
+
+    code = run_pull(NAME, weights_bytes=1024, yes=True, daemon=daemon, room=fixed_room(), now=NOW)
+
+    assert code == 130
+    assert "stopped at your request" in capsys.readouterr().err
+
+
+def test_ctrl_c_during_the_tags_check_is_exit_130(capsys):
+    daemon = _InterruptingDaemon(interrupt_on=("GET", TAGS_PATH))
+
+    code = run_pull(NAME, weights_bytes=1024, yes=True, daemon=daemon, room=fixed_room(), now=NOW)
+
+    assert code == 130
+
+
+def test_ctrl_c_during_the_disk_check_is_exit_130(capsys):
+    daemon = _InterruptingDaemon()
+
+    def raises(_path) -> int:
+        raise KeyboardInterrupt
+
+    room = dataclasses.replace(fixed_room(), disk_usage=raises)
+
+    code = run_pull(NAME, weights_bytes=1024, yes=True, daemon=daemon, room=room, now=NOW)
+
+    assert code == 130
+
+
+def test_ctrl_c_at_the_question_is_exit_130(capsys):
+    daemon = _InterruptingDaemon()
+
+    code = run_pull(NAME, weights_bytes=1024, daemon=daemon, room=fixed_room(), now=NOW, asker=_InterruptingAsker())
+
+    assert code == 130
+
+
+def test_ctrl_c_during_the_pull_itself_is_exit_130(capsys):
+    daemon = _InterruptingDaemon(interrupt_on=("POST", PULL_PATH))
+
+    code = run_pull(NAME, weights_bytes=1024, yes=True, daemon=daemon, room=fixed_room(), now=NOW)
+
+    assert code == 130

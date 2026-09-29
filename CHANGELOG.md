@@ -30,8 +30,9 @@ All notable changes to this project are documented in this file. The format foll
   `pull_choice.PULL_NAME_RE` first -- a Hub or registry answer outside `hf.co/<owner>/<repo>:<quant>`
   or `[<ns>/]<name>:<tag>` is no name at all, never a table row, a command or a `POST`. After the
   local pull, the run also asks **Which package should go onto another computer?** for every other
-  chosen machine with a package of its own (only where this computer was measured or ranked too);
-  choosing one hands over `modelroom pull <name> --weights-bytes <n>` to paste there -- a new
+  chosen machine with a package of its own -- even a run that only ever imported that machine and
+  never measured or ranked this computer at all; choosing one hands over
+  `modelroom pull <name> --weights-bytes <n>` to paste there -- a new
   subcommand, with no results folder and no configuration, that checks Ollama and the free disk on
   that computer and asks before it pulls (`--yes` for a terminal-less run). A machine already read
   over SSH is left to the SSH way (FR-B1, not yet built) instead.

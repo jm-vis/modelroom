@@ -29,7 +29,9 @@ from .room import Disk
 from .screen import install_name
 
 NONE_VALUE = "none"
-NO_PULL_NAME = "no pull name"
+# A2 (AP9-FR, Codex r1-5): "no safe pull name", not "no pull name" -- the one lock text a row
+# without a name gets, whether it genuinely has none or `install_name` rejected the one it built.
+NO_PULL_NAME = "no safe pull name"
 NOT_UNIQUE = "pull name not unique"
 LOCAL_ALREADY = "local already"
 QUESTION = "Which package should be pulled into Ollama?"

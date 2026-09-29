@@ -263,6 +263,12 @@ def test_a_name_outside_the_pattern_has_no_command():
 BAD_REPO = "unslоth/Nova-7B-GGUF"
 
 
+def test_the_lock_text_is_no_safe_pull_name():
+    """A2 names the lock text outright: `no safe pull name`, not the older `no pull name`
+    (Codex r1-5)."""
+    assert NO_PULL_NAME == "no safe pull name"
+
+
 def test_such_a_row_is_locked_in_every_list():
     bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
     rows = pull_rows(document([bad, Q4]), "workstation")
@@ -286,6 +292,52 @@ def test_no_install_or_handover_line_carries_it():
     locked = next(choice for choice in choices if choice.disabled == NO_PULL_NAME)
     assert "о" not in locked.value
     assert not any("modelroom pull" in choice.label or "modelroom pull" in choice.value for choice in choices)
+
+
+def test_the_markdown_view_carries_no_command_for_an_unsafe_name():
+    """`docs/models.md` never carries an install command at all -- checked here so A2 does not rest
+    on that being true only by the accident of what `document_markdown` happens to draw (Codex r1-2)."""
+    from modelroom.views import document_markdown
+
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+
+    markdown = document_markdown(document([bad, Q4], "workstation"))
+
+    assert "ollama pull" not in markdown
+
+
+def test_a_forced_unsafe_answer_to_pull_is_refused_and_never_posted(tmp_path: Path):
+    """`pull_step`: a hand-edited answer file naming the row's would-be pull name is not an answer
+    this list can take -- the row's own value is `#1 locked`, never the name (Codex r1-2)."""
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+    context = _context([bad, Q4])
+    daemon = _daemon()
+    forced = f"hf.co/{BAD_REPO}:Q4_K_M"
+    asker = _Recording({"pull_package": forced, "pull": True})
+    run, _lines = _run(tmp_path, asker, daemon)
+
+    with pytest.raises(AnswerInvalidError):
+        pull_step(run, context, True)
+    assert not any(call[1] == PULL_PATH for call in daemon.calls)
+
+
+def test_a_forced_unsafe_answer_to_pull_other_is_refused_and_hands_over_nothing(tmp_path: Path):
+    """`pull_other_step`: the same forced value on the other-machine question is refused too, and no
+    handover line is ever written (Codex r1-2). `server-a` also carries `Q8` -- a real named row --
+    so the question is eligible and asked at all; the bad row alone would make the list offer
+    nothing but `none` and never reach an answer to refuse."""
+    from modelroom.pull_other import pull_other_step
+
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+    doc = document_multi({"workstation": [Q4], "server-a": [bad, Q8]})
+    context = PullContext(doc, "workstation", [Q4, bad, Q8], ambiguous_names([Q4, bad, Q8]))
+    forced = f"server-a hf.co/{BAD_REPO}:Q4_K_M"
+    asker = _Recording({"pull_other": forced})
+    run, lines = _run(tmp_path, asker)
+
+    with pytest.raises(AnswerInvalidError):
+        pull_other_step(run, context)
+    assert not any("modelroom pull" in line for line in lines)
 
 
 def test_every_name_of_the_fixture_chain_passes():

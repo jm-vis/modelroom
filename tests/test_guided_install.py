@@ -448,6 +448,28 @@ def test_pull_target_carries_every_field_the_helpers_read(tmp_path: Path):
     assert lines and lines[-1].strip().startswith("✓ Pulled")
 
 
+def test_a_first_row_without_weights_bytes_computes_them_from_the_package(tmp_path: Path):
+    """An older `FirstRow(rank, name, weights_gib, package)` call, with no fifth argument, still
+    gets a real disk check -- not one against `0` bytes (Codex r1-4)."""
+    from fixture_room import fixed_room
+    from modelroom.room import free_disk
+
+    package = granite_ollama_package()
+    old_style = FirstRow(1, "granite4.2:8b", 5.0, package)  # no weights_bytes: the pre-A4 call shape
+
+    assert old_style.weights_bytes is None
+    assert old_style.needed_bytes == weights_bytes_of(package) > 0
+
+    daemon = pull_daemon()
+    lines: list[str] = []
+    run = _bare_run(tmp_path, daemon, {}, lines)
+    tiny_room = fixed_room(free_disk_bytes=1024)  # far less than the package needs
+    target = dataclasses.replace(pull_target_from_run(run), disk=lambda: free_disk(tiny_room))
+
+    assert _disk_allows(target, old_style) is False  # not silently allowed as a 0-byte download
+    assert any("not enough disk" in line for line in lines)
+
+
 class _Daemon:
     """Just `/api/tags`, for the reader the step shares with the load test."""
 

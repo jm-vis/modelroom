@@ -74,6 +74,16 @@ class FirstRow:
     package: Package | None = None
     weights_bytes: float | None = None
 
+    @property
+    def needed_bytes(self) -> float | None:
+        """`weights_bytes` where it was given; else computed from `package.files` where there is
+        one (Codex r1-4: an older `FirstRow(rank, name, weights_gib, package)` call, with no fifth
+        argument, still gets a real disk check instead of silently checking against `0`); `None`
+        with neither -- A4 without `--weights-bytes` and without a package."""
+        if self.weights_bytes is not None:
+            return self.weights_bytes
+        return weights_bytes_of(self.package) if self.package is not None else None
+
 
 def first_row(document: RenderDocument, machine: str, packages: Sequence[Package]) -> FirstRow | None:
     """This machine's first row with its Ollama name and its package from the snapshot, or `None`.
@@ -182,13 +192,13 @@ def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: boo
 
 def _disk_allows(target: PullTarget, first: FirstRow) -> bool:
     """Measured again now (U8): enough disk asks; too little says so and asks nothing; unknown asks
-    with a note. `first.weights_bytes` is `None` only where A4 was given no `--weights-bytes` at
-    all (`cli_pull.py` skips this call then; its own note covers that case)."""
+    with a note. `first.needed_bytes` is `None` only where A4 was given no `--weights-bytes` at
+    all and no package (`cli_pull.py` skips this call then; its own note covers that case)."""
     disk = target.disk()
     if not disk.known:
         target.screen.note(DISK_UNKNOWN)
         return True
-    need = pull_need_bytes(first.weights_bytes or 0.0)
+    need = pull_need_bytes(first.needed_bytes or 0.0)
     if disk.free_bytes >= need:
         return True
     which = f" for #{first.rank}" if first.rank is not None else ""

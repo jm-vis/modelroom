@@ -52,7 +52,30 @@ def run_pull(
     """`modelroom pull`: `0` pulled or the user said no, `1` a daemon/disk/pull fault, `2` an
     invalid name or no way to ask, `130` Ctrl-C. `asker` is dependency injection for a test
     (`tests/test_cli_pull.py`, a `TerminalAsker` over a pipe): the real CLI never passes it, and
-    without one a terminal asks, or `--yes` skips the question, or there is no way to ask at all."""
+    without one a terminal asks, or `--yes` skips the question, or there is no way to ask at all.
+
+    Ctrl-C covers the whole of it (Codex r1-3): version check, the tags note, the disk check, the
+    question and the pull itself all run under the one `try` below, so a `KeyboardInterrupt` in any
+    of them -- not only the dialog and the pull -- ends the command the same way, exit `130`.
+    """
+    try:
+        return _run_checked(name, weights_bytes, yes, daemon, room, now, out, asker)
+    except KeyboardInterrupt:
+        print("stopped at your request; nothing was pulled", file=sys.stderr)
+        return 130
+
+
+def _run_checked(
+    name: str,
+    weights_bytes: float | None,
+    yes: bool,
+    daemon: Daemon | None,
+    room: RoomProbes | None,
+    now: datetime | None,
+    out: Callable[[str], None] | None,
+    asker: Asker | None,
+) -> int:
+    """Steps 1-2 of `run_pull`, under its one Ctrl-C boundary."""
     if PULL_NAME_RE.fullmatch(name) is None:
         print(f"{name!r} {NOT_SAFE}", file=sys.stderr)
         return 2
@@ -101,7 +124,9 @@ def _pull_checked(
 def _ask_and_pull(
     target: PullTarget, first: FirstRow, weights_gib: float | None, name: str, yes: bool, asker: Asker | None, problems: list[str]
 ) -> int:
-    """Step 5 (the question) and step 6 (the pull itself) of `run_pull`."""
+    """Step 5 (the question) and step 6 (the pull itself) of `run_pull`. A `KeyboardInterrupt` from
+    either -- the dialog or `_pull` -- is not caught here: `run_pull`'s one `try` covers it, along
+    with every step before this one (Codex r1-3)."""
     question = pull_question(None, weights_gib, name)
     try:
         wants = _confirm(question, yes, asker)
@@ -111,16 +136,10 @@ def _ask_and_pull(
     except Canceled as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except KeyboardInterrupt:
-        print("stopped at your request; nothing was pulled", file=sys.stderr)
-        return 130
     target.screen.answer(question, yes_no(wants))
     if not wants:
         return 0
-    try:
-        _pull(target, first, live_line(target))
-    except KeyboardInterrupt:
-        return 130
+    _pull(target, first, live_line(target))
     return 1 if problems else 0
 
 

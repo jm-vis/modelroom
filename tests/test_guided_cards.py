@@ -309,18 +309,25 @@ def test_the_empty_card_names_the_origin(tmp_path: Path):
     assert IMPORTED_WORDS in card
 
 
-def test_another_computer_gets_its_install_line_and_no_pull(tmp_path: Path):
+def test_another_computer_gets_its_install_line_and_no_local_pull(tmp_path: Path):
+    """`no_pull` in the old name meant no *local* pull: this machine has no row of its own here
+    (only the imported one is ranked), but `pull_other` is asked all the same -- the imported
+    machine has a named row, and A3's condition no longer requires a row of this machine's own
+    (Codex r1-1). Answered `none`, so the question shows without a handover."""
     from fixture_support import pull_daemon
 
     daemon = pull_daemon()
-    code, lines = _run(tmp_path, _import_answers(tmp_path, ["import"], pull=True), daemon=daemon)
+    code, lines = _run(tmp_path, _import_answers(tmp_path, ["import"], pull=True, pull_other="none"), daemon=daemon)
 
     assert code == 0
     card = _after(lines, "── Step 5 of 5")
     install = [line for line in card if line.startswith("install")]
     assert install and all(line.startswith(f"install   #1 on {SERVER}") and "ollama pull hf.co/" in line for line in install)
-    # This machine has no row of its own here (only the imported one is ranked): `pull_other`
-    # follows nothing of its own either (AP9-FR A3), so the note stays the plain one.
-    assert "run it on that computer; this run pulls only onto this one" in card
-    assert not any(line.startswith("? ") for line in card)  # no list, no question: nothing of this machine
+    # A named row on the imported machine's own table: the note now points at the list below.
+    assert "run it on that computer, or choose a package for it below" in card
+    # The `pull_other` question is the only one asked here: this machine itself has no row (no
+    # local pull to ask about), but the imported machine's own package is still offered.
+    questions = [line for line in card if line.startswith("? ")]
+    assert len(questions) == 1 and "another computer" in questions[0]
+    assert not any("modelroom pull" in line for line in card)  # `none`: no handover was written
     assert not any(call[1] == "/api/pull" for call in daemon.calls)

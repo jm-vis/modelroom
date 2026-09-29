@@ -292,11 +292,12 @@ A row the daemon already has gets a note instead of the question. Rows that look
 repository under the table. A machine that is not this computer -- imported, entered by hand, or
 another profile of the folder -- says so on the card and in its table head, and gets its command to
 copy there: this run pulls only onto this one. Where that other machine's table has a package of its
-own and this run measured or ranked this computer too, step 5 also asks **Which package should go
-onto another computer?** afterwards, with the rows of every other chosen machine under its own
-heading; choosing one hands over `modelroom pull <name> --weights-bytes <n>` to paste on that
-computer, which checks Ollama and the disk there and asks before it pulls -- so a machine reached
-only by copy-paste, not by this run's own daemon, still gets its package. The first row is the largest model
+own, step 5 also asks **Which package should go onto another computer?** afterwards -- even for a
+run that only ever imported that other machine and never measured or ranked this computer at all --
+with the rows of every other chosen machine under its own heading; choosing one hands over
+`modelroom pull <name> --weights-bytes <n>` to paste on that computer, which checks Ollama and the
+disk there and asks before it pulls -- so a machine reached only by copy-paste, not by this run's
+own daemon, still gets its package. The first row is the largest model
 that fits, in the least compression of it that fits -- "best" means the same model, less
 compressed; modelroom rates no model family against another. With several models the table shows
 one row per model, its best package; a package you measured here that the rule leaves out is added
