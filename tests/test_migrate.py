@@ -22,9 +22,12 @@ from modelroom.contracts import HardwareSnapshot, SchemaVersionError
 from modelroom.examples import EXAMPLES
 from modelroom.measurements import legacy_measurement_record, measurement_path, read_measurements
 from modelroom.migrate import NOTHING_TO_DO, MigrationError, migrate
+from modelroom.neutral import NeutralError
 from modelroom.profile import HardwareProfile
 from modelroom.state import acquire_lock, release_lock
 from modelroom.toml_writer import dump_toml
+
+from fixture_support import windows_probes
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NOW = datetime(2026, 9, 23, 12, 0, 0, tzinfo=timezone.utc)
@@ -73,14 +76,16 @@ def test_first_run_migrates_profiles_measurements_and_configuration(tmp_path):
 
     hardware = tmp_path / "state" / "hardware"
     assert len([line for line in lines if line.startswith("migrated")]) == 3
-    assert f"machine renamed to {LAPTOP} (no host names in files)" in lines  # FR-N, after the migration
+    assert f"machine renamed to {LAPTOP} (no host names in files)" in lines  # FR-N
+    # FR-N: each schema-1 file is kept under its profile's name, with a neutral key (Codex FR-N r1-4).
     assert sorted(p.name for p in hardware.iterdir()) == [
         "a1aaaaaaaaaaaaaa.json",
+        "a1aaaaaaaaaaaaaa.json.v1.bak",
         "a2aaaaaaaaaaaaaa.json",
-        "laptop.json.v1.bak",
-        "server.json.v1.bak",
+        "a2aaaaaaaaaaaaaa.json.v1.bak",
     ]
-    assert (hardware / "laptop.json.v1.bak").read_bytes() == original_laptop
+    kept = json.loads((hardware / "a1aaaaaaaaaaaaaa.json.v1.bak").read_text(encoding="utf-8"))
+    assert (kept["schema_version"], kept["machine"], set(kept) <= set(json.loads(original_laptop)) | {"installed", "installed_unavailable_reason", "free_ram_gib_at_measurement", "gpu_name", "backend"}) == (1, "computer-a1aaaaaa", True)
     # The backup, swept of the machine names (FR-N): only the table heads differ.
     assert (tmp_path / "modelroom.toml.v1.bak").read_bytes() == _heads(original_config)
 
@@ -176,17 +181,18 @@ def test_an_unreadable_profile_stops_before_anything_is_written(tmp_path, conten
     config_path = _deployment(tmp_path)
     (tmp_path / "state" / "hardware" / "broken.json").write_text(content, encoding="utf-8")
     before = _tree(tmp_path)
-    with pytest.raises(MigrationError, match="broken.json"):
+    # FR-N: a profile that does not read cannot be cleaned; the sweep before the migration stops it.
+    with pytest.raises(NeutralError, match="could not be cleaned"):
         migrate(config_path, NOW, fresh_id=_ids())
     assert _tree(tmp_path) == before
 
 
 def test_a_backup_with_other_content_stops_before_anything_is_written(tmp_path):
     config_path = _deployment(tmp_path, profiles=("windows-nvidia-laptop.json",))
-    backup = tmp_path / "state" / "hardware" / "laptop.json.v1.bak"
-    backup.write_text("someone else's file", encoding="utf-8")
+    backup = tmp_path / "state" / "hardware" / "a1aaaaaaaaaaaaaa.json.v1.bak"  # the backup's name since FR-N
+    backup.write_text("{}", encoding="utf-8")
     before = _tree(tmp_path)
-    with pytest.raises(MigrationError, match="backup exists"):
+    with pytest.raises(MigrationError, match="exists with other content"):
         migrate(config_path, NOW, fresh_id=_ids())
     assert _tree(tmp_path) == before
     assert not (tmp_path / "state" / "modelroom.lock").exists()  # refused before the lock
@@ -201,13 +207,17 @@ def test_a_configuration_backup_with_other_content_stops_before_anything_is_writ
     assert _tree(tmp_path) == before
 
 
-@pytest.mark.parametrize("backup_name", ["modelroom.toml.v1.bak", "state/hardware/laptop.json.v1.bak"])
+@pytest.mark.parametrize("backup_name", ["modelroom.toml.v1.bak", "state/hardware/a1aaaaaaaaaaaaaa.json.v1.bak"])
 def test_cli_migrate_with_a_folder_at_a_backup_path_exits_3_without_writing(tmp_path, capsys, backup_name):
     config_path = _deployment(tmp_path, profiles=("windows-nvidia-laptop.json",))
     (tmp_path / backup_name).mkdir()
     before = _tree(tmp_path)
-    assert main(["migrate", "--config", str(config_path)], now=NOW) == 3
-    assert Path(backup_name).name in capsys.readouterr().err
+    if "hardware" in backup_name:  # named by the new profile id since FR-N: the ids of this run are drawn here
+        with pytest.raises(MigrationError, match=Path(backup_name).name):
+            migrate(config_path, NOW, fresh_id=_ids())
+    else:
+        assert main(["migrate", "--config", str(config_path)], now=NOW, probes=windows_probes()) == 3
+        assert Path(backup_name).name in capsys.readouterr().err
     assert _tree(tmp_path) == before
     assert not (tmp_path / "state" / "modelroom.lock").exists()  # refused before the lock
 

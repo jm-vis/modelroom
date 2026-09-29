@@ -101,7 +101,8 @@ def test_a_folder_that_went_from_1_to_2_and_to_3_keeps_every_backup(tmp_path: Pa
 
     migrate(config, NOW)
 
-    assert (hardware / "laptop.json.v1.bak").read_bytes() == v1
+    # FR-N: the schema-1 backup takes a neutral name of its content; the other backups stay.
+    assert not (hardware / "laptop.json.v1.bak").exists() and len(list(hardware.glob("legacy-*.json.v1.bak"))) == 1
     assert (hardware / f"{V3_ID}.json.v2.bak").read_bytes() == v2
     assert (hardware / f"{V3_ID}.json.v3.bak").is_file() and _schema(hardware / f"{V3_ID}.json") == 4
     assert _quiet(migrate(config, NOW)) == [NOTHING_TO_DO]
@@ -129,7 +130,7 @@ def test_a_schema_1_profile_lands_on_schema_4_in_one_run(tmp_path: Path):
     migrate(config, NOW, fresh_id=lambda: "aaaaaaaaaaaaaaa1")
     hardware = tmp_path / "state" / "hardware"
     assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
-    assert sorted(p.name for p in hardware.iterdir()) == ["aaaaaaaaaaaaaaa1.json", "laptop.json.v1.bak"]
+    assert sorted(p.name for p in hardware.iterdir()) == ["aaaaaaaaaaaaaaa1.json", "aaaaaaaaaaaaaaa1.json.v1.bak"]  # FR-N
 
 
 def test_a_run_of_0_1_0_that_stopped_with_a_schema_3_target_converges_on_schema_4(tmp_path: Path):
@@ -142,8 +143,8 @@ def test_a_run_of_0_1_0_that_stopped_with_a_schema_3_target_converges_on_schema_
 
     assert sorted(p.name for p in hardware.iterdir()) == [
         "aaaaaaaaaaaaaaa1.json",
+        "aaaaaaaaaaaaaaa1.json.v1.bak",  # FR-N: named after its profile
         "aaaaaaaaaaaaaaa1.json.v3.bak",
-        "laptop.json.v1.bak",
     ]
     assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
     assert _quiet(migrate(config, NOW)) == [NOTHING_TO_DO]

@@ -13,9 +13,12 @@ All notable changes to this project are documented in this file. The format foll
   (`<class>-<first 8 hex of the profile id>`, this computer `computer-<random>` from the new per-user
   file `~/.modelroom/remote.json`), a measurement record keeps the package name built from the
   package, fixed sentences as reasons, and a daemon version only as `X.Y.Z`. Every writing command
-  first sweeps its folder with the same rules -- profiles, configuration (its comments kept), records
-  and modelroom's own backups -- and writes nothing when that cannot be done (exit `1`). Exports carry
-  the neutral name; an import neutralizes before it plans. The load test shows and stores a package by
+  first sweeps its folder with the same rules -- profiles, configuration (keys renamed where they
+  stand, its comments kept; paths inside the folder made relative), records, modelroom's own backups
+  and the result documents (removed where they would keep an old name; the next render writes them)
+  -- and writes nothing when that cannot be done (exit `1`). Exports carry the neutral name and hold
+  `modelroom.lock`; an import neutralizes before it plans. The first key of this computer is made
+  under a lock of the user account (`remote.lock`). The load test shows and stores a package by
   the name built from the package, never by the name the daemon holds it under. The host name of this
   computer stands only in the start line, read live.
 
@@ -197,7 +200,11 @@ All notable changes to this project are documented in this file. The format foll
   files)`). A script calling `fetch --machine <old key>` is led to the new key in that call and meets
   the unknown-machine message afterwards: take the new key from `modelroom.toml`. The name typed for a
   machine entered by hand no longer reaches a file. A migration that stopped halfway finds its
-  profile by content, not by name. `hardware` no longer reads the host name at all.
+  profile by content, not by name, and names a schema-1 profile backup by the profile it became
+  (`<profile_id>.json.v1.bak`). A profile or record file that does not read as a JSON object now ends
+  every writing command with exit `1` (before: listed as broken and skipped), since it cannot be
+  cleaned of names -- a deliberate change, decided 2026-09-29: move the file away or repair it. `hardware` no longer stores the host name; every command reads it
+  live only to recognize this computer's key of 0.1.0, and writes it nowhere.
 
 - **The memory reserve follows the machine's size** (`modelroom/reserve.py`, `fit.py`, `config.py`;
   CONTRACTS.md, "MachineConfig", "Pool and mode"; ADR 0012; AP9-RM, decided 2026-09-29). Where

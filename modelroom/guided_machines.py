@@ -26,7 +26,7 @@ from .guided_entered import entered_class
 from .importer import ProfileScan, _label
 from .intro import card_names, class_words, graphics_words
 from .profile import HardwareProfile
-from .screen import this_machine_words
+from .screen import THIS_MACHINE, this_machine_words
 
 _UNKNOWN = "unknown"
 PROFILE_PREFIX = "profile:"
@@ -111,11 +111,14 @@ def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None, name: str
 def machine_answer_words(scan: ProfileScan, bound: HardwareProfile | None, name: str) -> dict[str, str]:
     """The words of the answer line for each row that has words of its own (`screen.machines_words`)."""
     here = bound if _measured_here(bound) else None
-    words = {"this-machine": this_machine_words(name, _class_word(here))}
+    # The answer line names this machine by its class alone: its neutral key says nothing to a reader
+    # and would push the line over the width of the screen (FR-N); the list itself shows the key.
+    own = f"{THIS_MACHINE} ({_class_word(here)})" if _class_word(here) else THIS_MACHINE
+    words = {"this-machine": own}
     for key, profile in scan.profiles.items():
         words[f"{PROFILE_PREFIX}{key}"] = _label(profile, scan)
     if here is not None:
-        words[f"{PROFILE_PREFIX}{here.profile_id}"] = this_machine_words(name, _class_word(here))
+        words[f"{PROFILE_PREFIX}{here.profile_id}"] = own
     return words
 
 

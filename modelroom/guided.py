@@ -77,7 +77,7 @@ from .guided_search import (
     search_step,
 )
 from .http import RequestBudget, Transport, UrllibTransport
-from .guided_write import Change, Said, create_config, update_config, with_found_profiles, with_profile, with_writer
+from .guided_write import Change, Said, create_config, neutral_change, update_config, with_found_profiles, with_profile, with_writer
 from .importer import (
     ImportConflictError,
     PrerequisiteError,
@@ -90,7 +90,7 @@ from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_machine_class, read_os_identity
 from .measurements import Scenario
 from .migrate import MigrationError, backup_suffix, migrate
-from .neutral_sweep import sweep
+from .neutral_sweep import load_names, sweep
 from .remote_store import remote_path_for, this_machine
 from .profile import MACHINE_CLASSES, HardwareProfile, os_fingerprint
 from .screen import (
@@ -252,12 +252,14 @@ def _write_config(run: GuidedRun, config_file: Path, change: Change | Configurat
 
     A change goes through `guided_write.update_config` -- read, change, write, and once more on a
     conflict -- and a second conflict in a row is a dialog error (exit `2`). A held lock keeps its
-    own exit code (`1`), it is not a dialog error.
+    own exit code (`1`), it is not a dialog error. Every configuration written goes through the sink
+    first, the one read last included: a key another run added meanwhile is neutral too (FR-N).
     """
+    names = load_names(config_file.parent, run.pointer_path, run.probes.hostname())
     try:
         if isinstance(change, Configuration):
             return create_config(config_file, change, now=run.now)
-        return update_config(config_file, change, now=run.now)
+        return update_config(config_file, neutral_change(change, names), now=run.now)
     except (ConfigError, OSError) as exc:
         raise GuidedError(f"{config_file}: the configuration could not be written ({exc})") from exc
 

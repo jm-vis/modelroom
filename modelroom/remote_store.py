@@ -18,6 +18,8 @@ every command maps to exit `3`, like a broken pointer file.
 from __future__ import annotations
 
 import json
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -25,11 +27,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from .contracts import PROFILE_ID_RE, SchemaVersionError, check_schema_version
 from .neutral import THIS_MACHINE_RE, is_alias, random_key
-from .state import atomic_write_json
+from .state import LockHandle, LockHeldError, acquire_lock, atomic_write_json, release_lock
 
 REMOTE_SCHEMA_VERSION = 1
 REMOTE_SCHEMA_RANGE: tuple[int, int] = (1, 2)
 REMOTE_FILE_NAME = "remote.json"
+LOCK_FILE_NAME = "remote.lock"
+# Fixed sentences: no path of the user account, no value of the file (FR-N, the screen).
+BROKEN = "remote.json of your user account (next to guided.json) does not read as modelroom's; move it away and run again"
+UNWRITTEN = "remote.json of your user account (next to guided.json) could not be written; nothing else was written"
 
 
 class RemoteStoreError(Exception):
@@ -83,31 +89,59 @@ def read_remote(path: Path) -> RemoteStore:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError) as exc:
-        raise RemoteStoreError(f"{path}: cannot read remote.json: {exc}") from exc
-    if not isinstance(data, dict):
-        raise RemoteStoreError(f"{path}: expected a JSON object at the root")
-    version = data.get("schema_version")
+        raise RemoteStoreError(BROKEN) from exc
+    version = data.get("schema_version") if isinstance(data, dict) else None
     if not isinstance(version, int) or isinstance(version, bool):
-        raise RemoteStoreError(f"{path}: schema_version is missing or not an integer: {version!r}")
+        raise RemoteStoreError(BROKEN)
     try:
-        check_schema_version(version, REMOTE_SCHEMA_RANGE, str(path))
+        check_schema_version(version, REMOTE_SCHEMA_RANGE, REMOTE_FILE_NAME)
         return RemoteStore.model_validate(data)
     except (SchemaVersionError, ValidationError) as exc:
-        raise RemoteStoreError(f"{path}: invalid remote.json: {exc}") from exc
+        raise RemoteStoreError(BROKEN) from exc
 
 
-# The maker of a new key; tests replace it to get a fixed one (`tests/conftest.py`).
+# The maker of a new key; tests replace it to get a fixed one (`tests/conftest.py`). How long a first
+# key waits for another process making it (seconds).
+_WAIT = 10.0
 _NEW_KEY: Callable[[], str] = random_key
 
 
 def this_machine(path: Path) -> str:
-    """This computer's key: the stored one, else a new random one, stored before it is returned."""
+    """This computer's key: the stored one, else a new random one, stored before it is returned.
+
+    The first one is made under a lock of the user account (`remote.lock` next to the file, the kernel
+    lock of `state.acquire_lock`), read once more under it: of two processes that start at once the
+    second waits and takes the first one's key. A file that cannot be written is `RemoteStoreError`.
+    """
     stored = read_remote(path)
     if stored.this_machine is not None:
         return stored.this_machine
-    key = _NEW_KEY()
-    atomic_write_json(path, stored.model_copy(update={"this_machine": key}).model_dump(mode="json"))
-    return key
+    handle = _account_lock(path)
+    try:
+        stored = read_remote(path)
+        if stored.this_machine is not None:
+            return stored.this_machine
+        key = _NEW_KEY()
+        atomic_write_json(path, stored.model_copy(update={"this_machine": key}).model_dump(mode="json"))
+        return key
+    except OSError as exc:
+        raise RemoteStoreError(UNWRITTEN) from exc
+    finally:
+        release_lock(handle)
+
+
+def _account_lock(path: Path) -> LockHandle:
+    """The lock of this user's `remote.json`; another process holding it is waited for, `_WAIT` at most."""
+    deadline = time.monotonic() + _WAIT
+    while True:
+        try:
+            return acquire_lock(path.with_name(LOCK_FILE_NAME), "remote", datetime.now(timezone.utc))
+        except LockHeldError:
+            if time.monotonic() > deadline:
+                raise RemoteStoreError(UNWRITTEN) from None
+            time.sleep(0.05)
+        except OSError as exc:
+            raise RemoteStoreError(UNWRITTEN) from exc
 
 
 def aliases(path: Path) -> dict[str, str]:

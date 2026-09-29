@@ -447,8 +447,8 @@ def test_render_names_every_hardware_file_that_does_not_read(tmp_path: Path, cap
 
     code = main(["render", "--config", str(config_path)], now=RUN2)
 
-    assert code == 0
-    assert f"skipped {hardware_path.name}" in capsys.readouterr().out
+    assert code == 1  # FR-N (Codex r1-3): such a file may hold a name the sweep cannot clean
+    assert "could not be cleaned of machine names" in capsys.readouterr().err and not (tmp_path / "models.md").exists()
 
 
 def test_render_end_to_end_exit_0_writes_a_markdown_document(tmp_path: Path):

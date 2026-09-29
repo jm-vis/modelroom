@@ -47,7 +47,7 @@ from .measurements import (
 )
 from .migrate import NOTHING_TO_DO, backup_suffix  # one wording and one backup name, defined once
 from .neutral import is_alias, key_for, neutral_export
-from .neutral_sweep import load_names, snapshot_packages, sweep, sweep_locked
+from .neutral_sweep import load_names, snapshot_packages, sweep_locked
 from .profile import HardwareProfile, read_profile_document
 from .remote_store import aliases, remote_path_for
 from .state import LockHandle, acquire_lock, atomic_write_json, atomic_write_text, release_lock
@@ -170,15 +170,22 @@ def export_profile(
     The profile is the one named with `--profile`, else this machine's binding for the results
     folder (the configuration file's own folder). An unreadable measurement file is reported
     and left out; it does not stop the export. Writing is atomic (`atomic_write_json`), so a
-    reader of `out_path` never sees a half-written file. The sweep of machine names comes first
-    (FR-N) and takes the lock when it has something to clean; the export itself reads without
-    it, and the profile and every record go through the sink before they are written, so the
-    only effect of a concurrent write is that a measurement published during the export may not
-    be in it.
+    reader of `out_path` never sees a half-written file. The whole export holds `modelroom.lock`
+    (`LockHeldError` otherwise): the sweep of machine names comes first under it (FR-N), then the
+    profile and every record go through the sink before they are written.
     """
     resolved_config = config_path.resolve()
-    notes = sweep(resolved_config, datetime.now(timezone.utc), "export-profile", pointer_path=pointer_path, hostname=hostname).notes
     config = _load_config(resolved_config)
+    names = load_names(resolved_config.parent, pointer_path, hostname)
+    handle = acquire_lock(config.paths.lock_file, "export-profile", datetime.now(timezone.utc))
+    try:
+        notes = sweep_locked(resolved_config, names, handle).notes
+        return _export(_load_config(resolved_config), resolved_config, out_path, profile_id, pointer_path, notes)
+    finally:
+        release_lock(handle)
+
+
+def _export(config: Configuration, resolved_config: Path, out_path: Path, profile_id: str | None, pointer_path: Path, notes: list[str]) -> list[str]:
     results_dir = resolved_config.parent
     if profile_id is not None and not PROFILE_ID_RE.fullmatch(profile_id):
         raise PrerequisiteError(f"--profile must be a profile_id of 16 lowercase hex characters: {profile_id!r}")
@@ -290,17 +297,17 @@ def import_profile(
     config = _load_config(resolved_config)
     _read_raw_config(resolved_config)
     if name is not None and not is_alias(name):
-        raise PrerequisiteError(f"not a host alias: {name!r}")
+        raise PrerequisiteError("the name for this machine is no host alias (letters, digits, dashes)")
     incoming = read_export_file(export_path)
     names = load_names(resolved_config.parent, pointer_path or default_pointer_path(), hostname)
     handle = acquire_lock(config.paths.lock_file, "import-profile", now)
     try:
-        swept = sweep_locked(resolved_config, names)
         current = _load_config(resolved_config)
         if current.paths != config.paths:
             raise ImportConflictError(
                 f"{resolved_config}: [paths] changed while waiting for the lock; run again\n{NOTHING_WRITTEN}"
             )
+        swept = sweep_locked(resolved_config, names, handle)
         export = neutral_export(incoming, name, snapshot_packages(current))
         plan = plan_import(current, resolved_config, _read_raw_config(resolved_config), export, name)
         return [*(f"note: {note}" for note in swept.notes), *_execute(plan, current, resolved_config, handle)]

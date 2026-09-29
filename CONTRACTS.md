@@ -2885,9 +2885,13 @@ renders or copies it. `this_machine` is this computer's key in `[machines.<name>
 results folder this user runs on this computer, and not derivable from the host name. `ssh` maps
 a `profile_id` to the host alias it was read over SSH under (written by the SSH way, FR-B1); an
 alias belongs to one `profile_id` at most. Every write reads the file, changes one field and
-writes it back atomically. A missing file reads as empty; a broken one (not JSON, a field of its
-own, a `this_machine` of another shape, an alias outside the alias rule, schema 2) is
-`RemoteStoreError`, exit `3` for every command, like a broken pointer file.
+writes it back atomically. The first `this_machine` is made under a lock of the user account
+(`remote.lock` next to the file, the kernel lock of "Lock file"), the file read again under it: of
+two processes that start at once the second waits (10 s at most) and takes the first one's key. A
+missing file reads as empty; a broken one (not JSON, a field of its own, a `this_machine` of another
+shape, an alias outside the alias rule, schema 2) and one that cannot be written are
+`RemoteStoreError`, exit `3` for every command, said in a fixed sentence that names neither a path
+of the user account nor a value of the file.
 
 ```json
 {"schema_version": 1, "this_machine": "computer-5c1e9a07", "ssh": {"3f9a0c21d4e6b870": "gpu1"}}
@@ -2924,35 +2928,58 @@ every write of the configuration. A load test shows its candidates, its progress
 the name built from the package as well; the name the daemon holds it under is used for the calls
 to the daemon alone. `render` builds its document from the files the sweep has left neutral.
 
+**The whole configuration** (`modelroom/neutral_config.py`). Besides its keys, a configuration may
+name its folder: `paths.state`, `paths.markdown` and `[guided].results` are written relative to the
+configuration's own folder where they lie inside it (`state`, `docs/models.md`, `.`), since a
+folder's path can carry a user's or a machine's name; a path outside the folder is the user's own
+choice and stays. The guided mode puts every configuration it writes -- the one read last, with what
+another run wrote meanwhile -- through the key rule immediately before the write.
+
 **The sweep.** `neutral_sweep.sweep` runs the same rules over the files a folder already holds:
-the profiles (only `display_name` changes, in the schema they are stored in), the configuration (the
-table heads `[machines.<old>]` replaced in the text, so its comments stay; a file whose machines are
-not written as table heads is written anew by the TOML writer), every measurement record (written
-anew under its own `measurement_id`), and modelroom's own backups (`modelroom.toml.bak`,
-`modelroom.toml.vN.bak`, `<profile_id>.json.vN.bak`): their table heads, the key of a row the
-configuration is renamed from taking the same new name, and `display_name` in a profile backup. The
-sweep makes no backup of its own. A backup that cannot be cleaned is a note naming the file
-(`a backup of modelroom could not be cleaned of machine names: <file>; delete it by hand`); a
-schema-1 profile backup `<old key>.json.v1.bak` is named by its kind only, since its file name is
-the old key. Each renamed machine is a note with its new name alone (`machine renamed to
-server-3f9a0c21 (no host names in files)`). A schema-1 configuration and schema-1 profiles are
-`migrate`'s: their keys name the profile files; `migrate` converts them through the sink and sweeps
-again under its own lock before it ends. Key, profile name and records are checked independently,
-so a run that stopped halfway converges, and a second sweep changes nothing.
+the profiles (only `display_name` changes, in the schema they are stored in); the configuration --
+each renamed key replaced where it stands as a TOML key (a table head, a dotted key, an inline table,
+bare or quoted) and each path inside the folder made relative, so its comments stay; only a file that
+cannot be brought to the expected table that way (an escaped key, a key spelled like a field of the
+file) is written anew by the TOML writer; every measurement record, field by field and whether or
+not the rest of it validates (written anew under its own `measurement_id`); modelroom's own backups
+(`modelroom.toml.bak`, `modelroom.toml.vN.bak`, `<profile_id>.json.vN.bak`: their keys, the key of a
+row the configuration is renamed from taking the same new name, and `display_name`); a schema-1
+profile backup `<old key>.json.v1.bak` of an earlier migration takes the name of the profile it became
+(`<profile_id>.json.v1.bak`, found by content), else a name of its content (`legacy-<8 hex>.json.v1.bak`),
+and a neutral key, its runtime text and the names of installed models dropped; and the result
+documents `docs/models.md` and its JSON view: made from the files as they were, they are removed
+where the sweep changes anything else, or where the JSON view names a machine by anything but a
+neutral name or an alias of this user (`the result documents were made from names this sweep changed;
+they were removed, the next render writes them`). The sweep makes no backup of its own. A backup
+that cannot be read is a note naming the file (`a backup of modelroom could not be cleaned of machine
+names: <file>; delete it by hand`). Each renamed machine is a note with its new name alone (`machine
+renamed to server-3f9a0c21 (no host names in files)`). A schema-1 configuration and schema-1 profiles
+are `migrate`'s: their keys name the profile files, and `migrate` plans the new configuration, the
+profiles, the records and both backups through the sink before it writes any of them ("Migration to
+schema 2"). Key, profile name and records are checked independently, so a run that stopped halfway
+converges, and a second sweep changes nothing.
 
 **The first step of every writing command:** the guided mode (once the configuration is found or
 made), `hardware`, `fetch`, `render`, `migrate`, `import-profile` (under its own lock) and
-`export-profile`. The folder is read without the lock first; only when something is to change is
-`modelroom.lock` taken, the folder read again and the files written. A `--machine <old>` of the same
-call is led to the new key (`note: --machine now names <new>`); a later call with the old name meets
-the unknown-machine message of that command. A file that cannot be read (a backup aside), a write
-that fails and a lock another process holds end the command with exit `1` and `the files of this
-folder could not be cleaned of machine names; nothing else was written`, before it writes anything
-else. A file that does not parse as JSON is left to the readers that list it as broken.
+`export-profile` (the last two under their own lock, for the whole command). Otherwise the folder is
+read without the lock first; only when something is to change is `modelroom.lock` taken, the folder
+read again, checked to be the folder of that lock (a `[paths]` that moved meanwhile is refused), and
+the files written. A `--machine <old>` of the same call is led to the new key (`note: --machine now
+names <new>`); a later call with the old name meets the unknown-machine message of that command. A
+profile or a record that does not read as a JSON object of UTF-8 (it may hold a name as well as any
+other file), a profile that carries a name but no id to form its neutral one, a write that fails and
+a lock another process holds end the command with exit `1` and `the files of this folder could not
+be cleaned of machine names; nothing else was written`, before it writes anything else. For a
+broken profile or record this is a deliberate change of 0.1.0, which listed it as broken and went on
+(decided 2026-09-29): such a file may hold a name, and a command that went on would leave it there.
+Only a backup that cannot be cleaned is a note instead. This computer's key of 0.1.0 is formed from the live
+host name exactly as 0.1.0 formed it (every character that is not alphanumeric one `-`, `node  01`
+is `node--01`); a host name that gave 0.1.0 no key gives none here.
 
 **The screen.** This computer's host name stands only in the start line (`machine <host name>`,
-read live). Every other line names keys and names as the files do; the name typed for a machine
-entered by hand stays in its answer line.
+read live). Every other line names keys and names as the files do; the answer line of the name typed
+for a machine entered by hand says `not kept: the machine gets a neutral name`, and the answer line of
+the machine list names this machine by its class alone (`this machine (laptop)`).
 
 ### Migration to schema 2
 
@@ -2963,7 +2990,8 @@ entered by hand stays in its answer line.
   random `profile_id` (`normalize_profile_v1`); its embedded measurements become measurement
   files with `protocol: none` (`legacy_measurement_record`, whose 8 hex characters come from the
   SHA-256 of the old measurement, so the same input always gives the same id); the old file is
-  moved to `<name>.json.v1.bak`;
+  kept as `<profile_id>.json.v1.bak`, through the sink (a neutral key, no runtime text, no names of
+  installed models; AP9-FR), and removed once its backup is there;
 - a schema-1 `modelroom.toml` becomes schema 2 (`normalize_config_v1`) with
   `[machines.<name>].profile` set for every migrated profile of that name; the rewritten text is
   validated like `load_config` would before it is written, the original bytes are kept as
@@ -3036,11 +3064,10 @@ Without `--profile` the exported profile is this machine's binding for that fold
 file, "Profile binding" above); `--profile` names any profile in the folder and wins over the
 binding, so a profile can also be handed on from a shared folder by a machine that has no
 binding of its own. The file is written with `atomic_write_json`, so a reader never sees half of
-it. The sweep of machine names comes first ("Neutral names") and takes `modelroom.lock` when it has
-something to clean; the export itself reads without the lock, and its profile and every record go
-through the sink before the file is written, so it carries a neutral `display_name` (or the SSH
-alias of that profile) and no foreign text. A concurrent write can only mean that a measurement
-published during the export is not in it. An unreadable measurement file
+it. The whole export holds `modelroom.lock` (a lock another process holds is exit `1`): the sweep of
+machine names comes first under it ("Neutral names"), then its profile and every record go through
+the sink before the file is written, so it carries a neutral `display_name` (or the SSH alias of that
+profile) and no foreign text. An unreadable measurement file
 is reported and left out; it does not stop the export. `--profile` has to be a `profile_id` (16
 lowercase hex characters), and `--out` must be none of the files this package writes itself:
 nothing inside `paths.state` (the same rule `PathsConfig` holds for `paths.markdown`), not the
@@ -3115,7 +3142,9 @@ no backup.
 An import never changes the local binding; it reads the pointer file for the sweep only. Broken
 files in the target folder (a profile that does not read or validate, one of an unsupported
 `schema_version`, a schema-1 profile, an unreadable measurement file) are listed in the report
-and left alone; they never stop the import of another profile. The report carries one line per
+and left alone; they never stop the import of another profile -- except a profile or a record that
+does not read as a JSON object at all, which the sweep before the import cannot clean and which ends
+the command with exit `1` ("Neutral names"). The report carries one line per
 profile and per measurement, and a run that changed nothing ends with `nothing to do`.
 
 | Exit | `export-profile` | `import-profile` |
@@ -5170,8 +5199,10 @@ from `[defaults]`, `writer = false`).
 families empty, `packagers` empty (the search writes every resolved repository as an
 owner-bound `repos` target, so a speculative `<packager>/<name>-GGUF` probe under five accounts
 per base model would only spend the shared request budget), this device as
-`[machines.<this_machine>]` (its neutral key from `~/.modelroom/remote.json`, "Neutral names") with `writer = true`, `paths.state = <folder>/state`, `paths.markdown = <folder>/docs/models.md`
-and `[guided].results = <folder>`. The folder is remembered in the pointer file. A
+`[machines.<this_machine>]` (its neutral key from `~/.modelroom/remote.json`, "Neutral names") with `writer = true`, `paths.state = "state"`, `paths.markdown = "docs/models.md"` and
+`[guided].results = "."` -- relative to the file's own folder, which is the results folder, so they
+read as `<folder>/state`, `<folder>/docs/models.md` and `<folder>` ("Neutral names"). The folder is
+remembered in the pointer file with its full path. A
 `modelroom.toml` of schema 1 in the folder is migrated first (`modelroom migrate`, under the
 lock, backup kept, idempotent), before anything is written, and the notes it leaves have one
 sentence in front of them that says what happened in plain words: `this folder holds a
@@ -5196,8 +5227,8 @@ notes, indented like their neighbors and without `note: ` in front (`hardware_wi
 note=run.screen.note)`, AP9-UX G); `modelroom hardware` still prints them as `note: <text>`. An import leaves `imported <display_name>: <the hardware in plain
 words>`; an import that does not go through stays a `run.failed` sentence. A machine entered by
 hand leaves `entered <name>: 64 GiB memory, graphics card 24 GiB` (or `…, no graphics card`, `…,
-shared memory`), the sizes as they were entered; `<name>` is the profile's neutral name, the name
-typed in stays in its answer line alone ("Neutral names").
+shared memory`), the sizes as they were entered; `<name>` is the profile's neutral name, and the
+answer line of the name typed in says `not kept: the machine gets a neutral name` ("Neutral names").
 
 **Step 1, the machines** (AP9-UX C and C1, `modelroom/guided_machines.py`). A note stands in front
 of the list: `another computer: pick its profile below, or import the file made there`. The list,
@@ -5225,8 +5256,8 @@ stands in row 3, and row 2 says `measure now` (decided 2026-09-26). A marked pro
 machine(s) naming it into the selection of this run (`RunSelection.machines`); nothing is measured
 or written for it. The marked entries run in this order: measure, import, enter. The key and the
 answers `this-machine`, `import`, `enter` stay the same, so an answer file is unaffected; the answer
-line names this machine (`this machine (computer-5c1e9a07, server)`, without a known class `this machine
-(computer-5c1e9a07)`) and a marked profile by its label.
+line names this machine by its class (`this machine (server)`, without a known class `this machine`;
+its key stands in the list only) and a marked profile by its label.
 
 `this machine (<name>, measure now)` makes sure `[machines.<this_machine>]` exists and is a writer -- this
 machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the

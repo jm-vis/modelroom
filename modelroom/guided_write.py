@@ -37,7 +37,8 @@ from typing import Callable, NamedTuple
 
 from .config import ConfigError, Configuration, GuidedConfig, PathsConfig, RequestsOrigin, config_from_text
 from .importer import scan_profiles
-from .neutral import key_for, neutral_profile
+from .neutral import Names, key_for, neutral_profile
+from .neutral_config import neutral_config
 from .search_apply import ConfigChangedError, write_configuration
 
 Change = Callable[[Configuration], "Configuration | None"]
@@ -102,6 +103,17 @@ def create_config(config_file: Path, config: Configuration, *, now: datetime) ->
     except ConfigChangedError:
         return read_stored(config_file).config
     return config
+
+
+def neutral_change(change: Change, names: Names) -> Change:
+    """`change`, its result through the sink of the whole configuration (`neutral_config`, FR-N): the
+    configuration as read last -- with whatever another run wrote meanwhile -- is written neutral."""
+
+    def neutral(current: Configuration) -> Configuration | None:
+        updated = change(current)
+        return None if updated is None else neutral_config(updated, names)
+
+    return neutral
 
 
 def with_writer(name: str) -> Change:
@@ -271,6 +283,7 @@ __all__ = [
     "Stored",
     "combined",
     "create_config",
+    "neutral_change",
     "new_machine_entry",
     "read_stored",
     "update_config",

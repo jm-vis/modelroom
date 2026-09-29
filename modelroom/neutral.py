@@ -38,7 +38,7 @@ ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 _CONTEXT_RE = re.compile(r"^the daemon loaded context \d+, not the ranking's \d+$")
 _HF_NAME_RE = re.compile(r"^hf\.co/(?P<repo>[^:\s]+):[A-Za-z0-9_.-]+$")
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")  # `contracts.validate_machine_name`, 0.1.0's key shape
 _SHORT = 8
 _ATTEMPTS = 8
 
@@ -78,15 +78,15 @@ class NeutralError(Exception):
 # --- names ---------------------------------------------------------------------------------------
 
 
-def is_neutral(name: str | None) -> bool:
+def is_neutral(name: object) -> bool:
     """`<class>-<8 hex>`: the only shape of a machine name modelroom writes on its own."""
-    return name is not None and NEUTRAL_RE.fullmatch(name) is not None
+    return isinstance(name, str) and NEUTRAL_RE.fullmatch(name) is not None
 
 
-def is_alias(name: str | None) -> bool:
+def is_alias(name: object) -> bool:
     """A host alias a user gave: `ALIAS_RE`, not only digits (ssh would read an address), and not in
     the shape of a neutral name, so that an alias and a neutral key never collide (Codex r7-1)."""
-    return name is not None and ALIAS_RE.fullmatch(name) is not None and not name.isdigit() and not is_neutral(name)
+    return isinstance(name, str) and ALIAS_RE.fullmatch(name) is not None and not name.isdigit() and not is_neutral(name)
 
 
 def random_key(token: Callable[[int], str] = secrets.token_hex) -> str:
@@ -101,12 +101,16 @@ def neutral_name(profile_id: str, machine_class: str | None) -> str:
 
 
 def old_key(hostname: str | None) -> str | None:
-    """The key modelroom 0.1.0 gave this computer, formed from its host name as read live; never stored."""
-    slug = _SLUG_RE.sub("-", (hostname or "").lower()).strip("-")
-    return slug or None
+    """The key modelroom 0.1.0 gave this computer, formed from its host name as read live; never stored.
+
+    Exactly 0.1.0's rule (`guided._machine_key`): every character that is not alphanumeric becomes one
+    `-` each (`node  01` is `node--01`), the ends trimmed; a result outside the key shape had no key.
+    """
+    slug = "".join(letter if letter.isalnum() else "-" for letter in (hostname or "").lower()).strip("-")
+    return slug if _KEY_RE.fullmatch(slug) else None
 
 
-def display_name_for(profile_id: str, machine_class: str | None, current: str | None, alias: str | None) -> str:
+def display_name_for(profile_id: str, machine_class: object, current: object, alias: str | None) -> str:
     """The `display_name` a profile may carry: its alias, a neutral name as it is, else `neutral_name`."""
     if alias is not None and is_alias(alias):
         return alias
@@ -119,6 +123,20 @@ def neutral_profile(profile: HardwareProfile, alias: str | None = None) -> Hardw
     return profile if name == profile.display_name else profile.model_copy(update={"display_name": name})
 
 
+def legacy_data(data: dict, machine: str) -> dict:
+    """A schema-1 profile as stored, through the sink: `machine` its neutral key, each measurement's
+    `runtime` only as `X.Y.Z` (else `unknown`), and no names of installed models or daemon text."""
+    clean = {**data, "machine": machine}
+    if "installed" in clean or "installed_unavailable_reason" in clean:
+        clean.update(installed=None, installed_unavailable_reason="not kept (names of the daemon)")
+    if isinstance(data.get("measurements"), list):
+        clean["measurements"] = [
+            {**entry, "runtime": neutral_version(entry.get("runtime")) or "unknown"} if isinstance(entry, dict) else entry
+            for entry in data["measurements"]
+        ]
+    return clean
+
+
 def renamed_note(new: str) -> str:
     """The note of a machine the sweep renamed: only the new name, never the old one."""
     return f"machine renamed to {new} (no host names in files)"
@@ -127,14 +145,18 @@ def renamed_note(new: str) -> str:
 # --- measurement records -------------------------------------------------------------------------
 
 
-def neutral_version(value: str | None) -> str | None:
+def neutral_version(value: object) -> str | None:
     """A daemon version as `X.Y.Z`, or `None`: any addition drops the whole value (Codex r3-3)."""
-    return value if value is not None and _VERSION_RE.fullmatch(value) else None
+    return value if isinstance(value, str) and _VERSION_RE.fullmatch(value) else None
 
 
-def comparable_reason(reason: str | None) -> str | None:
+def comparable_reason(reason: object) -> str | None:
     """A fixed sentence: kept, mapped from the beginning of a known local text, or the unknown one."""
-    if reason is None or reason in COMPARABLE_REASONS or _CONTEXT_RE.fullmatch(reason):
+    if reason is None:
+        return None
+    if not isinstance(reason, str):
+        return UNKNOWN_COMPARABLE
+    if reason in COMPARABLE_REASONS or _CONTEXT_RE.fullmatch(reason):
         return reason
     for start, sentence in _REASON_STARTS:
         if reason.startswith(start):
@@ -142,9 +164,11 @@ def comparable_reason(reason: str | None) -> str | None:
     return UNKNOWN_COMPARABLE
 
 
-def validity_reason(reason: str | None) -> str | None:
+def validity_reason(reason: object) -> str | None:
     """A sentence `measurement_invalid_reason` forms, `LEGACY_REASON`, or the unknown one."""
-    if reason is None or reason == LEGACY_REASON or any(pattern.fullmatch(reason) for pattern in _VALIDITY_RES):
+    if reason is None:
+        return None
+    if isinstance(reason, str) and (reason == LEGACY_REASON or any(pattern.fullmatch(reason) for pattern in _VALIDITY_RES)):
         return reason
     return UNKNOWN_VALIDITY
 
@@ -156,55 +180,63 @@ def package_name(package: "Package") -> str | None:
     return package_pull_name(package)
 
 
-def record_name(name: str | None, hf_repo: str | None) -> str | None:
+def record_name(name: object, hf_repo: object) -> str | None:
     """Without a known package, only `hf.co/<hf_repo>:<tag>` of the record's own repository."""
-    match = _HF_NAME_RE.fullmatch(name) if name is not None else None
+    match = _HF_NAME_RE.fullmatch(name) if isinstance(name, str) else None
     return name if match is not None and hf_repo is not None and match.group("repo") == hf_repo else None
+
+
+def record_data(data: dict, package: "Package | None" = None) -> dict:
+    """The record rules on a record as stored, field by field, whether or not the rest of it validates
+    (the sweep meets records of every age): what the table allows, everything else in its fixed form."""
+    ref = data.get("package") if isinstance(data.get("package"), dict) else {}
+    runs = data.get("runs")
+    rules = {
+        "ollama_name": package_name(package) if package is not None else record_name(data.get("ollama_name"), ref.get("hf_repo")),
+        "daemon_version": neutral_version(data.get("daemon_version")),
+        "comparable_reason": comparable_reason(data.get("comparable_reason")),
+        "validity_reason": validity_reason(data.get("validity_reason")),
+        "runs": [_run(run) for run in runs] if isinstance(runs, list) else None,
+    }
+    return {**data, **{key: value for key, value in rules.items() if key in data}}
+
+
+def _run(run: object) -> object:
+    if isinstance(run, dict) and run.get("done_reason") not in DONE_REASONS:
+        return {**run, "done_reason": "unknown"}
+    return run
 
 
 def neutral_record(record: MeasurementRecord, package: "Package | None" = None) -> MeasurementRecord:
     """`record` with every field of the table in its allowed form; the measurement itself stays."""
-    name = package_name(package) if package is not None else record_name(record.ollama_name, record.package.hf_repo)
-    runs = [run if run.done_reason in DONE_REASONS else run.model_copy(update={"done_reason": "unknown"}) for run in record.runs]
-    update = {
-        "ollama_name": name,
-        "daemon_version": neutral_version(record.daemon_version),
-        "comparable_reason": comparable_reason(record.comparable_reason),
-        "validity_reason": validity_reason(record.validity_reason),
-        "runs": runs,
-    }
-    changed = {key: value for key, value in update.items() if getattr(record, key) != value}
-    if not changed:
+    stored = record.model_dump(mode="json")
+    clean = record_data(stored, package)
+    if clean == stored:
         return record
     try:
-        return MeasurementRecord.model_validate({**record.model_dump(mode="json"), **_json(changed)})
+        return MeasurementRecord.model_validate(clean)
     except ValueError as exc:  # pydantic's ValidationError is a ValueError
         raise NeutralError(FAILED) from exc
 
 
-def _json(changed: dict) -> dict:
-    return {key: [run.model_dump(mode="json") for run in value] if key == "runs" else value for key, value in changed.items()}
-
-
-def known_package(record: MeasurementRecord, packages: "Sequence[Package]") -> "Package | None":
-    """The package of the folder's own snapshot the record's reference names, by digest; else `None`.
-
-    The identity modelroom itself fetched, never a name the daemon gave: so a record keeps the name
-    of its package in every folder that knows the package, whichever command writes it.
+def known_package(ref: object, packages: "Sequence[Package]") -> "Package | None":
+    """The package of the folder's own snapshot a record's reference (`package` as stored) names, by
+    digest; else `None`. The identity modelroom itself fetched, never a name the daemon gave: so a
+    record keeps the name of its package in every folder that knows the package.
     """
-    ref = record.package
+    ref = ref if isinstance(ref, dict) else {}
     for package in packages:
-        if ref.content_source == "ollama" and package.source == "ollama" and package.manifest_digest == ref.ollama_manifest_digest:
+        if ref.get("content_source") == "ollama" and package.source == "ollama" and package.manifest_digest == ref.get("ollama_manifest_digest"):
             return package
         digests = {file.digest for file in package.files if file.digest}
-        if ref.content_source == "huggingface" and package.repo == ref.hf_repo and ref.hf_file_digest in digests:
+        if ref.get("content_source") == "huggingface" and package.repo == ref.get("hf_repo") and ref.get("hf_file_digest") in digests:
             return package
     return None
 
 
 def neutral_records(records: "Sequence[MeasurementRecord]", packages: "Sequence[Package]" = ()) -> list[MeasurementRecord]:
     """Every record through the sink, each with its package where the folder knows it."""
-    return [neutral_record(record, known_package(record, packages)) for record in records]
+    return [neutral_record(record, known_package(record.package.model_dump(mode="json"), packages)) for record in records]
 
 
 def neutral_export(export: ExportObject, alias: str | None = None, packages: "Sequence[Package]" = ()) -> ExportObject:
@@ -308,6 +340,8 @@ __all__ = [
     "is_neutral",
     "key_for",
     "known_package",
+    "legacy_data",
+    "record_data",
     "machine_keys",
     "neutral_export",
     "neutral_name",

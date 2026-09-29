@@ -710,7 +710,7 @@ def _cmd_export_profile(args: argparse.Namespace, pointer_path: Path | None, hos
     except (SchemaVersionError, StoredFileError, PointerFileError, RemoteStoreError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
-    except NeutralError as exc:
+    except (NeutralError, LockHeldError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except (ConfigError, PrerequisiteError) as exc:

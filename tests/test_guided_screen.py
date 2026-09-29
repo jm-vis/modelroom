@@ -150,8 +150,6 @@ def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path
             continue  # a path, a registry's own message and a served model's id are as long as they are
         if "cannot reach the Ollama daemon" in line:
             continue  # the daemon's own reason, since AP9-UX E also as `Ollama: <reason>` before the question
-        if line.strip().startswith("? Which machines should the result cover?  this machine (computer-"):
-            continue  # FR-N: this machine's neutral key (17 characters) and a second entry pass 100 (open point)
         if "ollama pull " in line or line.strip().startswith(("repo ", "graphics  ")) or "hf.co/" in line:
             continue  # a command, a repository, a pull name and a graphics adapter (AP9-GPU G8) are as long as they are
         assert len(line) <= 100, line

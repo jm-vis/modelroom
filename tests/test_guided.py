@@ -213,7 +213,7 @@ def test_every_answer_is_written_back_in_words(tmp_path: Path):
     answers = [line.strip() for line in lines if line.strip().startswith("? ")]
     assert "? Where should results live?  this folder" in answers
     # The machine is named (AP9-UX F); its class follows in the next answer on a first run.
-    assert f"? Which machines should the result cover?  this machine ({THIS_MACHINE})" in answers
+    assert "? Which machines should the result cover?  this machine" in answers  # FR-N: its key is in the list only
     assert "? What are you looking for?  qwen" in answers
     assert "? Show only repositories of a publisher or a listed packager?  Yes" in answers
     # This answer file names repositories, as a file always could: an answer of the user appears
@@ -384,7 +384,7 @@ def test_the_first_start_writes_a_configuration_with_this_device_as_the_writer(t
     raw = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))
     assert raw["schema_version"] == 3
     assert raw["machines"][THIS_MACHINE]["writer"] is True
-    assert Path(raw["guided"]["results"]) == _results(tmp_path)
+    assert raw["guided"]["results"] == "."  # FR-N (Codex r1-2): the folder's own path goes in relative
     # The line that named the writer is gone from the screen: the configuration says it, and the
     # balance of step 1 says the folder and how many machines the result covers.
     assert not any("as the writer of this results folder" in line for line in lines)
@@ -592,7 +592,7 @@ def test_the_machine_list_keeps_its_order(tmp_path: Path):
     for index, name in enumerate(("alpha", "beta")):
         profile = v2_profile(profile_id=f"{index + 3}" * 16, display_name=name)
         atomic_write_json(_results(tmp_path) / "state" / "hardware" / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
-    (_results(tmp_path) / "state" / "hardware" / "broken.json").write_text("{", encoding="utf-8")
+    (_results(tmp_path) / "state" / "hardware" / "broken.json").write_text("{}", encoding="utf-8")  # FR-N: "{" stops every command
     rows = _recorded_machines(tmp_path, RUN2, _answers_without_folder(FULL_ANSWERS))
     assert [choice.value for choice in rows] == [
         f"profile:{bound}",
@@ -646,7 +646,7 @@ def test_enter_alone_keeps_the_profile_of_a_machine_measured_here(tmp_path: Path
     assert [path.stem for path in _profiles(tmp_path)] == [bound]
     assert (_results(tmp_path) / "state" / "hardware" / f"{bound}.json").read_bytes() == stored
     assert not any(line.strip().startswith("measured") for line in lines)
-    assert f"? Which machines should the result cover?  this machine ({THIS_MACHINE}, laptop)" in [line.strip() for line in lines]
+    assert "? Which machines should the result cover?  this machine (laptop)" in [line.strip() for line in lines]
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     assert [(block["machine"], block["status"]) for block in payload["machines"]] == [(THIS_MACHINE, "ranked")]
 
@@ -655,11 +655,11 @@ def test_this_machine_is_named_with_its_class(tmp_path: Path):
     """AP9-UX F: its key as the configuration names it (neutral, FR-N), and the class of its profile where known."""
     code, lines = _run(tmp_path, probes=windows_probes(host="GPU Server"))
     assert code == 0
-    assert f"? Which machines should the result cover?  this machine ({THIS_MACHINE})" in [line.strip() for line in lines]
+    assert "? Which machines should the result cover?  this machine" in [line.strip() for line in lines]
 
     code, lines = _run(tmp_path, {**_answers_without_folder(FULL_ANSWERS), "machines": ["this-machine"]}, now=RUN2, probes=windows_probes(host="GPU Server"))
     assert code == 0
-    assert f"? Which machines should the result cover?  this machine ({THIS_MACHINE}, laptop)" in [line.strip() for line in lines]
+    assert "? Which machines should the result cover?  this machine (laptop)" in [line.strip() for line in lines]
 
 
 def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_path: Path):
@@ -675,7 +675,7 @@ def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_
     hardware.mkdir(parents=True, exist_ok=True)
     legacy = dict(EXAMPLES["HardwareSnapshot"], machine="old")
     (hardware / "old.json").write_text(json.dumps(legacy), encoding="utf-8")
-    (hardware / "broken.json").write_text("{", encoding="utf-8")
+    (hardware / "broken.json").write_text("{}", encoding="utf-8")  # FR-N: "{" stops every command
 
     run_guided(
         _Recording({key: value for key, value in FULL_ANSWERS.items() if key != "results"} | {"machines": []}),
@@ -806,7 +806,7 @@ def test_a_change_made_during_the_dialog_is_not_written_over(tmp_path: Path):
         def text(self, key, question, default=""):
             if key == "search":
                 text = _config_file(tmp_path).read_text(encoding="utf-8")
-                addition = '\n[machines.other]\nreserve_ram_gib = 8.0\nreserve_vram_gib = 1.0\nwriter = false\n'
+                addition = '\n[machines.computer-0b0b0b0b]\nreserve_ram_gib = 8.0\nreserve_vram_gib = 1.0\nwriter = false\n'
                 _config_file(tmp_path).write_text(text + addition, encoding="utf-8")
             return super().text(key, question, default)
 
@@ -824,10 +824,10 @@ def test_a_change_made_during_the_dialog_is_not_written_over(tmp_path: Path):
     )
 
     assert code == 0
-    assert "other" in load_config(_config_file(tmp_path)).machines
+    assert "computer-0b0b0b0b" in load_config(_config_file(tmp_path)).machines  # a neutral key another run wrote
 
 
-def _adding_a_machine(tmp_path: Path, when_key: str, name: str = "other"):
+def _adding_a_machine(tmp_path: Path, when_key: str, name: str = "computer-0b0b0b0b"):
     """A `FileAsker` that adds `[machines.<name>]` to the file while one question is on screen."""
 
     def add() -> None:
@@ -873,7 +873,7 @@ def test_a_change_made_during_any_question_is_not_written_over(tmp_path: Path, w
     )
 
     assert code == 0
-    assert "other" in load_config(_config_file(tmp_path)).machines
+    assert "computer-0b0b0b0b" in load_config(_config_file(tmp_path)).machines  # a neutral key another run wrote
 
 
 def _guided_run_for(tmp_path: Path, out: list[str]):
@@ -2499,7 +2499,7 @@ def test_every_answer_of_the_machine_entered_by_hand_is_written_back_in_words(tm
     assert code == 0
     answers = [line.strip() for line in lines if line.strip().startswith("? ")]
     assert "? Which machines should the result cover?  a machine entered by hand" in answers
-    assert "? What is the machine called?  tower" in answers
+    assert "? What is the machine called?  not kept: the machine gets a neutral name" in answers  # FR-N (Codex r1-9)
     assert "? How much memory does it have, in GiB?  64 GiB" in answers
     assert "? What runs the model?  a graphics card with its own memory" in answers
     assert "? How much graphics memory, in GiB?  24 GiB" in answers
@@ -2661,7 +2661,7 @@ def test_the_new_profile_id_never_lands_on_a_file_of_the_folder_that_does_not_re
     legacy = hardware / f"{'a' * 16}.json"
     legacy.write_text(json.dumps(dict(EXAMPLES["HardwareSnapshot"], machine="old")), encoding="utf-8")
     broken = hardware / f"{'b' * 16}.json"
-    broken.write_text("{", encoding="utf-8")
+    broken.write_text("{}", encoding="utf-8")  # FR-N: "{" stops every command; `{}` reads as no profile
     before = {path: path.read_bytes() for path in (legacy, broken)}
 
     answers = {**ENTERED_UNIFIED, "write_config": True}
@@ -2678,13 +2678,13 @@ def test_a_file_name_in_another_letter_case_counts_as_taken(tmp_path: Path):
     hardware = _results(tmp_path) / "state" / "hardware"
     hardware.mkdir(parents=True)
     upper = hardware / f"{'A' * 16}.json"
-    upper.write_text("{", encoding="utf-8")
+    upper.write_text("{}", encoding="utf-8")
 
     answers = {**ENTERED_UNIFIED, "write_config": True}
     code, _lines = _run(tmp_path, answers, probes=windows_probes(ids=["a" * 16, "e" * 16]))
 
     assert code == 0
-    assert upper.read_text(encoding="utf-8") == "{"
+    assert upper.read_text(encoding="utf-8") == "{}"
     assert load_config(_config_file(tmp_path)).machines["workstation-eeeeeeee"].profile == "e" * 16
 
 
@@ -3192,7 +3192,7 @@ def test_no_selection_key_is_written(tmp_path: Path):
     assert json.dumps(str(tmp_path), ensure_ascii=False)[1:-1] not in masked
     assert not any(FORBIDDEN["absolute user path"].search(line) for line in masked.splitlines())
     golden = (Path(__file__).parent / "golden" / "guided-config-db0dff9.toml").read_bytes().decode("utf-8")  # fixed (Codex r1-16)
-    assert masked == golden.replace('-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]', '-9B-GGUF", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-9B-GGUF"]').replace("reserve_ram_gib = 8.0\n", "").replace("[machines.workstation]", f"[machines.{THIS_MACHINE}]")  # + own repo (P3); AP9-RM: no memory reserve; FR-N: this machine's neutral key
+    assert masked == golden.replace('-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]', '-9B-GGUF", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-9B-GGUF"]').replace("reserve_ram_gib = 8.0\n", "").replace("[machines.workstation]", f"[machines.{THIS_MACHINE}]").replace('"<results>/state"', '"state"').replace('"<results>/docs/models.md"', '"docs/models.md"').replace('results = "<results>"', 'results = "."')  # + own repo (P3); AP9-RM: no memory reserve; FR-N: neutral key, paths relative
 
 
 # --- AP9-UX G: every note of a measurement stands where the notes stand -----------------------------

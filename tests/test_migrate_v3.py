@@ -24,7 +24,7 @@ from modelroom.config import load_config
 from modelroom.contracts import HardwareSnapshot
 from modelroom.examples import EXAMPLES
 from modelroom.migrate import NOTHING_TO_DO, migrate
-from modelroom.neutral import is_neutral
+from modelroom.neutral import NeutralError, is_neutral
 from modelroom.profile import HardwareProfile, normalize_profile_v1, read_profile_document
 
 from fixture_support import v3_profile
@@ -138,11 +138,13 @@ def test_v1_to_v2_to_v3_in_the_same_folder_keeps_both_backups(tmp_path):
 
     migrate(config, NOW)
 
-    # FR-N: the machine names of the configuration's backup are swept; the schema-1 profile backup, its
-    # name the old key, cannot be cleaned and stays as it is (a note says so).
+    # FR-N: both backups are swept -- the configuration's keys, and the schema-1 profile backup takes a
+    # name of its content (no profile of this folder was made from it) and a neutral key.
     swept = (tmp_path / "modelroom.toml.v1.bak").read_text(encoding="utf-8")
     assert swept.startswith("# A schema-1") and all(is_neutral(key) for key in tomllib.loads(swept)["machines"])
-    assert (hardware / "laptop.json.v1.bak").read_bytes() == v1_profile
+    [kept] = hardware.glob("legacy-*.json.v1.bak")
+    assert not (hardware / "laptop.json.v1.bak").exists() and b"laptop" in v1_profile
+    assert is_neutral(json.loads(kept.read_text(encoding="utf-8"))["machine"])
     assert (tmp_path / "modelroom.toml.v2.bak").is_file()
     assert (hardware / f"{V2_PROFILE_ID}.json.v2.bak").is_file()
     assert _schema(config) == 3 and _schema(hardware / f"{V2_PROFILE_ID}.json") == 4
@@ -178,8 +180,8 @@ def test_a_run_of_an_earlier_version_that_stopped_halfway_converges_on_schema_3(
 
     assert sorted(p.name for p in hardware.iterdir()) == [
         "aaaaaaaaaaaaaaa1.json",
+        "aaaaaaaaaaaaaaa1.json.v1.bak",  # FR-N: named after its profile
         "aaaaaaaaaaaaaaa1.json.v2.bak",
-        "laptop.json.v1.bak",
     ]
     assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
     assert load_config(tmp_path / "modelroom.toml").machines["computer-aaaaaaaa"].profile == "aaaaaaaaaaaaaaa1"  # FR-N
@@ -251,10 +253,10 @@ def test_a_guided_run_that_cannot_migrate_names_the_file_and_claims_no_update(tm
     broken.parent.mkdir(parents=True)
     broken.write_text("{", encoding="utf-8")
 
-    with pytest.raises(GuidedError, match="broken.json") as caught:
+    # FR-N: a profile that does not read cannot be cleaned; the sweep before the migration stops the run.
+    with pytest.raises(NeutralError, match="could not be cleaned"):
         _run(tmp_path)
 
-    assert "move it away" in str(caught.value) or "cannot read" in str(caught.value)
     assert _schema(_config_file(tmp_path)) == 2
     assert not (_results(tmp_path) / "modelroom.toml.v2.bak").exists()
 

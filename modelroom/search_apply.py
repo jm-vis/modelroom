@@ -16,6 +16,7 @@ from .catalog import Catalog
 from .config import BaseModelConfig, ConfigError, Configuration, config_from_text
 from .guided_contracts import SearchHit
 from .state import acquire_lock, atomic_write_text, publish_new_text, release_lock
+from .neutral_config import relative_paths
 from .toml_writer import dump_toml
 
 
@@ -167,7 +168,8 @@ def write_configuration(path: Path, config: Configuration, *, now: datetime, exp
     stays and catches the ordinary case; the exclusive creation covers the moment in between.
     """
     target = path.resolve()
-    text = dump_toml(config.model_dump(mode="json"), _CONFIG_HEADER)
+    # The paths inside the folder go in relative: a folder's own path may carry a name (FR-N).
+    text = dump_toml(relative_paths(config.model_dump(mode="json"), target.parent), _CONFIG_HEADER)
     reread = config_from_text(text, target)
     if reread.model_dump(mode="json") != config.model_dump(mode="json"):
         raise ConfigError(f"{target}: the written configuration does not read back unchanged")

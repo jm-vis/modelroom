@@ -60,6 +60,7 @@ from modelroom.neutral import (
     validity_reason,
 )
 from modelroom.neutral_sweep import sweep
+import modelroom.state as state_module
 from modelroom.state import acquire_lock, release_lock
 
 NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
@@ -429,7 +430,14 @@ def test_an_unreadable_backup_is_a_note_without_its_content(tmp_path):
 
 
 @pytest.mark.parametrize("command", ["hardware", "fetch", "render", "migrate", "import-profile", "export-profile", "guided"])
-def test_every_writing_command_sweeps_first(tmp_path, command):
+def test_every_writing_command_sweeps_first(tmp_path, command, monkeypatch):
+    """The sweep's rewrite of the configuration comes before the first file the command writes itself."""
+    written: list[str] = []
+    real = state_module.atomic_write_json, state_module.atomic_write_text
+    for module in [module for name, module in sys.modules.items() if name.startswith("modelroom") and module is not None]:
+        for index, name in enumerate(("atomic_write_json", "atomic_write_text")):
+            if hasattr(module, name):
+                monkeypatch.setattr(module, name, lambda path, data, _real=real[index]: (written.append(Path(path).name), _real(path, data))[1])
     results = tmp_path / "results"
     config = _folder(results, {SENTINEL_HOST: PROFILE_ID}, writer=SENTINEL_HOST)
     _profile(results, PROFILE_ID, SENTINEL_HOST, "laptop")
@@ -451,10 +459,13 @@ def test_every_writing_command_sweeps_first(tmp_path, command):
             daemon=offline_daemon(), servers=offline_servers(), now=NOW, out=lambda line: None,
         )
     else:
-        main(argv[command], transport=build_transport({}), probes=probes, pointer_path=home, now=NOW)
+        main(argv[command], transport=build_transport({}), probes=probes, pointer_path=home, now=NOW.replace(hour=13))  # after the snapshot
 
     assert SENTINEL_HOST not in _machines(config)
     assert neutral.is_neutral(_display(results, PROFILE_ID))  # `import-profile` then takes the newer export's
+    own = {"hardware": "guided.json", "fetch": "modelroom.json", "render": "models.json", "migrate": None,
+           "import-profile": "20260923T083000Z-5c1e9a07.json", "export-profile": "out.json", "guided": "search.json"}[command]
+    assert "modelroom.toml" in written and (own is None or written.index("modelroom.toml") < written.index(own)), written
 
 
 def test_no_writer_bypasses_the_senke(tmp_path, monkeypatch):

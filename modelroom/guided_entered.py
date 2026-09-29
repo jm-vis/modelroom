@@ -74,6 +74,7 @@ SHAPES: dict[str, str] = {
 _GPU_STATES = {"card": "entered", "cards": "multi_gpu", "none": "none", "unified": "unified_memory"}
 _FRESH_ID_ATTEMPTS = 8
 ENTERED_MARK = "(entered)"
+NAME_NOT_KEPT = "not kept: the machine gets a neutral name"
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,8 @@ def _ask_name(run: "GuidedRun") -> str:
         raise _guided_error(
             f"entered_name: a machine name has 1 to {DISPLAY_NAME_MAX} characters, this one has {len(name)}"
         )
-    run.screen.answer(QUESTIONS["entered_name"], name)
+    # Not even the answer line repeats it: the machine is named by its class and id (FR-N).
+    run.screen.answer(QUESTIONS["entered_name"], NAME_NOT_KEPT)
     return name
 
 

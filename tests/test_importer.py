@@ -189,7 +189,8 @@ def test_export_of_a_schema_1_profile_file_exits_2_and_names_migrate(tmp_path, c
     assert not out.exists()
 
 
-def test_export_lists_an_unreadable_measurement_file_and_still_writes_the_others(tmp_path, capsys):
+def test_an_unreadable_measurement_file_stops_the_export(tmp_path, capsys):
+    """FR-N (Codex r1-3): a file that does not read cannot be cleaned of machine names; exit 1, nothing written."""
     config_path = _deployment(tmp_path / "source")
     _install(tmp_path / "source" / "state", EXPORT)
     broken = tmp_path / "source" / "state" / "measurements" / PROFILE_ID / "20260101T000000Z-aaaaaaaa.json"
@@ -198,12 +199,12 @@ def test_export_lists_an_unreadable_measurement_file_and_still_writes_the_others
 
     code = main(["export-profile", "--config", str(config_path), "--profile", PROFILE_ID, "--out", str(out)])
 
-    assert code == 0
-    assert len(load_export(json.loads(out.read_text(encoding="utf-8"))).measurements) == 2
-    assert broken.name in capsys.readouterr().out
+    assert code == 1
+    assert not out.exists()
+    assert "could not be cleaned of machine names" in capsys.readouterr().err
 
 
-def test_export_exits_3_for_an_unreadable_profile_file(tmp_path, capsys):
+def test_an_unreadable_profile_file_stops_the_export(tmp_path, capsys):
     config_path = _deployment(tmp_path / "source")
     path = tmp_path / "source" / "state" / "hardware" / f"{PROFILE_ID}.json"
     path.parent.mkdir(parents=True)
@@ -212,8 +213,8 @@ def test_export_exits_3_for_an_unreadable_profile_file(tmp_path, capsys):
 
     code = main(["export-profile", "--config", str(config_path), "--profile", PROFILE_ID, "--out", str(out)])
 
-    assert code == 3
-    assert path.name in capsys.readouterr().err
+    assert code == 1  # FR-N: exit 1 of the sweep, before the export's own 3
+    assert "could not be cleaned of machine names" in capsys.readouterr().err
     assert not out.exists()
 
 
@@ -580,13 +581,13 @@ def test_a_file_in_the_way_of_an_imported_measurement_is_a_conflict(tmp_path, ca
 
     assert code == 1
     assert _tree(tmp_path / "target") == before
-    assert blocked.name in capsys.readouterr().err
+    assert "could not be cleaned of machine names" in capsys.readouterr().err  # FR-N: the sweep first
 
 
 # --- import: broken files in the target ----------------------------------------------------------
 
 
-def test_an_unreadable_profile_file_in_the_target_is_listed_and_does_not_stop_the_import(tmp_path, capsys):
+def test_an_unreadable_profile_file_in_the_target_stops_the_import(tmp_path, capsys):
     config_path = _deployment(tmp_path / "target")
     broken = tmp_path / "target" / "state" / "hardware" / f"{OTHER_ID}.json"
     broken.parent.mkdir(parents=True)
@@ -594,10 +595,9 @@ def test_an_unreadable_profile_file_in_the_target_is_listed_and_does_not_stop_th
 
     code = main(["import-profile", str(_write_json(tmp_path / "e.json", EXPORT)), "--config", str(config_path)], now=NOW)
 
-    out = capsys.readouterr().out
-    assert code == 0
-    assert broken.name in out
-    assert (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").exists()
+    assert code == 1
+    assert "could not be cleaned of machine names" in capsys.readouterr().err
+    assert not (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").exists()
 
 
 def test_a_profile_of_an_unsupported_schema_in_the_target_is_listed_and_does_not_stop_the_import(tmp_path, capsys):
@@ -638,7 +638,7 @@ def test_a_file_in_the_way_of_the_imported_profile_is_a_conflict(tmp_path, capsy
 
     assert code == 1
     assert _tree(tmp_path / "target") == before
-    assert blocked.name in capsys.readouterr().err
+    assert "could not be cleaned of machine names" in capsys.readouterr().err  # FR-N: the sweep first
 
 
 # --- import: the local binding, the lock, unreadable input -----------------------------------------
@@ -765,7 +765,7 @@ def test_an_export_file_of_extreme_nesting_exits_3(tmp_path, capsys):
     assert export_file.name in capsys.readouterr().err
 
 
-def test_a_profile_file_of_extreme_nesting_is_listed_and_does_not_stop_the_import(tmp_path, capsys):
+def test_a_profile_file_of_extreme_nesting_stops_the_import(tmp_path, capsys):
     config_path = _deployment(tmp_path / "target")
     broken = tmp_path / "target" / "state" / "hardware" / f"{OTHER_ID}.json"
     broken.parent.mkdir(parents=True)
@@ -773,9 +773,9 @@ def test_a_profile_file_of_extreme_nesting_is_listed_and_does_not_stop_the_impor
 
     code = main(["import-profile", str(_write_json(tmp_path / "e.json", EXPORT)), "--config", str(config_path)], now=NOW)
 
-    assert code == 0
-    assert broken.name in capsys.readouterr().out
-    assert (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").exists()
+    assert code == 1  # FR-N: it does not read, so it cannot be cleaned
+    assert "could not be cleaned of machine names" in capsys.readouterr().err
+    assert not (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").exists()
 
 
 def test_a_configuration_value_the_toml_writer_cannot_write_exits_2(tmp_path, capsys):

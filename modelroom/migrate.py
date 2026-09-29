@@ -2,8 +2,10 @@
 
 Every schema-1 profile `<state>/hardware/<name>.json` becomes `<profile_id>.json` with a new
 random `profile_id`; its embedded measurements become measurement files (`protocol: none`); the
-old file is kept as `<name>.json.v1.bak`. A schema-1 `modelroom.toml` gets
-`[machines.<name>].profile` set, the old file kept as `modelroom.toml.v1.bak`. A schema-2
+old file is kept as `<profile_id>.json.v1.bak`. A schema-1 `modelroom.toml` gets
+`[machines.<name>].profile` set, the old file kept as `modelroom.toml.v1.bak`. Every file this run
+writes, the backups and their names included, goes through the sink of machine names first (FR-N):
+nothing it publishes carries an old key, however the run ends. A schema-2
 profile or configuration, or a schema-3 profile, is rewritten in place under the same name, the
 old file kept as `<name>.v2.bak` or `<name>.v3.bak` (decided 2026-09-25 and 2026-09-26): every
 backup is named after the version it left, so a folder that went from 1 to 2, to 3 and then to 4
@@ -44,8 +46,9 @@ from .profile import (
     stored_profile_version,
 )
 from .binding import default_pointer_path
-from .neutral import neutral_profile, neutral_records
-from .neutral_sweep import load_names, sweep, sweep_locked
+from .neutral import Names, legacy_data, machine_keys, neutral_name, neutral_profile, neutral_records, renamed_note
+from .neutral_config import config_text, entries, expected
+from .neutral_sweep import legacy_owners, load_names, sweep
 from .state import LockHandle, acquire_lock, atomic_write_json, atomic_write_text, release_lock
 from .toml_writer import dump_toml
 
@@ -81,6 +84,7 @@ class _ProfileStep:
     machine: str
     profile: HardwareProfile
     records: list[MeasurementRecord]
+    kept: dict  # the schema-1 file as its backup holds it, through the sink (`neutral.legacy_data`)
 
 
 @dataclass
@@ -99,6 +103,8 @@ class _Plan:
     config_text: str | None
     rewrites: list[_RewriteStep] = field(default_factory=list)
     config_version: int = CONFIG_SCHEMA_VERSION
+    config_backup: str | None = None  # the configuration as its backup holds it, through the sink
+    renames: dict[str, str] = field(default_factory=dict)  # the machine keys it takes to neutral ones
 
 
 def _scan_profiles(hardware_dir: Path) -> _ProfileScan:
@@ -155,24 +161,22 @@ def migrate(
 
     The sweep of machine names comes first (FR-N): the files of the current schemas, so every backup
     this run keeps is taken from a neutral file. A schema-1 configuration and schema-1 profiles are
-    this command's own to convert (their keys name the profile files); the files it writes from them
-    are swept again under the same lock before it ends (`neutral_sweep.sweep_locked`).
+    this command's own to convert (their keys name the profile files): the keys, the profiles, the
+    records and both backups are planned neutral, before anything is written.
     """
     config_path = config_path.resolve()
     names = load_names(config_path.parent, pointer_path or default_pointer_path(), hostname)
     swept = sweep(config_path, now, "migrate", pointer_path=pointer_path, hostname=hostname).notes
     config = load_config(config_path)
     id_for = _ids_per_machine(fresh_id)
-    _plan(config_path, config, id_for)
+    _plan(config_path, config, id_for, names)
     handle = acquire_lock(config.paths.lock_file, "migrate", now)
     try:
         # Planned again under the lock: another process may have changed the files meanwhile.
         current = load_config(config_path)
         if current.paths != config.paths:
             raise MigrationError(f"{config_path}: [paths] changed while waiting for the lock; run again")
-        lines = _execute(_plan(config_path, current, id_for), config_path, current, handle)
-        after = sweep_locked(config_path, names).notes if lines != [NOTHING_TO_DO] else []
-        return [*swept, *lines, *after]
+        return [*swept, *_execute(_plan(config_path, current, id_for, names), config_path, current, handle)]
     finally:
         release_lock(handle)
 
@@ -189,38 +193,36 @@ def _ids_per_machine(fresh_id: Callable[[], str]) -> Callable[[str], str]:
     return id_for
 
 
-def _plan(config_path: Path, config: Configuration, id_for: Callable[[str], str]) -> _Plan:
+def _plan(config_path: Path, config: Configuration, id_for: Callable[[str], str], names: Names) -> _Plan:
     """Read, convert and check everything the run would write; writes nothing."""
     raw, version = _read_config_version(config_path)
     scan = _scan_profiles(config.paths.hardware_dir)
     # A run that stopped halfway left a profile of the same machine: reuse its id. It is found by its
-    # content, not by its name: the sweep before this run gave it a neutral one (FR-N).
-    left = [p for p in scan.current.values() if p.os_fingerprint_source == "legacy"]
+    # content, not by its name (the sweep before this run gave it a neutral one, FR-N), and only where
+    # exactly one profile answers and no other file of this run takes it too.
+    left = {p.profile_id: p.model_dump(mode="json") for p in scan.current.values() if p.os_fingerprint_source == "legacy"}
     ids_by_name: dict[str, str] = {}
     steps: list[_ProfileStep] = []
     for path, legacy in scan.legacy.items():
         if any(step.machine == legacy.machine for step in steps):
             raise MigrationError(f"{path}: a second schema-1 profile for machine {legacy.machine!r}")
-        profile_id = _left_by(legacy, left) or id_for(legacy.machine)
+        profile_id = _left_by(path, legacy, left, set(ids_by_name.values())) or id_for(legacy.machine)
         ids_by_name[legacy.machine] = profile_id
         steps.append(_plan_profile(config.paths.state, path, legacy, profile_id))
     rewrites = [_plan_rewrite(path, stored, profile) for path, (stored, profile) in scan.stale.items()]
-    stale_config = version < CONFIG_SCHEMA_VERSION
-    config_text = _plan_config(config_path, raw, ids_by_name if version == 1 else {}, version) if stale_config else None
-    return _Plan(steps, config_text, rewrites, version)
+    if version >= CONFIG_SCHEMA_VERSION:
+        return _Plan(steps, None, rewrites, version)
+    text, backup, renames = _plan_config(config_path, raw, ids_by_name if version == 1 else {}, version, names)
+    return _Plan(steps, text, rewrites, version, backup, renames)
 
 
-def _left_by(legacy: HardwareSnapshot, left: list[HardwareProfile]) -> str | None:
-    """The id of the profile an earlier run made of this schema-1 file: all of it the same but id and name."""
-    try:
-        fresh = normalize_profile_v1(legacy, "0" * 16)
-    except ValidationError:
-        return None
-
-    def shape(profile: HardwareProfile) -> dict:
-        return {**profile.model_dump(mode="json"), "profile_id": None, "display_name": None}
-
-    return next((profile.profile_id for profile in left if shape(profile) == shape(fresh)), None)
+def _left_by(path: Path, legacy: HardwareSnapshot, left: dict[str, dict], taken: set[str]) -> str | None:
+    """The id of the profile an earlier run made of this schema-1 file; two that answer, or one another
+    file of this run already took, cannot be told apart and stop the run (nothing written)."""
+    owners = legacy_owners(legacy.model_dump(mode="json"), left)
+    if len(owners) > 1 or set(owners) & taken:
+        raise MigrationError(f"{path}: more than one profile of this folder was made from it; move the extra ones away and run again")
+    return owners[0] if owners else None
 
 
 def _plan_rewrite(path: Path, stored: int, profile: HardwareProfile) -> _RewriteStep:
@@ -245,9 +247,11 @@ def _plan_profile(state_dir: Path, path: Path, legacy: HardwareSnapshot, profile
     _require_profile_absent_or_same(target, profile)
     for record in records:
         _require_absent_or_same(measurement_path(state_dir, profile_id, record.measurement_id), record.model_dump(mode="json"))
-    backup = _backup_path(path)
-    _require_backup_absent_or_same(backup, path)
-    return _ProfileStep(path, target, backup, legacy.machine, profile, records)
+    # The backup takes the profile's name and a neutral key: its old name was the machine's key.
+    backup = path.with_name(f"{profile_id}.json{BACKUP_SUFFIX}")
+    kept = legacy_data(legacy.model_dump(mode="json"), neutral_name(profile_id, "unknown"))
+    _require_absent_or_same(backup, kept)
+    return _ProfileStep(path, target, backup, legacy.machine, profile, records, kept)
 
 
 def _require_absent_or_same(path: Path, content: dict) -> None:
@@ -298,8 +302,10 @@ def _require_backup_absent_or_same(backup: Path, original: Path) -> None:
         raise MigrationError(f"{backup}: backup exists with other content; move it away and run again")
 
 
-def _plan_config(config_path: Path, raw: dict, ids_by_name: dict[str, str], version: int) -> str:
-    """The current text for a configuration of an earlier schema, validated like `load_config` would.
+def _plan_config(config_path: Path, raw: dict, ids_by_name: dict[str, str], version: int, names: Names) -> tuple[str, str, dict]:
+    """The current text for a configuration of an earlier schema, validated like `load_config` would,
+    and the text of its backup -- both through the sink (FR-N): the keys by the key rule, the paths
+    inside the folder relative, the backup's other bytes as they stand.
 
     `ids_by_name` sets `[machines.<name>].profile` for machines of a schema-1 file; a schema-2
     file already names its profiles and keeps them. The backup is named after `version`.
@@ -311,6 +317,9 @@ def _plan_config(config_path: Path, raw: dict, ids_by_name: dict[str, str], vers
     for name, machine in normalized.get("machines", {}).items():
         if name in ids_by_name:
             machine["profile"] = ids_by_name[name]
+    keys = machine_keys(entries(normalized), {}, names)
+    renames = {old: new for old, new in keys.items() if old != new}
+    normalized = expected(normalized, renames, config_path.parent)
     try:
         text = dump_toml(normalized, header=_CONFIG_HEADER)
     except TypeError as exc:
@@ -318,8 +327,15 @@ def _plan_config(config_path: Path, raw: dict, ids_by_name: dict[str, str], vers
         # the file instead of ending in a traceback (exit 2, nothing written), as the import does.
         raise ConfigError(f"{config_path}: holds a value the TOML writer cannot write back: {exc}") from exc
     config_from_text(text, config_path)
-    _require_backup_absent_or_same(_backup_path(config_path, version), config_path)
-    return text
+    kept = config_text(config_path.read_text(encoding="utf-8"), raw, renames, config_path.parent)
+    backup = _backup_path(config_path, version)
+    try:
+        same = not backup.exists() or backup.read_text(encoding="utf-8") == kept
+    except (OSError, UnicodeDecodeError) as exc:
+        raise MigrationError(f"{backup}: cannot read existing backup: {exc}") from exc
+    if not same:
+        raise MigrationError(f"{backup}: backup exists with other content; move it away and run again")
+    return text, kept, renames
 
 
 def _execute(plan: _Plan, config_path: Path, config: Configuration, handle: LockHandle) -> list[str]:
@@ -332,18 +348,19 @@ def _execute(plan: _Plan, config_path: Path, config: Configuration, handle: Lock
         for record in step.records:
             if not measurement_path(config.paths.state, record.profile_id, record.measurement_id).exists():
                 write_measurement(config.paths.state, record, handle)
-        if step.backup.exists():
-            step.source.unlink()
-        else:
-            step.source.replace(step.backup)
+        if not step.backup.exists():
+            atomic_write_json(step.backup, step.kept)
+        step.source.unlink()
         count = len(step.records)
         lines.append(f"migrated {step.source.name} -> {step.target.name} ({count} measurement(s)), backup {step.backup.name}")
     lines += [_rewrite_profile(step) for step in plan.rewrites]
     if plan.config_text is not None:
         backup = _backup_path(config_path, plan.config_version)
-        _keep_backup(backup, config_path)
+        if not backup.exists():
+            atomic_write_text(backup, plan.config_backup)
         atomic_write_text(config_path, plan.config_text)
         lines.append(f"migrated {config_path.name} to schema {CONFIG_SCHEMA_VERSION}, backup {backup.name}")
+        lines += [renamed_note(new) for new in plan.renames.values()]
     return lines or [NOTHING_TO_DO]
 
 
