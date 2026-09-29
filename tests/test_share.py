@@ -550,6 +550,7 @@ def test_the_stored_share_path_reaches_no_file_but_remote_json(tmp_path: Path):
     ) == 0
 
     assert _decoded_leak_search(_results(tmp_path), sentinel) == []
+    assert _decoded_leak_search(folder, sentinel) == []  # the shared folder itself (Codex r2-2)
     assert sentinel not in export_path.read_text(encoding="utf-8")
     assert json.loads(remote.read_text(encoding="utf-8"))["profile_share"] == str(folder)
 
@@ -578,6 +579,7 @@ def test_the_environment_path_never_appears(tmp_path: Path):
     ) == 0
 
     assert _decoded_leak_search(_results(tmp_path), sentinel) == []
+    assert _decoded_leak_search(folder, sentinel) == []  # the shared folder itself (Codex r2-2)
     assert sentinel not in export_path.read_text(encoding="utf-8")
     remote = remote_path_for(_pointer(tmp_path))
     assert not remote.exists() or sentinel not in remote.read_text(encoding="utf-8")
@@ -586,19 +588,29 @@ def test_the_environment_path_never_appears(tmp_path: Path):
 def test_a_non_neutral_display_name_never_reaches_the_list_the_answer_or_the_import(tmp_path: Path):
     """Codex r1-6, the "Rechnernamen" gap: a valid export whose source forgot to neutralize its
     `display_name` -- the listing, the picked-answer line and the written profile all carry the
-    sink's own fallback name (`neutral.display_name_for`), never the raw one."""
+    sink's own fallback name (`neutral.display_name_for`), never the raw one. Codex r2-2: checked
+    against the whole results folder, not one profile field, and after a subsequent export."""
+    name = "sentinel-host"
     folder = _drop_folder(tmp_path)
-    _write(folder, "one.json", _export({"display_name": "sentinel-host", "recorded_at": "2026-09-20T08:00:00Z"}))
+    _write(folder, "one.json", _export({"display_name": name, "recorded_at": "2026-09-20T08:00:00Z"}))
 
-    _code, lines, asker = _share_run(
+    code, lines, asker = _share_run(
         tmp_path, {"share_setup": "use", "share_files": [PROFILE_ID]}, environ={ENV_VAR: str(folder)}
     )
 
-    assert not any("sentinel-host" in line for line in lines)
+    assert code == 0
+    assert not any(name in line for line in lines)
     rows = asker.choices["share_files"]
-    assert "sentinel-host" not in rows[0].label
-    stored = json.loads((_results(tmp_path) / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8"))
-    assert stored["display_name"] != "sentinel-host"
+    assert name not in rows[0].label
+    assert _decoded_leak_search(_results(tmp_path), name) == []
+
+    config_path = _results(tmp_path) / "modelroom.toml"
+    export_path = tmp_path / "out.json"
+    assert main(
+        ["export-profile", "--config", str(config_path), "--profile", PROFILE_ID, "--out", str(export_path)],
+        pointer_path=_pointer(tmp_path),
+    ) == 0
+    assert name not in export_path.read_text(encoding="utf-8")
 
 
 def test_a_non_neutral_display_name_never_reaches_an_error_sentence(tmp_path: Path):
@@ -670,6 +682,45 @@ def test_a_write_failure_after_create_is_a_write_problem_and_cleans_up(tmp_path:
     assert list(folder.iterdir()) == []  # cleaned up despite the write failure
 
 
+def test_a_write_failure_and_a_failed_cleanup_names_the_leftover_file(tmp_path: Path, monkeypatch):
+    """Codex r2-1: writing fails **and** the cleanup that follows fails too -- the plain
+    `WRITE_PROBLEM` sentence alone would drop the leftover file silently; its own (neutral) name
+    must be named so the leftover can be found and removed by hand."""
+    import builtins
+
+    folder = tmp_path / "share"
+    folder.mkdir()
+    real_open = builtins.open
+
+    def flaky_open(path, mode="r", *args, **kwargs):
+        if mode == "xb" and Path(path).parent == folder:
+            handle = real_open(path, mode, *args, **kwargs)
+
+            class _Flaky:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_exc):
+                    handle.close()
+                    return False
+
+                def write(self, _data):
+                    raise OSError("disk full")
+
+            return _Flaky()
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", flaky_open)
+    monkeypatch.setattr(Path, "unlink", lambda self, *a, **k: (_ for _ in ()).throw(OSError("busy")))
+    fixed_token = "deadbeef"
+
+    ok, note = guided_share._write_probe(folder, token=lambda: fixed_token)
+
+    assert ok is False
+    assert WRITE_PROBLEM in note
+    assert f"{guided_share.PROBE_PREFIX}{fixed_token}.tmp" in note
+
+
 def test_a_failed_create_never_deletes_an_existing_file(tmp_path: Path):
     """Codex r1-3: `open(..., "xb")` itself failing (a name collision) must never delete whatever
     is already at that path."""
@@ -703,9 +754,21 @@ def test_a_plain_run_never_prints_the_share_row_as_a_note(tmp_path: Path):
     assert not any(NO_SHARE_ROW in line for line in lines)
 
 
+def test_only_remote_store_and_guided_share_mention_profile_share():
+    """Codex r2-3: the package-wide check from round 1, kept alongside the sharper AST one below --
+    no other module of `modelroom` names `profile_share` at all, not even in a comment."""
+    import modelroom
+
+    package_dir = Path(modelroom.__file__).parent
+    hits = {path.name for path in package_dir.glob("*.py") if "profile_share" in path.read_text(encoding="utf-8")}
+
+    assert hits == {"remote_store.py", "guided_share.py"}
+
+
 def test_only_share_folder_reads_profile_share_as_an_attribute():
     """Codex r1-4: a grep on the module name is not enough -- `store.profile_share` must be an
-    attribute access inside `share_folder` and nowhere else in the module, function by function."""
+    attribute access inside `share_folder` and nowhere else in `guided_share.py`, function by
+    function."""
     import ast
 
     source = Path(guided_share.__file__).read_text(encoding="utf-8")

@@ -605,14 +605,29 @@ def test_a_file_replaced_after_the_choice_by_another_profiles_export_changes_not
 def test_a_file_grown_over_the_limit_after_the_listing_is_refused(tmp_path, capsys):
     """`max_bytes` is enforced on the bytes actually read, not on a size a lister saw earlier: a
     file over the limit -- whether it always was or grew since it was listed -- is `StaleExportError`
-    (Codex r1-1: the same story as a file that changed to another profile), not the generic
-    `StoredFileError` a caller without `expected_profile_id` would get, and nothing of it is written."""
+    (Codex r1-1: the same story as a file that changed to another profile) once it goes through
+    `import_profile`, not the generic `StoredFileError` (`ExportTooLargeError`) `read_export_file`
+    alone would raise for a lister, and nothing of it is written."""
     config_path = _deployment(tmp_path / "target")
     before = _tree(tmp_path / "target")
     export_path = _write_json(tmp_path / "e.json", EXPORT)
 
     with pytest.raises(StaleExportError):
         import_profile(config_path, export_path, NOW, expected_profile_id=PROFILE_ID, max_bytes=10)
+
+    assert _tree(tmp_path / "target") == before
+
+
+def test_max_bytes_alone_is_enough_for_stale_export_error(tmp_path):
+    """Codex r2-4: the `StaleExportError` translation of `import_profile` hangs on `max_bytes`
+    alone, not on `expected_profile_id` -- CONTRACTS.md tied the two together in error; this proves
+    the size check trips it with `expected_profile_id` left out entirely."""
+    config_path = _deployment(tmp_path / "target")
+    before = _tree(tmp_path / "target")
+    export_path = _write_json(tmp_path / "e.json", EXPORT)
+
+    with pytest.raises(StaleExportError):
+        import_profile(config_path, export_path, NOW, max_bytes=10)
 
     assert _tree(tmp_path / "target") == before
 

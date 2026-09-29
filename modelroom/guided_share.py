@@ -152,9 +152,9 @@ def _form_problem(value: str) -> str | None:
 def _write_probe(folder: Path, token: Callable[[], str] = lambda: secrets.token_hex(4)) -> tuple[bool, str | None]:
     """Write, then remove, a probe file of our own: `(True, None)` on full success, `(True, <note>)`
     when only the removal failed (the folder still counts), `(False, WRITE_PROBLEM)` when nothing
-    could be written there. `open(..., "xb")` never touches a file already there; a create that
-    fails outright never deletes one either (Codex r1-3) -- only a create that succeeded, with a
-    write or close that failed afterwards, is cleaned up on the way out."""
+    could be written there -- its own file name added when a write/close failure left it behind and
+    the cleanup after that failed too (Codex r2-1). `open(..., "xb")` never touches a file already
+    there; a create that fails outright never deletes one either (Codex r1-3)."""
     name = f"{PROBE_PREFIX}{token()}.tmp"
     path = folder / name
     created = False
@@ -167,7 +167,7 @@ def _write_probe(folder: Path, token: Callable[[], str] = lambda: secrets.token_
             try:
                 path.unlink()
             except OSError:
-                pass  # the write already failed; a leftover file is the lesser problem
+                return False, f"{WRITE_PROBLEM}; its test file {name} could not be removed either -- delete it by hand"
         return False, WRITE_PROBLEM
     try:
         path.unlink()

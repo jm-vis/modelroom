@@ -2958,13 +2958,17 @@ sentence under its neutral name, never the one the file actually carries).
 by file name), each through the unchanged `import_profile` with `expected_profile_id` and
 `max_bytes` (16 MiB). Both are checked on the object it actually reads, before it is planned, so a
 file that changed after it was listed -- a different profile now, or grown past the limit -- is
-`StaleExportError` (an `ImportConflictError`) either way, never the plain `StoredFileError` a size
-limit alone would be without `expected_profile_id` in play. Every exception is one of three fixed
-sentences, none of them naming the file: `a file in the shared folder changed after it was listed`
-(the check above), `a file of <name> in the shared folder contradicts one imported before` (any
-other conflict -- a contradicting measurement, most often), `a file of <name> in the shared folder
-could not be imported` (everything else); `<name>` is the neutral name as well. One file's failure
-never stops the others of the same `profile_id`, or the next `profile_id`. Herkunft `imported`, the
+`StaleExportError` (an `ImportConflictError`) either way. The two checks do not depend on each
+other: `read_export_file(..., max_bytes=...)` alone (no `expected_profile_id`, the plain listing's
+own use) still raises `ExportTooLargeError` for an oversized file, a `StoredFileError`; it is
+`import_profile(..., max_bytes=...)` that turns that `ExportTooLargeError` into `StaleExportError`,
+on `max_bytes` alone -- `expected_profile_id` plays no part in that particular translation, it only
+adds its own, separate `StaleExportError` for a `profile_id` that no longer matches. Every exception
+is one of three fixed sentences, none of them naming the file: `a file in the shared folder changed
+after it was listed` (either check above), `a file of <name> in the shared folder contradicts one
+imported before` (any other conflict -- a contradicting measurement, most often), `a file of <name>
+in the shared folder could not be imported` (everything else); `<name>` is the neutral name as well.
+One file's failure never stops the others of the same `profile_id`, or the next `profile_id`. Herkunft `imported`, the
 same as `import a profile file`.
 
 ### Neutral names
