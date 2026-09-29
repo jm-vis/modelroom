@@ -8,6 +8,7 @@ on Windows and Linux; the Windows cases name their folder through `OLLAMA_MODELS
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -186,32 +187,152 @@ def test_cards_that_differ_from_the_profile_are_unknown(stdout, cards):
     assert free_vram_mib(_smi(stdout), cards) is None
 
 
-def test_the_self_test_checks_the_free_line_for_its_form_only():
-    """`scripts/selftest.py` runs on the real machine: it checks the form of the `free` line, not its numbers.
+def test_the_self_test_checks_the_room_block_for_its_form_only():
+    """`scripts/selftest.py` runs on the real machine: it checks the form of the whole `room` block --
+    the labeled line and its continuations -- not its numbers (AP9-RM U10, Codex diff r1-2).
 
     Here and not in `tests/test_selftest.py`, which is over the size limit (AP9-UX2, size guard).
     """
     import importlib.util
 
-    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest.py"
+    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest_dialog.py"
     if not (script.parent.parent / ".git").exists():
         pytest.skip("scripts/ is not shipped in the sdist; the self-test is tested from a clone")
-    spec = importlib.util.spec_from_file_location("modelroom_selftest_free", script)
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_dialog_room", script)
     st = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(st)
     head = " #    Model                   Package                 Fit           Speed         Memory    Download"
     lines = [head, " shown     1 of 1 package", " install   #1  ollama pull x:y"]
+    graphics = " room      graphics 11.0 GB for models (12.0 GB card minus reserve)"
+    memory = "           memory 111.7 GB for models (127.7 GB minus reserve)"
+    disk = "           disk 41.2 GB free on C: (Ollama models)"
 
-    def named(free: list[str]) -> bool:
-        return any("free line" in problem for problem in st.result_table_problems([*free, *lines]))
+    def named(room: list[str]) -> bool:
+        return any("room line" in problem for problem in st.result_table_problems([*room, *lines]))
 
+    assert not named([graphics, memory, disk])  # three lines, as the guided mode draws them
+    assert not named([" room      graphics 41.4 GB for models (21.7 + 21.7 GB cards minus reserve)", memory + " · disk unknown"])
+    assert not named([" room      graphics unknown - memory unknown - disk unknown (two places Ollama may use)"])
+    assert not named([" room      shared memory 95.0 GB for models (128.0 GB minus both reserves) · disk unknown"])
+    assert not named([" room      graphics 176.0 GB for models (8 cards, 184.0 GB in all minus reserve)", memory, disk])
     assert named([])
-    assert not named([" free      graphics 21.0 + 20.4 GB free now · disk 41.2 GB free on C: (Ollama models)"])
-    assert not named([" free      graphics unknown - disk unknown (two places Ollama may use)"])
-    assert named([" free      graphics none · disk none"])
+    assert named([graphics])  # no memory, no disk
+    assert named([graphics, memory])  # no disk
+    assert named([graphics, disk])  # no memory
+    assert named([" room      shared memory lots of it · disk unknown"])  # no number
+    assert named([" room      graphics 11 GB for models (12 GB card minus reserve)", memory, disk])  # one decimal
+    assert named([" free      graphics 21.0 + 20.4 GB free now · disk 41.2 GB free on C: (Ollama models)"])
+    assert named([graphics, memory, disk, "           graphics 10.2 GB free now"])  # the moment is no piece of the head
+    assert named([" room      graphics none · disk none"])
 
 
 def test_no_test_reaches_the_real_room_probes():
     """The guard behind `tests/conftest.py`: the real probes refuse to run under pytest."""
     with pytest.raises(RuntimeError, match="real room probes"):
         real_room_probes()
+
+
+# --- what the daemon holds (AP9-RM U10): `GET /api/ps`, a hint that says nothing when unreadable ----
+
+
+def _ps_daemon(answer):
+    from modelroom.daemon import FixtureDaemon
+
+    return FixtureDaemon({("GET", "/api/ps"): answer})
+
+
+def test_loaded_models_are_read_from_api_ps():
+    from fixture_support import ps_answer
+    from modelroom.room import LoadedModel, loaded_models
+
+    assert loaded_models(_ps_daemon(ps_answer())) == (
+        LoadedModel("hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M", 6097846926, 6097846926),
+    )
+
+
+def test_nothing_loaded_is_an_empty_tuple():
+    from fixture_support import empty_ps_answer
+    from modelroom.room import loaded_models
+
+    assert loaded_models(_ps_daemon(empty_ps_answer())) == ()
+
+
+def test_an_entry_without_sizes_is_left_out():
+    import json
+
+    from modelroom.http import Response
+    from modelroom.room import LoadedModel, loaded_models
+
+    models = [
+        {"name": "a:1b", "size": 100, "size_vram": 50},
+        {"name": "b:1b", "size": 100},
+        {"name": "c:1b", "size": "100", "size_vram": 0},
+        {"name": "d:1b", "size": -1, "size_vram": 0},
+        {"size": 100, "size_vram": 0},
+        "e:1b",
+    ]
+    answer = Response(status=200, body=json.dumps({"models": models}).encode("utf-8"))
+    assert loaded_models(_ps_daemon(answer)) == (LoadedModel("a:1b", 100, 50),)
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[]", b'{"other": 1}', b'{"models": {}}'])
+def test_an_unreadable_ps_answer_is_none(body):
+    from modelroom.http import Response
+    from modelroom.room import loaded_models
+
+    assert loaded_models(_ps_daemon(Response(status=200, body=body))) is None
+    assert loaded_models(_ps_daemon(Response(status=500, body=b'{"models": []}'))) is None
+
+
+def test_an_unreachable_daemon_is_none():
+    from fixture_support import offline_daemon
+    from modelroom.room import loaded_models
+
+    assert loaded_models(offline_daemon()) is None
+
+
+# --- a moved home takes its application data along (AP9-RM U11b) --------------------------------------
+
+
+def test_the_moved_home_of_a_test_carries_its_application_data():
+    """A Windows PowerShell under a USERPROFILE without `AppData\\Local` wrote its module analysis cache
+    into the working directory -- the repository. Every test's home has both folders."""
+    import os
+
+    home = Path(os.environ["USERPROFILE"])
+    assert Path(os.environ["LOCALAPPDATA"]) == home / "AppData" / "Local" and (home / "AppData" / "Local").is_dir()
+    assert Path(os.environ["APPDATA"]) == home / "AppData" / "Roaming" and (home / "AppData" / "Roaming").is_dir()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the folder of Windows' own application data")
+def test_a_powershell_under_the_moved_home_resolves_its_cache_folder_inside_it(tmp_path):
+    """The resolution PowerShell uses for its cache (`LocalApplicationData`) stays in the moved home."""
+    import os
+    import shutil
+
+    powershell = shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("no Windows PowerShell on this machine")
+    command = "[Environment]::GetFolderPath('LocalApplicationData')"
+    answer = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command", command], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    assert Path(answer.stdout.strip()) == Path(os.environ["USERPROFILE"]) / "AppData" / "Local"
+    assert not (tmp_path / "Microsoft").exists()
+
+
+def test_the_self_test_moves_the_application_data_with_its_home(tmp_path, monkeypatch):
+    import importlib.util
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest.py"
+    if not (script.parent.parent / ".git").exists():
+        pytest.skip("scripts/ is not shipped in the sdist; the self-test is tested from a clone")
+    for name in ("HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA"):
+        monkeypatch.setenv(name, "unchanged")  # restored after the test; `_redirect_home` writes os.environ
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_home", script)
+    st = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(st)
+    home = tmp_path / "home"
+    st._redirect_home(home)
+    import os
+
+    assert os.environ["LOCALAPPDATA"] == str(home / "AppData" / "Local") and (home / "AppData" / "Local").is_dir()
+    assert os.environ["APPDATA"] == str(home / "AppData" / "Roaming") and (home / "AppData" / "Roaming").is_dir()

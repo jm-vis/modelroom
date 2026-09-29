@@ -20,6 +20,18 @@ PER_MODEL_PIECES = (
 )
 
 
+# Each table ranks for its own machine, so two machines show different rows (GF question 5 (a),
+# AP9-RM): said once per block in the terminal, once under the first table in the Markdown file,
+# and only where a result ranks two machines or more.
+EACH_MACHINE_PIECE = "ranked for this machine; another machine may show other rows"
+EACH_MACHINE_SENTENCE = "Each table is ranked for its own machine; another machine may show other rows."
+
+
+def several_ranked(document) -> bool:
+    """Whether the result ranks two machines or more."""
+    return sum(block.status == "ranked" for block in document.machines) >= 2
+
+
 def per_model(block) -> bool:
     """Whether this block shows one row per model: its rule rows name `ranking.best_per_model`."""
     return any(BEST_FACT in entry.note.facts for entry in block.ranked)
@@ -34,8 +46,9 @@ def _rows(count: int) -> str:
     return "1 row" if count == 1 else f"{count} rows"
 
 
-def shown_pieces(block, dash: str) -> list[str]:
-    """The `shown` line's own pieces: how many rows of how many packages, and the appended rows."""
+def shown_pieces(block, dash: str, several: bool = False) -> list[str]:
+    """The `shown` line's own pieces: how many rows of how many packages, and the appended rows;
+    with `several` ranked machines, that the table is this machine's own."""
     shown = len(block.ranked)
     if per_model(block):
         pieces = [f"{_rows(shown)} of {block.ranked_total} packages, one row per model"]
@@ -46,6 +59,8 @@ def shown_pieces(block, dash: str) -> list[str]:
         pieces.append(f"{ranks_text(ranks, dash)} is shown for its measurement, not by the rule")
     elif ranks:
         pieces.append(f"{ranks_text(ranks, dash)} are shown for their measurements, not by the rule")
+    if several and block.ranked:
+        pieces.append(EACH_MACHINE_PIECE)
     return pieces
 
 
@@ -68,4 +83,14 @@ def showing_line(block) -> str:
     return f"Showing {shown} of {block.ranked_total} ranked packages."
 
 
-__all__ = ["PER_MODEL_PIECES", "appended_ranks", "key_pieces", "per_model", "showing_line", "shown_pieces"]
+__all__ = [
+    "EACH_MACHINE_PIECE",
+    "EACH_MACHINE_SENTENCE",
+    "PER_MODEL_PIECES",
+    "appended_ranks",
+    "key_pieces",
+    "per_model",
+    "several_ranked",
+    "showing_line",
+    "shown_pieces",
+]

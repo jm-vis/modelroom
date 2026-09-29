@@ -179,6 +179,40 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **The memory reserve follows the machine's size** (`modelroom/reserve.py`, `fit.py`, `config.py`;
+  CONTRACTS.md, "MachineConfig", "Pool and mode"; ADR 0012; AP9-RM, decided 2026-09-29). Where
+  `modelroom.toml` sets no `reserve_ram_gib`, a machine keeps a quarter of its memory, at least 2 and
+  at most 16 GB (unified memory: a quarter, no upper bound, plus the card reserve). A number entered
+  always wins and is never overwritten. A new folder writes no `reserve_ram_gib`; `[defaults]` has no
+  default number any more, a number there is still copied into a new entry. A folder that still
+  carries the `8.0` of 0.1.0 keeps it and gets a hint under its table with the computed reserve. The
+  laptop of 127.7 GB computes with 111.7 GB instead of 119.7. **Compatibility:** every file 0.1.0
+  wrote reads as before; the released 0.1.0 refuses the schema-3 files this version writes with exit
+  `3`; a schema-1 or -2 file whose key was removed by hand stops 0.1.0 with a field error.
+- **The table head names the budget, not the moment** (`modelroom/room_head.py`, `room.py`,
+  `views.py`; CONTRACTS.md, "Under the head, the budget"; ADR 0012; AP9-RM U10). The line `free`
+  became `room`: `graphics 11.0 GB for models (12.0 GB card minus reserve) · memory 111.7 GB for
+  models (127.7 GB minus reserve) · disk 41.2 GB free on C: (Ollama models)`, for another computer
+  from its profile with `disk unknown on another computer`. What Ollama holds right now stands on a
+  line `loaded` of its own, only when it holds a model. The `memory` line names the budget of rows in
+  system memory too, the key says how the reserve is computed, the Markdown column `Reserve RAM GiB`
+  says `(computed)`, and the document carries `reserve_ram_origin` (schema 3, additive). With two
+  ranked machines or more, each `shown` line says the table is ranked for its own machine.
+- **A download larger than the free disk is marked, and not recommended** (`modelroom/disk_fit.py`,
+  `views_install.py`, `pull_choice.py`, `guided_install.py`; CONTRACTS.md, "A download larger than
+  the free disk"; ADR 0012; AP9-RM U11, GF 2026-09-29). Rank and fit class stay (ADR 0009). The
+  rule is the one of the check before a pull, download plus 1 GB, from one function
+  (`room.pull_need_bytes`). Where the free disk of this machine was read, such a row lies on the house
+  red with white text -- the first background color of modelroom -- and carries ` ×` behind its
+  download, also without color and in `docs/models.md`; a red `disk` line under `memory` names the
+  rows (`× #1–10 need more than the 26.4 GB free on C: -- free space first, or pick a smaller
+  model`); `install` takes the best row that fits the disk (`the best row that also fits the disk;
+  #1–4 need more space`) or says in red `no package fits the 26.4 GB free on C:; free space first`;
+  the pull list shows such rows in red with `needs 94.1 GB plus 1 GB room, 26.4 GB free`, they cannot
+  be chosen, and the pointer starts on the first row that can. The table's `Download` column is 10
+  wide for it (`Package` 21, `Fit` 11). Another computer and an unknown disk change nothing; the
+  check before the pull stays. A package the daemon provably holds already needs no disk and is never
+  marked: it stays a `local already` row of the pull list, with its note.
 - **The package to pull is chosen** (`modelroom/pull_choice.py`, `guided_install.py`; CONTRACTS.md,
   "The pull"; ADR 0010; AP9-UX2 U6, decided 2026-09-28). Step 5 lists the rows shown for this machine
   (`pull_package`), then names the command of the choice, checks the disk and asks `Pull #3 into
@@ -341,6 +375,10 @@ All notable changes to this project are documented in this file. The format foll
   does the card of a run that ranked nothing, where every profile the folder holds was entered.
 
 ### Fixed
+
+- **A pool of 0 or less is said in words** (`modelroom/render.py`; AP9-RM RM-2): a package set
+  aside on a machine whose reserve takes all of its memory says `nothing is left after the reserve of
+  8.0 GiB (3.8 GiB in all)` instead of `of the -4.2 GiB left after the reserve`.
 
 - **`OLLAMA_MODELS` with several separators after `~`** (`modelroom/room.py`): `~//models` joined a
   root path onto the home folder and measured the disk of `/models`; every `/` and `\` behind `~`

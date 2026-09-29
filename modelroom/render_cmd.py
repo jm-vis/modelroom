@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from .config import Configuration
 from .contracts import SchemaVersionError
@@ -42,6 +42,7 @@ from .state import (
     release_lock,
 )
 from .pull_choice import ambiguous_names
+from .room import Disk
 from .views import document_markdown, document_terminal
 
 
@@ -89,8 +90,12 @@ def render_with_config(
     echo: Callable[[str], None] | None = None,
     on_document: Callable[[RenderDocument], None] | None = None,
     selection: RunSelection | None = None,
+    disks: Mapping[str, Disk] | None = None,
 ) -> int:
     """Run `render` against an already-loaded `Configuration` -- the programmatic entry point.
+
+    `disks` is the free disk a guided run read, per machine name: the Markdown view marks a download
+    larger than it (AP9-RM U11). `modelroom render` reads no machine and passes nothing.
 
     `selection` is what a guided run chose (`selection.RunSelection`): the document then covers only
     its machines and its models, ranked with the release and the size its step 2 showed (AP9-UX B,
@@ -144,7 +149,7 @@ def render_with_config(
 
     try:
         return _render_locked(
-            config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo, on_document, selection
+            config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo, on_document, selection, disks
         )
     finally:
         release_lock(handle)
@@ -159,6 +164,7 @@ def _render_locked(
     echo: Callable[[str], None] | None,
     on_document: Callable[[RenderDocument], None] | None = None,
     selection: RunSelection | None = None,
+    disks: Mapping[str, Disk] | None = None,
 ) -> int:
     """Read, build and write both views; a broken profile file is a note, never the whole render.
 
@@ -202,7 +208,7 @@ def _render_locked(
         print(f"{json_path}: the JSON view could not be written ({exc}); nothing else written", file=sys.stderr)
         return 1
     try:
-        atomic_write_text(config.paths.markdown, document_markdown(document))
+        atomic_write_text(config.paths.markdown, document_markdown(document, disks))
     except OSError as exc:
         print(
             f"{config.paths.markdown}: the Markdown view could not be written ({exc}); "

@@ -47,11 +47,13 @@
  result    docs\models.md          24 packages ranked, 0 no fit
 
  workstation · context L 32k
- free      graphics 10.2 GB free now · disk 41.2 GB free on C: (Ollama models)
- #    Model                   Package                 Fit           Speed         Memory    Download
+ room      graphics 11.0 GB for models (12.0 GB card minus reserve)
+           memory 111.7 GB for models (127.7 GB minus reserve)
+           disk 41.2 GB free on C: (Ollama models)
+ #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    DeepSeek-R1-0528-Qwen3  unsloth · Q4_K_M        tight         –             10.2 GB   4.7 GB
- 2    Qwen3.5-9B              unsloth · UD-Q6_K_XL    tight         –             10.5 GB   8.2 GB
+ 1    DeepSeek-R1-0528-Qwen3  unsloth · Q4_K_M       tight        –             10.2 GB   4.7 GB
+ 2    Qwen3.5-9B              unsloth · UD-Q6_K_XL   tight        –             10.5 GB   8.2 GB
  shown     2 rows of 24 packages, one row per model
  memory    #1–2 fit into graphics memory, budget 11.0 GB (card minus reserve, from the profile)
  speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
@@ -59,7 +61,8 @@
            fits: up to 85 % · tight: up to 98 % · no fit: more
            the pool is what the mode names, minus its reserve (per card) · gpu: one card
            gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
-           one memory shared by system and card counts as gpu, both reserves taken
+           system memory keeps a quarter as reserve, 2 to 16 GB, unless modelroom.toml sets it
+           one memory shared by system and card counts as gpu, a quarter kept, no upper limit
            off the card, and for a fit from size the highest class is fits
            best: the least compression of the same model that fits
            modelroom rates no model family against another

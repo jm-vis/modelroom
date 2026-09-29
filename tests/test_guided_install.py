@@ -35,6 +35,7 @@ from modelroom.config import load_config
 from modelroom.http import Response
 from modelroom.loadtest import installed_models
 
+from fixture_servers import DEEPSEEK_WEIGHTS_BYTES
 from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
     PULL_STREAM_LINES,
@@ -107,6 +108,11 @@ def _run(tmp_path: Path, answers: dict, daemon, room=None) -> tuple[int, list[st
 def _first_weights(tmp_path: Path) -> float:
     payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
     return next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"][0]["weights_gib"]
+
+
+def _ranked_count(tmp_path: Path) -> int:
+    payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
+    return len(next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"])
 
 
 def _pull_calls(daemon) -> list:
@@ -545,7 +551,7 @@ def test_the_disk_is_measured_again_before_the_pull(tmp_path: Path):
 
     assert code == 0  # no `run.failed`: too little disk is a finding, not a fault
     assert disk.calls == 2
-    assert "free      graphics 10.2 GB free now · disk 100.0 GB free on C: (Ollama models)" in lines
+    assert "disk 100.0 GB free on C: (Ollama models)" in lines  # AP9-RM U10: its own piece of the `room` line
     after = _after_results(lines)
     assert "install   not enough disk for #1: needs 9.9 GB, 9.9 GB free on C:" in after
     assert "pull" not in asker.asked and _pull_calls(daemon) == []
@@ -565,8 +571,10 @@ def test_one_byte_short_does_not_ask(tmp_path: Path):
 
     _code, lines, asker = _run(tmp_path, {**ANSWERS, "pull": True}, pull_daemon(), room=room_with_disk(SequenceDisk(NEED - 1)))
 
+    # AP9-RM U11b: the table and the pull list apply the very rule of the check before a pull, so #1
+    # is marked and cannot be chosen; the check itself is covered by the test with two disk readings.
     assert "pull" not in asker.asked
-    assert any(line.startswith("install   not enough disk for #1") for line in lines)
+    assert next(line for line in lines if line.startswith("1    ")).endswith(" ×")
 
 
 def test_an_unknown_disk_asks_with_a_note(tmp_path: Path):
@@ -579,12 +587,18 @@ def test_an_unknown_disk_asks_with_a_note(tmp_path: Path):
     assert "pull" in asker.asked
 
 
-def test_the_table_head_names_free_graphics_and_disk(tmp_path: Path):
+def test_the_table_head_names_the_budgets_and_the_disk(tmp_path: Path):
+    """AP9-RM U10: the head says what the fit computes with, the budget, and the free disk of now."""
     _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
 
     head = lines.index(next(line for line in lines if line.startswith("workstation · context")))
-    assert lines[head + 1] == "free      graphics 10.2 GB free now · disk 41.2 GB free on C: (Ollama models)"
+    assert lines[head + 1 : head + 4] == [
+        "room      graphics 11.0 GB for models (12.0 GB card minus reserve)",
+        "memory 111.7 GB for models (127.7 GB minus reserve)",
+        "disk 41.2 GB free on C: (Ollama models)",
+    ]
     assert any("budget 11.0 GB (card minus reserve, from the profile)" in line for line in lines)
+    assert not any("free now" in line for line in lines)  # the daemon is offline: no `loaded` line either
 
 
 def test_unknown_is_never_none(tmp_path: Path):
@@ -592,9 +606,9 @@ def test_unknown_is_never_none(tmp_path: Path):
 
     _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon(), room=fixed_room(None, None))
 
-    free = next(line for line in lines if line.startswith("free "))
-    assert free == "free      graphics unknown · disk unknown"
-    assert "none" not in free
+    head = lines.index(next(line for line in lines if line.startswith("room ")))
+    assert lines[head + 1] == "memory 111.7 GB for models (127.7 GB minus reserve) · disk unknown"
+    assert not any("none" in line for line in lines[head : head + 2])
 
 
 def test_the_self_test_pull_criterion_goes_through_the_pull_list(tmp_path: Path):
@@ -623,3 +637,69 @@ def test_the_download_column_is_the_weight_of_the_package(tmp_path: Path):
 
     row = next(line for line in lines if line.startswith("1 "))
     assert row.endswith(f"{_first_weights(tmp_path):.1f} GB") and row.endswith("8.9 GB")
+
+
+# --- AP9-RM U11: a download larger than the free disk ------------------------------------------------
+
+
+def test_a_disk_too_small_for_every_row_marks_them_all_and_offers_nothing(tmp_path: Path):
+    """1 GB free: every row carries ` ×`, the `disk` line says what to do, no command, no pull, the file too."""
+    from fixture_room import fixed_room
+
+    daemon = pull_daemon()
+    _code, lines, asker = _run(tmp_path, PULL, daemon, room=fixed_room(free_disk_bytes=1024**3))
+
+    # Every row of the table, marked or not (Codex r3-3): the lines under its head and its rule up to
+    # the first line that is no row, as many as the document ranks for this machine; then each mark.
+    head = next(index for index, line in enumerate(lines) if line.startswith("#") and line.endswith("Download"))
+    end = next(index for index in range(head + 2, len(lines)) if not lines[index][:1].isdigit())
+    rows = lines[head + 2 : end]
+    assert len(rows) == _ranked_count(tmp_path) > 1
+    assert all(row.endswith(" ×") for row in rows), rows
+    assert any(line.startswith("disk      × #1–") and "need more than the 1.0 GB free on C:" in line for line in lines)
+    assert "install   no package fits the 1.0 GB free on C:; free space first" in lines
+    assert not any(line.startswith("install   #") for line in lines)
+    assert _pull_calls(daemon) == [] and "pull" not in asker.asked
+    markdown = (tmp_path / "results" / "docs" / "models.md").read_text(encoding="utf-8")
+    assert " × |" in markdown and "need more than the 1.0 GB free on C:" in markdown
+
+
+def test_a_disk_that_holds_some_rows_moves_the_install_line(tmp_path: Path):
+    """8 GB free: `Q8_0` (#1, 8.9 GB and the margin of 1 GB) is marked; the install line takes the best row that fits."""
+    from fixture_room import fixed_room
+
+    _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon(), room=fixed_room(free_disk_bytes=8 * 1024**3))
+
+    assert next(line for line in lines if line.startswith("1 ")).endswith("8.9 GB ×")
+    install = next(index for index, line in enumerate(lines) if line.startswith("install   #"))
+    assert not lines[install].startswith("install   #1 ")
+    assert lines[install + 1].startswith("the best row that also fits the disk; #1")
+
+
+# --- U11c (Codex r3-1): a package the daemon holds already needs no disk -------------------------------
+
+# DeepSeek (#1 measured, 4.7 GB) is held and proven by its digest; half a GiB more is free than its
+# weight file -- less than the file and the margin of 1 GB a pull would need.
+HELD_FREE = DEEPSEEK_WEIGHTS_BYTES + 1024**3 // 2
+
+
+@pytest.mark.parametrize("chosen", [{"pull_package": DEEPSEEK_OLLAMA_NAME}, {}], ids=["named", "default"])
+def test_a_held_package_on_a_tight_disk_stays_a_local_choice(tmp_path: Path, chosen: dict):
+    """Chosen by the answer file, or `#1` by default: `local already`, no mark, no lock, no question."""
+    from fixture_room import fixed_room
+
+    daemon = pull_daemon()
+    code, lines, asker = _run(tmp_path, {**MEASURED, **chosen, "pull": True}, daemon, room=fixed_room(free_disk_bytes=HELD_FREE))
+
+    assert code == 0
+    after = _after_results(lines)
+    first = next(line for line in lines if line.startswith("1 "))
+    assert "DeepSeek" in first and not first.endswith(" ×")
+    assert next(line for line in lines if line.startswith("2 ")).endswith(" ×")  # the others still need the disk
+    assert not any(line.startswith("disk      × #1") for line in lines)
+    assert "install   #1 is local already · say Yes in step 4 to measure it" in after
+    assert "pull" not in asker.asked and _pull_calls(daemon) == []
+    if chosen:
+        assert f"? Which package should be pulled into Ollama?  #1  {DEEPSEEK_OLLAMA_NAME}" in after
+    markdown = (tmp_path / "results" / "docs" / "models.md").read_text(encoding="utf-8")
+    assert "×" not in next(line for line in markdown.splitlines() if line.startswith("| 1 |"))

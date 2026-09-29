@@ -39,7 +39,14 @@ from .profile import HardwareProfile
 # The mark's colors, from `docs/assets/banner.svg`: white and a muted blue for the pictogram and
 # the name, green for the pointer and for what is done, amber for what is tight, cyan for a path,
 # gray for a side note. They are foreground colors only -- the background belongs to the terminal.
+# One exception (GF 2026-09-29, AP9-RM U11, ADR 0012): a table row whose download does not fit the
+# free disk lies on the house red, `RED_BAND`; the lines that say so are `RED_TEXT`, the lighter
+# step of the same red, since `#C32F27` itself is too dark as text on a black terminal.
 WHITE = "#ffffff"
+RED = "#c32f27"
+RED_TEXT = "#f07a72"
+# `RED` at 32 % over the black of a terminal (`#0c0c0c`), mixed here: a terminal draws no alpha.
+RED_BAND = "#471715"
 MUTED = "#8cacc9"
 # The darker tone of the same family, for the empty cells of the mark. In color every cell is a
 # full block and the tone alone tells them apart (decided 2026-09-24): Windows Terminal draws the
@@ -103,12 +110,14 @@ class Glyphs:
     move: str
     dot: str
     rule: str
+    # What a row too large for the free disk carries behind its download (AP9-RM U11).
+    cross: str = "×"
 
 
 UNICODE_GLYPHS = Glyphs(full="██", muted="▓▓", empty="░░", lower="▄▄▄", block="███", check="✓",
-                        skip="–", pointer="❯", move="↑↓", dot="·", rule="─")
+                        skip="–", pointer="❯", move="↑↓", dot="·", rule="─", cross="×")
 ASCII_GLYPHS = Glyphs(full="##", muted="::", empty="..", lower="...", block="###", check="ok",
-                      skip="-", pointer=">", move="^v", dot="-", rule="-")
+                      skip="-", pointer=">", move="^v", dot="-", rule="-", cross="x")
 
 
 def glyphs(stream=None) -> Glyphs:
@@ -159,6 +168,9 @@ def style_rules() -> list[tuple[str, str]]:
         ("tight", f"fg:{AMBER}"),
         # A line a reader copies into a shell: the one thing on the screen that is not prose.
         ("command", f"fg:{WHITE} bold"),
+        # A download larger than the free disk (AP9-RM U11): the lines that say so, and the row itself.
+        ("warn", f"fg:{RED_TEXT}"),
+        ("over-disk", f"bg:{RED_BAND} fg:{WHITE}"),
     ]
 
 

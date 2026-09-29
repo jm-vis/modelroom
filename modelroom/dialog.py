@@ -57,6 +57,9 @@ class Choice:
     disabled: str | None = None
     heading: bool = False
     dim: bool = False
+    # A row drawn in light red whose label says itself why it cannot be taken (AP9-RM U11: a package
+    # too large for the free disk); it is `disabled` as well, and its reason is not repeated behind it.
+    warn: bool = False
 
 
 class Canceled(Exception):
@@ -482,10 +485,10 @@ def _questionary_choices(choices: Sequence[Choice]) -> list:
             built.append(questionary.Separator(choice.label))
             continue
         label = choice.label.ljust(width) if choice.disabled is None else choice.label
-        title = [("class:note", label)] if choice.dim else label
-        built.append(
-            questionary.Choice(title=title, value=choice.value, checked=choice.checked, disabled=choice.disabled)
-        )
+        title = [("class:warn", label)] if choice.warn else [("class:note", label)] if choice.dim else label
+        # A red row says its reason in its own label; `True` keeps the library from adding it again.
+        disabled = True if choice.warn and choice.disabled else choice.disabled
+        built.append(questionary.Choice(title=title, value=choice.value, checked=choice.checked, disabled=disabled))
     return built
 
 

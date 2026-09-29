@@ -155,6 +155,7 @@ _MACHINE_RANKING = {
     "profile": deepcopy(_HARDWARE_PROFILE),
     "reserve_ram_gib": 8.0,
     "reserve_vram_gib": 1.0,
+    "reserve_ram_origin": "entered",
     "reason": None,
     "ranked": [deepcopy(_RANKED_ENTRY)],
     "ranked_total": 1,

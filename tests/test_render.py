@@ -765,11 +765,11 @@ def test_a_second_memory_pool_is_a_line_of_its_own_under_the_first():
     # 90 GiB of weights do not fit the graphics card; the small one does.
     packages = [_hf_package(), _hf_package(repo="packager/Nova-8B-XL-GGUF", weights_bytes=90 * GIB)]
 
-    lines = [line for line in document_terminal(_document(packages, base_models=unknown)).splitlines() if "memory" in line]
+    lines = [line for line in document_terminal(_document(packages, base_models=unknown)).splitlines() if "memory" in line and "for models" not in line]  # AP9-RM: not the `room` head
 
     assert lines[0].split(maxsplit=1)[0] == "memory"
     assert lines[1].startswith(" " * 11)
-    assert lines[1].strip() == "#2 needs system memory, the graphics card helps"
+    assert lines[1].strip() == "#2 needs system memory, the graphics card helps, budget 111.5 GB"  # AP9-RM: its budget
 
 
 def test_a_single_rank_is_named_in_the_singular():

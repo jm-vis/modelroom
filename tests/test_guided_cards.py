@@ -256,7 +256,9 @@ def test_an_imported_machine_says_so_on_the_card_and_in_its_table_head(tmp_path:
     machine = next(index for index, line in enumerate(card) if line.startswith("machine") and "server" in line)
     assert card[machine + 1] == IMPORTED_WORDS
     assert any(line.startswith("server") and " · imported · context " in line for line in card)
-    assert "free      unknown on another computer" in card
+    head = _after(card, "server")  # AP9-RM U10: the budget of the imported profile, the disk not read
+    assert head[1].startswith("room      graphics ") and "GB for models (2 x " in head[1]
+    assert "disk unknown on another computer" in " ".join(head[1:4])
 
 
 def test_this_machine_chosen_by_its_existing_profile_is_this(tmp_path: Path):
@@ -291,7 +293,8 @@ def test_this_machine_and_an_import_together(tmp_path: Path):
     assert any(line.startswith("workstation · context ") for line in card)
     assert any(line.startswith("server") and " · imported · context " in line for line in card)
     assert card.count(IMPORTED_WORDS) == 1
-    assert any(line.startswith("free      graphics ") for line in card)  # this machine, measured now
+    own = _after(card, "workstation · context ")  # this machine: its budget, and its disk measured now
+    assert own[1].startswith("room      graphics ") and "free on" in " ".join(own[1:4])
 
 
 def test_the_empty_card_names_the_origin(tmp_path: Path):

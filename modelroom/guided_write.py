@@ -104,21 +104,36 @@ def create_config(config_file: Path, config: Configuration, *, now: datetime) ->
 
 
 def with_writer(name: str) -> Change:
-    """`[machines.<name>]` present and a writer: this machine is the one that fetches."""
+    """`[machines.<name>]` present and a writer: this machine is the one that fetches.
+
+    The reserves of `[defaults]` go into a new entry only (AP9-RM, Codex r2-1): an entry that is
+    there keeps its own, a reserve left out included -- that one stays computed. A `None` is left
+    out of the file by the TOML writer, never here.
+    """
 
     def change(current: Configuration) -> Configuration | None:
         machine = current.machines.get(name)
         if machine is not None and machine.writer:
             return None
         data = current.model_dump(mode="json")
-        entry = data["machines"].get(name, {})
-        entry.setdefault("reserve_ram_gib", current.defaults.reserve_ram_gib)
-        entry.setdefault("reserve_vram_gib", current.defaults.reserve_vram_gib)
+        entry = data["machines"].get(name)
+        if entry is None:
+            entry = new_machine_entry(current, writer=True)
         entry["writer"] = True
         data["machines"][name] = entry
         return Configuration.from_dict(data)
 
     return change
+
+
+def new_machine_entry(current: Configuration, *, writer: bool, profile: str | None = None) -> dict:
+    """A new `[machines.<name>]` entry with the reserves of `[defaults]`: a number there is copied
+    as it is; a memory reserve `[defaults]` leaves out is left out here too, and computed (ADR 0012)."""
+    entry: dict = {} if current.defaults.reserve_ram_gib is None else {"reserve_ram_gib": current.defaults.reserve_ram_gib}
+    entry.update(reserve_vram_gib=current.defaults.reserve_vram_gib, writer=writer)
+    if profile is not None:
+        entry["profile"] = profile
+    return entry
 
 
 def with_profile(name: str, profile_id: str | None, measured_paths: PathsConfig, config_file: Path, said: Said) -> Change:
@@ -218,12 +233,7 @@ def with_found_profiles(said: Said) -> Change:
             except ImportConflictError as exc:
                 said.problems.append(f"the profile {profile.profile_id} stays without a machine entry: {exc}")
                 continue
-            data["machines"][name] = {
-                "reserve_ram_gib": current.defaults.reserve_ram_gib,
-                "reserve_vram_gib": current.defaults.reserve_vram_gib,
-                "writer": False,
-                "profile": profile.profile_id,
-            }
+            data["machines"][name] = new_machine_entry(current, writer=False, profile=profile.profile_id)
             said.notes.append(f"machine {name!r} added for the profile {profile.profile_id} found in this folder")
         return Configuration.from_dict(data) if said.notes else None
 
@@ -255,12 +265,7 @@ def with_entered_machine(profile_id: str, display_name: str, said: Said) -> Chan
             said.problems.append(f"the profile {profile_id} stays without a machine entry: {exc}")
             return None
         data = current.model_dump(mode="json")
-        data["machines"][name] = {
-            "reserve_ram_gib": current.defaults.reserve_ram_gib,
-            "reserve_vram_gib": current.defaults.reserve_vram_gib,
-            "writer": False,
-            "profile": profile_id,
-        }
+        data["machines"][name] = new_machine_entry(current, writer=False, profile=profile_id)
         return Configuration.from_dict(data)
 
     return change
@@ -272,6 +277,7 @@ __all__ = [
     "Stored",
     "combined",
     "create_config",
+    "new_machine_entry",
     "read_stored",
     "update_config",
     "with_context",

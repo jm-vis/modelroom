@@ -105,8 +105,12 @@ class MachineRanking(BaseModel):
     status: MachineStatus
     label: str = Field(min_length=1)
     profile: HardwareProfile | None = None
+    # The memory reserve the fit took (`reserve.ram_reserve`): the number entered in modelroom.toml,
+    # one computed from the machine, or `unknown` (no number, no profile; then 0.0). Schema 3,
+    # additive (AP9-RM, ADR 0012); a document of 0.1.0 reads as `entered`.
     reserve_ram_gib: float = Field(ge=0)
     reserve_vram_gib: float = Field(ge=0)
+    reserve_ram_origin: Literal["entered", "computed", "unknown"] = "entered"
     reason: str | None = None
     ranked: list[RankedEntry] = Field(default_factory=list)
     # How many packages the rule ranked in all; `ranked` shows the first `ranking.TOP_LIMIT`

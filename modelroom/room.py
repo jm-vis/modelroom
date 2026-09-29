@@ -14,6 +14,10 @@ AP9-UX2 U8 (GF F5, F6, ADR 0010). Both are read live, never persisted, and both 
   -- the one of them that exists; with none, the user default; with both, unclear. A folder that is
   not there yet is measured at the nearest folder above it that is.
 
+Since AP9-RM (U10, ADR 0012) none of it is a head's budget any more: a `LiveRoom` carries what was
+read, per machine, and `room_head` shows it as the free disk and the `loaded` hint -- what the daemon
+holds (`loaded_models`, `GET /api/ps`) and the free graphics memory of now.
+
 The path decision is pure (`ollama_models_candidates`); everything that touches the machine goes
 through `RoomProbes`, so a test passes its own. `default_room_probes()` is the real machine and
 refuses to run inside the test suite, where `tests/conftest.py` replaces it (Codex r2-5).
@@ -39,6 +43,15 @@ MIB = 1024**2
 # The disk a pull needs besides the weight files (U8): the manifest, the layers Ollama writes
 # alongside, and a margin. One GiB, in bytes.
 PULL_DISK_MARGIN_BYTES = 1 * GIB
+
+
+def pull_need_bytes(weights_bytes: float, held: bool = False) -> float:
+    """The disk a pull of `weights_bytes` of weight files needs: the files plus the margin. The one rule
+    of the check before a pull and of the marks of the table and the pull list (AP9-RM U11). A package
+    the daemon provably holds already (`held`) needs nothing: it is not pulled (U11c, Codex r3-1)."""
+    return 0.0 if held else weights_bytes + PULL_DISK_MARGIN_BYTES
+
+
 NVIDIA_SMI_FREE_ARGS = ("nvidia-smi", "--query-gpu=index,name,memory.free", "--format=csv,noheader,nounits")
 UNKNOWN = "unknown"
 UNCLEAR_REASON = "two places Ollama may use"
@@ -78,11 +91,17 @@ def real_room_probes() -> RoomProbes:
 
 @dataclass(frozen=True)
 class Disk:
-    """The free disk where Ollama keeps its models: bytes and the drive, or why it is not known."""
+    """The free disk where Ollama keeps its models: bytes and the drive, or why it is not known.
+
+    `held`: the identities (`package_identity_key`) of the packages the daemon provably holds there
+    already, by the load test's digest rule -- they need no disk (`pull_need_bytes`, U11c); empty
+    where nobody asked the daemon.
+    """
 
     free_bytes: int | None
     drive: str | None
     reason: str | None = None
+    held: frozenset[tuple[str, str, str]] = frozenset()
 
     @property
     def known(self) -> bool:
@@ -223,10 +242,69 @@ def profile_cards(profile) -> list[tuple[int, str | None]]:
     return [(gpu.index, gpu.name) for gpu in profile.gpus]
 
 
-def free_pieces(room: RoomProbes, profile) -> tuple[str, str]:
-    """The two pieces of this machine's `free` line, graphics and disk, each measured now; the view
-    joins them and breaks between them where the line would pass 100 columns (Codex r1 m8)."""
-    return graphics_words(free_graphics_mib(room, profile)), disk_words(free_disk(room))
+@dataclass(frozen=True)
+class LoadedModel:
+    """One model the daemon holds right now (`GET /api/ps`): its name, its size and the part of it
+    on the graphics card, both in bytes."""
+
+    name: str
+    size_bytes: int
+    vram_bytes: int
+
+
+@dataclass(frozen=True)
+class LiveRoom:
+    """What was read live about one machine, only in memory (AP9-RM U10): never an input to a fit.
+
+    `disk`: the free disk where Ollama keeps its models, `None` when it was not read. `loaded`: the
+    models the daemon holds, `()` when it holds none, `None` when nobody asked or the answer could
+    not be read. `graphics_free_mib`: the free memory of each card of the profile, in MiB, in the
+    profile's order, `None` when unknown.
+    """
+
+    disk: Disk | None = None
+    loaded: tuple[LoadedModel, ...] | None = None
+    graphics_free_mib: tuple[float, ...] | None = None
+
+
+def live_room(room: RoomProbes, profile, daemon=None, disk: Disk | None = None) -> LiveRoom:
+    """This machine read now: the disk (or the one read a moment ago, `disk`), the free graphics
+    memory and, with a `daemon`, what it holds."""
+    free = free_graphics_mib(room, profile)
+    return LiveRoom(
+        disk=disk if disk is not None else free_disk(room),
+        loaded=loaded_models(daemon) if daemon is not None else None,
+        graphics_free_mib=tuple(free) if free else None,
+    )
+
+
+def loaded_models(daemon) -> tuple[LoadedModel, ...] | None:
+    """The models the daemon holds (`GET /api/ps`), or `None` for every answer that cannot be read.
+
+    A reader of its own next to the load test's (`loadtest._observe`), which raises instead: a hint
+    that cannot be read is no hint, and says nothing (W4). An entry without a name or without two
+    whole, non-negative sizes is left out.
+    """
+    from .daemon import PS_PATH
+
+    try:
+        answer = daemon("GET", PS_PATH, None)
+        data = answer.json() if answer.status == 200 else None
+    except Exception:  # noqa: BLE001 -- every failure of a hint is silence, never a fault of the run (W4)
+        return None
+    models = data.get("models") if isinstance(data, dict) else None
+    if not isinstance(models, list):
+        return None
+    return tuple(model for model in (_loaded(entry) for entry in models) if model is not None)
+
+
+def _loaded(entry: object) -> LoadedModel | None:
+    if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+        return None
+    size, vram = entry.get("size"), entry.get("size_vram")
+    if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in (size, vram)):
+        return None
+    return LoadedModel(entry["name"], size, vram)
 
 
 def free_graphics_mib(room: RoomProbes, profile) -> list[float] | None:
@@ -263,7 +341,10 @@ def free_sysfs_mib(room: RoomProbes, slots: Sequence[str | None]) -> list[float]
 
 __all__ = [
     "Disk",
-    "free_pieces",
+    "LiveRoom",
+    "LoadedModel",
+    "live_room",
+    "loaded_models",
     "profile_cards",
     "NVIDIA_SMI_FREE_ARGS",
     "PULL_DISK_MARGIN_BYTES",

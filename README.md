@@ -264,12 +264,17 @@ table say what is **shown** (ten of 45, one no fit), which rows fit into graphic
 which need system memory, which rows have their fit computed from the package size as its
 **basis** rather than from the architecture (the line appears only when there are such rows) and
 what was measured for **speed**; the **key** says what the fit words mean. The **install** line is the command for the first row, ready to
-paste. Under the head of the table a **free** line says how much graphics memory and disk is free
-right now, read when the step draws (the disk where Ollama keeps its models, with its drive;
-`unknown` where it cannot be read), and the **Download** column is what a pull of that row brings;
-the **memory** line names the budget the fit computed with. Where the local Ollama daemon answered,
+paste. Under the head of the table a **room** line says the budget the fit computes with and how
+much disk is free right now where Ollama keeps its models (with its drive; `unknown` where it cannot
+be read), and the **Download** column is what a pull of that row brings; the **memory** line names
+the budget of each pool. **A row whose download, plus 1 GB of room, is more than the free disk**
+stays where the fit puts it, but lies on red, carries ` ×` behind its download (also without color and in
+`docs/models.md`), and a red **disk** line under **memory** names those rows; the **install** line
+then takes the best row that also fits the disk, or says in red that no package fits and space
+must be freed first. Where the local Ollama daemon answered,
 the run lists the rows shown and asks **Which package should be pulled into Ollama?** -- any row,
-not only #1; a row without an Ollama name, or whose name more than one file answers to, is locked.
+not only #1; a row without an Ollama name, or whose name more than one file answers to, is locked,
+and so is a row too large for the free disk, shown in red with what it needs.
 The command of the choice follows, the disk is checked again, and **Pull #3 into Ollama now?** with
 the size of the package: **Yes** pulls it into the daemon and shows the progress, **No** leaves it
 at the line to paste; step 4 of the next run measures it. Too little disk says so and asks nothing.
@@ -397,6 +402,19 @@ its reserve when it fits no graphics memory. `ample` needs at most 60 % of that 
 85 %, `tight` 98 %; anything above is `no_fit`. Off the GPU the class is capped at `fits`. Each
 word says only what was computed, and a table carries a line under it that says so. The full rule is in `CONTRACTS.md`,
 "Fit contract v1".
+
+**The reserve of the system memory** follows the machine's size: a quarter of its memory, at least
+2 and at most 16 GB (on unified memory a quarter with no upper bound, plus the card reserve). To
+set it yourself, write a number into the machine's table of `modelroom.toml` -- `reserve_ram_gib =
+12.0` under `[machines.<name>]` -- and that number always wins; `0.0` gives the whole memory. A
+folder written by 0.1.0 carries `8.0` there and keeps it; the table of such a machine says what the
+computed reserve would be. A folder written by this version carries no number where none was set;
+the released 0.1.0 refuses it with exit `3` (ADR 0012).
+
+**Under each table's head** the line `room` names what the fit computes with -- the budget, not the
+memory free at this moment: `graphics 11.0 GB for models (12.0 GB card minus reserve) · memory 111.7
+GB for models (127.7 GB minus reserve) · disk 41.2 GB free on C: (Ollama models)`. What Ollama holds
+right now stands on a line `loaded` under it, only while it holds a model.
 
 What it does not say: the class is arithmetic, not a measurement. It makes no statement about
 tokens per second, output quality or whether a runtime actually loads the package. It is

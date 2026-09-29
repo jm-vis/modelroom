@@ -27,7 +27,6 @@ from .binding import KnownProfile, PointerFileError, default_pointer_path, read_
 from .catalog import Catalog, load_catalog
 from .config import (
     CONFIG_SCHEMA_VERSION,
-    DEFAULT_RESERVE_RAM_GIB,
     DEFAULT_RESERVE_VRAM_GIB,
     ConfigError,
     Configuration,
@@ -51,9 +50,9 @@ from .guided_folder import known_config as _known_config
 from .guided_folder import last_elsewhere
 from .guided_folder import looks_like_results_folder as _looks_like_results_folder
 from .guided_folder import remember_folder as _remember_folder
-from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, pull_step
+from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, pull_step
 from .pull_choice import ambiguous_names, run_packages
-from .room import RoomProbes, free_pieces
+from .room import RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
 from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices, _measured_here  # noqa: F401
 from .guided_machines import chosen_machines, machine_answer_words
@@ -227,8 +226,8 @@ def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
             "packagers": [],
             "publishers": [],
             "machines": {
+                # No `reserve_ram_gib`: the memory reserve is computed from the machine (ADR 0012).
                 name: {
-                    "reserve_ram_gib": DEFAULT_RESERVE_RAM_GIB,
                     "reserve_vram_gib": DEFAULT_RESERVE_VRAM_GIB,
                     "writer": True,
                 }
@@ -639,7 +638,9 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
 
 
-def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scenario: Scenario) -> tuple[int, PullContext | None]:
+def _render_step(
+    run: GuidedRun, config_file: Path, config: Configuration, scenario: Scenario, daemon_reachable: bool = False
+) -> tuple[int, PullContext | None]:
     """Step 5: render, then the card of the whole run (decided 2026-09-24) and one table per machine.
 
     Built from the document the render just wrote, so no number is computed twice; with nothing to
@@ -662,16 +663,23 @@ def _render_step(run: GuidedRun, config_file: Path, config: Configuration, scena
         # Read inside the callback, which runs while the render still holds the lock: the card, the
         # table and the packages of the pull rest on one snapshot (second-model round, 2026-09-24).
         packages = run_packages(config, chosen)  # before the eligibility filter (U4, Codex r3-1)
-        written.append((document, snapshot_facts(config, chosen), PullContext(document, here, packages, ambiguous_names(packages))))
+        written.append((document, snapshot_facts(config, chosen), PullContext(document, here, packages, ambiguous_names(packages), disk)))
 
-    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen)
+    # The free disk is read once, before the render: the Markdown file, the table and the pull list
+    # mark the same rows (AP9-RM U11); the check before a pull reads it again.
+    disk = free_disk(run.room)
+    if daemon_reachable:
+        # A package the daemon holds already needs no disk and is never marked (U11c, Codex r3-1).
+        disk = replace(disk, held=held_identities(run, run_packages(config, chosen)))
+    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk})
     if not written:
         shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only
         show_nothing(run.screen, shown, config_file.parent, scenario, run.now, card_facts(run), chosen.origins)
         return code, None
     document, facts, context = written[0]
     own = next((block.profile for block in document.machines if block.machine == here), None)
-    view = RunView(ambiguous=context.ambiguous, free=free_pieces(run.room, own), origins=chosen.origins)
+    live = {here: live_room(run.room, own, run.daemon if daemon_reachable else None, disk)}  # U10: this machine only
+    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 
@@ -728,7 +736,7 @@ def run_guided(
     run.screen.done(3, context_short(scenario.context_requested))
     measured = load_tests(run, config, scenario, config_file.parent)
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
-    code, first = _render_step(run, config_file, config, scenario)
+    code, first = _render_step(run, config_file, config, scenario, intro.daemon_reachable)
     pull_step(run, first, intro.daemon_reachable)
     if code == 0 and run.problems:
         # The document was written, but a step did not do what it was asked -- the pull included.

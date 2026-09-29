@@ -47,19 +47,23 @@
  result    docs\models.md          23 packages ranked, 0 no fit
 
  workstation · context L 32k
- free      graphics 10.2 GB free now · disk 41.2 GB free on C: (Ollama models)
- #    Model                   Package                 Fit           Speed         Memory    Download
+ room      graphics 11.0 GB for models (12.0 GB card minus reserve)
+           memory 111.7 GB for models (127.7 GB minus reserve)
+           disk 41.2 GB free on C: (Ollama models)
+ loaded    Ollama holds hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-… (5.7 GB, 5.7 GB of it on the card)
+           graphics 10.2 GB free now
+ #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    Qwen3.5-9B              unsloth · UD-Q6_K_XL    tight         –             10.5 GB   8.2 GB
- 2    Qwen3.5-9B              unsloth · Q6_K          fits          –             9.2 GB    6.9 GB
- 3    Qwen3.5-9B              unsloth · UD-Q5_K_XL    fits          –             8.5 GB    6.3 GB
- 4    Qwen3.5-9B              unsloth · Q5_K_M        fits          –             8.3 GB    6.1 GB
- 5    Qwen3.5-9B              unsloth · Q5_K_S        fits          –             8.1 GB    5.9 GB
- 6    Qwen3.5-9B              unsloth · UD-Q4_K_XL    fits          –             7.7 GB    5.6 GB
- 7    Qwen3.5-9B              ollama · Q4_K_M         fits          –             8.3 GB    6.1 GB
- 8    Qwen3.5-9B              unsloth · Q4_K_M        fits          –             7.4 GB    5.3 GB
- 9    Qwen3.5-9B              unsloth · Q4_K_S        fits          –             7.1 GB    5.0 GB
- 10   Qwen3.5-9B              unsloth · Q4_1          fits          –             7.5 GB    5.4 GB
+ 1    Qwen3.5-9B              unsloth · UD-Q6_K_XL   tight        –             10.5 GB   8.2 GB
+ 2    Qwen3.5-9B              unsloth · Q6_K         fits         –             9.2 GB    6.9 GB
+ 3    Qwen3.5-9B              unsloth · UD-Q5_K_XL   fits         –             8.5 GB    6.3 GB
+ 4    Qwen3.5-9B              unsloth · Q5_K_M       fits         –             8.3 GB    6.1 GB
+ 5    Qwen3.5-9B              unsloth · Q5_K_S       fits         –             8.1 GB    5.9 GB
+ 6    Qwen3.5-9B              unsloth · UD-Q4_K_XL   fits         –             7.7 GB    5.6 GB
+ 7    Qwen3.5-9B              ollama · Q4_K_M        fits         –             8.3 GB    6.1 GB
+ 8    Qwen3.5-9B              unsloth · Q4_K_M       fits         –             7.4 GB    5.3 GB
+ 9    Qwen3.5-9B              unsloth · Q4_K_S       fits         –             7.1 GB    5.0 GB
+ 10   Qwen3.5-9B              unsloth · Q4_1         fits         –             7.5 GB    5.4 GB
  shown     10 of 23 packages
  memory    #1–10 fit into graphics memory, budget 11.0 GB (card minus reserve, from the profile)
  speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
@@ -67,7 +71,8 @@
            fits: up to 85 % · tight: up to 98 % · no fit: more
            the pool is what the mode names, minus its reserve (per card) · gpu: one card
            gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
-           one memory shared by system and card counts as gpu, both reserves taken
+           system memory keeps a quarter as reserve, 2 to 16 GB, unless modelroom.toml sets it
+           one memory shared by system and card counts as gpu, a quarter kept, no upper limit
            off the card, and for a fit from size the highest class is fits
            best: the least compression of the same model that fits
            modelroom rates no model family against another

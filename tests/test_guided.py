@@ -1841,7 +1841,7 @@ def test_a_change_another_process_writes_while_the_head_count_is_asked_is_kept(t
             if key == "users":
                 config_file = _config_file(tmp_path)
                 text = config_file.read_text(encoding="utf-8")
-                config_file.write_text(text.replace("reserve_ram_gib = 8.0", "reserve_ram_gib = 12.0", 1), encoding="utf-8")
+                config_file.write_text(text.replace("reserve_vram_gib = 1.0", "reserve_ram_gib = 12.0\nreserve_vram_gib = 1.0", 1), encoding="utf-8")  # AP9-RM: a new folder has no memory reserve
             return super().select_or_text(key, question, choices, text_value, text_question, instruction)
 
     assert _run(tmp_path)[0] == 0
@@ -1955,7 +1955,7 @@ def test_the_scale_counts_with_the_reserves_the_file_holds_after_the_head_count(
     """Reserves another run wrote while the head count was asked are the ones the ranking uses, so
     the last column of the scale uses them too."""
     assert _run(tmp_path)[0] == 0
-    tight = {"reserve_ram_gib = 8.0": "reserve_ram_gib = 127.0", "reserve_vram_gib = 1.0": "reserve_vram_gib = 11.5"}
+    tight = {"reserve_vram_gib = 1.0": "reserve_ram_gib = 127.0\nreserve_vram_gib = 11.5"}  # AP9-RM: no memory reserve written
     asker = _EditsWhileAsked(dict(FULL_ANSWERS), _config_file(tmp_path), "users", tight)
 
     assert _run_with(tmp_path, asker) == 0
@@ -3192,7 +3192,7 @@ def test_no_selection_key_is_written(tmp_path: Path):
     assert json.dumps(str(tmp_path), ensure_ascii=False)[1:-1] not in masked
     assert not any(FORBIDDEN["absolute user path"].search(line) for line in masked.splitlines())
     golden = (Path(__file__).parent / "golden" / "guided-config-db0dff9.toml").read_bytes().decode("utf-8")  # fixed (Codex r1-16)
-    assert masked == golden.replace('-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]', '-9B-GGUF", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-9B-GGUF"]')  # + own repo (P3)
+    assert masked == golden.replace('-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]', '-9B-GGUF", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-9B-GGUF"]').replace("reserve_ram_gib = 8.0\n", "")  # + own repo (P3); AP9-RM: no memory reserve in the machine nor in [defaults]
 
 
 # --- AP9-UX G: every note of a measurement stands where the notes stand -----------------------------

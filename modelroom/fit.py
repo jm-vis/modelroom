@@ -29,6 +29,7 @@ from .config import MachineConfig
 from .contracts import Architecture, BaseModelSpec, Fit, HardwareSnapshot, Package
 from .measurements import Scenario
 from .profile import HardwareProfile, fit_block_reason
+from .reserve import ram_reserve
 
 GIB = 1024**3
 
@@ -284,13 +285,14 @@ def _size_fit(
     context: int,
     requests: int,
 ) -> Fit:
-    """The shared tail of the two size-basis entry points; `ram_gib` unknown is a `0` pool."""
+    """The shared tail of the two size-basis entry points; `ram_gib` unknown reaches `_choose_pool`
+    as `None`: the cards are tried first, the system memory then counts as 0 (AP9-RM)."""
     try:
         kv_gib = context * KV_PER_TOKEN_SIZE_BASIS * requests / GIB
         need_gib = weights_gib * WEIGHTS_OVERHEAD_RATIO + kv_gib + FIXED_OVERHEAD_GIB
     except OverflowError:  # the same second line of defense as `_fit_for_memory`
         return unknown_fit("size values out of range")
-    mode, pool_gib, reserve_gib, _cap = _choose_pool(need_gib, pool, ram_gib or 0.0, machine_config)
+    mode, pool_gib, reserve_gib, _cap = _choose_pool(need_gib, pool, ram_gib, machine_config)
     return Fit(
         fit_class=_classify(need_gib, pool_gib, cap_at_fits=True),
         mode=mode,
@@ -368,7 +370,7 @@ def _architecture_kv_gib(arch: Architecture, context: int, requests: int) -> flo
 
 
 def _choose_pool(
-    need_gib: float, pool: GpuPool, ram_gib: float, machine_config: MachineConfig
+    need_gib: float, pool: GpuPool, ram_gib: float | None, machine_config: MachineConfig
 ) -> tuple[str, float, float, bool]:
     """The memory pool `need_gib` is judged against, and whether the class is capped at `fits`.
 
@@ -380,7 +382,7 @@ def _choose_pool(
     lies in graphics memory whole. A pool is only chosen when the package fits it in the sense of
     `_classify` -- at most `TIGHT_RATIO` of it (AP9-UX2 P2, ADR 0010): a package between 98 and
     100 % of the card is tried on the next pool instead of being `no_fit` on this one. The last
-    pool is judged as it is. Otherwise it falls back to the RAM pool (minus `reserve_ram_gib`),
+    pool is judged as it is. Otherwise it falls back to the RAM pool (minus its reserve),
     mode `cpu_gpu` when there is some VRAM at all, `cpu` when there is none -- and the class is
     capped at `fits` off the GPU, since `ample` only ever describes a package with room to spare
     in VRAM.
@@ -389,20 +391,25 @@ def _choose_pool(
     model share one memory, so the pool is the RAM minus **both** reserves, the mode is `gpu`
     and nothing is capped -- and there is no fallback, since the RAM is that same memory. A pool
     of 0 or less is `no_fit` (`_classify`).
+
+    The reserve of the system memory is read here and nowhere else (`reserve.ram_reserve`, AP9-RM):
+    the number entered for the machine, else a share of its memory. A memory nobody knows (the size
+    basis without a profile) counts as 0 once the cards are passed.
     """
     reserve = machine_config.reserve_vram_gib
+    ram_reserve_gib, _origin = ram_reserve(machine_config, ram_gib, pool.shared)
+    memory = ram_gib or 0.0
     if pool.shared:
-        reserve_gib = machine_config.reserve_ram_gib + reserve
-        return "gpu", ram_gib - reserve_gib, reserve_gib, False
+        reserve_gib = ram_reserve_gib + reserve
+        return "gpu", memory - reserve_gib, reserve_gib, False
     if pool.cards and _holds(need_gib, max(pool.cards) - reserve):
         return "gpu", max(pool.cards) - reserve, reserve, False
     spread = sum(card - reserve for card in pool.cards)
     if len(pool.cards) > 1 and _holds(need_gib, spread):
         return "gpu_split", spread, len(pool.cards) * reserve, False
 
-    pool_gib = ram_gib - machine_config.reserve_ram_gib
     mode = "cpu_gpu" if pool.cards else "cpu"
-    return mode, pool_gib, machine_config.reserve_ram_gib, True
+    return mode, memory - ram_reserve_gib, ram_reserve_gib, True
 
 
 def _holds(need_gib: float, pool_gib: float) -> bool:
