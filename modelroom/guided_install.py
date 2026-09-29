@@ -21,7 +21,7 @@ import json
 import shutil
 import sys
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Sequence, TextIO
 
 from .contracts import InstalledModel, Package
@@ -99,14 +99,16 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     """The list of the rows shown, the command of the choice, the disk, the question; a fault is `run.failed`."""
     if context is None or not reachable:
         return
-    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, context.disk)
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot)
     if not any(row.name is not None for row in rows):
         return
     run.screen.blank()
-    installed, _reason = installed_models(run.daemon, run.now)
-    locals_ = {
-        row.rank for row in rows if row.locked is None and _holds(run, installed, package_of(row, context.packages))
-    }
+    # What the daemon holds is read before the lock of the disk (U11c, Codex r3-1): a package held
+    # already needs no disk, so it stays a choice and its note -- in the table as in this list.
+    held = held_identities(run, [package for package in (package_of(row, context.packages) for row in rows) if package])
+    disk = None if context.disk is None else replace(context.disk, held=context.disk.held | held)
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk)
+    locals_ = {row.rank for row in rows if row.locked is None and row.identity in held}
     row = _choose(run, rows, locals_)
     if row is None:
         return
@@ -174,12 +176,28 @@ def _row_words(row: PullRow, local: bool) -> str:
     return f"{words}  {LOCAL_ALREADY}" if local else words
 
 
-def _holds(run: "GuidedRun", installed: Sequence[InstalledModel] | None, package: Package | None) -> bool:
+def _holds(run: "GuidedRun", installed: Sequence[InstalledModel] | None, package: Package | None, show=None) -> bool:
     """Whether the daemon's inventory provably holds `package` (the load test's digest rule)."""
     if installed is None or package is None:
         return False
-    inventory = installed_candidates([package], list(installed), lambda name: weight_digest(run.daemon, name))
-    return bool(inventory.candidates)
+    look = show if show is not None else (lambda name: weight_digest(run.daemon, name))
+    return bool(installed_candidates([package], list(installed), look).candidates)
+
+
+def held_identities(run: "GuidedRun", packages: Sequence[Package]) -> frozenset[tuple[str, str, str]]:
+    """The identities of those `packages` the daemon provably holds (`_holds`, one look at `/api/tags`
+    and at most one `/api/show` per name); empty where the inventory cannot be read (U11c)."""
+    installed, _reason = installed_models(run.daemon, run.now)
+    if installed is None:
+        return frozenset()
+    seen: dict[str, tuple[str | None, str | None]] = {}
+
+    def show(name: str) -> tuple[str | None, str | None]:
+        if name not in seen:
+            seen[name] = weight_digest(run.daemon, name)
+        return seen[name]
+
+    return frozenset(package_identity_key(package) for package in packages if _holds(run, installed, package, show))
 
 
 def _is_local(run: "GuidedRun", first: FirstRow) -> bool:

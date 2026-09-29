@@ -5522,7 +5522,10 @@ daemon provably holds -- then `none, do not pull`. A row without an Ollama name 
 name`), so is every row whose name is not unique (below). Since AP9-RM U11 a row whose download is
 larger than the free disk of this machine, as step 5 read it, stands in light red with what it needs
 in place of its name -- `#1  unsloth · Q6_K  94.1 GB  needs 94.1 GB plus 1 GB room, 26.4 GB free` -- and is locked
-too (an answer file that names it is exit 2; one without `pull_package` then pulls nothing). The
+too (an answer file that names it is exit 2; one without `pull_package` then pulls nothing). A
+package the daemon provably holds already needs no disk: it is never marked -- not in the table, the
+`disk` line, the install line, `docs/models.md` or this list -- and stays a `local already` row that
+can be chosen, with its note as before (U11c; `room.pull_need_bytes` is 0 for it). The
 pointer starts on the first row that can be chosen, on `none, do not pull` where none can; nothing
 is marked. After the choice the pull part names it, `install   #3  ollama
 pull <name>`, then checks the disk, then asks `Pull #3 into Ollama now? (5.0 GB)`; a local row is

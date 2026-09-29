@@ -10,6 +10,8 @@ guided run reads it. Every test imports what AP9-RM U11 added inside itself, so 
 
 from __future__ import annotations
 
+import io
+import sys
 from contextlib import contextmanager
 
 from prompt_toolkit.input import create_pipe_input
@@ -99,7 +101,8 @@ def test_another_computer_changes_nothing():
 
 
 def test_the_marked_row_carries_the_band_and_the_lines_their_red():
-    """In color the whole row lies on the house red; without color the ` ×` says the same (NO_COLOR)."""
+    """In color the whole row lies on the house red: the style classes of the lines. The output without
+    color is rendered for real in `test_no_color_on_an_ascii_console_keeps_the_mark_as_an_x`."""
     lines = _lines(6.5)
     marked = [line for line in lines if plain(line).strip().startswith("1 ")]
     other = [line for line in lines if plain(line).strip().startswith("2 ")]
@@ -128,10 +131,34 @@ def test_a_marked_table_stays_within_100_columns():
                 assert len(text) <= 100, text
 
 
-def test_an_ascii_console_marks_with_an_x():
-    from modelroom.intro import ASCII_GLYPHS, UNICODE_GLYPHS
+class _AsciiTerminal(io.TextIOWrapper):
+    """A terminal whose console encodes ASCII only (`cp1252` knows no `×` either)."""
 
-    assert (UNICODE_GLYPHS.cross, ASCII_GLYPHS.cross) == ("×", "x")
+    def isatty(self) -> bool:
+        return True
+
+
+def test_no_color_on_an_ascii_console_keeps_the_mark_as_an_x(monkeypatch):
+    """Rendered for real (Codex r3-2): `NO_COLOR` set, a terminal that encodes ASCII only, the lines
+    written through the run's `Screen` into that stream. The mark stays, as `x`; no color code."""
+    from modelroom.intro import use_color
+    from modelroom.screen import Screen
+
+    stream = _AsciiTerminal(io.BytesIO(), encoding="ascii", newline="\n")
+    monkeypatch.delenv("NO_COLOR", raising=False)  # the same run with and without an outer `NO_COLOR`
+    assert use_color(stream)  # a terminal: only `NO_COLOR` takes the color away below
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(sys, "stdout", stream)  # `glyphs()` asks the stream the run prints to
+    screen = Screen(lambda text: stream.write(text + "\n"), stream=stream)
+    for line in _lines(6.5):
+        screen.write(line)  # a character the stream cannot encode raises here
+    stream.flush()
+    written = stream.buffer.getvalue().decode("ascii")
+    text = [line.strip() for line in written.splitlines()]
+    rows = _rows(text)
+    assert rows[0].endswith("6.0 GB x") and rows[1].endswith("5.0 GB")
+    assert "disk      x #1 needs more than the 6.5 GB free on C:" in text
+    assert "×" not in written and "\x1b" not in written
 
 
 # --- the Markdown file --------------------------------------------------------------------------
@@ -204,3 +231,42 @@ def test_a_download_half_a_gib_under_the_free_disk_is_marked():
     assert pull_need_bytes(6 * GIB) == 7 * GIB
     assert over_disk(6.0, _disk(6.5)) and not over_disk(5.0, _disk(6.5)) and not over_disk(5.5, _disk(6.5))
     assert _rows(_text(6.5))[0].endswith("6.0 GB ×")
+
+
+# --- a package the daemon holds already (U11c, Codex r3-1) ------------------------------------------
+
+
+def _held_disk(free_gib: float) -> Disk:
+    """`free_gib` free, and the daemon holds `Q8_0` (#1, 6 GiB) already."""
+    first = next(block for block in _document().machines if block.machine == MACHINE).ranked[0]
+    return Disk(int(free_gib * GIB), "C:", held=frozenset({tuple(first.package_identity)}))
+
+
+def test_a_package_held_already_needs_no_disk_and_is_never_marked():
+    """6 GiB held, 6.5 GiB free: no mark in the table, the `disk` line, the install line or the file."""
+    from modelroom.disk_fit import over_disk
+    from modelroom.room import pull_need_bytes
+
+    assert pull_need_bytes(6 * GIB, held=True) == 0
+    disk = _held_disk(6.5)
+    assert not over_disk(6.0, disk, next(iter(disk.held))) and over_disk(6.0, disk)
+    view = RunView(install_for=MACHINE, live={MACHINE: LiveRoom(disk=disk)})
+    text = [plain(line).strip() for line in terminal_blocks(_document(), MACHINE, view=view)]
+    assert not any("×" in line for line in text)
+    assert not any(line.startswith("disk      ") for line in text)
+    assert "install   #1  ollama pull hf.co/packager/Nova-8B-GGUF:Q8_0" in text
+    assert "×" not in document_markdown(_document(), disks={MACHINE: disk})
+
+
+def test_a_package_held_already_stays_a_choice_of_the_pull_list_with_its_note():
+    from modelroom.guided_install import pull_choices
+    from modelroom.pull_choice import pull_rows
+
+    rows = pull_rows(_document(), MACHINE, frozenset(), "·", _held_disk(6.5))
+    assert (rows[0].locked, rows[0].over_disk) == (None, False)
+    choices = pull_choices(rows, {1})
+    assert choices[0].label == "#1  packager · Q8_0  6.0 GB  hf.co/packager/Nova-8B-GGUF:Q8_0  local already"
+    assert choices[0].disabled is None and not choices[0].warn
+    with _enter() as asker:
+        taken = asker.select("pull_package", "Which package should be pulled into Ollama?", choices)
+    assert taken == "hf.co/packager/Nova-8B-GGUF:Q8_0"

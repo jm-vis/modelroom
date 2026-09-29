@@ -10,7 +10,9 @@ too large rows cannot be picked. Only where the free disk of that machine was re
 Pure: the rows come from the document, the disk from a `LiveRoom`. The rule is the one of the check
 before a pull (`guided_install._disk_allows`), read from the same function, `room.pull_need_bytes`:
 the download plus the margin of 1 GB against the free disk (decided 2026-09-29, AP9-RM U11b), so no
-row is offered that the check then refuses. The check itself stays, as the second safety.
+row is offered that the check then refuses. The check itself stays, as the second safety. A package
+the daemon provably holds already (`Disk.held`) needs no disk and is never marked (U11c, Codex r3-1):
+it stays a `local already` row of the pull list, as before U11.
 """
 
 from __future__ import annotations
@@ -33,16 +35,26 @@ def known(disk: Disk | None) -> Disk | None:
     return disk if disk is not None and disk.known else None
 
 
-def over_disk(weights_gib: float, disk: Disk | None) -> bool:
+def over_disk(weights_gib: float, disk: Disk | None, identity: Sequence[str] | None = None) -> bool:
     """Whether a download of `weights_gib` and its margin need more than the free disk; never where it
-    is unknown. The rule of the check before a pull (`room.pull_need_bytes`)."""
+    is unknown, and never for a package the daemon holds already (`identity` in `Disk.held`, U11c).
+    The rule of the check before a pull (`room.pull_need_bytes`)."""
     read = known(disk)
-    return read is not None and pull_need_bytes(weights_gib * GIB) > read.free_bytes
+    if read is None:
+        return False
+    held = identity is not None and tuple(identity) in read.held
+    return pull_need_bytes(weights_gib * GIB, held) > read.free_bytes
+
+
+def entry_over_disk(entry: RankedEntry, disk: Disk | None) -> bool:
+    """`over_disk` of a shown row, by its download and its package: the one test of the table, the
+    `disk` line, the install line and the pull list."""
+    return over_disk(entry.weights_gib, disk, entry.package_identity)
 
 
 def over_ranks(block: MachineRanking, disk: Disk | None) -> list[int]:
     """The ranks of the shown rows whose download does not fit the free disk."""
-    return [entry.rank for entry in block.ranked if over_disk(entry.weights_gib, disk)]
+    return [entry.rank for entry in block.ranked if entry_over_disk(entry, disk)]
 
 
 def disk_words(block: MachineRanking, disk: Disk | None, dash: str = "–", mark: str = MARK) -> str | None:
@@ -61,7 +73,7 @@ def best_on_disk(entries: Sequence[RankedEntry], disk: Disk | None) -> tuple[Ran
     """The first row that also fits the disk, and the ranks skipped for it; `(None, all)` where none fits."""
     skipped = []
     for entry in entries:
-        if not over_disk(entry.weights_gib, disk):
+        if not entry_over_disk(entry, disk):
             return entry, skipped
         skipped.append(entry.rank)
     return None, skipped
@@ -88,6 +100,7 @@ __all__ = [
     "MARK",
     "best_on_disk",
     "disk_words",
+    "entry_over_disk",
     "known",
     "none_fits_words",
     "over_disk",

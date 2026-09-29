@@ -211,7 +211,8 @@ All notable changes to this project are documented in this file. The format foll
   the pull list shows such rows in red with `needs 94.1 GB plus 1 GB room, 26.4 GB free`, they cannot
   be chosen, and the pointer starts on the first row that can. The table's `Download` column is 10
   wide for it (`Package` 21, `Fit` 11). Another computer and an unknown disk change nothing; the
-  check before the pull stays.
+  check before the pull stays. A package the daemon provably holds already needs no disk and is never
+  marked: it stays a `local already` row of the pull list, with its note.
 - **The package to pull is chosen** (`modelroom/pull_choice.py`, `guided_install.py`; CONTRACTS.md,
   "The pull"; ADR 0010; AP9-UX2 U6, decided 2026-09-28). Step 5 lists the rows shown for this machine
   (`pull_package`), then names the command of the choice, checks the disk and asks `Pull #3 into

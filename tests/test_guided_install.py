@@ -35,6 +35,7 @@ from modelroom.config import load_config
 from modelroom.http import Response
 from modelroom.loadtest import installed_models
 
+from fixture_servers import DEEPSEEK_WEIGHTS_BYTES
 from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
     PULL_STREAM_LINES,
@@ -107,6 +108,11 @@ def _run(tmp_path: Path, answers: dict, daemon, room=None) -> tuple[int, list[st
 def _first_weights(tmp_path: Path) -> float:
     payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
     return next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"][0]["weights_gib"]
+
+
+def _ranked_count(tmp_path: Path) -> int:
+    payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
+    return len(next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"])
 
 
 def _pull_calls(daemon) -> list:
@@ -643,8 +649,13 @@ def test_a_disk_too_small_for_every_row_marks_them_all_and_offers_nothing(tmp_pa
     daemon = pull_daemon()
     _code, lines, asker = _run(tmp_path, PULL, daemon, room=fixed_room(free_disk_bytes=1024**3))
 
-    rows = [line for line in lines if line[:2].strip().isdigit() and " GB" in line and "·" in line]
-    assert rows and all(row.endswith(" ×") for row in rows)
+    # Every row of the table, marked or not (Codex r3-3): the lines under its head and its rule up to
+    # the first line that is no row, as many as the document ranks for this machine; then each mark.
+    head = next(index for index, line in enumerate(lines) if line.startswith("#") and line.endswith("Download"))
+    end = next(index for index in range(head + 2, len(lines)) if not lines[index][:1].isdigit())
+    rows = lines[head + 2 : end]
+    assert len(rows) == _ranked_count(tmp_path) > 1
+    assert all(row.endswith(" ×") for row in rows), rows
     assert any(line.startswith("disk      × #1–") and "need more than the 1.0 GB free on C:" in line for line in lines)
     assert "install   no package fits the 1.0 GB free on C:; free space first" in lines
     assert not any(line.startswith("install   #") for line in lines)
@@ -663,3 +674,32 @@ def test_a_disk_that_holds_some_rows_moves_the_install_line(tmp_path: Path):
     install = next(index for index, line in enumerate(lines) if line.startswith("install   #"))
     assert not lines[install].startswith("install   #1 ")
     assert lines[install + 1].startswith("the best row that also fits the disk; #1")
+
+
+# --- U11c (Codex r3-1): a package the daemon holds already needs no disk -------------------------------
+
+# DeepSeek (#1 measured, 4.7 GB) is held and proven by its digest; half a GiB more is free than its
+# weight file -- less than the file and the margin of 1 GB a pull would need.
+HELD_FREE = DEEPSEEK_WEIGHTS_BYTES + 1024**3 // 2
+
+
+@pytest.mark.parametrize("chosen", [{"pull_package": DEEPSEEK_OLLAMA_NAME}, {}], ids=["named", "default"])
+def test_a_held_package_on_a_tight_disk_stays_a_local_choice(tmp_path: Path, chosen: dict):
+    """Chosen by the answer file, or `#1` by default: `local already`, no mark, no lock, no question."""
+    from fixture_room import fixed_room
+
+    daemon = pull_daemon()
+    code, lines, asker = _run(tmp_path, {**MEASURED, **chosen, "pull": True}, daemon, room=fixed_room(free_disk_bytes=HELD_FREE))
+
+    assert code == 0
+    after = _after_results(lines)
+    first = next(line for line in lines if line.startswith("1 "))
+    assert "DeepSeek" in first and not first.endswith(" ×")
+    assert next(line for line in lines if line.startswith("2 ")).endswith(" ×")  # the others still need the disk
+    assert not any(line.startswith("disk      × #1") for line in lines)
+    assert "install   #1 is local already · say Yes in step 4 to measure it" in after
+    assert "pull" not in asker.asked and _pull_calls(daemon) == []
+    if chosen:
+        assert f"? Which package should be pulled into Ollama?  #1  {DEEPSEEK_OLLAMA_NAME}" in after
+    markdown = (tmp_path / "results" / "docs" / "models.md").read_text(encoding="utf-8")
+    assert "×" not in next(line for line in markdown.splitlines() if line.startswith("| 1 |"))

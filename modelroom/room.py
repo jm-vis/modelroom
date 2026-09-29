@@ -45,10 +45,13 @@ MIB = 1024**2
 PULL_DISK_MARGIN_BYTES = 1 * GIB
 
 
-def pull_need_bytes(weights_bytes: float) -> float:
+def pull_need_bytes(weights_bytes: float, held: bool = False) -> float:
     """The disk a pull of `weights_bytes` of weight files needs: the files plus the margin. The one rule
-    of the check before a pull and of the marks of the table and the pull list (AP9-RM U11)."""
-    return weights_bytes + PULL_DISK_MARGIN_BYTES
+    of the check before a pull and of the marks of the table and the pull list (AP9-RM U11). A package
+    the daemon provably holds already (`held`) needs nothing: it is not pulled (U11c, Codex r3-1)."""
+    return 0.0 if held else weights_bytes + PULL_DISK_MARGIN_BYTES
+
+
 NVIDIA_SMI_FREE_ARGS = ("nvidia-smi", "--query-gpu=index,name,memory.free", "--format=csv,noheader,nounits")
 UNKNOWN = "unknown"
 UNCLEAR_REASON = "two places Ollama may use"
@@ -88,11 +91,17 @@ def real_room_probes() -> RoomProbes:
 
 @dataclass(frozen=True)
 class Disk:
-    """The free disk where Ollama keeps its models: bytes and the drive, or why it is not known."""
+    """The free disk where Ollama keeps its models: bytes and the drive, or why it is not known.
+
+    `held`: the identities (`package_identity_key`) of the packages the daemon provably holds there
+    already, by the load test's digest rule -- they need no disk (`pull_need_bytes`, U11c); empty
+    where nobody asked the daemon.
+    """
 
     free_bytes: int | None
     drive: str | None
     reason: str | None = None
+    held: frozenset[tuple[str, str, str]] = frozenset()
 
     @property
     def known(self) -> bool:

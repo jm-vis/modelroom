@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from .contracts import Package
-from .disk_fit import over_disk, too_big_words
+from .disk_fit import entry_over_disk, too_big_words
 from .document import MachineRanking, RankedEntry, RenderDocument
 from .quantization import package_identity_key
 from .room import Disk
@@ -139,7 +139,8 @@ def pull_rows(
     """One row per shown table row of `machine`, in table order (regular and appended measured rows).
 
     With the free disk of this machine a row whose download does not fit it is locked with how much
-    it needs (AP9-RM U11); a lock of its name comes first.
+    it needs (AP9-RM U11); a lock of its name comes first. A package in `disk.held` needs no disk
+    and is never locked for it (U11c).
     """
     block = next((block for block in document.machines if block.machine == machine), None)
     if block is None:
@@ -148,7 +149,7 @@ def pull_rows(
     for entry in block.ranked:
         name = entry_pull_name(entry)
         locked = NO_PULL_NAME if name is None else NOT_UNIQUE if name in ambiguous else None
-        over = locked is None and over_disk(entry.weights_gib, disk)
+        over = locked is None and entry_over_disk(entry, disk)  # a package held already is never over (U11c)
         locked = too_big_words(entry.weights_gib, disk) if over else locked
         cell = f"{entry.packager} {dot} {entry.quantization}"
         rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over))

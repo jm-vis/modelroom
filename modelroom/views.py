@@ -17,7 +17,7 @@ from .contracts import Area, Fit, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
-from .disk_fit import DISK_LABEL, disk_words, over_disk
+from .disk_fit import DISK_LABEL, disk_words, entry_over_disk
 from .pull_choice import collision_pieces, repo_lines
 from .ranking_words import EACH_MACHINE_SENTENCE, key_pieces, several_ranked, showing_line, shown_pieces
 from .render import format_header_line
@@ -212,7 +212,7 @@ def _ranked_row(entry: RankedEntry, document: RenderDocument, disk: Disk | None 
         entry.provenance,
         _cell(entry.note.text),
     ]
-    row[6] += " ×" if over_disk(entry.weights_gib, disk) else ""  # AP9-RM U11: the download does not fit the disk
+    row[6] += " ×" if entry_over_disk(entry, disk) else ""  # AP9-RM U11: the download does not fit the disk
     return row
 
 
@@ -604,7 +604,7 @@ def _terminal_ranking(
         disk = _disk(block, view)
         for entry in block.ranked:
             # A download larger than the free disk: ` ×` behind it, and the whole row on the house red (U11).
-            over = over_disk(entry.weights_gib, disk)
+            over = entry_over_disk(entry, disk)
             download = f"{entry.weights_gib:.1f} GB" + (f" {glyphs().cross}" if over else "")
             cells = [str(entry.rank), _model_name(entry), _package_cell(entry), fit_word(entry.fit.fit_class, entry.fit.mode)]
             cells += [_terminal_speed(entry, dash), f"{entry.fit.need_gib:.1f} GB", download]

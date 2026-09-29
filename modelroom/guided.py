@@ -50,7 +50,7 @@ from .guided_folder import known_config as _known_config
 from .guided_folder import last_elsewhere
 from .guided_folder import looks_like_results_folder as _looks_like_results_folder
 from .guided_folder import remember_folder as _remember_folder
-from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, pull_step
+from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, pull_step
 from .pull_choice import ambiguous_names, run_packages
 from .room import RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
@@ -668,6 +668,9 @@ def _render_step(
     # The free disk is read once, before the render: the Markdown file, the table and the pull list
     # mark the same rows (AP9-RM U11); the check before a pull reads it again.
     disk = free_disk(run.room)
+    if daemon_reachable:
+        # A package the daemon holds already needs no disk and is never marked (U11c, Codex r3-1).
+        disk = replace(disk, held=held_identities(run, run_packages(config, chosen)))
     code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk})
     if not written:
         shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only

@@ -60,6 +60,8 @@ budget at all.
    function (`room.pull_need_bytes`; decided 2026-09-29 by the coordination, reported to the GF), so no
    row is offered that the check then refuses; the texts say `need more than` and `needs 94.1 GB plus
    1 GB room`. The check stays as the second safety. The `Download` column became 10 wide for the mark.
+   A package the daemon provably holds already (the load test's digest rule) needs no disk -- the
+   same function gives 0 for it -- so it is never marked and stays a `local already` choice (U11c).
 
 ## Sources (retrieved 2026-09-29)
 
