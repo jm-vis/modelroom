@@ -23,7 +23,7 @@ import pytest
 from modelroom.binding import read_pointer
 from modelroom.cli import main
 from modelroom.config import load_config
-from modelroom.importer import machine_name_for
+from modelroom.neutral import is_neutral, key_for
 from modelroom.measurements import load_export, measurement_path, read_measurements
 from modelroom.profile import HardwareProfile, read_profile_document
 from modelroom.state import acquire_lock, release_lock
@@ -364,10 +364,10 @@ def test_import_writes_the_profile_its_measurements_and_a_machine_entry(tmp_path
     stored = _read_profile(
         (tmp_path / "target" / "state" / "hardware" / f"{PROFILE_ID}.json").read_text(encoding="utf-8")
     )
-    assert stored.display_name == "workstation"
+    assert stored.display_name == "workstation-3f9a0c21"
     records = read_measurements(tmp_path / "target" / "state", PROFILE_ID)
     assert len(records.records) == 2 and not records.unreadable
-    machine = _machines(config_path)["workstation"]
+    machine = _machines(config_path)["workstation-3f9a0c21"]
     assert machine == {"reserve_ram_gib": 6.0, "reserve_vram_gib": 0.5, "writer": False, "profile": PROFILE_ID}
     assert "workstation" in out and "new" in out
     for measurement in EXPORT["measurements"]:
@@ -386,7 +386,7 @@ def test_the_first_rewrite_of_the_configuration_leaves_a_backup(tmp_path, capsys
     assert code == 0
     assert backup.read_bytes() == original
     assert "# A schema-3 configuration" in backup.read_text(encoding="utf-8")
-    assert "[machines.workstation]" in config_path.read_text(encoding="utf-8")
+    assert "[machines.workstation-3f9a0c21]" in config_path.read_text(encoding="utf-8")
     assert backup.name in out
 
 
@@ -401,7 +401,7 @@ def test_an_existing_backup_of_the_configuration_is_never_overwritten(tmp_path, 
     assert code == 0
     assert backup.read_bytes() == before
     assert backup.name in capsys.readouterr().out
-    assert "[machines.workstation]" in config_path.read_text(encoding="utf-8")
+    assert "[machines.workstation-3f9a0c21]" in config_path.read_text(encoding="utf-8")
 
 
 def test_no_backup_is_written_when_the_configuration_is_not_rewritten(tmp_path):
@@ -438,7 +438,7 @@ def test_import_keeps_every_other_configuration_value(tmp_path):
     main(["import-profile", str(_write_json(tmp_path / "e.json", EXPORT)), "--config", str(config_path)], now=NOW)
     after = load_config(config_path)
 
-    assert after.machines["laptop"] == before.machines["laptop"]
+    assert after.machines["laptop-c0ffee00"] == before.machines["laptop-c0ffee00"]
     assert (after.families, after.packagers, after.publishers, after.paths, after.llmfit, after.defaults) == (
         before.families,
         before.packagers,
@@ -489,7 +489,7 @@ def test_an_older_profile_never_overwrites_the_stored_one(tmp_path, capsys):
 
     assert code == 0
     assert _tree(tmp_path / "target" / "state") == before
-    assert _machines(config_path)["workstation"]["profile"] == PROFILE_ID
+    assert _machines(config_path)["workstation-3f9a0c21"]["profile"] == PROFILE_ID
     assert "kept" in capsys.readouterr().out
 
 
@@ -530,7 +530,7 @@ def test_the_same_display_name_keeps_both_and_shows_the_short_id(tmp_path, capsy
     hardware = tmp_path / "target" / "state" / "hardware"
     assert code == 0
     assert sorted(p.stem for p in hardware.iterdir()) == sorted([PROFILE_ID, OTHER_ID])
-    assert f"workstation ({OTHER_ID[:8]})" in out
+    assert f"workstation-3f9a0c21 ({OTHER_ID[:8]})" in out
 
 
 # --- import: measurements ----------------------------------------------------------------------
@@ -797,15 +797,15 @@ def test_a_configuration_value_the_toml_writer_cannot_write_exits_2(tmp_path, ca
 
 def test_the_machine_name_gets_the_short_id_when_the_name_is_already_taken(tmp_path):
     config_path = _deployment(tmp_path / "target")
-    text = config_path.read_text(encoding="utf-8").replace("[machines.laptop]", "[machines.workstation]")
+    text = config_path.read_text(encoding="utf-8").replace("[machines.laptop-c0ffee00]", "[machines.workstation-3f9a0c21]")
     config_path.write_text(text, encoding="utf-8")
 
     code = main(["import-profile", str(_write_json(tmp_path / "e.json", EXPORT)), "--config", str(config_path)], now=NOW)
 
     machines = _machines(config_path)
     assert code == 0
-    assert machines[f"workstation-{PROFILE_ID[:8]}"]["profile"] == PROFILE_ID
-    assert machines["workstation"]["profile"] == "c0ffee0000000001"
+    [new] = [key for key, entry in machines.items() if entry["profile"] == PROFILE_ID]
+    assert is_neutral(new) and machines["workstation-3f9a0c21"]["profile"] == "c0ffee0000000001"
 
 
 def test_a_display_name_without_usable_characters_becomes_the_short_id(tmp_path):
@@ -815,7 +815,7 @@ def test_a_display_name_without_usable_characters_becomes_the_short_id(tmp_path)
     code = main(["import-profile", str(_write_json(tmp_path / "e.json", data)), "--config", str(config_path)], now=NOW)
 
     assert code == 0
-    assert _machines(config_path)[PROFILE_ID[:8]]["profile"] == PROFILE_ID
+    assert _machines(config_path)[f"computer-{PROFILE_ID[:8]}"]["profile"] == PROFILE_ID  # FR-N: its neutral name
 
 
 def test_a_machine_that_already_carries_this_profile_keeps_its_entry(tmp_path):
@@ -828,21 +828,21 @@ def test_a_machine_that_already_carries_this_profile_keeps_its_entry(tmp_path):
 
     assert code == 0
     assert config_path.read_bytes() == before
-    assert sorted(_machines(config_path)) == ["laptop"]
+    assert sorted(_machines(config_path)) == ["laptop-c0ffee00"]
 
 
 @pytest.mark.parametrize(
-    "display_name, taken, expected",
+    "display_name, machine_class, taken, expected",
     [
-        ("workstation", set(), "workstation"),
-        ("Workstation_01", set(), "workstation-01"),
-        ("a b", {"a-b"}, "a-b-3f9a0c21"),
-        ("...", set(), "3f9a0c21"),
-        ("-lead-", set(), "lead"),
+        ("workstation", "unknown", set(), f"computer-{PROFILE_ID[:8]}"), ("Workstation_01", "server", set(), f"server-{PROFILE_ID[:8]}"),
+        ("laptop-0a1b2c3d", "server", set(), "laptop-0a1b2c3d"),
+        ("a b", "laptop", {f"laptop-{PROFILE_ID[:8]}"}, None),
+        ("...", "workstation", set(), f"workstation-{PROFILE_ID[:8]}"),
     ],
 )
-def test_machine_name_for_normalizes_and_avoids_collisions(display_name, taken, expected):
-    assert machine_name_for(display_name, PROFILE_ID, taken) == expected
+def test_machine_name_for_normalizes_and_avoids_collisions(display_name, machine_class, taken, expected):
+    key = key_for(PROFILE_ID, machine_class, display_name, taken)  # FR-N: never the name, a neutral key
+    assert key == expected if expected is not None else (is_neutral(key) and key not in taken)
 
 
 # --- concurrency (real processes) ------------------------------------------------------------------
@@ -931,7 +931,7 @@ def test_two_imports_at_once_serialize_without_loss_or_a_half_written_file(tmp_p
     _assert_state_is_consistent(tmp_path / "target", config_path)
     for profile_id in (PROFILE_ID, OTHER_ID):
         assert len(read_measurements(tmp_path / "target" / "state", profile_id).records) == 2
-    assert sorted(_machines(config_path)) == ["laptop", "server", "workstation"]
+    assert sorted(_machines(config_path)) == ["computer-b1b2b3b4", "laptop-c0ffee00", "workstation-3f9a0c21"]
 
 
 def test_an_import_during_a_measurement_write_stops_at_the_lock_and_loses_nothing(tmp_path):

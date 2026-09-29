@@ -453,6 +453,12 @@ names, paths or people. Written 2026-09-23.
   one protocol `v1` and one migrated (`protocol: none`) from the laptop fixture. Its profile is
   schema 2, as version 0.1.0 wrote it, and stays so: it is the evidence that an export of an
   earlier version still imports (the profile is read as schema 3).
+  **Neutral names (AP9-FR, FR-N, 2026-09-29):** its `display_name` is `workstation-3f9a0c21`, the
+  registry name of its first record and the runtime text of its second are `null`, and the machine
+  keys of `config_v2`/`config_v3` are `laptop-c0ffee00`, as are the names in `profiles_v2`/`profiles_v3`
+  (`workstation-3f9a0c21`): the values the sink of 0.2.0 leaves, so the tests of import, migration
+  and schema steps test those steps, not the sweep. A file with a host name in it is the business of
+  `tests/test_neutral.py`, which builds its own.
 - `measurement_v2_invalid.json` -- a protocol-v1 measurement stored as `invalid` (run 2 ended
   with `done_reason: stop`), with its reason.
 

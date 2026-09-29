@@ -28,7 +28,9 @@ from modelroom.toml_writer import dump_toml
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NOW = datetime(2026, 9, 23, 12, 0, 0, tzinfo=timezone.utc)
-IDS = ["aaaaaaaaaaaaaaa1", "aaaaaaaaaaaaaaa2", "aaaaaaaaaaaaaaa3"]
+LAPTOP, SERVER = "computer-a1aaaaaa", "computer-a2aaaaaa"
+# Their first eight differ: the neutral names of two machines (FR-N) never collide.
+IDS = ["a1aaaaaaaaaaaaaa", "a2aaaaaaaaaaaaaa", "a3aaaaaaaaaaaaaa"]
 
 
 def _ids():
@@ -46,6 +48,15 @@ def _deployment(tmp_path: Path, profiles=("windows-nvidia-laptop.json", "linux-c
     return tmp_path / "modelroom.toml"
 
 
+def _heads(config: bytes) -> bytes:
+    return config.replace(b"[machines.laptop]", f"[machines.{LAPTOP}]".encode()).replace(b"[machines.server]", f"[machines.{SERVER}]".encode())
+
+
+def _lines(lines: list[str]) -> list[str]:
+    """Without the note on the two schema-1 backups, whose file names still carry the old keys."""
+    return [line for line in lines if not line.startswith("a backup of modelroom")]
+
+
 def _tree(root: Path) -> dict[str, bytes]:
     return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file() and p.name != "modelroom.lock"}
 
@@ -61,28 +72,30 @@ def test_first_run_migrates_profiles_measurements_and_configuration(tmp_path):
     lines = migrate(config_path, NOW, fresh_id=_ids())
 
     hardware = tmp_path / "state" / "hardware"
-    assert len(lines) == 3
+    assert len([line for line in lines if line.startswith("migrated")]) == 3
+    assert f"machine renamed to {LAPTOP} (no host names in files)" in lines  # FR-N, after the migration
     assert sorted(p.name for p in hardware.iterdir()) == [
-        "aaaaaaaaaaaaaaa1.json",
-        "aaaaaaaaaaaaaaa2.json",
+        "a1aaaaaaaaaaaaaa.json",
+        "a2aaaaaaaaaaaaaa.json",
         "laptop.json.v1.bak",
         "server.json.v1.bak",
     ]
     assert (hardware / "laptop.json.v1.bak").read_bytes() == original_laptop
-    assert (tmp_path / "modelroom.toml.v1.bak").read_bytes() == original_config
+    # The backup, swept of the machine names (FR-N): only the table heads differ.
+    assert (tmp_path / "modelroom.toml.v1.bak").read_bytes() == _heads(original_config)
 
-    laptop = HardwareProfile.model_validate_json((hardware / "aaaaaaaaaaaaaaa1.json").read_text(encoding="utf-8"))
-    assert laptop.display_name == "laptop" and laptop.gpu_state == "legacy_unknown"
-    records = read_measurements(tmp_path / "state", "aaaaaaaaaaaaaaa1")
+    laptop = HardwareProfile.model_validate_json((hardware / "a1aaaaaaaaaaaaaa.json").read_text(encoding="utf-8"))
+    assert laptop.display_name == LAPTOP and laptop.gpu_state == "legacy_unknown"
+    records = read_measurements(tmp_path / "state", "a1aaaaaaaaaaaaaa")
     assert len(records.records) == 2 and not records.unreadable
     assert {r.protocol for r in records.records} == {"none"}
-    assert read_measurements(tmp_path / "state", "aaaaaaaaaaaaaaa2").records == []
+    assert read_measurements(tmp_path / "state", "a2aaaaaaaaaaaaaa").records == []
 
     config = load_config(config_path)
     assert tomllib.loads(config_path.read_text(encoding="utf-8"))["schema_version"] == 3
-    assert config.machines["laptop"].profile == "aaaaaaaaaaaaaaa1"
-    assert config.machines["server"].profile == "aaaaaaaaaaaaaaa2"
-    assert config.machines["laptop"].writer is True
+    assert config.machines[LAPTOP].profile == "a1aaaaaaaaaaaaaa"
+    assert config.machines[SERVER].profile == "a2aaaaaaaaaaaaaa"
+    assert config.machines[LAPTOP].writer is True
     assert [f.name for f in config.families] == ["nova"]
 
 
@@ -91,8 +104,8 @@ def test_migrated_configuration_keeps_every_schema_1_value(tmp_path):
     before = load_config(config_path)
     migrate(config_path, NOW, fresh_id=_ids())
     after = load_config(config_path)
-    for machine in ("laptop", "server"):
-        assert after.machines[machine].model_copy(update={"profile": None}) == before.machines[machine]
+    for machine, renamed in (("laptop", LAPTOP), ("server", SERVER)):
+        assert after.machines[renamed].model_copy(update={"profile": None}) == before.machines[machine]
     assert (after.families, after.packagers, after.publishers, after.paths, after.llmfit) == (
         before.families,
         before.packagers,
@@ -106,7 +119,7 @@ def test_second_run_says_nothing_to_do_and_writes_nothing(tmp_path):
     config_path = _deployment(tmp_path)
     migrate(config_path, NOW, fresh_id=_ids())
     before = _tree(tmp_path)
-    assert migrate(config_path, NOW, fresh_id=_ids()) == [NOTHING_TO_DO]
+    assert _lines(migrate(config_path, NOW, fresh_id=_ids())) == [NOTHING_TO_DO]
     assert _tree(tmp_path) == before
 
 
@@ -128,10 +141,10 @@ def test_a_run_that_stopped_after_the_profile_converges_to_the_same_result(tmp_p
     broken.mkdir()
     config_path = _deployment(broken)
     hardware = broken / "state" / "hardware"
-    shutil.copy(clean / "state" / "hardware" / "aaaaaaaaaaaaaaa1.json", hardware / "aaaaaaaaaaaaaaa1.json")
+    shutil.copy(clean / "state" / "hardware" / "a1aaaaaaaaaaaaaa.json", hardware / "a1aaaaaaaaaaaaaa.json")
     shutil.copytree(clean / "state" / "measurements", broken / "state" / "measurements")
 
-    migrate(config_path, NOW, fresh_id=iter(["aaaaaaaaaaaaaaa2"]).__next__)
+    migrate(config_path, NOW, fresh_id=iter(["a2aaaaaaaaaaaaaa"]).__next__)
     assert _tree(broken) == _tree(clean)
 
 
@@ -203,15 +216,15 @@ def test_an_existing_target_profile_with_other_content_stops_before_anything_is_
     clean = tmp_path / "clean"
     clean.mkdir()
     migrate(_deployment(clean, profiles=("windows-nvidia-laptop.json",)), NOW, fresh_id=_ids())
-    target = json.loads((clean / "state" / "hardware" / "aaaaaaaaaaaaaaa1.json").read_text(encoding="utf-8"))
+    target = json.loads((clean / "state" / "hardware" / "a1aaaaaaaaaaaaaa.json").read_text(encoding="utf-8"))
     target["ram_physical_gib"] = 15.6  # an older reading of the same machine
 
     broken = tmp_path / "broken"
     broken.mkdir()
     config_path = _deployment(broken, profiles=("windows-nvidia-laptop.json",))
-    (broken / "state" / "hardware" / "aaaaaaaaaaaaaaa1.json").write_text(json.dumps(target), encoding="utf-8")
+    (broken / "state" / "hardware" / "a1aaaaaaaaaaaaaa.json").write_text(json.dumps(target), encoding="utf-8")
     before = _tree(broken)
-    with pytest.raises(MigrationError, match="aaaaaaaaaaaaaaa1.json"):
+    with pytest.raises(MigrationError, match="a1aaaaaaaaaaaaaa.json"):
         migrate(config_path, NOW, fresh_id=_ids())
     assert _tree(broken) == before
 
@@ -223,7 +236,7 @@ def test_a_measurement_file_with_other_content_stops_before_anything_is_written(
     broken = tmp_path / "broken"
     broken.mkdir()
     config_path = _deployment(broken, profiles=("windows-nvidia-laptop.json",))
-    shutil.copy(clean / "state" / "hardware" / "aaaaaaaaaaaaaaa1.json", broken / "state" / "hardware")
+    shutil.copy(clean / "state" / "hardware" / "a1aaaaaaaaaaaaaa.json", broken / "state" / "hardware")
     shutil.copytree(clean / "state" / "measurements", broken / "state" / "measurements")
     one = next((broken / "state" / "measurements").rglob("*.json"))
     one.write_text(json.dumps({"schema_version": 3}), encoding="utf-8")
@@ -322,7 +335,7 @@ def test_a_schema_1_range_starting_at_zero_migrates_unchanged(tmp_path):
     data["measurements"][0]["tps_range"] = [0.0, 45.0]
     path.write_text(json.dumps(data), encoding="utf-8")
     migrate(config_path, NOW, fresh_id=_ids())
-    records = read_measurements(tmp_path / "state", "aaaaaaaaaaaaaaa1").records
+    records = read_measurements(tmp_path / "state", "a1aaaaaaaaaaaaaa").records
     assert sorted((r.tps_min, r.tps_max) for r in records) == [(0.0, 45.0), (21.5, 23.0)]
 
 
@@ -337,7 +350,7 @@ def test_cli_migrate_twice_then_schema_3_exits_3_without_writing(tmp_path, capsy
     assert "migrated laptop.json" in first and "migrated modelroom.toml" in first
 
     assert main(["migrate", "--config", str(config_path)], now=NOW) == 0
-    assert capsys.readouterr().out.strip() == NOTHING_TO_DO
+    assert _lines(capsys.readouterr().out.splitlines()) == [NOTHING_TO_DO]
 
     (tmp_path / "state" / "hardware" / "future.json").write_text(json.dumps({"schema_version": 3}), encoding="utf-8")
     before = _tree(tmp_path)

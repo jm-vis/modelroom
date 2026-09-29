@@ -69,7 +69,10 @@ from .llmfit import LlmfitReference, read_llmfit_reference
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware
 from .views_adapters import adapter_lines
 from .migrate import MigrationError, migrate
+from .neutral import NeutralError, neutral_name, neutral_profile
+from .neutral_sweep import moved_machine, sweep_for_command
 from .profile import MACHINE_CLASSES, HardwareProfile, MachineClass, fit_block_reason, os_fingerprint, read_profile_document
+from .remote_store import RemoteStoreError
 from .render_cmd import render_with_config
 from .room import RoomProbes
 from .state import (
@@ -175,18 +178,21 @@ def main(
     if args.answers is not None:
         print(f"--answers belongs to the guided mode; {args.command} never asks a question", file=sys.stderr)
         return 2
+    # Every subcommand sweeps its folder of machine names first (FR-N); the live host name is read
+    # only to find this computer's 0.1.0 key, never written.
+    host = (probes if probes is not None else Probes()).hostname
     if args.command == "fetch":
-        return _cmd_fetch(args, transport, now)
+        return _cmd_fetch(args, transport, now, pointer_path, host)
     if args.command == "hardware":
         return _cmd_hardware(args, probes, pointer_path, now)
     if args.command == "render":
-        return _cmd_render(args, now)
+        return _cmd_render(args, now, pointer_path, host)
     if args.command == "migrate":
-        return _cmd_migrate(args, now)
+        return _cmd_migrate(args, now, pointer_path, host)
     if args.command == "export-profile":
-        return _cmd_export_profile(args, pointer_path)
+        return _cmd_export_profile(args, pointer_path, host)
     if args.command == "import-profile":
-        return _cmd_import_profile(args, now)
+        return _cmd_import_profile(args, now, pointer_path, host)
     parser.error(f"unknown command: {args.command}")
     return 2  # pragma: no cover - argparse.error already exits
 
@@ -242,7 +248,10 @@ def _cmd_guided(
     except LockHeldError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    except (SchemaVersionError, MigrationError, PointerFileError) as exc:
+    except NeutralError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except (SchemaVersionError, MigrationError, PointerFileError, RemoteStoreError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -262,7 +271,12 @@ def _asker_for(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Ask
     return None
 
 
-def _cmd_fetch(args: argparse.Namespace, transport: Transport | None, now: datetime | None) -> int:
+def _cmd_fetch(
+    args: argparse.Namespace, transport: Transport | None, now: datetime | None, pointer_path: Path | None, host: Callable[[], str]
+) -> int:
+    code, swept = sweep_for_command(args.config, "fetch", now, pointer_path, host)
+    if code is not None:
+        return code
     try:
         config = load_config(args.config)
     except SchemaVersionError as exc:
@@ -272,7 +286,7 @@ def _cmd_fetch(args: argparse.Namespace, transport: Transport | None, now: datet
         print(str(exc), file=sys.stderr)
         return 2
 
-    return fetch_with_config(config, args.machine, transport, now)
+    return fetch_with_config(config, moved_machine(args.machine, swept), transport, now)
 
 
 def fetch_with_config(
@@ -349,6 +363,10 @@ def _run_locked(config, transport: Transport, run_at: datetime, budget: int | Re
 def _cmd_hardware(
     args: argparse.Namespace, probes: Probes | None, pointer_path: Path | None, now: datetime | None
 ) -> int:
+    active = probes if probes is not None else Probes()
+    code, swept = sweep_for_command(args.config, "hardware", now, pointer_path, active.hostname)
+    if code is not None:
+        return code
     try:
         config = load_config(args.config)
     except SchemaVersionError as exc:
@@ -360,8 +378,8 @@ def _cmd_hardware(
 
     return hardware_with_config(
         config,
-        args.machine,
-        probes,
+        moved_machine(args.machine, swept),
+        active,
         now,
         pointer_path,
         cpu_only=args.cpu_only,
@@ -507,14 +525,14 @@ def _hardware_locked(
         return 2
 
     existing = profiles.get(target.profile_id)
-    display_name = existing.display_name if existing is not None else probes.hostname()
+    display_name = existing.display_name if existing is not None else neutral_name(target.profile_id, measured.machine_class.machine_class)
     # Second line of defense, the same convention the llmfit path already follows: every source
     # guards its own value (a byte count that is not a real positive number never becomes a
     # reading), but a combination none of them anticipated must still end as an exit code, never
     # as an uncaught pydantic error. Validation happens before the write, so nothing is written
     # either way (probe: a naive `now`, which `recorded_at` refuses).
     try:
-        profile = build_profile(measured, reference, target.profile_id, display_name, recorded_at)
+        profile = neutral_profile(build_profile(measured, reference, target.profile_id, display_name, recorded_at))
     except ValidationError as exc:
         print(f"this measurement did not validate as a hardware profile: {exc}", file=sys.stderr)
         return 2
@@ -647,7 +665,10 @@ def _gib(value: float | None) -> str:
     return "unknown" if value is None else f"{value:.2f} GiB"
 
 
-def _cmd_render(args: argparse.Namespace, now: datetime | None) -> int:
+def _cmd_render(args: argparse.Namespace, now: datetime | None, pointer_path: Path | None, host: Callable[[], str]) -> int:
+    code, _swept = sweep_for_command(args.config, "render", now, pointer_path, host)
+    if code is not None:
+        return code
     try:
         config = load_config(args.config)
     except SchemaVersionError as exc:
@@ -660,19 +681,19 @@ def _cmd_render(args: argparse.Namespace, now: datetime | None) -> int:
     return render_with_config(config, now=now)
 
 
-def _cmd_migrate(args: argparse.Namespace, now: datetime | None) -> int:
-    """`migrate`: exit 0 migrated or nothing to do, 1 lock held, 2 configuration invalid, 3 a
-    file has an unsupported schema version or cannot be read -- nothing written in 1, 2, 3."""
+def _cmd_migrate(args: argparse.Namespace, now: datetime | None, pointer_path: Path | None, host: Callable[[], str]) -> int:
+    """`migrate`: exit 0 migrated or nothing to do, 1 lock held or the folder not swept, 2 configuration
+    invalid, 3 a file has an unsupported schema version or cannot be read -- nothing written in 1, 2, 3."""
     started_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     try:
-        lines = migrate(args.config, started_at)
-    except (SchemaVersionError, MigrationError) as exc:
+        lines = migrate(args.config, started_at, pointer_path=pointer_path, hostname=host())
+    except (SchemaVersionError, MigrationError, RemoteStoreError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
     except ConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except LockHeldError as exc:
+    except (LockHeldError, NeutralError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     for line in lines:
@@ -680,15 +701,18 @@ def _cmd_migrate(args: argparse.Namespace, now: datetime | None) -> int:
     return 0
 
 
-def _cmd_export_profile(args: argparse.Namespace, pointer_path: Path | None) -> int:
+def _cmd_export_profile(args: argparse.Namespace, pointer_path: Path | None, host: Callable[[], str]) -> int:
     """`export-profile`: exit 0 written, 2 the configuration, `--out` or the chosen profile is
     not usable (no binding, no such profile, still schema 1, the file cannot be written), 3 a
     stored file does not read."""
     try:
-        lines = export_profile(args.config, args.out, args.profile, pointer_path or default_pointer_path())
-    except (SchemaVersionError, StoredFileError, PointerFileError) as exc:
+        lines = export_profile(args.config, args.out, args.profile, pointer_path or default_pointer_path(), hostname=host())
+    except (SchemaVersionError, StoredFileError, PointerFileError, RemoteStoreError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
+    except NeutralError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     except (ConfigError, PrerequisiteError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -702,20 +726,20 @@ def _cmd_export_profile(args: argparse.Namespace, pointer_path: Path | None) -> 
     return 0
 
 
-def _cmd_import_profile(args: argparse.Namespace, now: datetime | None) -> int:
+def _cmd_import_profile(args: argparse.Namespace, now: datetime | None, pointer_path: Path | None, host: Callable[[], str]) -> int:
     """`import-profile`: exit 0 written or nothing to do, 1 the lock is held or a stored file
     contradicts the import, 2 the configuration is missing/invalid or still schema 1, 3 the
     export file does not read or its schema is not supported -- 1, 2 and 3 write nothing."""
     started_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     try:
-        lines = import_profile(args.config, args.file, started_at)
-    except (SchemaVersionError, StoredFileError) as exc:
+        lines = import_profile(args.config, args.file, started_at, pointer_path=pointer_path, hostname=host())
+    except (SchemaVersionError, StoredFileError, RemoteStoreError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
     except (ConfigError, PrerequisiteError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except (LockHeldError, ImportConflictError) as exc:
+    except (LockHeldError, ImportConflictError, NeutralError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except OSError as exc:

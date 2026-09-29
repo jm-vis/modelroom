@@ -43,6 +43,9 @@ from .profile import (
     read_profile_document,
     stored_profile_version,
 )
+from .binding import default_pointer_path
+from .neutral import neutral_profile, neutral_records
+from .neutral_sweep import load_names, sweep, sweep_locked
 from .state import LockHandle, acquire_lock, atomic_write_json, atomic_write_text, release_lock
 from .toml_writer import dump_toml
 
@@ -136,14 +139,28 @@ def _read_config_version(config_path: Path) -> tuple[dict, int]:
     return raw, read_config_schema_version(raw, str(config_path))
 
 
-def migrate(config_path: Path, now: datetime, fresh_id: Callable[[], str] = new_profile_id) -> list[str]:
+def migrate(
+    config_path: Path,
+    now: datetime,
+    fresh_id: Callable[[], str] = new_profile_id,
+    *,
+    pointer_path: Path | None = None,
+    hostname: str | None = None,
+) -> list[str]:
     """Migrate the configuration at `config_path` and its profiles; one line per changed file.
 
     Returns `[NOTHING_TO_DO]` when everything is already on the current schema. Raises
     `SchemaVersionError` (a file of a later schema), `ConfigError`, `MigrationError` or
     `state.LockHeldError`; none of them leaves a file written.
+
+    The sweep of machine names comes first (FR-N): the files of the current schemas, so every backup
+    this run keeps is taken from a neutral file. A schema-1 configuration and schema-1 profiles are
+    this command's own to convert (their keys name the profile files); the files it writes from them
+    are swept again under the same lock before it ends (`neutral_sweep.sweep_locked`).
     """
     config_path = config_path.resolve()
+    names = load_names(config_path.parent, pointer_path or default_pointer_path(), hostname)
+    swept = sweep(config_path, now, "migrate", pointer_path=pointer_path, hostname=hostname).notes
     config = load_config(config_path)
     id_for = _ids_per_machine(fresh_id)
     _plan(config_path, config, id_for)
@@ -153,7 +170,9 @@ def migrate(config_path: Path, now: datetime, fresh_id: Callable[[], str] = new_
         current = load_config(config_path)
         if current.paths != config.paths:
             raise MigrationError(f"{config_path}: [paths] changed while waiting for the lock; run again")
-        return _execute(_plan(config_path, current, id_for), config_path, current, handle)
+        lines = _execute(_plan(config_path, current, id_for), config_path, current, handle)
+        after = sweep_locked(config_path, names).notes if lines != [NOTHING_TO_DO] else []
+        return [*swept, *lines, *after]
     finally:
         release_lock(handle)
 
@@ -174,19 +193,34 @@ def _plan(config_path: Path, config: Configuration, id_for: Callable[[str], str]
     """Read, convert and check everything the run would write; writes nothing."""
     raw, version = _read_config_version(config_path)
     scan = _scan_profiles(config.paths.hardware_dir)
-    # A run that stopped halfway left a schema-2 profile of the same machine: reuse its id.
-    ids_by_name = {p.display_name: p.profile_id for p in scan.current.values() if p.os_fingerprint_source == "legacy"}
+    # A run that stopped halfway left a profile of the same machine: reuse its id. It is found by its
+    # content, not by its name: the sweep before this run gave it a neutral one (FR-N).
+    left = [p for p in scan.current.values() if p.os_fingerprint_source == "legacy"]
+    ids_by_name: dict[str, str] = {}
     steps: list[_ProfileStep] = []
     for path, legacy in scan.legacy.items():
         if any(step.machine == legacy.machine for step in steps):
             raise MigrationError(f"{path}: a second schema-1 profile for machine {legacy.machine!r}")
-        profile_id = ids_by_name.get(legacy.machine) or id_for(legacy.machine)
+        profile_id = _left_by(legacy, left) or id_for(legacy.machine)
         ids_by_name[legacy.machine] = profile_id
         steps.append(_plan_profile(config.paths.state, path, legacy, profile_id))
     rewrites = [_plan_rewrite(path, stored, profile) for path, (stored, profile) in scan.stale.items()]
     stale_config = version < CONFIG_SCHEMA_VERSION
     config_text = _plan_config(config_path, raw, ids_by_name if version == 1 else {}, version) if stale_config else None
     return _Plan(steps, config_text, rewrites, version)
+
+
+def _left_by(legacy: HardwareSnapshot, left: list[HardwareProfile]) -> str | None:
+    """The id of the profile an earlier run made of this schema-1 file: all of it the same but id and name."""
+    try:
+        fresh = normalize_profile_v1(legacy, "0" * 16)
+    except ValidationError:
+        return None
+
+    def shape(profile: HardwareProfile) -> dict:
+        return {**profile.model_dump(mode="json"), "profile_id": None, "display_name": None}
+
+    return next((profile.profile_id for profile in left if shape(profile) == shape(fresh)), None)
 
 
 def _plan_rewrite(path: Path, stored: int, profile: HardwareProfile) -> _RewriteStep:
@@ -200,8 +234,9 @@ def _plan_rewrite(path: Path, stored: int, profile: HardwareProfile) -> _Rewrite
 def _plan_profile(state_dir: Path, path: Path, legacy: HardwareSnapshot, profile_id: str) -> _ProfileStep:
     """Convert one schema-1 profile; every file it would touch must be absent or identical."""
     try:
-        profile = normalize_profile_v1(legacy, profile_id)
-        records = [legacy_measurement_record(m, profile_id) for m in legacy.measurements]
+        # Through the sink (FR-N): the old machine key is no name for the profile, the old runtime no version.
+        profile = neutral_profile(normalize_profile_v1(legacy, profile_id))
+        records = neutral_records([legacy_measurement_record(m, profile_id) for m in legacy.measurements])
     except ValidationError as exc:
         raise MigrationError(f"{path}: cannot convert to schema {PROFILE_SCHEMA_VERSION}: {exc}") from exc
     target = path.with_name(f"{profile_id}.json")

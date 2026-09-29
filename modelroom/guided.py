@@ -33,7 +33,7 @@ from .config import (
     load_config,
     read_config_schema_version,
 )
-from .contracts import SchemaVersionError, validate_machine_name
+from .contracts import SchemaVersionError
 from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT, Checked
@@ -90,6 +90,8 @@ from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_machine_class, read_os_identity
 from .measurements import Scenario
 from .migrate import MigrationError, backup_suffix, migrate
+from .neutral_sweep import sweep
+from .remote_store import remote_path_for, this_machine
 from .profile import MACHINE_CLASSES, HardwareProfile, os_fingerprint
 from .screen import (
     CLONE_QUESTION,
@@ -200,12 +202,16 @@ def _configuration_step(run: GuidedRun, config_arg: Path | None) -> tuple[Path, 
     return config_file, config
 
 
-def _machine_key(hostname: str) -> str:
-    """This machine's key in `[machines.<name>]`: its host name in the shape a key has to have."""
-    slug = "".join(letter if letter.isalnum() else "-" for letter in hostname.lower()).strip("-")
-    if not slug:
-        raise GuidedError(f"this machine's host name ({hostname!r}) cannot be a machine name; write one by hand")
-    return validate_machine_name(slug)
+def _machine_key(run: GuidedRun) -> str:
+    """This machine's key in `[machines.<name>]`: its neutral key in `remote.json`, never its host name (FR-N)."""
+    return this_machine(remote_path_for(run.pointer_path))
+
+
+def _sweep(run: GuidedRun, config_file: Path) -> None:
+    """The run's first write to the folder: no file of it keeps a machine name (`neutral_sweep`, FR-N)."""
+    swept = sweep(config_file, run.now, "guided", pointer_path=run.pointer_path, hostname=run.probes.hostname())
+    for note in swept.notes:
+        run.screen.note(note)
 
 
 def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
@@ -218,7 +224,7 @@ def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
     A file another run created meanwhile is taken over as it is (`guided_write.create_config`).
     """
     folder = config_file.parent
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     config = Configuration.from_dict(
         {
             "schema_version": 2,
@@ -270,7 +276,7 @@ def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
     stored = _stored_schema_version(config_file)
     if stored < CONFIG_SCHEMA_VERSION:
         try:
-            lines = migrate(config_file, run.now)
+            lines = migrate(config_file, run.now, pointer_path=run.pointer_path, hostname=run.probes.hostname())
         except (ConfigError, MigrationError) as exc:
             raise GuidedError(f"{exc}; nothing was changed -- move that file away and run again") from exc
         run.screen.note(
@@ -315,6 +321,7 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path) -> Configuratio
     is false. The matching is worked out on the file as it is at the write, and again after a
     conflict (`guided_write.with_found_profiles`).
     """
+    _sweep(run, config_file)
     said = Said()
     config = _write_config(run, config_file, with_found_profiles(said))
     for problem in said.problems:
@@ -383,7 +390,7 @@ def _measure_this_machine(
     from .cli import hardware_with_config  # imported here: the CLI imports this module in turn
 
     results_dir = config_file.parent
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     config = _ensure_this_machine(run, config_file, name)
     mode = _clone_mode(run, config, name, scan, results_dir)
     code = hardware_with_config(
@@ -467,7 +474,7 @@ def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) 
     run.screen.answer(QUESTIONS["import_file"], str(path), path=True)
     before = set(scan_profiles(config.paths.hardware_dir).profiles)
     try:
-        report = import_profile(config_file, path, run.now)
+        report = import_profile(config_file, path, run.now, pointer_path=run.pointer_path, hostname=run.probes.hostname())
     except (
         SchemaVersionError,
         StoredFileError,
@@ -506,7 +513,7 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     an existing profile of the folder taken as it is; the run's result covers exactly these (B)."""
     scan = scan_profiles(config.paths.hardware_dir)
     bound = _bound_profile(run, scan, config_file.parent)
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     configured = [machine.profile for machine in config.machines.values() if machine.profile is not None]
     run.screen.note(ANOTHER_COMPUTER)
     picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound, name, configured))
@@ -534,7 +541,7 @@ def _origins(run: GuidedRun, config: Configuration, config_file: Path, machines,
     measured here, then imported, then entered, then the folder (`selection.machine_origins`)."""
     bound = _bound_profile(run, scan_profiles(config.paths.hardware_dir), config_file.parent)
     own = bound.profile_id if _measured_here(bound) else None
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     this = {name} if "this-machine" in picked else set()
     this |= {machine for machine in machines if own is not None and config.machines[machine].profile == own}
     return machine_origins(config, machines, this=this, imported=imported, entered=entered)
@@ -632,7 +639,7 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
     if not config.families:
         run.screen.note("no base model is configured yet, so there is nothing to fetch")
         return
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget)
     if code != 0:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
@@ -652,7 +659,7 @@ def _render_step(
     run.screen.blank()
     run.screen.head(STEP_COUNT)
     written: list = []
-    here = _machine_key(run.probes.hostname())
+    here = _machine_key(run)
     chosen = run.selection
     if not chosen.machines:
         run.screen.note(NO_MACHINE_CHOSEN)

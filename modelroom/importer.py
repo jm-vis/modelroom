@@ -6,8 +6,9 @@ as one file; `import-profile` reads such a file into another results folder, und
 (`recorded_at`; a younger stored profile is never overwritten), each measurement follows the
 import rule of `measurements.plan_measurement_import` (idempotent / conflict / new). An import
 adds a `[machines.<name>]` entry for the imported machine with the reserves from `[defaults]`
-and `writer = false`, and it never touches this machine's own binding (the pointer file is not
-even read). See CONTRACTS.md, "Export and import".
+and `writer = false`, and it never touches this machine's own binding (the pointer file is only
+read, by the sweep of machine names). Both ways go through the sink of `modelroom/neutral.py`: no
+export and no imported file carries a machine name (FR-N). See CONTRACTS.md, "Export and import".
 
 The whole run is planned under the lock and only then written, so the plan is the freshness
 check: every writer of a profile, a measurement or the configuration holds the same lock, so
@@ -18,13 +19,12 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 import tomllib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from .binding import read_pointer
+from .binding import default_pointer_path, read_pointer
 from .config import (
     CONFIG_SCHEMA_VERSION,
     ConfigError,
@@ -34,7 +34,7 @@ from .config import (
     normalize_config,
     read_config_schema_version,
 )
-from .contracts import PROFILE_ID_RE, HardwareSnapshot, SchemaVersionError, validate_machine_name
+from .contracts import PROFILE_ID_RE, HardwareSnapshot, SchemaVersionError
 from .measurements import (
     EXPORT_SCHEMA_VERSION,
     ExportObject,
@@ -46,7 +46,10 @@ from .measurements import (
     write_measurement,
 )
 from .migrate import NOTHING_TO_DO, backup_suffix  # one wording and one backup name, defined once
+from .neutral import is_alias, key_for, neutral_export
+from .neutral_sweep import load_names, snapshot_packages, sweep, sweep_locked
 from .profile import HardwareProfile, read_profile_document
+from .remote_store import aliases, remote_path_for
 from .state import LockHandle, acquire_lock, atomic_write_json, atomic_write_text, release_lock
 from .toml_writer import dump_toml
 
@@ -58,7 +61,6 @@ NOTHING_WRITTEN = "nothing written"
 CONFIG_BACKUP_SUFFIX = ".bak"
 
 _CONFIG_HEADER = f"modelroom configuration, schema {CONFIG_SCHEMA_VERSION} (rewritten by `modelroom import-profile`)."
-_MACHINE_UNSAFE_RE = re.compile(r"[^a-z0-9]+")
 
 
 class StoredFileError(Exception):
@@ -160,18 +162,22 @@ def read_export_file(path: Path) -> ExportObject:
 # --- export --------------------------------------------------------------------------------------
 
 
-def export_profile(config_path: Path, out_path: Path, profile_id: str | None, pointer_path: Path) -> list[str]:
+def export_profile(
+    config_path: Path, out_path: Path, profile_id: str | None, pointer_path: Path, *, hostname: str | None = None
+) -> list[str]:
     """Write one profile and all of its measurements to `out_path`; returns the report lines.
 
     The profile is the one named with `--profile`, else this machine's binding for the results
     folder (the configuration file's own folder). An unreadable measurement file is reported
     and left out; it does not stop the export. Writing is atomic (`atomic_write_json`), so a
-    reader of `out_path` never sees a half-written file. No lock is taken: nothing inside the
-    state folder is written, and a measurement file is published whole and never changed, so
-    the only effect of a concurrent write is that a measurement published during the export may
-    not be in it.
+    reader of `out_path` never sees a half-written file. The sweep of machine names comes first
+    (FR-N) and takes the lock when it has something to clean; the export itself reads without
+    it, and the profile and every record go through the sink before they are written, so the
+    only effect of a concurrent write is that a measurement published during the export may not
+    be in it.
     """
     resolved_config = config_path.resolve()
+    notes = sweep(resolved_config, datetime.now(timezone.utc), "export-profile", pointer_path=pointer_path, hostname=hostname).notes
     config = _load_config(resolved_config)
     results_dir = resolved_config.parent
     if profile_id is not None and not PROFILE_ID_RE.fullmatch(profile_id):
@@ -185,10 +191,13 @@ def export_profile(config_path: Path, out_path: Path, profile_id: str | None, po
     _check_out_target(out_path, config, resolved_config, pointer_path)
     profile = _profile_to_export(config.paths.hardware_dir, chosen)
     stored = read_measurements(config.paths.state, chosen)
-    export = ExportObject(schema_version=EXPORT_SCHEMA_VERSION, profile=profile, measurements=stored.records)
+    alias = aliases(remote_path_for(pointer_path)).get(chosen)
+    whole = ExportObject(schema_version=EXPORT_SCHEMA_VERSION, profile=profile, measurements=stored.records)
+    export = neutral_export(whole, alias, snapshot_packages(config))
     out = out_path.resolve()
     atomic_write_json(out, export.model_dump(mode="json"))
-    lines = [f"exported {profile.display_name} ({chosen}) with {len(stored.records)} measurement(s) to {out}"]
+    lines = [f"note: {note}" for note in notes]
+    lines.append(f"exported {export.profile.display_name} ({chosen}) with {len(stored.records)} measurement(s) to {out}")
     return lines + [f"skipped unreadable measurement file {path.name}: {reason}" for path, reason in stored.unreadable]
 
 
@@ -249,12 +258,25 @@ class ImportPlan:
         return self.profile is None and not self.measurements and self.config_text is None
 
 
-def import_profile(config_path: Path, export_path: Path, now: datetime) -> list[str]:
+def import_profile(
+    config_path: Path,
+    export_path: Path,
+    now: datetime,
+    *,
+    name: str | None = None,
+    pointer_path: Path | None = None,
+    hostname: str | None = None,
+) -> list[str]:
     """Import an export file into the results folder of `config_path`; returns the report lines.
 
     Raises `ConfigError`/`PrerequisiteError` (exit 2), `SchemaVersionError`/`StoredFileError`
     (exit 3), `state.LockHeldError`/`ImportConflictError` (exit 1). Every one of them leaves
     the results folder as it was, except for the lock file itself.
+
+    Under the lock the folder is swept first (FR-N, `neutral_sweep.sweep_locked`), and the export
+    goes through the sink before the plan (`neutral.neutral_export`): the freshness and the conflict
+    rule compare neutral with neutral. `name` is a host alias, and only the SSH way passes one
+    (FR-B1): the machine is then `[machines.<name>]` and its profile carries the alias as its name.
 
     The configuration is read twice: once before the lock, to refuse a missing, invalid or
     schema-1 file without even creating a lock file, and once under the lock, because the run
@@ -267,16 +289,21 @@ def import_profile(config_path: Path, export_path: Path, now: datetime) -> list[
     resolved_config = config_path.resolve()
     config = _load_config(resolved_config)
     _read_raw_config(resolved_config)
-    export = read_export_file(export_path)
+    if name is not None and not is_alias(name):
+        raise PrerequisiteError(f"not a host alias: {name!r}")
+    incoming = read_export_file(export_path)
+    names = load_names(resolved_config.parent, pointer_path or default_pointer_path(), hostname)
     handle = acquire_lock(config.paths.lock_file, "import-profile", now)
     try:
+        swept = sweep_locked(resolved_config, names)
         current = _load_config(resolved_config)
         if current.paths != config.paths:
             raise ImportConflictError(
                 f"{resolved_config}: [paths] changed while waiting for the lock; run again\n{NOTHING_WRITTEN}"
             )
-        plan = plan_import(current, resolved_config, _read_raw_config(resolved_config), export)
-        return _execute(plan, current, resolved_config, handle)
+        export = neutral_export(incoming, name, snapshot_packages(current))
+        plan = plan_import(current, resolved_config, _read_raw_config(resolved_config), export, name)
+        return [*(f"note: {note}" for note in swept.notes), *_execute(plan, current, resolved_config, handle)]
     finally:
         release_lock(handle)
 
@@ -296,7 +323,9 @@ def _read_raw_config(config_path: Path) -> dict:
     return raw
 
 
-def plan_import(config: Configuration, config_path: Path, raw: dict, export: ExportObject) -> ImportPlan:
+def plan_import(
+    config: Configuration, config_path: Path, raw: dict, export: ExportObject, name: str | None = None
+) -> ImportPlan:
     """Decide everything the import would write, and write nothing.
 
     Raises `ImportConflictError` as soon as one decision cannot be taken without overwriting
@@ -312,7 +341,7 @@ def plan_import(config: Configuration, config_path: Path, raw: dict, export: Exp
     records, measurement_lines = _plan_measurements(config, export)
     plan.measurements = records
     plan.lines += measurement_lines
-    name, plan.config_text = _plan_machine(config, config_path, raw, export.profile)
+    name, plan.config_text = _plan_machine(config, config_path, raw, export.profile, name)
     if name is not None:
         reserves = (
             "the memory reserve is computed from its memory"
@@ -424,9 +453,12 @@ def _plan_measurements(config: Configuration, export: ExportObject) -> tuple[lis
 
 
 def _plan_machine(
-    config: Configuration, config_path: Path, raw: dict, profile: HardwareProfile
+    config: Configuration, config_path: Path, raw: dict, profile: HardwareProfile, alias: str | None = None
 ) -> tuple[str | None, str | None]:
     """The `[machines.<name>]` entry an imported machine gets, and the configuration text for it.
+
+    The name is the one the sink gives a new row (`neutral.key_for`): the host alias where the SSH way
+    passes one, else the profile's neutral name, else a random neutral key where that one is taken.
 
     `(None, None)` when a machine already carries this `profile` and the file is on the current
     schema; a file of an earlier schema is rewritten all the same, with no machine added. The
@@ -443,7 +475,7 @@ def _plan_machine(
         raise ConfigError(f"{config_path}: invalid configuration: {exc}") from exc
     name = None
     if not known:
-        name = machine_name_for(profile.display_name, profile.profile_id, set(config.machines))
+        name = key_for(profile.profile_id, profile.machine_class, profile.display_name, set(config.machines), alias)
         # Only a new entry is made here. A memory reserve `[defaults]` leaves out stays `None`, which
         # the TOML writer leaves out: it is computed from the machine at every run (ADR 0012).
         data.setdefault("machines", {})[name] = {
@@ -460,21 +492,6 @@ def _plan_machine(
         raise ConfigError(f"{config_path}: holds a value the TOML writer cannot write back: {exc}") from exc
     config_from_text(text, config_path)
     return name, text
-
-
-def machine_name_for(display_name: str, profile_id: str, taken: set[str]) -> str:
-    """A configuration key for an imported machine: `display_name` normalized, then made unique.
-
-    Everything outside `a-z0-9` becomes a single `-` and the ends are trimmed; a name that is
-    taken, or empty after that, gets the short id (`profile_id`'s first 8 hex) appended or, as
-    a last resort, the whole `profile_id`.
-    """
-    base = _MACHINE_UNSAFE_RE.sub("-", display_name.lower()).strip("-")
-    short = profile_id[:SHORT_ID_LEN]
-    for candidate in (base, f"{base}-{short}" if base else short, f"{base}-{profile_id}" if base else profile_id):
-        if candidate and candidate not in taken:
-            return validate_machine_name(candidate)
-    raise ImportConflictError(f"no free machine name for {display_name!r} ({profile_id}); rename a machine first")
 
 
 def _check_writable_path(path: Path) -> None:

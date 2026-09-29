@@ -243,6 +243,10 @@ def _import_answers(tmp_path: Path, machines: list[str], **changes) -> dict:
     return {**FULL_ANSWERS, "machines": machines, "import_file": str(export), **changes}
 
 
+# FR-N: the neutral names of the imported server profile and of this machine's measured one.
+SERVER, OWN = "computer-0291d4f7", "laptop-00000000"
+
+
 def _after(lines: list[str], start: str) -> list[str]:
     stripped = [line.strip() for line in lines]
     return stripped[next(index for index, line in enumerate(stripped) if line.startswith(start)) :]
@@ -253,10 +257,10 @@ def test_an_imported_machine_says_so_on_the_card_and_in_its_table_head(tmp_path:
 
     assert code == 0
     card = _after(lines, "── Step 5 of 5")
-    machine = next(index for index, line in enumerate(card) if line.startswith("machine") and "server" in line)
+    machine = next(index for index, line in enumerate(card) if line.startswith("machine") and SERVER in line)
     assert card[machine + 1] == IMPORTED_WORDS
-    assert any(line.startswith("server") and " · imported · context " in line for line in card)
-    head = _after(card, "server")  # AP9-RM U10: the budget of the imported profile, the disk not read
+    assert any(line.startswith(SERVER) and " · imported · context " in line for line in card)
+    head = _after(card, SERVER)  # AP9-RM U10: the budget of the imported profile, the disk not read
     assert head[1].startswith("room      graphics ") and "GB for models (2 x " in head[1]
     assert "disk unknown on another computer" in " ".join(head[1:4])
 
@@ -271,7 +275,7 @@ def test_this_machine_chosen_by_its_existing_profile_is_this(tmp_path: Path):
     assert code == 0
     card = _after(lines, "── Step 5 of 5")
     assert not any("not this computer" in line for line in card)
-    assert any(line.startswith("workstation · context ") for line in card)
+    assert any(line.startswith(f"{OWN} · context ") for line in card)
 
 
 def test_reimporting_a_profile_of_the_folder_is_imported(tmp_path: Path):
@@ -290,10 +294,10 @@ def test_this_machine_and_an_import_together(tmp_path: Path):
 
     assert code == 0
     card = _after(lines, "── Step 5 of 5")
-    assert any(line.startswith("workstation · context ") for line in card)
-    assert any(line.startswith("server") and " · imported · context " in line for line in card)
+    assert any(line.startswith(f"{OWN} · context ") for line in card)
+    assert any(line.startswith(SERVER) and " · imported · context " in line for line in card)
     assert card.count(IMPORTED_WORDS) == 1
-    own = _after(card, "workstation · context ")  # this machine: its budget, and its disk measured now
+    own = _after(card, f"{OWN} · context ")  # this machine: its budget, and its disk measured now
     assert own[1].startswith("room      graphics ") and "free on" in " ".join(own[1:4])
 
 
@@ -314,7 +318,7 @@ def test_another_computer_gets_its_install_line_and_no_pull(tmp_path: Path):
     assert code == 0
     card = _after(lines, "── Step 5 of 5")
     install = [line for line in card if line.startswith("install")]
-    assert install and all(line.startswith("install   #1 on server") and "ollama pull hf.co/" in line for line in install)
+    assert install and all(line.startswith(f"install   #1 on {SERVER}") and "ollama pull hf.co/" in line for line in install)
     assert "run it on that computer; this run pulls only onto this one" in card
     assert not any(line.startswith("? ") for line in card)  # no list, no question: nothing of this machine
     assert not any(call[1] == "/api/pull" for call in daemon.calls)

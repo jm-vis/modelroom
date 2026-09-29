@@ -23,6 +23,7 @@ from modelroom.state import atomic_write_json
 
 # Moved to their own modules (AP9-UX2, size guard) and exported back, so every test's import stays.
 from fixture_http import FIXTURES, build_transport, envelope_response, html_response, json_response  # noqa: F401
+from fixture_neutral import THIS_MACHINE  # noqa: F401  (this computer's key in every test, FR-N)
 from fixture_servers import (  # noqa: F401
     DAEMON_OBSERVED_AT,
     DEEPSEEK_BASE,

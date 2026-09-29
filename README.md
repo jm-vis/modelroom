@@ -139,9 +139,19 @@ every number of such a machine is computed, none measured. The measurement is cr
 
 Nothing in the list is marked in advance: the arrow keys move, the space bar marks a row, and Enter
 takes what is marked or, with nothing marked, the row under the pointer. Where this machine was
-measured in this folder before, its profile is the first row (`this machine (gpu-server, server, as
-measured 2026-09-28)`), so Enter alone keeps it and measures nothing; `measure again` is the row
-under it. The result covers exactly the machines you marked in this run.
+measured in this folder before, its profile is the first row (`this machine (computer-5c1e9a07,
+server, as measured 2026-09-28)`), so Enter alone keeps it and measures nothing; `measure again` is
+the row under it. The result covers exactly the machines you marked in this run.
+
+**Machine names.** No result file (`modelroom.toml`, `docs/`, `state/`) and no export file carries
+a host name. This computer is `computer-<random>` in `modelroom.toml` -- a key made once for your
+user account and kept in `~/.modelroom/remote.json` -- and `laptop-<id>` (by its class) in tables and
+`docs/`; another computer is `<class>-<id>`, and a machine entered by hand as well, whatever name you
+typed. The neutral key of this computer is the only value from `~/.modelroom` that appears in a
+results folder; your own state under `~/.modelroom` keeps the folders you chose, as you typed them,
+and never leaves your computer. A folder of 0.1.0 is renamed once, backups included, by the first
+command that writes to it (`machine renamed to server-3f9a0c21`); a script calling `fetch --machine
+<old name>` takes the new key. Only the start screen names this computer's host name, live.
 
 Where the results live is the first question of the step. A folder the last run used is offered
 first when you start in another one, with the pointer on it; the start screen already says `the
@@ -368,6 +378,10 @@ control. The lock file and `run-status.json` are operating data of one deploymen
 file is never deleted: the lock is a kernel lock on it, which the operating system releases
 when its holder exits, and a second `fetch` or `render` against the same state directory
 stops at it instead of waiting.
+
+In your user account, outside every results folder, `~/.modelroom/guided.json` remembers the last
+folder and which profile is this computer in each, and `~/.modelroom/remote.json` holds this
+computer's neutral key. Neither is exported or copied into a results folder.
 
 ## Publishers the search resolves
 

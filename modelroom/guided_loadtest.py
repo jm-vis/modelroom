@@ -30,6 +30,7 @@ from .loadtest import (
 )
 from .measure import read_os_identity
 from .measurements import MeasurementExistsError, MeasurementRecord, Scenario
+from .neutral import NeutralError, neutral_record
 from .profile import os_fingerprint
 from .screen import context_tokens_text
 from .selection import narrow_snapshot
@@ -143,7 +144,7 @@ def _candidate_rows(candidates: list[Candidate]) -> list[str]:
     """The lines of the load test's selection list: the four facts, aligned in columns."""
     rows = [
         [
-            candidate.ollama_name,
+            candidate.shown_name,
             candidate.package.base_model_hf_repo,
             candidate.package.quantization or _UNKNOWN,
             f"{candidate.weights_bytes / _GIB:.2f} GiB",
@@ -160,7 +161,7 @@ def _candidate_choices(candidates: list[Candidate]) -> list[Choice]:
     names it reads the same on a machine with ten installed packages as on one with one.
     """
     return [
-        Choice(candidate.ollama_name, label)
+        Choice(candidate.shown_name, label)
         for candidate, label in zip(candidates, _candidate_rows(candidates))
     ]
 
@@ -226,12 +227,14 @@ def _measure_candidate(
             progress=run.screen.note,
         )
     except LoadTestError as exc:
-        run.failed(f"nothing measured for {candidate.ollama_name}: {exc}")
+        run.failed(f"nothing measured for {candidate.shown_name}: {exc}")
         return False
     try:
-        store_measurement(config.paths.state, record, run.now)
-    except (LockHeldError, MeasurementExistsError, OSError) as exc:
-        run.failed(f"the measurement of {candidate.ollama_name} was not stored: {exc}")
+        # What is shown is what is stored: the record as the sink leaves it (FR-N).
+        record = neutral_record(record, candidate.package)
+        store_measurement(config.paths.state, record, run.now, candidate.package)
+    except (LockHeldError, MeasurementExistsError, OSError, NeutralError) as exc:
+        run.failed(f"the measurement of {candidate.shown_name} was not stored: {exc}")
         return False
     problem = _record_problem(record)
     if problem is not None:
@@ -304,7 +307,7 @@ def ollama_rows(offer: OllamaOffer) -> list[Choice]:
 
 def measure_ollama(run: "GuidedRun", config: Configuration, offer: OllamaOffer, scenario: Scenario, picked: list[str]) -> str | None:
     """Measure the picked candidates; `<k> of <n> measured`, or `None` where none was picked."""
-    chosen = [candidate for candidate in offer.candidates if candidate.ollama_name in picked]
+    chosen = [candidate for candidate in offer.candidates if candidate.shown_name in picked]
     if not chosen or offer.profile_id is None:
         return None
     run.screen.note(LOAD_NOTE_LINE)

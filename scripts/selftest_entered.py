@@ -124,8 +124,11 @@ def entered_steps(work: Path, answers_toml: Callable[[dict], str], now: datetime
         return [(NAME, False, f"the run ended with exit {code}: " + " | ".join(lines[-3:]))]
     import tomllib
 
+    from modelroom.remote_store import read_remote, remote_path_for
+
     configured = set(tomllib.loads((results / "modelroom.toml").read_text(encoding="utf-8")).get("machines", {}))
-    problems = entered_problems(json.loads(document.read_text(encoding="utf-8")), "workstation", configured)
+    local = read_remote(remote_path_for(pointer)).this_machine or ""  # this machine's neutral key (FR-N)
+    problems = entered_problems(json.loads(document.read_text(encoding="utf-8")), local, configured)
     bindings = json.loads(pointer.read_text(encoding="utf-8")).get("bindings", {}) if pointer.is_file() else {}
     if bindings:
         problems.append(f"the pointer file binds a profile after a run that measured nothing: {bindings}")

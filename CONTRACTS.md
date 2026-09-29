@@ -73,6 +73,7 @@ documented decision (`docs/adr/`), never a side effect.
 | Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26; ADR 0006, 2026-09-27 (the fit words) |
 | Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
 | Measurement file | 2 | 2 | -- | -- |
+| Remote machines (`~/.modelroom/remote.json`) | 1 | `[1, 2)` | -- (new with AP9-FR) | AP9-FR, 2026-09-29 |
 
 AP9-SV1 changes no persisted form (ADR 0008): a vLLM server's reading and its load test live in
 memory for one guided run and are written nowhere. AP9-UX changes no persisted form (ADR 0009): the
@@ -94,6 +95,11 @@ against the published 0.1.0 on 2026-09-29). Only a file that says schema 1 or 2 
 removed by hand makes 0.1.0 stop with a field error (exit `2`), since the schema number does not
 change; the rule below needs a later schema number and does not cover that case. The render document
 is not read back by this package; the new field concerns other readers only.
+AP9-FR changes no shared persisted form: configuration 3, profile 4, document 3, export 1 and
+measurement 2 stay. What changes is which values they may hold ("Neutral names"): from 0.2.0 on an
+export, a profile and a configuration carry a neutral `display_name` and neutral machine keys, and a
+record the forms of its fields the sink allows. The file of the user account `remote.json` is new
+("Remote machines").
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -135,6 +141,10 @@ it is the tag part of `ollama_name` after the colon.
 | `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first leaves the snapshot, the hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated, because the lock is taken before the staleness checks (`cli.py`) |
 | `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration (`fetch`) or not configured at all (`hardware`); `hardware`'s bound profile belongs to another machine (see "Hardware measurement") and neither `--same-machine` nor `--new-identity` says which it is; `hardware --same-machine` and `hardware --new-identity` were passed together; or an external tool a command *requires* is missing or below the minimum version -- since the measurement work package `hardware` no longer requires `llmfit`, which is a cross-check there |
 | `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version`, is not valid JSON, or does not match its model (fix-round 5, P2-3: `cli.py`'s own `_read_snapshot`/`_read_hardware_snapshot` catch `json.JSONDecodeError`/pydantic `ValidationError` at every load site and name the file in the message, the same exit code as an unsupported `schema_version`) |
+
+Since AP9-FR every writing command sweeps its folder of machine names first ("Neutral names"): a
+sweep that cannot finish is exit `1` with nothing else written, and a broken
+`~/.modelroom/remote.json` is exit `3`.
 
 ## Models
 
@@ -2314,8 +2324,10 @@ note, instead of as three failures.
 a Windows machine with one NVIDIA adapter produces exactly its fields: `origin` `measured`,
 `ram_physical_source` `os`, `vram_source` `nvidia-smi`, `gpu_state` `measured`, both cross-checks
 `confirmed`. The raw machine identifier never reaches the file -- only `os_fingerprint`'s digest.
-`display_name` is this machine's host name for a new profile and is kept as it is when the
-profile already exists (the user may rename it). `--cpu-only` writes an `entered` profile, which
+`display_name` of a new profile is its neutral name, `<class>-<first 8 hex of the profile_id>`
+(`computer` where the class is unknown), never the host name; an existing profile keeps its own
+through the sink ("Neutral names": a neutral name or the SSH alias stays, anything else becomes the
+neutral name). `--cpu-only` writes an `entered` profile, which
 by contract carries no fingerprint (`os_fingerprint_source` `none`).
 
 **Which profile is written** follows the takeover rule (`resolve_profile_target`, "Profile
@@ -2671,6 +2683,10 @@ A measurement is its own file, `<state>/measurements/<profile_id>/<measurement_i
 `write_measurement(state_dir, record, lock)` requires the held `modelroom.lock` of that state
 folder, checks under the lock that no file with this id exists (`MeasurementExistsError`
 otherwise) and writes with `atomic_write_json`; a measurement is never overwritten.
+Every record reaches its file through the sink ("Neutral names"): `ollama_name`,
+`comparable_reason`, `validity_reason`, `daemon_version` and the `done_reason` of its runs only in
+the forms it allows. The one change to a written file is the sweep's: a measurement file whose
+fields the sink changes is written anew, whole and atomically, under the same `measurement_id`.
 `read_measurements` returns every readable record of one profile, oldest id first, and lists a
 file that is not valid JSON, fails validation, or whose name or folder disagree with its own
 `measurement_id`/`profile_id` as unreadable instead of loading it; the other files are still
@@ -2827,7 +2843,7 @@ would ask, it answers `rewrite` with the **id the binding already names** and th
 reached (`... is missing in the results folder; measured again under the same id`, or `... has
 another os_fingerprint; measured again under the same id, the answer was that it is the same
 machine`). `hardware` then writes the profile under that `profile_id` -- `display_name` the
-existing profile's, else this machine's host name -- binds it (the binding does not change, it
+existing profile's through the sink, else its neutral name -- binds it (the binding does not change, it
 is the same id) and the guided mode writes `[machines.<name>].profile` as it does after `new`.
 The measurements under `measurements/<profile_id>/` stay what they are: a measurement belongs to
 an id, and whether it still counts for a ranking is decided, as ever, by the comparison of
@@ -2859,6 +2875,84 @@ Keys of `bindings` and `current` are absolute folder paths; values are `profile_
   }
 }
 ```
+
+### Remote machines (`~/.modelroom/remote.json`)
+
+A file of the user account next to the pointer file (`remote_store.remote_path_for`), new with
+AP9-FR, schema 1, read range `[1, 2)`. It never lies in a results folder and no command exports,
+renders or copies it. `this_machine` is this computer's key in `[machines.<name>]`:
+`computer-<8 random hex>` (`secrets.token_hex`), made on first need and kept, the same in every
+results folder this user runs on this computer, and not derivable from the host name. `ssh` maps
+a `profile_id` to the host alias it was read over SSH under (written by the SSH way, FR-B1); an
+alias belongs to one `profile_id` at most. Every write reads the file, changes one field and
+writes it back atomically. A missing file reads as empty; a broken one (not JSON, a field of its
+own, a `this_machine` of another shape, an alias outside the alias rule, schema 2) is
+`RemoteStoreError`, exit `3` for every command, like a broken pointer file.
+
+```json
+{"schema_version": 1, "this_machine": "computer-5c1e9a07", "ssh": {"3f9a0c21d4e6b870": "gpu1"}}
+```
+
+### Neutral names
+
+**No file of modelroom carries a machine name** (AP9-FR, FR-N: nothing about the machines of whoever
+runs it in what is passed on). The invariant covers everything that can be passed on:
+the results folder (`modelroom.toml` and its backups, `docs/`, `state/` with profiles, records,
+snapshot, search log, run status), the export file and the shared folder. `~/.modelroom` is the
+user's own state and never leaves the computer: `guided.json` keeps the folders the user chose, as
+they are, and nothing of it reaches a file of a results folder, an export or a render; from
+`remote.json` only `this_machine` and the aliases reach a results folder, as keys and names.
+
+**One sink.** `modelroom/neutral.py` alone decides what of a name and of foreign text may reach a
+file; every place that writes or exports hands its object through it first. The rules, complete --
+everything else is dropped:
+
+| Field | Allowed | Otherwise |
+|---|---|---|
+| machine key `[machines.<k>]` | `NEUTRAL_RE` (`^(laptop\|workstation\|server\|computer)-[0-9a-f]{8}$`), or a host alias at the row of the profile `remote.json` gives it to | this computer's row (the one of the profile this folder binds it to, else its 0.1.0 key formed from the live host name): `this_machine`, and `this_machine` at another row yields to it; with a profile: `neutral_name(profile)`; without one, or where that name is taken: `computer-<8 random hex>` |
+| `display_name` (profile, export, the document's `label`) | `NEUTRAL_RE`, or the host alias of that profile | `neutral_name(profile)` = `<class>-<first 8 hex of the profile_id>`, `computer` for the class `unknown` |
+| `MeasurementRecord.ollama_name` | the name built from the known package (the load test's; else the one of the folder's own snapshot the record's digest names); without one only `hf.co/<hf_repo>:<tag>` of the record's own repository | `null` |
+| `comparable_reason` | `another model was loaded during the measurement`, `no observation of the measured model`, `no observation of /api/ps was made`, `the digest of the measured model changed during the measurement`, `the daemon loaded context <n>, not the ranking's <m>`, or the legacy reason | mapped by the beginning of the local text; else `the measurement is not comparable (reason not kept)` |
+| `validity_reason` | the sentences `measurement_invalid_reason` forms (numbers, and Ollama's own done reasons), or the legacy reason | `the measurement is not valid (reason not kept)` |
+| `daemon_version` | exactly `X.Y.Z` | `null`: any addition (`-rc1`, `+<address>`) drops the whole value |
+| `runs[].done_reason` | `stop`, `length`, `load`, `unload`, `unknown` | `unknown` |
+
+The writers: `hardware` and the guided measurement (the profile), a machine entered by hand, the
+import (profile, records, configuration entry), `migrate` (profile and records of schema 1),
+`store_measurement` (the load test, with its package), `export-profile` (profile and records), and
+every write of the configuration. A load test shows its candidates, its progress and its result by
+the name built from the package as well; the name the daemon holds it under is used for the calls
+to the daemon alone. `render` builds its document from the files the sweep has left neutral.
+
+**The sweep.** `neutral_sweep.sweep` runs the same rules over the files a folder already holds:
+the profiles (only `display_name` changes, in the schema they are stored in), the configuration (the
+table heads `[machines.<old>]` replaced in the text, so its comments stay; a file whose machines are
+not written as table heads is written anew by the TOML writer), every measurement record (written
+anew under its own `measurement_id`), and modelroom's own backups (`modelroom.toml.bak`,
+`modelroom.toml.vN.bak`, `<profile_id>.json.vN.bak`): their table heads, the key of a row the
+configuration is renamed from taking the same new name, and `display_name` in a profile backup. The
+sweep makes no backup of its own. A backup that cannot be cleaned is a note naming the file
+(`a backup of modelroom could not be cleaned of machine names: <file>; delete it by hand`); a
+schema-1 profile backup `<old key>.json.v1.bak` is named by its kind only, since its file name is
+the old key. Each renamed machine is a note with its new name alone (`machine renamed to
+server-3f9a0c21 (no host names in files)`). A schema-1 configuration and schema-1 profiles are
+`migrate`'s: their keys name the profile files; `migrate` converts them through the sink and sweeps
+again under its own lock before it ends. Key, profile name and records are checked independently,
+so a run that stopped halfway converges, and a second sweep changes nothing.
+
+**The first step of every writing command:** the guided mode (once the configuration is found or
+made), `hardware`, `fetch`, `render`, `migrate`, `import-profile` (under its own lock) and
+`export-profile`. The folder is read without the lock first; only when something is to change is
+`modelroom.lock` taken, the folder read again and the files written. A `--machine <old>` of the same
+call is led to the new key (`note: --machine now names <new>`); a later call with the old name meets
+the unknown-machine message of that command. A file that cannot be read (a backup aside), a write
+that fails and a lock another process holds end the command with exit `1` and `the files of this
+folder could not be cleaned of machine names; nothing else was written`, before it writes anything
+else. A file that does not parse as JSON is left to the readers that list it as broken.
+
+**The screen.** This computer's host name stands only in the start line (`machine <host name>`,
+read live). Every other line names keys and names as the files do; the name typed for a machine
+entered by hand stays in its answer line.
 
 ### Migration to schema 2
 
@@ -2914,7 +3008,9 @@ read (a folder at a backup path, for instance), or two schema-1 files for the sa
 machine is exit 3 as well; in every case nothing is written and no lock file is created. A run
 that finds everything at the current schema prints `nothing to do` and exits 0. A run that
 stopped halfway converges on the next run: a converted profile with fingerprint source `legacy`
-and the same `display_name` keeps its `profile_id`, and files that are already there are left as
+whose content is the same but for its `profile_id` and `display_name` keeps its `profile_id` (since
+AP9-FR: the sweep before the run has given it a neutral name, so the name no longer finds it; a
+profile of other content is another machine's, and the run takes a new id), and files that are already there are left as
 they are or rewritten in place: a measurement file with the same JSON content, a profile the same
 after reading -- whatever schema an earlier version left it in, compared through
 `read_profile_document` (decided 2026-09-26). A configuration that is already schema 2 or 3 never gets
@@ -2940,9 +3036,11 @@ Without `--profile` the exported profile is this machine's binding for that fold
 file, "Profile binding" above); `--profile` names any profile in the folder and wins over the
 binding, so a profile can also be handed on from a shared folder by a machine that has no
 binding of its own. The file is written with `atomic_write_json`, so a reader never sees half of
-it. No lock is taken: the export writes nothing inside the state folder, and a measurement file
-is published whole and never changed afterwards, so the only effect of a concurrent write is
-that a measurement published during the export may not be in it. An unreadable measurement file
+it. The sweep of machine names comes first ("Neutral names") and takes `modelroom.lock` when it has
+something to clean; the export itself reads without the lock, and its profile and every record go
+through the sink before the file is written, so it carries a neutral `display_name` (or the SSH
+alias of that profile) and no foreign text. A concurrent write can only mean that a measurement
+published during the export is not in it. An unreadable measurement file
 is reported and left out; it does not stop the export. `--profile` has to be a `profile_id` (16
 lowercase hex characters), and `--out` must be none of the files this package writes itself:
 nothing inside `paths.state` (the same rule `PathsConfig` holds for `paths.markdown`), not the
@@ -2950,7 +3048,12 @@ configuration file, not the pointer file -- otherwise an export object would rep
 the snapshot, the lock file, the configuration or the binding, outside the lock.
 
 `modelroom import-profile <file> --config <file>` reads such a file into another results folder,
-under `modelroom.lock`. The whole run is planned under the lock and only then written, so the
+under `modelroom.lock`. Under the lock the folder is swept first ("Neutral names"), and the export
+goes through the sink before the plan, so the freshness and the conflict rule compare neutral with
+neutral: the same record from an export of 0.1.0 and one of 0.2.0 is `unchanged`, not a conflict.
+`import_profile(..., name=<alias>)` is the SSH way's alone (AP9-FR, FR-B1): the machine is then
+`[machines.<alias>]` and its profile carries the alias as its `display_name`. A refused import
+leaves what the sweep cleaned cleaned. The whole run is planned under the lock and only then written, so the
 plan *is* the freshness check -- every writer of a profile, a measurement or the configuration
 holds the same lock. A conflict anywhere in the plan leaves the run without a single write. The
 configuration is read once before the lock (a missing, invalid or schema-1 file is refused
@@ -2993,9 +3096,9 @@ Two machines are never merged and never renamed:
   name that more than one profile carries is shown with the short id (the first 8 hex of the
   `profile_id`).
 
-The imported machine gets a `[machines.<name>]` entry: `<name>` is its `display_name`
-normalized (everything outside `a-z0-9` becomes a single `-`, the ends are trimmed), made
-unique with the short id and, as a last resort, with the whole `profile_id`; the reserves come
+The imported machine gets a `[machines.<name>]` entry: `<name>` is the key the sink gives a new
+row (`neutral.key_for`): the SSH alias where one is passed, else the profile's neutral name, else,
+where that name is taken, a random neutral key `computer-<8 hex>`; the reserves come
 from `[defaults]`, `writer` is `false` and `profile` is the imported `profile_id`. A machine
 that already carries this `profile` keeps its entry, and the file is not rewritten at all; a
 machine whose profile is in the folder but in no `[machines.<name>]` entry gets one even when the
@@ -3009,7 +3112,7 @@ only when no backup is there yet -- an existing `.bak` holds an older state and 
 overwritten. Either way the report names the backup path, and a run that rewrites nothing writes
 no backup.
 
-An import never changes the local binding -- it does not even read the pointer file. Broken
+An import never changes the local binding; it reads the pointer file for the sweep only. Broken
 files in the target folder (a profile that does not read or validate, one of an unsupported
 `schema_version`, a schema-1 profile, an unreadable measurement file) are listed in the report
 and left alone; they never stop the import of another profile. The report carries one line per
@@ -3023,14 +3126,14 @@ profile and per measurement, and a run that changed nothing ends with `nothing t
 | `3` | a stored profile, or the pointer file, does not read | the export file does not read, or its `schema_version` is outside the accepted range (`EXPORT_SCHEMA_RANGE`: schema 1 today) |
 
 ```console
-$ modelroom export-profile --config /srv/models/modelroom.toml --out /srv/exchange/workstation.json
-exported workstation (3f9a0c21d4e6b870) with 2 measurement(s) to /srv/exchange/workstation.json
+$ modelroom export-profile --config /srv/models/modelroom.toml --out /srv/exchange/workstation-3f9a0c21.json
+exported workstation-3f9a0c21 (3f9a0c21d4e6b870) with 2 measurement(s) to /srv/exchange/workstation-3f9a0c21.json
 
-$ modelroom import-profile /srv/exchange/workstation.json --config /srv/laptop/modelroom.toml
-profile workstation: new
+$ modelroom import-profile /srv/exchange/workstation-3f9a0c21.json --config /srv/laptop/modelroom.toml
+profile workstation-3f9a0c21: new
 measurement 20260922T202000Z-4da3b585: new
 measurement 20260923T083000Z-5c1e9a07: new
-note: machine "workstation" added with the reserves from [defaults] and writer = false
+note: machine "workstation-3f9a0c21" added with the reserves from [defaults] and writer = false
 ```
 
 ### Catalog rules
@@ -5066,8 +5169,8 @@ from `[defaults]`, `writer = false`).
 **Step 1, the results folder.** A new `modelroom.toml` is written with `schema_version = 2`,
 families empty, `packagers` empty (the search writes every resolved repository as an
 owner-bound `repos` target, so a speculative `<packager>/<name>-GGUF` probe under five accounts
-per base model would only spend the shared request budget), this device as `[machines.<host>]`
-with `writer = true`, `paths.state = <folder>/state`, `paths.markdown = <folder>/docs/models.md`
+per base model would only spend the shared request budget), this device as
+`[machines.<this_machine>]` (its neutral key from `~/.modelroom/remote.json`, "Neutral names") with `writer = true`, `paths.state = <folder>/state`, `paths.markdown = <folder>/docs/models.md`
 and `[guided].results = <folder>`. The folder is remembered in the pointer file. A
 `modelroom.toml` of schema 1 in the folder is migrated first (`modelroom migrate`, under the
 lock, backup kept, idempotent), before anything is written, and the notes it leaves have one
@@ -5093,17 +5196,18 @@ notes, indented like their neighbors and without `note: ` in front (`hardware_wi
 note=run.screen.note)`, AP9-UX G); `modelroom hardware` still prints them as `note: <text>`. An import leaves `imported <display_name>: <the hardware in plain
 words>`; an import that does not go through stays a `run.failed` sentence. A machine entered by
 hand leaves `entered <name>: 64 GiB memory, graphics card 24 GiB` (or `…, no graphics card`, `…,
-shared memory`), the sizes as they were entered.
+shared memory`), the sizes as they were entered; `<name>` is the profile's neutral name, the name
+typed in stays in its answer line alone ("Neutral names").
 
 **Step 1, the machines** (AP9-UX C and C1, `modelroom/guided_machines.py`). A note stands in front
 of the list: `another computer: pick its profile below, or import the file made there`. The list,
 from the top, nothing marked:
 
 1. the profile this folder binds this machine to, where it was measured here (value
-   `profile:<profile_id>`, `this machine (gpu-server, server, as measured 2026-09-28)`);
-2. `this machine (gpu-server, measure again)` with row 1, else `this machine (gpu-server, measure
-   now)` (value `this-machine`); the name is `[machines.<name>]` of this host, the class that of
-   the profile where it is known;
+   `profile:<profile_id>`, `this machine (computer-5c1e9a07, server, as measured 2026-09-28)`);
+2. `this machine (computer-5c1e9a07, measure again)` with row 1, else `this machine
+   (computer-5c1e9a07, measure now)` (value `this-machine`); the name is this computer's key
+   `this_machine` (never its host name, "Neutral names"), the class that of the profile where it is known;
 3. every other profile of the folder a `[machines.<name>]` names, one row each (value
    `profile:<profile_id>`, `<label>  <hardware>`: the label as the import forms it, with the short
    id where two carry one name; the hardware as `2 x NVIDIA L4 44.98 GiB VRAM / 94.29 GiB RAM`, a
@@ -5121,10 +5225,10 @@ stands in row 3, and row 2 says `measure now` (decided 2026-09-26). A marked pro
 machine(s) naming it into the selection of this run (`RunSelection.machines`); nothing is measured
 or written for it. The marked entries run in this order: measure, import, enter. The key and the
 answers `this-machine`, `import`, `enter` stay the same, so an answer file is unaffected; the answer
-line names this machine (`this machine (gpu-server, server)`, without a known class `this machine
-(gpu-server)`) and a marked profile by its label.
+line names this machine (`this machine (computer-5c1e9a07, server)`, without a known class `this machine
+(computer-5c1e9a07)`) and a marked profile by its label.
 
-`this machine (<name>, measure now)` makes sure `[machines.<host>]` exists and is a writer -- this
+`this machine (<name>, measure now)` makes sure `[machines.<this_machine>]` exists and is a writer -- this
 machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the
 results folder as the binding key. The takeover rule decides which profile is written
 (`resolve_profile_target`, "Profile binding"); its `ask_clone` case is the `clone` question, and
@@ -5188,7 +5292,7 @@ the profile's own reason, never a traceback. Then, in this order:
   written by hand -- the takeover rule answers `new` before the fingerprint ("Profile binding", "A
   machine entered by hand is never adopted"): no clone question, a fresh profile for this machine,
   the entered file unchanged byte for byte. Through the home binding, the entered machine keeps its
-  own entry and the result has both blocks. Through `[machines.<host>].profile`, the measurement
+  own entry and the result has both blocks. Through `[machines.<this_machine>].profile`, the measurement
   binds that entry to the new profile (the profile record of step 1), so the entered profile is
   without an entry for the rest of this run -- one block -- and the next run enters it again (two
   blocks).

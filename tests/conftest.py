@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from fixture_neutral import THIS_MACHINE
 from fixture_room import fixed_room
 
 
@@ -44,3 +45,13 @@ def _fixed_room(monkeypatch: pytest.MonkeyPatch):
     from modelroom import room
 
     monkeypatch.setattr(room, "default_room_probes", lambda: fixed_room())
+
+
+@pytest.fixture(autouse=True)
+def _fixed_this_machine(monkeypatch: pytest.MonkeyPatch):
+    """This computer's neutral key (FR-N) is random in a real run; a test gets the same one every time,
+    so a screen or a configuration compared with a golden file reads the same. `remote.json` itself
+    lands in the test's home folder (above), never in a real one."""
+    from modelroom import remote_store
+
+    monkeypatch.setattr(remote_store, "_NEW_KEY", lambda: THIS_MACHINE)

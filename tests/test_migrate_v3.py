@@ -24,6 +24,7 @@ from modelroom.config import load_config
 from modelroom.contracts import HardwareSnapshot
 from modelroom.examples import EXAMPLES
 from modelroom.migrate import NOTHING_TO_DO, migrate
+from modelroom.neutral import is_neutral
 from modelroom.profile import HardwareProfile, normalize_profile_v1, read_profile_document
 
 from fixture_support import v3_profile
@@ -37,7 +38,7 @@ V2_PROFILE_ID = "c0ffee0000000001"
 
 def _v2_profile(profile_id: str = V2_PROFILE_ID) -> dict:
     """A schema-2 profile file exactly as version 0.1.0 wrote it (a fixture, not the schema-4 example)."""
-    return v3_profile(schema_version=2, profile_id=profile_id, display_name="laptop")
+    return v3_profile(schema_version=2, profile_id=profile_id, display_name="laptop-c0ffee00")  # neutral since FR-N
 
 
 def _as_schema_2(profile: HardwareProfile) -> dict:
@@ -55,6 +56,11 @@ def _v2_folder(root: Path) -> Path:
     hardware.mkdir(parents=True)
     (hardware / f"{V2_PROFILE_ID}.json").write_text(json.dumps(_v2_profile(), indent=2), encoding="utf-8", newline="\n")
     return config
+
+
+def _quiet(lines: list[str]) -> list[str]:
+    """Without the note on a schema-1 backup, whose file name still carries the old key (FR-N)."""
+    return [line for line in lines if not line.startswith("a backup of modelroom")]
 
 
 def _tree(root: Path) -> dict[str, bytes]:
@@ -84,7 +90,7 @@ def test_migrate_rewrites_a_schema_2_configuration_and_profile_in_place_with_bac
     stored = HardwareProfile.model_validate_json(profile.read_text(encoding="utf-8"))
     assert stored == read_profile_document(_v2_profile())
     migrated = load_config(config)
-    assert migrated.machines["laptop"].profile == V2_PROFILE_ID
+    assert migrated.machines["laptop-c0ffee00"].profile == V2_PROFILE_ID
     assert (migrated.defaults.reserve_ram_gib, migrated.defaults.reserve_vram_gib) == (6.0, 0.5)
     assert len(lines) == 2 and all("v2.bak" in line for line in lines)
 
@@ -132,12 +138,15 @@ def test_v1_to_v2_to_v3_in_the_same_folder_keeps_both_backups(tmp_path):
 
     migrate(config, NOW)
 
-    assert (tmp_path / "modelroom.toml.v1.bak").read_bytes() == v1_config
+    # FR-N: the machine names of the configuration's backup are swept; the schema-1 profile backup, its
+    # name the old key, cannot be cleaned and stays as it is (a note says so).
+    swept = (tmp_path / "modelroom.toml.v1.bak").read_text(encoding="utf-8")
+    assert swept.startswith("# A schema-1") and all(is_neutral(key) for key in tomllib.loads(swept)["machines"])
     assert (hardware / "laptop.json.v1.bak").read_bytes() == v1_profile
     assert (tmp_path / "modelroom.toml.v2.bak").is_file()
     assert (hardware / f"{V2_PROFILE_ID}.json.v2.bak").is_file()
     assert _schema(config) == 3 and _schema(hardware / f"{V2_PROFILE_ID}.json") == 4
-    assert migrate(config, NOW) == [NOTHING_TO_DO]
+    assert _quiet(migrate(config, NOW)) == [NOTHING_TO_DO]
 
 
 def test_a_schema_1_folder_lands_on_schema_3_in_one_run(tmp_path):
@@ -152,7 +161,7 @@ def test_a_schema_1_folder_lands_on_schema_3_in_one_run(tmp_path):
     assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
     assert (tmp_path / "modelroom.toml.v1.bak").is_file()
     assert not (tmp_path / "modelroom.toml.v2.bak").exists()
-    assert migrate(tmp_path / "modelroom.toml", NOW) == [NOTHING_TO_DO]
+    assert _quiet(migrate(tmp_path / "modelroom.toml", NOW)) == [NOTHING_TO_DO]
 
 
 def test_a_run_of_an_earlier_version_that_stopped_halfway_converges_on_schema_3(tmp_path):
@@ -173,8 +182,8 @@ def test_a_run_of_an_earlier_version_that_stopped_halfway_converges_on_schema_3(
         "laptop.json.v1.bak",
     ]
     assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
-    assert load_config(tmp_path / "modelroom.toml").machines["laptop"].profile == "aaaaaaaaaaaaaaa1"
-    assert migrate(tmp_path / "modelroom.toml", NOW) == [NOTHING_TO_DO]
+    assert load_config(tmp_path / "modelroom.toml").machines["computer-aaaaaaaa"].profile == "aaaaaaaaaaaaaaa1"  # FR-N
+    assert _quiet(migrate(tmp_path / "modelroom.toml", NOW)) == [NOTHING_TO_DO]
 
 
 def test_a_stored_v2_backup_with_other_content_stops_the_run_before_any_write(tmp_path):
@@ -295,7 +304,7 @@ def test_import_rewrites_a_schema_2_configuration_even_when_the_machine_is_alrea
 
     assert _schema(config) == 3
     assert (config.parent / "modelroom.toml.bak").read_bytes() == before
-    assert load_config(config).machines["laptop"].profile == EXPORT["profile"]["profile_id"]
+    assert load_config(config).machines["laptop-c0ffee00"].profile == EXPORT["profile"]["profile_id"]
     after = _tree(tmp_path / "results")
     assert _import(tmp_path, config) == 0
     assert _tree(tmp_path / "results") == after

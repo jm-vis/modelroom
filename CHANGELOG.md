@@ -7,6 +7,18 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **No file carries a machine name** (AP9-FR, FR-N; `modelroom/neutral.py`, `modelroom/neutral_sweep.py`,
+  `modelroom/remote_store.py`; CONTRACTS.md, "Neutral names", "Remote machines"). One sink decides
+  what of a name and of foreign text reaches a file: machine keys and `display_name` are neutral
+  (`<class>-<first 8 hex of the profile id>`, this computer `computer-<random>` from the new per-user
+  file `~/.modelroom/remote.json`), a measurement record keeps the package name built from the
+  package, fixed sentences as reasons, and a daemon version only as `X.Y.Z`. Every writing command
+  first sweeps its folder with the same rules -- profiles, configuration (its comments kept), records
+  and modelroom's own backups -- and writes nothing when that cannot be done (exit `1`). Exports carry
+  the neutral name; an import neutralizes before it plans. The load test shows and stores a package by
+  the name built from the package, never by the name the daemon holds it under. The host name of this
+  computer stands only in the start line, read live.
+
 - **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
   `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).
   `hardware` reads each vendor's own source -- NVIDIA from `nvidia-smi` with the compute
@@ -178,6 +190,14 @@ All notable changes to this project are documented in this file. The format foll
 - **`docs/adr/`**, the first three decision records, with its index.
 
 ### Changed
+
+- **Machine keys and names of a folder of 0.1.0 change once** (FR-N): the first command that writes
+  to it renames `[machines.<host name>]` and every other hand-written key to a neutral one, and a
+  profile's `display_name` to its neutral name (`machine renamed to server-3f9a0c21 (no host names in
+  files)`). A script calling `fetch --machine <old key>` is led to the new key in that call and meets
+  the unknown-machine message afterwards: take the new key from `modelroom.toml`. The name typed for a
+  machine entered by hand no longer reaches a file. A migration that stopped halfway finds its
+  profile by content, not by name. `hardware` no longer reads the host name at all.
 
 - **The memory reserve follows the machine's size** (`modelroom/reserve.py`, `fit.py`, `config.py`;
   CONTRACTS.md, "MachineConfig", "Pool and mode"; ADR 0012; AP9-RM, decided 2026-09-29). Where

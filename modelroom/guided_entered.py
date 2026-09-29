@@ -31,6 +31,7 @@ from .config import Configuration
 from .dialog import Choice
 from .guided_write import Said, with_entered_machine
 from .measure import DISPLAY_NAME_MAX
+from .neutral import neutral_profile
 from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, GpuAdapter, HardwareProfile, LlmfitCrosscheck
 from .intro import class_words
 from .screen import entered_note, gib_words
@@ -308,7 +309,8 @@ def _write_profile(run: "GuidedRun", config: Configuration, machine: EnteredMach
         run.failed(f"nothing entered: {config.paths.lock_file}: the lock could not be taken ({exc})")
         return None
     try:
-        profile = _built(machine, _new_profile_id(run, hardware_dir), run.now)
+        # The name typed in stays on the screen: the file carries the neutral one (FR-N).
+        profile = neutral_profile(_built(machine, _new_profile_id(run, hardware_dir), run.now))
         path = hardware_dir / f"{profile.profile_id}.json"
         try:
             atomic_write_json(path, profile.model_dump(mode="json"))

@@ -36,7 +36,8 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 from .config import ConfigError, Configuration, GuidedConfig, PathsConfig, RequestsOrigin, config_from_text
-from .importer import ImportConflictError, machine_name_for, scan_profiles
+from .importer import scan_profiles
+from .neutral import key_for, neutral_profile
 from .search_apply import ConfigChangedError, write_configuration
 
 Change = Callable[[Configuration], "Configuration | None"]
@@ -216,8 +217,8 @@ def with_found_profiles(said: Said) -> Change:
 
     The whole matching runs on every read -- scan, which profiles are configured, the names, the
     reserves -- so a name another run took meanwhile is not written over and a profile it entered
-    is not entered twice. Name from the `display_name`, reserves from `[defaults]`, `writer` false:
-    the rule `import-profile` follows.
+    is not entered twice. The name the sink gives a new row (`neutral.key_for`), reserves from
+    `[defaults]`, `writer` false: the rule `import-profile` follows.
     """
 
     def change(current: Configuration) -> Configuration | None:
@@ -225,14 +226,11 @@ def with_found_profiles(said: Said) -> Change:
         scan = scan_profiles(current.paths.hardware_dir)
         configured = {machine.profile for machine in current.machines.values() if machine.profile is not None}
         data = current.model_dump(mode="json")
-        for key, profile in sorted(scan.profiles.items()):
+        for key, found in sorted(scan.profiles.items()):
             if key in configured:
                 continue
-            try:
-                name = machine_name_for(profile.display_name, profile.profile_id, set(data["machines"]))
-            except ImportConflictError as exc:
-                said.problems.append(f"the profile {profile.profile_id} stays without a machine entry: {exc}")
-                continue
+            profile = neutral_profile(found)
+            name = key_for(profile.profile_id, profile.machine_class, profile.display_name, set(data["machines"]))
             data["machines"][name] = new_machine_entry(current, writer=False, profile=profile.profile_id)
             said.notes.append(f"machine {name!r} added for the profile {profile.profile_id} found in this folder")
         return Configuration.from_dict(data) if said.notes else None
@@ -243,11 +241,11 @@ def with_found_profiles(said: Said) -> Change:
 def with_entered_machine(profile_id: str, display_name: str, said: Said) -> Change:
     """A machine entered by hand gets its `[machines.<name>]` entry, the rule of `with_found_profiles`.
 
-    Name from the `display_name` (`importer.machine_name_for`), reserves from `[defaults]`, `writer`
+    The name the sink gives a new row (`neutral.key_for`), reserves from `[defaults]`, `writer`
     false, `profile` the entered one; no binding. Worked out on every read: a name another run took
     meanwhile is not written over, and a profile it already entered is not entered twice. A
-    `[paths]` whose state folder no longer holds the profile, and a name that cannot be found, are
-    problems the run reports; nothing is written then, and the profile stays in its folder.
+    `[paths]` whose state folder no longer holds the profile is a problem the run reports; nothing
+    is written then, and the profile stays in its folder.
     """
 
     def change(current: Configuration) -> Configuration | None:
@@ -259,11 +257,7 @@ def with_entered_machine(profile_id: str, display_name: str, said: Said) -> Chan
             return None
         if any(machine.profile == profile_id for machine in current.machines.values()):
             return None
-        try:
-            name = machine_name_for(display_name, profile_id, set(current.machines))
-        except ImportConflictError as exc:
-            said.problems.append(f"the profile {profile_id} stays without a machine entry: {exc}")
-            return None
+        name = key_for(profile_id, None, display_name, set(current.machines))
         data = current.model_dump(mode="json")
         data["machines"][name] = new_machine_entry(current, writer=False, profile=profile_id)
         return Configuration.from_dict(data)

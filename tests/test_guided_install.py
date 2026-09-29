@@ -39,6 +39,7 @@ from fixture_servers import DEEPSEEK_WEIGHTS_BYTES
 from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
     PULL_STREAM_LINES,
+    THIS_MACHINE,
     build_transport,
     deepseek_package,
     granite_ollama_package,
@@ -107,12 +108,12 @@ def _run(tmp_path: Path, answers: dict, daemon, room=None) -> tuple[int, list[st
 
 def _first_weights(tmp_path: Path) -> float:
     payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
-    return next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"][0]["weights_gib"]
+    return next(block for block in payload["machines"] if block["machine"] == THIS_MACHINE)["ranked"][0]["weights_gib"]
 
 
 def _ranked_count(tmp_path: Path) -> int:
     payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
-    return len(next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"])
+    return len(next(block for block in payload["machines"] if block["machine"] == THIS_MACHINE)["ranked"])
 
 
 def _pull_calls(daemon) -> list:
@@ -326,7 +327,7 @@ def _document(tmp_path: Path) -> RenderDocument:
 def _first_row_of(tmp_path: Path) -> FirstRow:
     config = load_config(tmp_path / "results" / "modelroom.toml")
     packages, _base = snapshot_packages(config)
-    first = first_row(_document(tmp_path), "workstation", packages)
+    first = first_row(_document(tmp_path), THIS_MACHINE, packages)
     assert first is not None
     return first
 
@@ -373,9 +374,9 @@ def test_a_first_row_without_an_ollama_name_or_of_another_machine_is_none(tmp_pa
         update={"machines": [block.model_copy(update={"ranked": [unnamed, *block.ranked[1:]]})]}
     )
 
-    assert first_row(without_name, "workstation", packages) is None
+    assert first_row(without_name, THIS_MACHINE, packages) is None
     assert first_row(document, "inference-server", packages) is None
-    assert first_row(document, "workstation", []) is None
+    assert first_row(document, THIS_MACHINE, []) is None
 
 
 def test_enter_alone_at_the_terminal_declines_the_pull(tmp_path: Path):
@@ -591,7 +592,7 @@ def test_the_table_head_names_the_budgets_and_the_disk(tmp_path: Path):
     """AP9-RM U10: the head says what the fit computes with, the budget, and the free disk of now."""
     _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
 
-    head = lines.index(next(line for line in lines if line.startswith("workstation · context")))
+    head = lines.index(next(line for line in lines if line.startswith("laptop-00000000 · context")))
     assert lines[head + 1 : head + 4] == [
         "room      graphics 11.0 GB for models (12.0 GB card minus reserve)",
         "memory 111.7 GB for models (127.7 GB minus reserve)",
@@ -625,7 +626,7 @@ def test_the_self_test_pull_criterion_goes_through_the_pull_list(tmp_path: Path)
     assert _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())[0] == 0
 
     problems, detail = selftest_pull._fixture_pull(
-        tmp_path / "results", tmp_path / "home" / ".modelroom" / "guided.json", "workstation", RUN1
+        tmp_path / "results", tmp_path / "home" / ".modelroom" / "guided.json", THIS_MACHINE, RUN1
     )
 
     assert problems == [], problems
