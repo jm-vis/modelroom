@@ -27,6 +27,7 @@ from .fit import AMPLE_RATIO, FITS_RATIO, TIGHT_RATIO
 from .intro import STEP_NAMES, Fact, Glyphs, class_words, fact_line, glyphs, graphics_words, hardware_words, style_rules, use_color
 from .intro import GAP, LABEL_WIDTH
 from .profile import HardwareProfile
+from .reserve import RAM_RESERVE_MAX_GIB, RAM_RESERVE_MIN_GIB, share_words
 
 Fragment = tuple[str, str]
 Line = list[Fragment]
@@ -61,7 +62,10 @@ FIT_POOL_HINT = (
     "gpu: one card",
     "gpu_split: all cards together",
     f"cpu_gpu, cpu{RAM_SUFFIX}: the system memory",
-    "one memory shared by system and card counts as gpu, both reserves taken",
+    # The reserve of the system memory, from the constants of `reserve.py` (AP9-RM, ADR 0012).
+    f"system memory keeps {share_words()} as reserve, {RAM_RESERVE_MIN_GIB:g} to "
+    f"{RAM_RESERVE_MAX_GIB:g} GB, unless modelroom.toml sets it",
+    f"one memory shared by system and card counts as gpu, {share_words()} kept, no upper limit",
     # Not "the best is fits": `best` names the least compression of one model (BEST_HINT, Diff-Review N4).
     "off the card, and for a fit from size the highest class is fits",
 )

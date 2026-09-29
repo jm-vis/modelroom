@@ -202,16 +202,79 @@ def test_the_self_test_checks_the_free_line_for_its_form_only():
     head = " #    Model                   Package                 Fit           Speed         Memory    Download"
     lines = [head, " shown     1 of 1 package", " install   #1  ollama pull x:y"]
 
-    def named(free: list[str]) -> bool:
-        return any("free line" in problem for problem in st.result_table_problems([*free, *lines]))
+    def named(room: list[str]) -> bool:
+        return any("room line" in problem for problem in st.result_table_problems([*room, *lines]))
 
+    # AP9-RM U10: the head names the budget; the free memory of the moment is no head any more.
     assert named([])
-    assert not named([" free      graphics 21.0 + 20.4 GB free now · disk 41.2 GB free on C: (Ollama models)"])
-    assert not named([" free      graphics unknown - disk unknown (two places Ollama may use)"])
-    assert named([" free      graphics none · disk none"])
+    assert not named([" room      graphics 41.4 GB for models (21.7 + 21.7 GB cards minus reserve)"])
+    assert not named([" room      graphics 11.0 GB for models (12.0 GB card minus reserve) · memory 111.7 GB for models (127.7 GB minus reserve)"])
+    assert not named([" room      graphics unknown - memory unknown - disk unknown (two places Ollama may use)"])
+    assert not named([" room      shared memory 95.0 GB for models (128.0 GB minus both reserves) · disk unknown"])
+    assert named([" free      graphics 21.0 + 20.4 GB free now · disk 41.2 GB free on C: (Ollama models)"])
+    assert named([" room      graphics none · disk none"])
 
 
 def test_no_test_reaches_the_real_room_probes():
     """The guard behind `tests/conftest.py`: the real probes refuse to run under pytest."""
     with pytest.raises(RuntimeError, match="real room probes"):
         real_room_probes()
+
+
+# --- what the daemon holds (AP9-RM U10): `GET /api/ps`, a hint that says nothing when unreadable ----
+
+
+def _ps_daemon(answer):
+    from modelroom.daemon import FixtureDaemon
+
+    return FixtureDaemon({("GET", "/api/ps"): answer})
+
+
+def test_loaded_models_are_read_from_api_ps():
+    from fixture_support import ps_answer
+    from modelroom.room import LoadedModel, loaded_models
+
+    assert loaded_models(_ps_daemon(ps_answer())) == (
+        LoadedModel("hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M", 6097846926, 6097846926),
+    )
+
+
+def test_nothing_loaded_is_an_empty_tuple():
+    from fixture_support import empty_ps_answer
+    from modelroom.room import loaded_models
+
+    assert loaded_models(_ps_daemon(empty_ps_answer())) == ()
+
+
+def test_an_entry_without_sizes_is_left_out():
+    import json
+
+    from modelroom.http import Response
+    from modelroom.room import LoadedModel, loaded_models
+
+    models = [
+        {"name": "a:1b", "size": 100, "size_vram": 50},
+        {"name": "b:1b", "size": 100},
+        {"name": "c:1b", "size": "100", "size_vram": 0},
+        {"name": "d:1b", "size": -1, "size_vram": 0},
+        {"size": 100, "size_vram": 0},
+        "e:1b",
+    ]
+    answer = Response(status=200, body=json.dumps({"models": models}).encode("utf-8"))
+    assert loaded_models(_ps_daemon(answer)) == (LoadedModel("a:1b", 100, 50),)
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[]", b'{"other": 1}', b'{"models": {}}'])
+def test_an_unreadable_ps_answer_is_none(body):
+    from modelroom.http import Response
+    from modelroom.room import loaded_models
+
+    assert loaded_models(_ps_daemon(Response(status=200, body=body))) is None
+    assert loaded_models(_ps_daemon(Response(status=500, body=b'{"models": []}'))) is None
+
+
+def test_an_unreachable_daemon_is_none():
+    from fixture_support import offline_daemon
+    from modelroom.room import loaded_models
+
+    assert loaded_models(offline_daemon()) is None

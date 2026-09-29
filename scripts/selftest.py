@@ -417,7 +417,7 @@ def model_list_problems(models: list[str]) -> list[str]:
     return problems
 
 
-_FREE_LINE = r"free\s+graphics (?:unknown|[\d.]+(?: \+ [\d.]+)* GB free now) [·.-] disk (?:unknown.*|[\d.]+ GB free on .+ \(Ollama models\))"
+_ROOM_LINE = r"room\s+(?:graphics (?:(?:[\d.]+ GB|nothing left) for models \(.+ minus reserve\)|none counted|unknown)|shared memory .+)(?: [·.-] (?:memory|disk) .+)?"  # AP9-RM U10: the budget
 
 
 def result_table_problems(lines: list[str]) -> list[str]:
@@ -428,8 +428,9 @@ def result_table_problems(lines: list[str]) -> list[str]:
         problems.append("the result view has no table head with Model, Package and Fit")
     elif head.split() != ["#", "Model", "Package", "Fit", "Speed", "Memory", "Download"]:
         problems.append(f"the columns of the result table are {head.split()}")
-    if not any(re.fullmatch(_FREE_LINE, line.strip()) for line in lines):  # AP9-UX2 U8: the form, not the numbers
-        problems.append("the table head carries no free line of the expected form")
+    room = [line for line in lines if re.fullmatch(_ROOM_LINE, line.strip())]  # AP9-RM U10: the form, not the numbers
+    if not room or any("free now" in line for line in room):
+        problems.append("the table head carries no room line of the expected form")
     if not any(line.strip().startswith("shown ") for line in lines):
         problems.append("the result table says not how many of its rows are shown")
     if not any(line.strip().startswith("install ") for line in lines):

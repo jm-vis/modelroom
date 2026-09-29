@@ -37,6 +37,7 @@ from .measurements import MeasurementRecord, Scenario
 from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
 from .quantization import package_identity_key
 from .parameters import parameter_count
+from .reserve import ram_reserve
 from .ranking import (
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
@@ -334,15 +335,24 @@ def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = Fa
     # A package set aside on the size basis says on what basis: the number that put it there was
     # computed from its size, not from its architecture (second-model round, 2026-09-24).
     from_size = _FROM_SIZE_SENTENCE if fit.basis == "size" else ""
+    reserves = "both reserves" if shared_memory else "the reserve"
+    if fit.pool_gib > 0:
+        room = f"of the {fit.pool_gib:.1f} GiB left after {reserves}"
+    else:
+        # A pool of 0 or less is said in words, never as a memory below zero (AP9-RM RM-2): the
+        # memory in all is the pool and the reserve together.
+        room = (
+            f"and nothing is left after {reserves} of {fit.reserve_gib:.1f} GiB "
+            f"({fit.pool_gib + fit.reserve_gib:.1f} GiB in all)"
+        )
     return Note(
         code="no_fit",
         subject="package",
         origin="computed",
-        text=_clip(
-            f"Fit contract v1 does not count this as a fit: it needs about {fit.need_gib:.1f} GiB "
-            f"of the {fit.pool_gib:.1f} GiB left after {'both reserves' if shared_memory else 'the reserve'}.{from_size}"
-        ),
-        facts=["fit.need_gib", "fit.pool_gib"] + (["fit.basis"] if fit.basis == "size" else []),
+        text=_clip(f"Fit contract v1 does not count this as a fit: it needs about {fit.need_gib:.1f} GiB {room}.{from_size}"),
+        facts=["fit.need_gib", "fit.pool_gib"]
+        + ([] if fit.pool_gib > 0 else ["fit.reserve_gib"])
+        + (["fit.basis"] if fit.basis == "size" else []),
     )
 
 
@@ -423,10 +433,19 @@ def _machine_block(
     models: Mapping[str, ModelFacts] | None = None,
     per_model: bool = False,
 ) -> MachineRanking:
-    """One machine's block: its three lists, or its reason when no fit can be computed at all."""
+    """One machine's block: its three lists, or its reason when no fit can be computed at all.
+
+    The block carries the memory reserve the fit took and where it came from (`reserve.ram_reserve`,
+    AP9-RM): without a profile the memory is unknown, so only a number entered stays one.
+    """
+    profile = found.profile
+    ram_gib = profile.ram_physical_gib if profile is not None else None
+    unified = profile is not None and profile.gpu_state == "unified_memory"
+    ram_reserve_gib, origin = ram_reserve(machine_config, ram_gib, unified)
     reserves = {
-        "reserve_ram_gib": machine_config.reserve_ram_gib,
+        "reserve_ram_gib": ram_reserve_gib,
         "reserve_vram_gib": machine_config.reserve_vram_gib,
+        "reserve_ram_origin": origin,
     }
     if found.profile is None:
         return MachineRanking(

@@ -84,6 +84,16 @@ and disk and the pull choice live in memory; `search.json` keeps schema 3. AP9-G
 hardware profile schema 4 without a step, by the precedent of ADR 0006: the list `adapters` and the
 graphics memory sources `sysfs` and `sysctl`. An empty list is not written, so every file of an
 earlier shape stays as it was; a file that says schema 2 or 3 and carries either is refused.
+AP9-RM (ADR 0012) keeps configuration schema 3 and render document schema 3: `reserve_ram_gib` of a
+machine and of `[defaults]` becomes optional (left out, it is computed from the machine at every run),
+and a `MachineRanking` gains `reserve_ram_origin`, additive. **The limit of this choice, stated
+plainly:** the new version reads every file 0.1.0 wrote (each carries the number, which reads as
+`entered`). The released 0.1.0 reads configuration schemas `[1, 3)` only, and every file this
+version writes is schema 3, so 0.1.0 refuses such a folder cleanly with exit `3` (checked by hand
+against the published 0.1.0 on 2026-09-29). Only a file that says schema 1 or 2 and has the key
+removed by hand makes 0.1.0 stop with a field error (exit `2`), since the schema number does not
+change; the rule below needs a later schema number and does not cover that case. The render document
+is not read back by this package; the new field concerns other readers only.
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -759,7 +769,7 @@ there (`^[a-z0-9][a-z0-9-]*$`) against every key at once.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `reserve_ram_gib` | `float` | `>= 0` | system RAM to leave unused when judging fit |
+| `reserve_ram_gib` | `float \| None` | `>= 0`; default `None` (key left out) | system RAM to leave unused when judging fit; left out, it is computed from the machine at every run (`reserve.py`, ADR 0012); a number always wins |
 | `reserve_vram_gib` | `float` | `>= 0` | GPU VRAM to leave unused on each graphics card when judging fit |
 | `writer` | `bool` | -- | whether this machine runs `fetch` and writes the shared state |
 | `profile` | `str \| None` | schema 2; 16 lowercase hex characters; default `None` | the `profile_id` of this machine's hardware profile (`<state>/hardware/<profile_id>.json`), set by `modelroom migrate` or a guided run |
@@ -768,6 +778,15 @@ there (`^[a-z0-9][a-z0-9-]*$`) against every key at once.
 `unified_memory` the operating system and the model share one memory, so the fit takes both
 reserves from it: pool = physical RAM - `reserve_ram_gib` - `reserve_vram_gib` (see "Fit contract
 v1", "Unified memory"). On every other machine each reserve belongs to its own memory, as before.
+
+**The memory reserve is computed where none is entered** (AP9-RM, decided 2026-09-29, ADR 0012):
+a quarter of the physical RAM, at least 2 and at most 16 GiB; on unified memory a quarter with no
+upper bound (128 GiB: 32 + the card reserve 1, pool 95). A number in `modelroom.toml` wins, `0.0`
+included, and is never overwritten; a machine that still carries the `8.0` of 0.1.0 gets a hint
+under its table when the computed reserve differs, nothing more. Without a number and without a
+known RAM the reserve is `0.0` with origin `unknown`. A new folder writes no `reserve_ram_gib`;
+a new entry takes a number from `[defaults]` as before and leaves the key out where `[defaults]` has
+none; an existing entry keeps its own through every write.
 
 ```json
 {
@@ -781,12 +800,12 @@ v1", "Unified memory"). On every other machine each reserve belongs to its own m
 #### DefaultsConfig
 
 Schema 2. Reserves for a machine that joins without its own `[machines.<name>]` table (an
-imported profile); such a machine is never a writer. The defaults are the values the shipped
-example uses for a workstation.
+imported profile); such a machine is never a writer. Since AP9-RM `reserve_ram_gib` has no
+default number: left out, the new entry leaves it out too and computes it (ADR 0012).
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `reserve_ram_gib` | `float` | `>= 0`, default `8.0` | system RAM to leave unused |
+| `reserve_ram_gib` | `float \| None` | `>= 0`, default `None` | system RAM to leave unused; `None`: computed from the machine |
 | `reserve_vram_gib` | `float` | `>= 0`, default `1.0` | GPU VRAM to leave unused on each graphics card |
 
 ```json
@@ -1666,9 +1685,13 @@ never print them for an `"unknown"` fit.
 **Pool and mode.** `available_vram = hardware.vram_gib - machine_config.reserve_vram_gib`.
 When `need_gib <= 0.98 x available_vram` (`TIGHT_RATIO`, AP9-UX2 P2), the package fits the GPU: `mode="gpu"`, `pool_gib =
 available_vram`, `reserve_gib = reserve_vram_gib`. Otherwise it falls back to the RAM pool:
-`pool_gib = hardware.ram_gib - machine_config.reserve_ram_gib`, `reserve_gib =
-reserve_ram_gib`, `mode="cpu_gpu"` when `hardware.vram_gib > 0` (some GPU exists, just not
-enough) else `mode="cpu"`.
+`pool_gib = hardware.ram_gib - reserve_ram`, `reserve_gib = reserve_ram`, `mode="cpu_gpu"` when
+`hardware.vram_gib > 0` (some GPU exists, just not enough) else `mode="cpu"`. `reserve_ram` is
+`reserve.ram_reserve(machine_config, ram, unified)`, read in `fit._choose_pool` and nowhere else
+(AP9-RM, ADR 0012): `machine_config.reserve_ram_gib` where it is a number, else a quarter of the
+RAM between 2 and 16 GiB (no upper bound on unified memory). A fit from the size or the parameter
+count without a known RAM tries the cards first; the system memory then counts as 0 (with no number,
+reserve 0), so it is `no_fit` there.
 
 **Several graphics cards (decided 2026-09-26).** A profile's memory is a pool of cards
 (`fit.GpuPool`: each card's `vram_gib` from `gpus`, and whether it is unified memory); schema 1's
@@ -1716,7 +1739,8 @@ graphics memory of its own: the system and the model share one memory. Its pool 
 `ram_physical_gib - reserve_ram_gib - reserve_vram_gib`, `reserve_gib` is the sum of both
 reserves, `mode="gpu"`, no fallback onto the same RAM, and the class is not capped on the
 architecture basis (the size basis stays capped at `fits`); a pool of 0 or less is `no_fit`.
-Example: 32 GiB, reserves 8 + 1 -> pool 23 GiB. Feeding the RAM in as graphics memory would let
+Example: 32 GiB, reserves 8 + 1 -> pool 23 GiB; 128 GiB with the computed reserve (a quarter,
+no upper bound, ADR 0012), 32 + 1 -> pool 95 GiB. Feeding the RAM in as graphics memory would let
 the GPU branch compute with 31 GiB and lose the system reserve -- hence the branch of its own.
 
 **Classification.** `ratio = need_gib / pool_gib` (a `pool_gib <= 0` is always `no_fit`,
@@ -3946,16 +3970,27 @@ decimal) and, since AP9-UX2 (U8), `Download` (8, `weights_gib` as `GB`: the weig
 brings). With the one space every line is indented by, that is 100 characters, and no line of this
 view is wider but the repository lines and the commands below.
 
-**Under the head, the room left** (AP9-UX2 U8, GF F5): a line `free      graphics 10.2 GB free now ·
-disk 41.2 GB free on C: (Ollama models)`, read live when step 5 draws (`room.py`): the free memory
-of each card of this machine's profile through `nvidia-smi --query-gpu=index,name,memory.free`
-(`21.0 + 21.0 + 20.4 + 21.0 GB free now` for several), matched by index, and the free disk where
-Ollama keeps its models (see "The pull"). Whatever cannot be read -- no `nvidia-smi`, a timeout, a
-line that does not read, cards whose number or names differ from the profile, unified memory, no
-NVIDIA card -- is `unknown`, never `none`. A machine that is not this one says `free      unknown on
-another computer`; `modelroom render`, which reads no machine live, says `free      graphics unknown
-· disk unknown (modelroom render reads no machine live)`. The two pieces break onto two lines where
-they would pass 100 columns (several cards). The choice of a pool and the class compare the very
+**Under the head, the budget** (AP9-RM U10, GF 2026-09-29, ADR 0012; until then AP9-UX2 U8's `free`
+line with the free graphics memory of the moment): a line `room`, built by `room_head.head_pieces`
+from the profile and the reserves of the block, never from a live value. Its pieces, joined with ` · `
+and wrapped between pieces: the graphics budget, `graphics 11.0 GB for models (12.0 GB card minus
+reserve)`, for several cards the sum of `card - reserve` (the `gpu_split` pool) with `4 x 22.5 GB
+cards` or `22.5 + 22.5 + 11.9 GB cards`, and `<n> cards, <sum> GB in all` where the list would pass
+the line; `graphics none counted` without a counted card, `graphics unknown` for a state without a
+number (never `none`); the memory budget, `memory 111.7 GB for models (127.7 GB minus reserve)`, or
+`memory unknown`; on unified memory both as one piece, `shared memory 95.0 GB for models (128.0 GB
+minus both reserves)`; a budget of 0 or less says `nothing left for models`. Last the free disk where
+Ollama keeps its models, read live (`disk 41.2 GB free on C: (Ollama models)`, see "The pull"), for
+the machine it was read on; for a machine nobody read, `disk unknown` (this computer, with its reason
+where there is one), `disk unknown on another computer`, or, in `modelroom render`, which reads no
+machine live, `disk unknown (modelroom render reads no machine live)`. What was read live lives in a
+`room.LiveRoom` per machine name (`RunView.live`), only in memory; a guided run fills this machine's.
+
+**What Ollama holds now** stands on a line `loaded` under the `room` line of that machine, and only
+where the daemon holds at least one model (`GET /api/ps`, `room.loaded_models`): `Ollama holds
+qwen3.5:9b (7.4 GB, 6.9 GB of it on the card) · graphics 0.5 GB free now` -- one piece per model, a
+name cut with `…` to fit, the free graphics memory of now behind it where `nvidia-smi` or sysfs read
+it. Every answer that cannot be read leaves the line out. It is a hint and changes no budget. The choice of a pool and the class compare the very
 same ratio `need / pool` with `TIGHT_RATIO`, so they never disagree at a floating-point edge. A machine of the run that is not this
 computer says so in its head too (U2): `server (a1b2c3d4) · imported · context L 32k`, or `· another
 computer` for an entered machine or another profile of the folder.
@@ -3991,9 +4026,19 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    reserve, from the profile)`, `#3 fits into graphics memory, spread over the cards, budget 44.0 GB`
    with `(cards minus the reserve on each, from the profile)` on a line of its own where the
    statement is longer than the room, `#4–5 need
-   system memory, the graphics card helps`, `#6 needs system memory, no graphics card`. Two
+   system memory, the graphics card helps, budget 111.7 GB (memory minus reserve, from the profile)`,
+   `#6 needs system memory, no graphics card, budget …` -- since AP9-RM the rows in system memory name
+   their budget too, so the reserve is not invisible. Two
    statements about two memories joined by a `·` read as one. The numbers come from the fields of
-   `Fit`, never from parsing a note's own sentence back apart.
+   `Fit`, never from parsing a note's own sentence back apart. A machine that carries the `8.0` of
+   0.1.0 while the computed reserve differs gets a row more: `memory reserve 8.0 GB is set in
+   modelroom.toml;` / `computed from this machine it would be 16.0 GB` (GF question 3 (a), ADR 0012);
+   the Markdown file says it as a sentence under the machine's headline. A package set aside because
+   no pool is left says so in words, never as a memory below zero: `it needs about 1.5 GiB and nothing
+   is left after the reserve of 8.0 GiB (3.8 GiB in all)`.
+   Where a result ranks two machines or more, `shown` ends with `ranked for this machine; another
+   machine may show other rows`, and the Markdown file says it once, behind the first table's count
+   (GF question 5 (a)).
 3. `basis` -- `#2–5 computed from the package size, not its architecture`, where there are such rows.
 4. `speed` -- `#3 measured 41.1 tok/s` per measured row, then the rows whose measurement counts but
    for its requests alone, with the reason their note carries: `#3 measured with 1 request, ranking
@@ -4139,6 +4184,11 @@ package fields as `RankedEntry`, plus the `reason` shown next to it.
 
 One machine's block. `label` is the profile's `display_name`, the schema-1 file's name or the
 machine name, depending on `status`; `ranked_total` is how many packages the rule ranked in all.
+`reserve_ram_gib` is the memory reserve the fit took, `reserve_ram_origin` where it came from
+(AP9-RM, ADR 0012): `entered` (the number in `modelroom.toml`; the default, so a document of 0.1.0
+reads so), `computed` (from the profile's RAM), or `unknown` (no number, no profile: `0.0`). A block
+without a profile keeps an entered number. The Markdown column `Reserve RAM GiB` shows `16.00
+(computed)`, `1.50` for an entered number, `–` for `unknown`.
 
 ```json
 {
@@ -4187,6 +4237,7 @@ machine name, depending on `status`; `ranked_total` is how many packages the rul
   },
   "reserve_ram_gib": 8.0,
   "reserve_vram_gib": 1.0,
+  "reserve_ram_origin": "entered",
   "reason": null,
   "ranked": [
     {
@@ -4387,6 +4438,7 @@ card; a hint, never a limit.
       },
       "reserve_ram_gib": 8.0,
       "reserve_vram_gib": 1.0,
+      "reserve_ram_origin": "entered",
       "reason": null,
       "ranked": [
         {

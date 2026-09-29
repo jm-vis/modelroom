@@ -398,6 +398,19 @@ its reserve when it fits no graphics memory. `ample` needs at most 60 % of that 
 word says only what was computed, and a table carries a line under it that says so. The full rule is in `CONTRACTS.md`,
 "Fit contract v1".
 
+**The reserve of the system memory** follows the machine's size: a quarter of its memory, at least
+2 and at most 16 GB (on unified memory a quarter with no upper bound, plus the card reserve). To
+set it yourself, write a number into the machine's table of `modelroom.toml` -- `reserve_ram_gib =
+12.0` under `[machines.<name>]` -- and that number always wins; `0.0` gives the whole memory. A
+folder written by 0.1.0 carries `8.0` there and keeps it; the table of such a machine says what the
+computed reserve would be. A folder written by this version carries no number where none was set;
+the released 0.1.0 refuses it with exit `3` (ADR 0012).
+
+**Under each table's head** the line `room` names what the fit computes with -- the budget, not the
+memory free at this moment: `graphics 11.0 GB for models (12.0 GB card minus reserve) · memory 111.7
+GB for models (127.7 GB minus reserve) · disk 41.2 GB free on C: (Ollama models)`. What Ollama holds
+right now stands on a line `loaded` under it, only while it holds a model.
+
 What it does not say: the class is arithmetic, not a measurement. It makes no statement about
 tokens per second, output quality or whether a runtime actually loads the package. It is
 labeled "fit (computed, v1)" in the output for that reason.

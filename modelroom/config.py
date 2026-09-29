@@ -32,7 +32,8 @@ CONFIG_SCHEMA_VERSION = 3
 # memory by `normalize_config`) and 3; 4 and above are refused before any field is validated.
 CONFIG_SCHEMA_RANGE: tuple[int, int] = (1, 4)
 
-DEFAULT_RESERVE_RAM_GIB = 8.0
+# The reserve of the system memory has no default number since AP9-RM: without one it is computed
+# from the machine (`reserve.py`, ADR 0012). The graphics reserve keeps its fixed default.
 DEFAULT_RESERVE_VRAM_GIB = 1.0
 
 # The share of the people using a server who send a request at the same moment, when only the
@@ -139,7 +140,9 @@ class MachineConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    reserve_ram_gib: float = Field(ge=0)
+    # `None` (the key left out): computed from the machine's memory at every run (`reserve.py`,
+    # ADR 0012); a number is the machine's own and always wins. Version 0.1.0 requires the key.
+    reserve_ram_gib: float | None = Field(default=None, ge=0)
     reserve_vram_gib: float = Field(ge=0)
     writer: bool
     # Schema 2: the `profile_id` of this machine's hardware profile (`<state>/hardware/
@@ -160,7 +163,8 @@ class DefaultsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    reserve_ram_gib: float = Field(default=DEFAULT_RESERVE_RAM_GIB, ge=0)
+    # `None`: a machine that joins leaves the key out and computes its reserve (ADR 0012).
+    reserve_ram_gib: float | None = Field(default=None, ge=0)
     reserve_vram_gib: float = Field(default=DEFAULT_RESERVE_VRAM_GIB, ge=0)
 
 

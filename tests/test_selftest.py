@@ -687,7 +687,7 @@ GOOD_DIALOG = [
     " result    docs/models.md          25 packages ranked, 0 no fit",
     "",
     " workstation - context L 32k",
-    " free      graphics 10.2 GB free now - disk 41.2 GB free on C: (Ollama models)",
+    " room      graphics 11.0 GB for models (12.0 GB card minus reserve)",
     " #    Model                   Package                 Fit           Speed         Memory    Download",
     " 1    Qwen3.5-9B              unsloth - Q4_K_S        tight         -             10.5 GB   5.0 GB",
     " shown     1 of 25 packages",

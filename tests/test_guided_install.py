@@ -545,7 +545,7 @@ def test_the_disk_is_measured_again_before_the_pull(tmp_path: Path):
 
     assert code == 0  # no `run.failed`: too little disk is a finding, not a fault
     assert disk.calls == 2
-    assert "free      graphics 10.2 GB free now · disk 100.0 GB free on C: (Ollama models)" in lines
+    assert "disk 100.0 GB free on C: (Ollama models)" in lines  # AP9-RM U10: its own piece of the `room` line
     after = _after_results(lines)
     assert "install   not enough disk for #1: needs 9.9 GB, 9.9 GB free on C:" in after
     assert "pull" not in asker.asked and _pull_calls(daemon) == []
@@ -579,12 +579,18 @@ def test_an_unknown_disk_asks_with_a_note(tmp_path: Path):
     assert "pull" in asker.asked
 
 
-def test_the_table_head_names_free_graphics_and_disk(tmp_path: Path):
+def test_the_table_head_names_the_budgets_and_the_disk(tmp_path: Path):
+    """AP9-RM U10: the head says what the fit computes with, the budget, and the free disk of now."""
     _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
 
     head = lines.index(next(line for line in lines if line.startswith("workstation · context")))
-    assert lines[head + 1] == "free      graphics 10.2 GB free now · disk 41.2 GB free on C: (Ollama models)"
+    assert lines[head + 1 : head + 4] == [
+        "room      graphics 11.0 GB for models (12.0 GB card minus reserve)",
+        "memory 111.7 GB for models (127.7 GB minus reserve)",
+        "disk 41.2 GB free on C: (Ollama models)",
+    ]
     assert any("budget 11.0 GB (card minus reserve, from the profile)" in line for line in lines)
+    assert not any("free now" in line for line in lines)  # the daemon is offline: no `loaded` line either
 
 
 def test_unknown_is_never_none(tmp_path: Path):
@@ -592,9 +598,9 @@ def test_unknown_is_never_none(tmp_path: Path):
 
     _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon(), room=fixed_room(None, None))
 
-    free = next(line for line in lines if line.startswith("free "))
-    assert free == "free      graphics unknown · disk unknown"
-    assert "none" not in free
+    head = lines.index(next(line for line in lines if line.startswith("room ")))
+    assert lines[head + 1] == "memory 111.7 GB for models (127.7 GB minus reserve) · disk unknown"
+    assert not any("none" in line for line in lines[head : head + 2])
 
 
 def test_the_self_test_pull_criterion_goes_through_the_pull_list(tmp_path: Path):

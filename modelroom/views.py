@@ -18,8 +18,10 @@ from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
 from .pull_choice import collision_pieces, entry_pull_name, repo_lines
-from .ranking_words import key_pieces, showing_line, shown_pieces
+from .ranking_words import EACH_MACHINE_SENTENCE, key_pieces, several_ranked, showing_line, shown_pieces
 from .render import format_header_line
+from .room import LiveRoom
+from .room_head import LOADED_LABEL, ROOM_LABEL, head_pieces, loaded_pieces, reserve_hint_rows
 from .result_card import _DASH, _folder_is_empty, _model_name, context_fact, context_short, empty_card
 from .result_card import relative_path, result_card
 from .scenario_text import document_scenario, load_hint, never_measured, scenario_line, unused_measurements
@@ -153,7 +155,7 @@ def _machine_row(block: MachineRanking, rendered_at: datetime) -> list[str]:
     what to do (`modelroom migrate`, then `modelroom hardware`).
     """
     profile = block.profile
-    reserves = [f"{block.reserve_ram_gib:.2f}", f"{block.reserve_vram_gib:.2f}"]
+    reserves = [_reserve_cell(block), f"{block.reserve_vram_gib:.2f}"]
     if profile is None:
         return [
             _cell(block.machine),
@@ -179,6 +181,12 @@ def _machine_row(block: MachineRanking, rendered_at: datetime) -> list[str]:
         profile.recorded_at.isoformat(),
         str((rendered_at - profile.recorded_at).days),
     ]
+
+
+def _reserve_cell(block: MachineRanking) -> str:
+    """The memory reserve and where it came from (AP9-RM): `16.00 (computed)`, `1.50`, or a dash."""
+    computed = " (computed)" if block.reserve_ram_origin == "computed" else ""
+    return _DASH if block.reserve_ram_origin == "unknown" else f"{block.reserve_ram_gib:.2f}{computed}"
 
 
 def _number(value: float | None) -> str:
@@ -235,16 +243,19 @@ def _summary_lines(document: RenderDocument) -> list[str]:
     return lines
 
 
-def _machine_sections(block: MachineRanking, document: RenderDocument) -> list[str]:
-    """One machine's sections: its ranking, then what was set aside, each as its own heading."""
+def _machine_sections(block: MachineRanking, document: RenderDocument, first: bool = False) -> list[str]:
+    """One machine's sections: its ranking, then what was set aside, each as its own heading; the
+    reserve hint of 0.1.0 and, for the `first` of several, that each table is its machine's (AP9-RM)."""
     headline = f"{block.label} -- {block.status}{_deviation(block)}"
     if block.reason is not None:
         headline = f"{headline}: {_cell(block.reason)}"
     sections = [f"## Ranking: {block.machine}", "", headline, ""]
+    hint = " ".join(reserve_hint_rows(block))
+    sections += [f"{hint[0].upper()}{hint[1:]}.", ""] if hint else []
     if block.ranked:
         repos = repo_lines(block)
         sections += [
-            showing_line(block),
+            f"{showing_line(block)}{' ' + EACH_MACHINE_SENTENCE if first else ''}",
             "",
             _table(_RANKED_COLUMNS, [_ranked_row(entry, document) for entry in block.ranked]),
             "",
@@ -291,8 +302,9 @@ def document_markdown(document: RenderDocument) -> str:
     adapters = [[_cell(value) for value in row] for block in document.machines for row in adapter_table_rows(block.machine, block.profile)]
     if adapters:
         sections += ["## Graphics adapters", "", _table(ADAPTER_COLUMNS, adapters), "", ADAPTER_HINT, ""]
+    first = next((block.machine for block in document.machines if block.ranked), None) if several_ranked(document) else None
     for block in document.machines:
-        sections += _machine_sections(block, document)
+        sections += _machine_sections(block, document, first=block.machine == first)
     return "\n".join(sections)
 
 
@@ -326,12 +338,9 @@ SPEED_LABEL = "speed"
 # 2026-09-27): the same hint the Markdown file carries under its ranking.
 KEY_LABEL = "key"
 INSTALL_LABEL = "install"
-# U4 and U8 (AP9-UX2): the repositories of rows that look alike, and the room left on this machine.
+# U4 (AP9-UX2): the repositories of rows that look alike. The `room` and `loaded` lines under the
+# head are `room_head`'s (AP9-RM U10).
 REPO_LABEL = "repo"
-FREE_LABEL = "free"
-ANOTHER_COMPUTER_FREE = "unknown on another computer"
-# `modelroom render` reads no machine live: its head says so rather than leaving the line out (Codex r1 m7).
-RENDER_FREE = ("graphics unknown", "disk unknown (modelroom render reads no machine live)")
 OTHER_INSTALL_NOTE = "run it on that computer; this run pulls only onto this one"
 NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 # What is left of the 100 characters for the text of a labeled line: the label's own column, and
@@ -472,13 +481,13 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
         if shared and mode == "gpu":
             plural, singular = "fit into shared memory", "fits into shared memory"
         text = f"{ranks_text([entry.rank for entry in entries], dash)} {singular if len(entries) == 1 else plural}"
-        if mode in ("gpu", "gpu_split"):
-            # The fit's own budget, labeled as such (U8, F5): the free memory of now is the `free` line.
-            source = (
-                "memory minus both reserves" if shared else "cards minus the reserve on each" if mode == "gpu_split"
-                else "card minus reserve"
-            )
-            text += f", budget {entries[0].fit.pool_gib:.1f} GB ({source}, from the profile)"
+        # The fit's own budget, labeled as such (U8, F5), for system memory too since AP9-RM: the
+        # reserve of the system memory is no longer invisible.
+        source = (
+            "memory minus both reserves" if shared and mode == "gpu" else "cards minus the reserve on each"
+            if mode == "gpu_split" else "card minus reserve" if mode == "gpu" else "memory minus reserve"
+        )
+        text += f", budget {entries[0].fit.pool_gib:.1f} GB ({source}, from the profile)"
         # A statement longer than the room breaks before its bracket, never inside a word.
         head, bracket, rest = text.partition(" (")
         pieces += [head, f"({rest}"] if len(text) > _NOTE_WIDTH and bracket else [text]
@@ -518,24 +527,25 @@ def _labeled(label: str, pieces: list[str], dot: str) -> list[Line]:
 @dataclass(frozen=True)
 class RunView:
     """What the guided run adds to the terminal view (AP9-UX2): the pull names no row may claim (U4),
-    the room left on this machine (U8, `None` outside a guided run) and where each machine came from (U2)."""
+    what was read live per machine name (AP9-RM U10; `None` outside a guided run, which reads no
+    machine live) and where each machine came from (U2)."""
 
     install_for: str | None = None
     ambiguous: frozenset[str] = frozenset()
-    free: tuple[str, ...] | None = None
+    live: Mapping[str, LiveRoom] | None = None
     origins: Mapping[str, str] = field(default_factory=dict)
 
 
-def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView) -> list[Line]:
+def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
     """Everything under one machine's table, in the order a reader reads it, each line labeled."""
     lines = _labeled_rows(REPO_LABEL, repo_lines(block))
-    shown = shown_pieces(block, dash)
+    shown = shown_pieces(block, dash, several)
     shown += _set_aside_pieces("not covered", block.not_covered)
     shown += _set_aside_pieces(NO_FIT, block.no_fit)
     shown += collision_pieces(block, view.ambiguous)
     lines += _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
-    lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash))
+    lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash) + reserve_hint_rows(block))
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
@@ -585,21 +595,21 @@ def _install_lines(block: MachineRanking, view: RunView) -> list[Line]:
     return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", OTHER_INSTALL_NOTE)])]
 
 
-def _free_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
-    """The room left, under the head of a block (U8): measured now for this machine, `unknown` for
-    another one, and `unknown` with its reason where no machine was read (`modelroom render`)."""
-    if view.free is None:
-        pieces: tuple[str, ...] = RENDER_FREE
-    elif block.machine == view.install_for:
-        pieces = view.free
-    else:
-        pieces = (ANOTHER_COMPUTER_FREE,)
-    return _labeled(FREE_LABEL, list(pieces), dot)
+def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
+    """Under the head of a block (U10): the budgets and the disk (`room`), and what Ollama holds
+    (`loaded`) where it holds something -- for the machine the live values were read on."""
+    live = None if view.live is None else view.live.get(block.machine)
+    where = "render" if view.live is None else "this" if block.machine == view.install_for else "other"
+    lines = _labeled(ROOM_LABEL, head_pieces(block, live, where), dot)
+    loaded = loaded_pieces(live)
+    return lines + (_labeled(LOADED_LABEL, loaded, dot) if loaded else [])
 
 
-def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot: str, view: RunView) -> list[Line]:
+def _terminal_ranking(
+    block: MachineRanking, scenario: Scenario, dash: str, dot: str, view: RunView, several: bool = False
+) -> list[Line]:
     origin = view.origins.get(block.machine)
-    lines: list[Line] = [[("", _block_head(block, scenario, dot, origin))], *_free_lines(block, view, dot)]
+    lines: list[Line] = [[("", _block_head(block, scenario, dot, origin))], *_room_lines(block, view, dot)]
     if block.reason is not None:
         lines.append([("", block.reason)])
     if not block.ranked:
@@ -626,7 +636,7 @@ def _terminal_ranking(block: MachineRanking, scenario: Scenario, dash: str, dot:
                     )
                 ]
             )
-    lines += _note_lines(block, dash, dot, view)
+    lines += _note_lines(block, dash, dot, view, several)
     return lines
 
 
@@ -697,8 +707,9 @@ def terminal_blocks(
     view = view if view is not None else RunView(install_for=install_for, ambiguous=ambiguous)
     marks = glyphs()
     lines: list[Line] = []
+    several = several_ranked(document)
     for block in document.machines:
-        lines += [[], *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, view)]
+        lines += [[], *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, view, several)]
     return lines
 
 

@@ -314,7 +314,12 @@ def plan_import(config: Configuration, config_path: Path, raw: dict, export: Exp
     plan.lines += measurement_lines
     name, plan.config_text = _plan_machine(config, config_path, raw, export.profile)
     if name is not None:
-        plan.lines.append(f'note: machine "{name}" added with the reserves from [defaults] and writer = false')
+        reserves = (
+            "the memory reserve is computed from its memory"
+            if config.defaults.reserve_ram_gib is None
+            else "the reserves from [defaults]"
+        )
+        plan.lines.append(f'note: machine "{name}" added with {reserves} and writer = false')
     if plan.config_text is not None:
         plan.config_backup, line = _plan_config_backup(config_path)
         plan.lines.append(line)
@@ -439,6 +444,8 @@ def _plan_machine(
     name = None
     if not known:
         name = machine_name_for(profile.display_name, profile.profile_id, set(config.machines))
+        # Only a new entry is made here. A memory reserve `[defaults]` leaves out stays `None`, which
+        # the TOML writer leaves out: it is computed from the machine at every run (ADR 0012).
         data.setdefault("machines", {})[name] = {
             "reserve_ram_gib": config.defaults.reserve_ram_gib,
             "reserve_vram_gib": config.defaults.reserve_vram_gib,

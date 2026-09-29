@@ -492,7 +492,7 @@ def test_machine_config_rejects_a_profile_that_is_not_a_profile_id():
 
 def test_defaults_updates_and_guided_have_their_documented_defaults():
     config = Configuration.model_validate({"schema_version": CONFIG_SCHEMA_VERSION, "paths": EXAMPLES["PathsConfig"]})
-    assert (config.defaults.reserve_ram_gib, config.defaults.reserve_vram_gib) == (8.0, 1.0)
+    assert (config.defaults.reserve_ram_gib, config.defaults.reserve_vram_gib) == (None, 1.0)  # AP9-RM: computed
     assert config.updates.check is True
     assert config.guided.results is None
     assert (config.guided.users, config.guided.requests, config.guided.requests_origin) == (None, 1, "default")
@@ -551,7 +551,7 @@ def test_normalize_config_v1_is_lossless_and_leaves_its_input_unchanged():
     for key, value in legacy.items():
         if key != "schema_version":
             assert normalized[key] == value
-    assert normalized["defaults"] == {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0}
+    assert normalized["defaults"] == {"reserve_ram_gib": None, "reserve_vram_gib": 1.0}  # AP9-RM: computed
     assert normalized["updates"] == {"check": True}
     assert "guided" not in normalized
     Configuration.model_validate(normalize_config_v2(normalized))
