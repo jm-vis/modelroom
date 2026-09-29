@@ -3,6 +3,8 @@
 - **Status:** accepted, decided 2026-09-27
 - **Supersedes:** single sentences of ADR 0004 and ADR 0005, named below; both stay in force for
   everything else, and so does ADR 0001
+- **Superseded in part by ADR 0011:** decision 3, as far as llmfit is only a safety net -- it is
+  the fallback where modelroom counts no card of its own
 
 ## Context
 

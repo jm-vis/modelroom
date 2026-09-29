@@ -3213,7 +3213,7 @@ def test_every_hardware_note_stands_indented_like_its_neighbours(tmp_path: Path,
     overrides = {
         "two_l4": {NVIDIA_SMI_ARGS: _completed(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_l4.csv").read_text(encoding="utf-8"))},
         "llmfit": {("llmfit", "--version"): _completed(("llmfit", "--version"), code=1)},
-        "fit_block": {NVIDIA_SMI_ARGS: FileNotFoundError("nvidia-smi"), WINDOWS_ADAPTER_ARGS: FileNotFoundError("powershell")},
+        "fit_block": {NVIDIA_SMI_ARGS: FileNotFoundError("nvidia-smi"), WINDOWS_ADAPTER_ARGS: FileNotFoundError("powershell"), ("llmfit", "--version"): FileNotFoundError("llmfit")},  # AP9-GPU: else llmfit counts
     }[case]
     expected = {
         "two_l4": "nvidia-smi lists 2 adapters: 2 x NVIDIA L4",

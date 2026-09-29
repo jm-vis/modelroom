@@ -80,8 +80,10 @@ _LEGACY_REASON = "profile from schema 1 carries llmfit readings only; measure ag
 # The values schema 3 added; a file that says it is schema 2 cannot carry them.
 _SCHEMA_3_VALUES = {"ram_physical_source": "entered", "vram_source": "entered", "gpu_state": "entered"}
 # The fields and the value schema 4 added; a file that says it is schema 2 or 3 carries none of them.
-_SCHEMA_4_FIELDS = ("gpus", "machine_class", "machine_class_source")
+_SCHEMA_4_FIELDS = ("gpus", "machine_class", "machine_class_source", "adapters")
 _SCHEMA_4_VALUES = {"gpu_state": "multi_gpu"}
+# The graphics memory sources schema 4 added with the adapters (AP9-GPU, ADR 0011).
+_SCHEMA_4_VRAM_SOURCES = ("sysfs", "sysctl")
 # The cross-check status schema 4 added (decided 2026-09-27); a file of schema 2 or 3 carries none.
 _SCHEMA_4_CROSSCHECK_STATUS = "not_comparable"
 
@@ -140,7 +142,42 @@ class GpuAdapter(BaseModel):
     index: int = Field(ge=0)
     name: str | None = None
     vram_gib: float = Field(gt=0)
-    vram_source: Literal["nvidia-smi", "llmfit", "entered"]
+    vram_source: Literal["nvidia-smi", "sysfs", "sysctl", "llmfit", "entered"]
+
+
+class GraphicsAdapter(BaseModel):
+    """One graphics unit a source of this machine names, counted or not (schema 4, ADR 0011).
+
+    `source` is where the memory came from, else the name; `evidence` where the proof of the
+    backend came from. `usable` is the proof (`yes`: a native backend of Ollama for this card),
+    `form` the build, `counted` whether the card is in `gpus`. `reason` says why a card is not
+    usable or not counted, and is there exactly then -- unified memory is never counted and needs none.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vendor: Literal["nvidia", "amd", "intel", "apple", "other"]
+    name: str | None = None
+    pci_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{4}:[0-9a-f]{4}$")
+    pci_slot: str | None = Field(default=None, pattern=r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$")
+    memory_gib: float | None = Field(default=None, gt=0)
+    memory_kind: Literal["dedicated", "shared", "unified", "unknown"]
+    form: Literal["discrete", "integrated", "unified", "unknown"]
+    source: Literal["nvidia-smi", "sysfs", "registry", "sysctl", "system_profiler", "lspci", "windows", "llmfit"]
+    evidence: Literal["nvidia-smi", "kfd", "sysctl", "llmfit"] | None = None
+    backend: Literal["cuda", "rocm", "metal", "vulkan", "none", "unknown"]
+    usable: Literal["yes", "no", "unconfirmed"]
+    counted: bool
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _check_reason(self) -> "GraphicsAdapter":
+        needs = self.usable != "yes" or (not self.counted and self.form != "unified")
+        if needs != (self.reason is not None):
+            raise ValueError("reason is set exactly for a card that is not usable, or not counted and not unified memory")
+        if self.counted and (self.usable != "yes" or self.memory_gib is None):
+            raise ValueError("a counted card is usable and has its memory")
+        return self
 
 
 class HardwareProfile(BaseModel):
@@ -170,7 +207,7 @@ class HardwareProfile(BaseModel):
     ram_limit_gib: float | None = Field(default=None, gt=0)
     ram_limit_scope: str = Field(min_length=1)
     vram_gib: float | None = Field(default=None, ge=0)
-    vram_source: Literal["nvidia-smi", "llmfit", "entered", "none", "unknown"]
+    vram_source: Literal["nvidia-smi", "sysfs", "sysctl", "llmfit", "entered", "none", "unknown"]
     gpu_state: GpuState
     gpu_name: str | None = None
     gpus: list[GpuAdapter]
@@ -178,6 +215,10 @@ class HardwareProfile(BaseModel):
     machine_class_source: Literal["chassis", "entered", "unknown"]
     llmfit_crosscheck: LlmfitCrosscheck
     llmfit_version: str | None = None
+    # Every graphics unit a source named, counted or not (AP9-GPU, ADR 0011); empty is valid for
+    # every profile: older files, machines entered by hand, `--cpu-only`, exports. An empty list is
+    # not written, so every file of those shapes stays as it was, byte for byte.
+    adapters: list[GraphicsAdapter] = Field(default_factory=list, exclude_if=lambda value: not value)
 
     @field_validator("profile_id")
     @classmethod
@@ -269,6 +310,13 @@ class HardwareProfile(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _check_adapters(self) -> "HardwareProfile":
+        """The adapter list agrees with the card list and the state; only for a list that is not empty (D1)."""
+        if self.adapters:
+            _check_adapter_list(self)
+        return self
+
+    @model_validator(mode="after")
     def _check_machine_class(self) -> "HardwareProfile":
         if (self.machine_class == "unknown") != (self.machine_class_source == "unknown"):
             raise ValueError("machine_class is 'unknown' exactly when machine_class_source is 'unknown'")
@@ -296,6 +344,27 @@ def _check_card_sum(profile: HardwareProfile) -> None:
     # Inclusive, and isclose keeps an exact 0.01 (80.00 against 79.99) from failing on float rounding.
     if difference > CARD_SUM_TOLERANCE and not math.isclose(difference, CARD_SUM_TOLERANCE, rel_tol=1e-9):
         raise ValueError("vram_gib of gpu_state 'multi_gpu' is the sum of its cards")
+
+
+def _check_adapter_list(profile: HardwareProfile) -> None:
+    """A measured profile's adapters (ADR 0011): the counted ones are `gpus`, one source, and the
+    state follows -- unified memory is one unified unit holding the RAM from `sysctl`, or both unknown."""
+    if profile.origin != "measured" or profile.os_fingerprint_source == "legacy":
+        raise ValueError("adapters belong to a profile measured by this version")
+    counted = [adapter for adapter in profile.adapters if adapter.counted]
+    as_cards = [(adapter.name, adapter.memory_gib) for adapter in counted]
+    if as_cards != [(gpu.name, gpu.vram_gib) for gpu in profile.gpus]:
+        raise ValueError("the counted adapters are the cards of gpus, in order, with their names and sizes")
+    if any(adapter.source != profile.vram_source for adapter in counted):
+        raise ValueError("every counted adapter has the profile's vram_source")
+    if counted and profile.gpu_state not in ("measured", "multi_gpu"):
+        raise ValueError(f"gpu_state {profile.gpu_state!r} counts no adapter")
+    if profile.gpu_state == "unified_memory":
+        unified = [adapter for adapter in profile.adapters if adapter.form == "unified"]
+        both_known = profile.vram_gib == profile.ram_physical_gib and profile.vram_source == "sysctl"
+        both_unknown = profile.vram_gib is None and profile.ram_physical_gib is None
+        if len(profile.adapters) != 1 or len(unified) != 1 or not (both_known or both_unknown):
+            raise ValueError("unified memory is one unified adapter holding the RAM read by sysctl, or both unknown")
 
 
 def _check_entered_shape(profile: HardwareProfile) -> None:
@@ -437,6 +506,8 @@ def _refuse_later_values(data: dict, version: int, values: dict[str, str]) -> No
     for name in _SCHEMA_4_FIELDS:
         if name in data:
             raise ValueError(f"hardware profile: schema {version} has no field {name!r}")
+    if data.get("vram_source") in _SCHEMA_4_VRAM_SOURCES:
+        raise ValueError(f"hardware profile: schema {version} has no vram_source {data.get('vram_source')!r}")
     _refuse_later_crosscheck(data, version)
 
 

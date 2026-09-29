@@ -167,9 +167,8 @@ def answered_class(reading) -> str:
 
 
 def measurement_problems(profile: dict) -> list[str]:
-    """Criterion 2: this machine was really measured -- one graphics card, or two and more with their
-    sum -- its class read from the chassis, or the answered class where the chassis names none,
-    and llmfit confirmed both readings."""
+    """Criterion 2: this machine was really measured -- one graphics card, or two and more with their sum, and
+    its adapters -- its class from the chassis or the answered one, and llmfit confirmed both readings."""
     problems, state, cards = [], profile.get("gpu_state"), profile.get("gpus") or []
     total = sum(card.get("vram_gib") or 0 for card in cards)
     if not ((state, len(cards)) == ("measured", 1) or (state == "multi_gpu" and len(cards) > 1 and abs(total - (profile.get("vram_gib") or 0)) <= 0.01)):
@@ -180,11 +179,12 @@ def measurement_problems(profile: dict) -> list[str]:
     read = source == "chassis" and machine_class not in (None, "unknown")
     answered = source == "entered" and machine_class == ANSWERED_CLASS
     if not (read or answered):
-        problems.append(
-            f"machine class is {machine_class!r} ({source!r}), expected one the chassis names or the answered {ANSWERED_CLASS!r}"
-        )
+        problems.append(f"machine class is {machine_class!r} ({source!r}), expected one the chassis names or the answered {ANSWERED_CLASS!r}")
     if profile.get("origin") != "measured":
         problems.append(f"origin is {profile.get('origin')!r}, expected 'measured'")
+    adapters = profile.get("adapters") or []  # AP9-GPU F18, in form only: there, every counted card one of `gpus`
+    if not adapters or sum(1 for adapter in adapters if adapter.get("counted")) != len(cards):
+        problems.append(f"{len(adapters)} graphics adapter(s), expected a list whose counted cards are the {len(cards)} of gpus")
     for field in ("ram_physical", "vram"):
         status = profile.get("llmfit_crosscheck", {}).get(field, {}).get("status")
         if status != "confirmed":
@@ -434,7 +434,7 @@ def result_table_problems(lines: list[str]) -> list[str]:
         problems.append("the result table says not how many of its rows are shown")
     if not any(line.strip().startswith("install ") for line in lines):
         problems.append("the result table carries no install line for the machine of this run")
-    pooled = [line for line in _outside_key_block(lines) if "graphics memory" in line or "system memory" in line]
+    pooled = [line for line in _outside_key_block(lines) if ("graphics memory" in line or "system memory" in line) and not line.strip().startswith("graphics  ")]  # an adapter line (AP9-GPU) is no pool note
     if pooled and not all("#" in line for line in pooled):
         problems.append(f"a note about the memory pool names no rank: {pooled}")
     if len(pooled) > 3:

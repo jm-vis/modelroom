@@ -2,6 +2,8 @@
 
 - **Status:** accepted, decided 2026-09-26
 - **Supersedes:** nothing (ADR 0001 stays in force for schema 3; this adds the next step)
+- **Superseded in part by ADR 0011:** a measured card from `nvidia-smi` only, the CUDA sum check,
+  and "a card of another vendor is not in the list"
 
 ## Context
 

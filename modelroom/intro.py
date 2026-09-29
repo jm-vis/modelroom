@@ -31,6 +31,7 @@ from .binding import PointerFileError, read_pointer
 from .config import ConfigError, load_config
 from .contracts import SchemaVersionError
 from .daemon import TAGS_PATH, VERSION_PATH, Daemon, DaemonError
+from .gpu_usable import adapter_label, is_display_only
 from .importer import scan_profiles
 from .measure import Probes
 from .profile import HardwareProfile
@@ -356,12 +357,21 @@ def hardware_words(profile: HardwareProfile) -> str:
     """One machine's hardware in plain words: its class, the graphics cards, the system memory."""
     if profile.gpu_state in ("measured", "multi_gpu") and profile.gpus:
         card = cards_words(profile)
-    elif profile.gpu_state == "none":
-        card = "no graphics card"
     else:
-        card = "the graphics memory was not measured"
+        card = graphics_words(profile, "the graphics memory was not measured")
     memory = "system memory unknown" if profile.ram_physical_gib is None else f"{profile.ram_physical_gib:.0f} GB memory"
     return f"{class_words(profile)}{card}, {memory}"
+
+
+def graphics_words(profile: HardwareProfile, unmeasured: str = "graphics memory not measured") -> str:
+    """The graphics of a machine without a counted card (AP9-GPU G8): none, the first card not
+    counted, unified memory, or `unmeasured` (the card of step 5 and the start screen word it apart)."""
+    if profile.gpu_state == "none":
+        units = [adapter for adapter in profile.adapters if not is_display_only(adapter)]
+        return f"no counted graphics card ({adapter_label(units[0])})" if units else "no graphics card"
+    if profile.gpu_state == "unified_memory" and profile.vram_gib is not None and profile.adapters:
+        return f"unified memory {profile.vram_gib:.0f} GB"
+    return unmeasured
 
 
 def class_words(profile: HardwareProfile) -> str:
@@ -497,6 +507,7 @@ __all__ = [
     "daemon_fact",
     "fact_line",
     "glyphs",
+    "graphics_words",
     "hardware_words",
     "intro_lines",
     "is_cloud_name",

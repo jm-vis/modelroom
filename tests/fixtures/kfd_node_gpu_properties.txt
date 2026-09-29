@@ -1,0 +1,8 @@
+cpu_cores_count 0
+simd_count 192
+mem_banks_count 1
+location_id 768
+domain 0
+gfx_target_version 110000
+vendor_id 4098
+device_id 29772

@@ -190,7 +190,8 @@ One version source: `[project] version` in `pyproject.toml`, Semver, starting at
 `modelroom.__version__` reads it from package metadata; a test fails if a second version
 literal appears anywhere. Releases are annotated tags `vX.Y.Z` on `main`. Release procedure:
 
-1. Gate: `uv run --frozen python scripts/release-check.py` ends with `RELEASE-CHECK: OK <version>`.
+1. Gate: `uv run --frozen python scripts/release-check.py` ends with `RELEASE-CHECK: OK <version>`;
+   `MODELROOM_RELEASE_PRIVATE_WORDS` names the file of private words, outside the repository.
 2. Smoke: `uv run --frozen python scripts/release-smoke.py` ends with `RELEASE-SMOKE: OK`.
 3. Tag: `git tag -a vX.Y.Z -m "modelroom X.Y.Z"`, then the gate again with `--tag vX.Y.Z`.
 4. Review: an independent second-model review of the release diff, findings closed or answered.

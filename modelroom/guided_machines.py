@@ -24,7 +24,7 @@ from .config import Configuration
 from .dialog import Choice
 from .guided_entered import entered_class
 from .importer import ProfileScan, _label
-from .intro import card_names, class_words
+from .intro import card_names, class_words, graphics_words
 from .profile import HardwareProfile
 from .screen import this_machine_words
 
@@ -39,7 +39,10 @@ def _hardware_class(profile: HardwareProfile) -> str:
     """What makes two machines the same to the user: the class, the cards, their memory, the system memory."""
     if profile.ram_physical_source == "entered":
         return entered_class(profile)
-    gpu = card_names(profile) if profile.gpus else profile.gpu_name or profile.gpu_state
+    if profile.gpus:
+        gpu = card_names(profile)
+    else:  # a machine whose cards were named but none counted says which (AP9-GPU G8)
+        gpu = graphics_words(profile) if profile.gpu_state == "none" and profile.adapters else profile.gpu_name or profile.gpu_state
     return f"{class_words(profile)}{gpu} {_gib(profile.vram_gib)} VRAM / {_gib(profile.ram_physical_gib)} RAM"
 
 

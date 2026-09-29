@@ -20,7 +20,7 @@ Ranking rule: graphics memory before system memory, then every model that is not
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | workstation | workstation (3f9a0c21d4e6b870) | measured | 127.46 | os | 11.94 | nvidia-smi | measured | 0 Nova GPU 11.94 | workstation (chassis) | 16.00 | 1.00 | 2026-09-22T09:00:00+00:00 | 0 |
 
-GPU state: measured = read from nvidia-smi; entered = typed in by hand; multi_gpu = several cards, added up; present_unmeasured = a card may be there, its memory was not read; none = no usable card (none found, display adapter only, or --cpu-only); unified_memory = system and card share one memory; unsupported_platform = not read on this platform; multi_gpu_not_covered = several cards, measured before the fit covered them; legacy_unknown = from a schema-1 profile
+GPU state: measured = a counted card, read by modelroom or llmfit; entered = typed in by hand; multi_gpu = several counted cards, added up; present_unmeasured = a card may be there, nothing about it was read; none = no counted card (none found, none usable, display adapter only, or --cpu-only); unified_memory = system and card share one memory; unsupported_platform = not read on this platform; multi_gpu_not_covered = several cards, measured before the fit covered them; legacy_unknown = from a schema-1 profile
 
 Class: laptop, workstation or server, as the chassis reports it (chassis) or as the user gave it (entered); unknown where neither says. It changes no number.
 

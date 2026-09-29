@@ -1,0 +1,32 @@
+{
+  "providers": {
+    "llama.cpp": {
+      "available": false,
+      "detection_hint": "not in PATH, set LLAMA_CPP_PATH",
+      "llama_cli_path": null,
+      "llama_server_path": null,
+      "server_running": false
+    }
+  },
+  "system": {
+    "available_ram_gb": 76.64,
+    "backend": "ROCm",
+    "cpu_cores": 14,
+    "cpu_name": "x86 CPU",
+    "gpu_count": 1,
+    "gpu_name": "AMD Radeon RX 7900 XTX",
+    "gpu_vram_gb": 23.98,
+    "gpus": [
+      {
+        "backend": "ROCm",
+        "count": 1,
+        "name": "AMD Radeon RX 7900 XTX",
+        "unified_memory": false,
+        "vram_gb": 23.98
+      }
+    ],
+    "has_gpu": true,
+    "total_ram_gb": 127.46,
+    "unified_memory": false
+  }
+}

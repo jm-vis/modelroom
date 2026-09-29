@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from fixture_support import windows_gpu_responses
 from modelroom.binding import GuidedPointer, read_pointer, write_pointer
 from modelroom.cli import hardware_with_config, main
 from modelroom.config import Configuration
@@ -64,6 +65,7 @@ def _runner(llmfit_system: str | None = None, llmfit_missing: bool = False, over
     """Every command a Windows/NVIDIA `hardware` run makes, answered from the fixtures."""
     guid_stdout = f"\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\n    MachineGuid    REG_SZ    {MACHINE_GUID}\n"
     responses = {
+        **windows_gpu_responses(),  # the sources AP9-GPU added, from the laptop recording
         NVIDIA_SMI_ARGS: _completed(NVIDIA_SMI_ARGS, stdout=(FIXTURES / "nvidia_smi_one_gpu.csv").read_text(encoding="utf-8")),
         WINDOWS_MACHINE_GUID_ARGS: _completed(WINDOWS_MACHINE_GUID_ARGS, stdout=guid_stdout),
         WINDOWS_CHASSIS_ARGS: _completed(WINDOWS_CHASSIS_ARGS, stdout="10\n"),
@@ -421,7 +423,7 @@ def test_a_missing_llmfit_is_not_a_failure_and_leaves_the_cross_check_absent(tmp
 def test_a_deviating_llmfit_reading_is_stored_and_the_fit_computes(tmp_path: Path, capsys):
     """llmfit is a safety net, never a block (decided 2026-09-27): the summary says `deviation`."""
     config = _config(tmp_path)
-    runner = _runner(llmfit_system=_llmfit_system(gpu_vram_gb=6.0))
+    runner = _runner(llmfit_system=_llmfit_system(gpu_vram_gb=6.0, gpus=[{"backend": "CUDA", "count": 1, "name": "NVIDIA", "vram_gb": 6.0}]))
 
     assert _run(config, tmp_path, probes=_probes(runner)) == 0
 
@@ -445,23 +447,20 @@ def test_a_failing_llmfit_is_recorded_as_an_error_not_as_a_deviation(tmp_path: P
 # --- notes the user has to read --------------------------------------------------------------
 
 
-def test_an_unmeasured_adapter_is_reported_as_a_note_and_leaves_the_fit_unknown(tmp_path: Path, capsys):
+def test_integrated_graphics_alone_is_a_note_and_the_cpu_fit_computes(tmp_path: Path, capsys):
+    """AP9-GPU G7 (F6, F7): until 2026-09-28 `present_unmeasured` with the fit blocked."""
     config = _config(tmp_path)
+    listed = '[{"Name":"Intel(R) Graphics","PNPDeviceID":"PCI\\\\VEN_8086&DEV_7D51&SUBSYS_00000000&REV_08\\\\X"}]'
     runner = _runner(
-        overrides={
-            NVIDIA_SMI_ARGS: FileNotFoundError("nvidia-smi not found"),
-            WINDOWS_ADAPTER_ARGS: _completed(
-                WINDOWS_ADAPTER_ARGS, stdout="PCI\\VEN_8086&DEV_7D51&SUBSYS_00000000&REV_08\\3&2411e6fe&0&10\n"
-            ),
-        }
+        overrides={NVIDIA_SMI_ARGS: FileNotFoundError("nvidia-smi not found"), WINDOWS_ADAPTER_ARGS: _completed(WINDOWS_ADAPTER_ARGS, stdout=listed)},
+        llmfit_system=_llmfit_system(gpus=[]),
     )
 
     assert _run(config, tmp_path, probes=_probes(runner)) == 0
 
     profile = _written(config)
-    assert profile.gpu_state == "present_unmeasured"
-    assert fit_block_reason(profile) is not None
-    assert "Ollama uses the CPU on Intel graphics" in capsys.readouterr().out
+    assert profile.gpu_state == "none" and fit_block_reason(profile) is None
+    assert "integrated graphics shares the system memory" in capsys.readouterr().out
 
 
 # --- existing files in the results folder ------------------------------------------------------
@@ -803,21 +802,22 @@ def test_a_linux_cpu_server_writes_a_profile_the_fit_can_compute(tmp_path: Path)
     assert fit_block_reason(profile) is None
 
 
-def test_a_macos_run_writes_an_unsupported_platform_profile(tmp_path: Path):
+def test_a_macos_run_writes_a_unified_memory_profile_the_fit_computes_for(tmp_path: Path):
+    """AP9-GPU G5: until 2026-09-28 every Mac wrote `unsupported_platform` with the fit blocked."""
     config = _config(tmp_path)
     runner = FixtureRunner(
         {
             MACOS_MEMSIZE_ARGS: _completed(MACOS_MEMSIZE_ARGS, stdout="137438953472\n"),
+            ("sysctl", "-n", "hw.optional.arm64"): _completed(("sysctl",), stdout="1\n"),
+            ("sysctl", "-n", "machdep.cpu.brand_string"): _completed(("sysctl",), stdout="Apple M3 Max\n"),
             ("ioreg", "-rd1", "-c", "IOPlatformExpertDevice"): _completed(("ioreg",), stdout='"IOPlatformUUID" = "A-B-C"\n'),
             ("llmfit", "--version"): FileNotFoundError("llmfit not found"),
         }
     )
-    probes = Probes(platform="darwin", runner=runner, read_text=FixtureFiles({}), memory_bytes=lambda: 0,
-                    hostname=lambda: "laptop", new_id=lambda: ID_ONE)
+    probes = Probes(platform="darwin", runner=runner, read_text=FixtureFiles({}), memory_bytes=lambda: 0, hostname=lambda: "laptop", new_id=lambda: ID_ONE)
 
     assert _run(config, tmp_path, probes=probes) == 0
 
     profile = _written(config)
-    assert profile.gpu_state == "unsupported_platform" and profile.vram_gib is None
-    assert profile.os_fingerprint_source == "macos_platform_uuid"
-    assert fit_block_reason(profile) is not None
+    assert (profile.gpu_state, profile.vram_gib, profile.vram_source) == ("unified_memory", 128.0, "sysctl")
+    assert profile.os_fingerprint_source == "macos_platform_uuid" and fit_block_reason(profile) is None

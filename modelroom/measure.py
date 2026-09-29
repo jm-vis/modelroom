@@ -13,22 +13,49 @@ source, or no value with the reason, so one unreadable source never ends the com
 from __future__ import annotations
 
 import ctypes
-import math
 import re
 import socket
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Callable, Literal
 
+from .gpu import (  # noqa: F401 -- exported back: the tests and callers import these from here
+    DISPLAY_ONLY_NOTE,
+    DISPLAY_ONLY_VENDORS,
+    INTEL_VENDOR,
+    MEASURED_PLATFORMS,
+    measure_gpu,
+)
+from .gpu_linux import LSPCI_ARGS, UNKNOWN_VENDOR, WSL_OSRELEASE_FILE, _lspci_vendors  # noqa: F401
+from .gpu_llmfit import vram_crosscheck
+from .gpu_macos import MACOS_ARM64_ARGS, MACOS_CHIP_ARGS, SYSTEM_PROFILER_ARGS  # noqa: F401
+from .gpu_nvidia import NVIDIA_CC_ARGS, NVIDIA_SMI_ARGS, _nvidia_adapter  # noqa: F401
+from .gpu_windows import WINDOWS_ADAPTER_ARGS, WINDOWS_REGISTRY_ARGS  # noqa: F401
 from .llmfit import LlmfitReference, Runner, SubprocessRunner
+from .measure_base import (  # noqa: F401
+    GIB,
+    KIB,
+    MIB,
+    TIMEOUT_SECONDS,
+    FileText,
+    FixtureFiles,
+    GpuReading,
+    ListDir,
+    MemoryBytes,
+    list_directory,
+    no_listing,
+    Reading,
+    _gib,
+    _gib_reading,
+    _run,
+    _whole_number,
+    read_file_text,
+)
 from .profile import (
     PROFILE_SCHEMA_VERSION,
     CrossCheck,
-    GpuAdapter,
-    GpuState,
     HardwareProfile,
     LlmfitCrosscheck,
     MachineClass,
@@ -37,26 +64,11 @@ from .profile import (
     os_fingerprint,
 )
 
-GIB = 1024**3
-MIB = 1024**2
-KIB = 1024
-TIMEOUT_SECONDS = 10.0
-# The platforms whose GPU this measures at all; everywhere else is `unsupported_platform`.
-MEASURED_PLATFORMS: frozenset[str] = frozenset({"win32", "linux"})
 DISPLAY_NAME_MAX = 128
 DISPLAY_NAME_FALLBACK = "this machine"
 
 # Every command this module runs, as a fixed argument list -- no user-controlled string ever
 # reaches a command line (AGENTS.md, "Security, definition of done").
-NVIDIA_SMI_ARGS = ("nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits")
-LSPCI_ARGS = ("lspci", "-nn")
-WINDOWS_ADAPTER_ARGS = (
-    "powershell",
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    "Get-CimInstance Win32_VideoController | ForEach-Object { $_.PNPDeviceID }",
-)
 WINDOWS_CHASSIS_ARGS = (
     "powershell",
     "-NoProfile",
@@ -85,63 +97,12 @@ CHASSIS_CLASSES: dict[int, MachineClass] = {
 # The chassis type is the first word of the answer, a whole number of ASCII digits and nothing else.
 _CHASSIS_NUMBER_RE = re.compile(r"[0-9]+")
 
-# PCI vendors whose class-03 devices are pure display or virtual adapters: they never run a
-# model, so a machine that has only these is a CPU machine, not a machine with an unmeasured
-# GPU. A positive list on purpose -- an unknown vendor is never silently declared harmless.
-DISPLAY_ONLY_VENDORS = {
-    "1234": "QEMU/Bochs",
-    "1af4": "virtio",
-    "15ad": "VMware",
-    "1b36": "Red Hat",
-    "80ee": "VirtualBox",
-    "1414": "Microsoft Hyper-V",
-    "5853": "Xen",
-    "1d0f": "Amazon",
-}
-INTEL_VENDOR = "8086"
-UNKNOWN_VENDOR = "unknown"
-INTEL_NOTE = "Ollama uses the CPU on Intel graphics; run `hardware --cpu-only` for the CPU fit"
-DISPLAY_ONLY_NOTE = "display adapter only"
 CPU_ONLY_NOTE = "GPU sources skipped: --cpu-only was given, so this machine is judged as a CPU machine"
 CPU_ONLY_IDENTITY_REASON = "an entered profile carries no OS fingerprint"
 
-_LSPCI_CLASS_RE = re.compile(r"^\S+\s+.*?\[([0-9a-fA-F]{4})\]:")
-_LSPCI_ID_RE = re.compile(r"\[([0-9a-fA-F]{4}):([0-9a-fA-F]{4})\]")
-_PNP_VENDOR_RE = re.compile(r"VEN_([0-9a-fA-F]{4})")
 _MACHINE_GUID_RE = re.compile(r"MachineGuid\s+REG_SZ\s+(\S+)")
 _PLATFORM_UUID_RE = re.compile(r'"IOPlatformUUID"\s*=\s*"([^"]+)"')
 _MEMTOTAL_RE = re.compile(r"^MemTotal:\s+(\d+)\s+kB", flags=re.MULTILINE)
-
-
-# --- the two injected layers ------------------------------------------------------------------
-
-FileText = Callable[[str], str]
-MemoryBytes = Callable[[], int]
-
-
-def read_file_text(path: str) -> str:
-    """The real file layer: the file's text, or an `OSError` naming it."""
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        return handle.read()
-
-
-class FixtureFiles:
-    """Test file layer: a path-to-text mapping; every other path is a `FileNotFoundError`.
-
-    The same shape `FixtureRunner`/`FixtureTransport` have and for the same reason -- there is
-    no mocking library in this project, a test that needs a particular `/proc` content
-    constructs one of these and passes it in like any other value.
-    """
-
-    def __init__(self, files: dict[str, str]) -> None:
-        self._files = dict(files)
-        self.reads: list[str] = []
-
-    def __call__(self, path: str) -> str:
-        self.reads.append(path)
-        if path not in self._files:
-            raise FileNotFoundError(f"{path}: no such file")
-        return self._files[path]
 
 
 class _MemoryStatusEx(ctypes.Structure):
@@ -174,28 +135,6 @@ def windows_physical_memory_bytes() -> int:
 
 
 # --- what one source returns ------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Reading:
-    """One measured quantity in GiB with its source, or no value and the reason why not."""
-
-    value: float | None
-    source: Literal["os", "unknown"]
-    reason: str | None = None
-
-
-@dataclass(frozen=True)
-class GpuReading:
-    """The GPU verdict: the state the fit gates on, the VRAM with its source, a note, and every
-    card `nvidia-smi` measured (none for every state but `measured` and `multi_gpu`)."""
-
-    gpu_state: GpuState
-    vram_gib: float | None
-    vram_source: Literal["nvidia-smi", "none", "unknown"]
-    gpu_name: str | None = None
-    note: str | None = None
-    adapters: tuple[GpuAdapter, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -257,44 +196,18 @@ class Probes:
     memory_bytes: MemoryBytes = windows_physical_memory_bytes
     hostname: Callable[[], str] = socket.gethostname
     new_id: Callable[[], str] = new_profile_id
+    # The folder layer (sysfs, AP9-GPU): `None` is the real one with the real file layer, else the
+    # injected file layer's own `list_dir` where it has one, else no folder at all.
+    list_dir: ListDir | None = None
 
 
-# --- the command layer, with one place for every failure --------------------------------------
-
-
-def _whole_number(text: str) -> int | None:
-    """`text` as an integer, or `None` when it is not one this process can convert.
-
-    The range is left to each caller: a negative or zero value is rejected where it matters
-    (`_gib_reading`, the `memory.max` filter, the adapter's index and memory).
-
-    `int(text)` is not enough on its own: a digit string above Python's int/str conversion limit
-    (4300 digits by default) raises `ValueError`, and a source must never raise -- not even for
-    output no real kernel or driver would print (probe: `MemTotal` with 5000 digits).
-    """
-    try:
-        return int(text)
-    except ValueError:
-        return None
-
-
-def _run(runner: Runner, args: tuple[str, ...]) -> tuple[str | None, str | None]:
-    """`(stdout, None)` when the command answered with exit 0, else `(None, reason)`.
-
-    Every way a command can fail ends here: not installed, not runnable, no answer within the
-    timeout the runner enforces, or a non-zero exit code. Nothing propagates to the caller.
-    """
-    try:
-        result = runner(list(args))
-    except FileNotFoundError as exc:
-        return None, f"{args[0]} is not installed ({exc})"
-    except subprocess.TimeoutExpired:
-        return None, f"{args[0]} did not answer within {TIMEOUT_SECONDS:.0f} s"
-    except OSError as exc:
-        return None, f"{args[0]} could not be run ({exc})"
-    if result.returncode != 0:
-        return None, f"{args[0]} failed (exit {result.returncode}): {result.stderr.strip()}"
-    return result.stdout, None
+def folder_layer(read_text: FileText | None, list_dir: ListDir | None) -> ListDir:
+    """The folder layer that belongs to a file layer: a test's files never mix with this machine's folders."""
+    if list_dir is not None:
+        return list_dir
+    if read_text is None or read_text is read_file_text:
+        return list_directory
+    return getattr(read_text, "list_dir", no_listing)
 
 
 # --- physical RAM ------------------------------------------------------------------------------
@@ -302,7 +215,7 @@ def _run(runner: Runner, args: tuple[str, ...]) -> tuple[str | None, str | None]
 
 def measure_physical_ram(platform: str, runner: Runner, read_text: FileText, memory_bytes: MemoryBytes) -> Reading:
     """Installed physical RAM in GiB: Windows `GlobalMemoryStatusEx`, Linux `/proc/meminfo`,
-    macOS `sysctl hw.memsize` (display only -- macOS has no fit, see `measure_gpu`)."""
+    macOS `sysctl hw.memsize` (the unified memory of a Mac, AP9-GPU G5)."""
     if platform == "win32":
         return _windows_ram(memory_bytes)
     if platform == "linux":
@@ -343,170 +256,6 @@ def _macos_ram(runner: Runner) -> Reading:
     except ValueError:
         return Reading(None, "unknown", f"sysctl hw.memsize did not answer with a byte count: {stdout.strip()!r}")
     return _gib_reading(total, "sysctl hw.memsize")
-
-
-def _gib(total: object) -> float | None:
-    """`total` bytes in GiB, or `None` when that is not a usable number.
-
-    Every memory value in the contract is `> 0`, so a `0` from a call that reported success, a
-    negative number, an infinity, a value so small it rounds to `0.00` GiB, or an integer too
-    large to turn into a float all come back `None` instead of reaching the contract or raising.
-    Both `math.isfinite` and the division itself raise `OverflowError` for an integer of that
-    size (probe: `nvidia-smi` reporting 400 digits of memory), which counts as "not usable" --
-    the same rule `llmfit.py::_is_finite_number` follows.
-    """
-    if not isinstance(total, (int, float)) or isinstance(total, bool):
-        return None
-    try:
-        if not math.isfinite(total) or total <= 0:
-            return None
-        gib = round(total / GIB, 2)
-    except OverflowError:
-        return None
-    return gib if gib > 0 else None
-
-
-def _gib_reading(total: object, label: str) -> Reading:
-    """`_gib` as a `Reading`: the value with source `os`, or unknown naming the source."""
-    gib = _gib(total)
-    if gib is None:
-        return Reading(None, "unknown", f"{label} is not a usable number of bytes: {str(total)[:40]}")
-    return Reading(gib, "os")
-
-
-# --- VRAM and the graphics adapter --------------------------------------------------------------
-
-
-def measure_gpu(platform: str, runner: Runner) -> GpuReading:
-    """The GPU state and the measured VRAM of every NVIDIA adapter: one is `measured`, two or more
-    `multi_gpu` with their sum (decided 2026-09-26).
-
-    `nvidia-smi` first; when it is not there or cannot answer, the adapter rule decides between
-    "no GPU at all" and "an adapter is present but unmeasured" -- a graphics adapter's own
-    reported memory (`AdapterRAM`) is never read, it is not VRAM. macOS and everything else is
-    `unsupported_platform`: no unified-memory statement is invented.
-    """
-    if platform not in MEASURED_PLATFORMS:
-        return GpuReading("unsupported_platform", None, "unknown", None, f"the GPU is not measured on {platform} yet")
-    measured = _nvidia_smi_gpu(runner)
-    if measured is not None:
-        return measured
-    return _adapter_rule(platform, runner)
-
-
-def _nvidia_smi_gpu(runner: Runner) -> GpuReading | None:
-    """The `nvidia-smi` verdict, or `None` when it did not answer at all (adapter rule then)."""
-    stdout, _ = _run(runner, NVIDIA_SMI_ARGS)
-    if stdout is None:
-        return None
-    rows = [line for line in stdout.splitlines() if line.strip()]
-    if not rows:
-        return None
-    adapters = []
-    for row in rows:
-        adapter = _nvidia_adapter(row)
-        if isinstance(adapter, GpuReading):
-            return adapter  # a card without a number is no half measurement: the whole reading is unmeasured
-        adapters.append(adapter)
-    indexes = [adapter.index for adapter in adapters]
-    if len(adapters) == 1 and indexes != [0]:
-        note = f"nvidia-smi reports this adapter at index {indexes[0]}, not index 0"
-        return GpuReading("present_unmeasured", None, "unknown", adapters[0].name, note)
-    if indexes != list(range(len(adapters))):
-        note = f"nvidia-smi reports the adapters at indexes {', '.join(map(str, indexes))}, not 0 to {len(adapters) - 1}"
-        return GpuReading("present_unmeasured", None, "unknown", None, note)
-    return _nvidia_cards(tuple(adapters))
-
-
-def _nvidia_adapter(row: str) -> GpuAdapter | GpuReading:
-    """One row of `nvidia-smi` as a card, or the unmeasured reading that says why it is none."""
-    fields = [field.strip() for field in row.split(",")]
-    index = _whole_number(fields[0]) if fields else None
-    mib = _whole_number(fields[2]) if len(fields) == 3 else None
-    if len(fields) != 3 or index is None or mib is None:
-        return GpuReading("present_unmeasured", None, "unknown", None, f"nvidia-smi output could not be read: {row.strip()[:120]!r}")
-    if index < 0:
-        return GpuReading("present_unmeasured", None, "unknown", fields[1], f"nvidia-smi reports this adapter at index {index}, not index 0")
-    vram_gib = _gib(mib * MIB)
-    if vram_gib is None:
-        note = f"nvidia-smi reports no usable memory for this adapter: {str(mib)[:40]} MiB"
-        return GpuReading("present_unmeasured", None, "unknown", fields[1], note)
-    return GpuAdapter(index=index, name=fields[1], vram_gib=vram_gib, vram_source="nvidia-smi")
-
-
-def _nvidia_cards(adapters: tuple[GpuAdapter, ...]) -> GpuReading:
-    """One card is `measured` as before; two or more are `multi_gpu` with their sum and a note."""
-    first = adapters[0]
-    if len(adapters) == 1:
-        return GpuReading("measured", first.vram_gib, "nvidia-smi", first.name, adapters=adapters)
-    names = {adapter.name for adapter in adapters}
-    if len(names) == 1:
-        listed = f"{len(adapters)} x {first.name or 'graphics card'}"
-    else:
-        listed = ", ".join(f"{adapter.name or 'graphics card'} {adapter.vram_gib:.2f} GiB" for adapter in adapters)
-    total = round(sum(adapter.vram_gib for adapter in adapters), 2)
-    note = f"nvidia-smi lists {len(adapters)} adapters: {listed}"
-    return GpuReading("multi_gpu", total, "nvidia-smi", first.name if len(names) == 1 else None, note, adapters)
-
-
-def _adapter_rule(platform: str, runner: Runner) -> GpuReading:
-    """No nvidia-smi: decide from the PCI vendor ids of the class-03 (display) devices."""
-    vendors, reason = _display_adapter_vendors(platform, runner)
-    if vendors is None:
-        note = f"the graphics adapters could not be listed, so a GPU cannot be ruled out ({reason})"
-        return GpuReading("present_unmeasured", None, "unknown", None, note)
-    if not vendors:
-        return GpuReading("none", 0.0, "none")
-    measurable = [vendor for vendor in vendors if vendor not in DISPLAY_ONLY_VENDORS]
-    if not measurable:
-        return GpuReading("none", 0.0, "none", None, DISPLAY_ONLY_NOTE)
-    return GpuReading("present_unmeasured", None, "unknown", None, _unmeasured_adapter_note(measurable))
-
-
-def _unmeasured_adapter_note(vendors: list[str]) -> str:
-    """Name every adapter that could hold memory, not just the first one found.
-
-    The Intel advice is only true for a machine whose *only* measurable adapter is Intel
-    graphics: a laptop that also carries a discrete card would otherwise be told to compute a
-    CPU fit although it has a GPU whose driver tools were simply not installed.
-    """
-    listed = ", ".join(dict.fromkeys(vendors))
-    note = f"a graphics adapter is present (PCI vendor {listed}), but its memory was not measured"
-    if set(vendors) == {INTEL_VENDOR}:
-        return f"{note}; {INTEL_NOTE}"
-    return f"{note}; run `hardware --cpu-only` for the CPU fit"
-
-
-def _display_adapter_vendors(platform: str, runner: Runner) -> tuple[list[str] | None, str | None]:
-    """The PCI vendor id of every display adapter, or `(None, reason)` when none could be listed."""
-    if platform == "linux":
-        stdout, reason = _run(runner, LSPCI_ARGS)
-        return (None, reason) if stdout is None else (_lspci_vendors(stdout), None)
-    stdout, reason = _run(runner, WINDOWS_ADAPTER_ARGS)
-    return (None, reason) if stdout is None else (_pnp_vendors(stdout), None)
-
-
-def _lspci_vendors(stdout: str) -> list[str]:
-    """Every `lspci -nn` line of PCI class 03 (display controllers), by vendor id."""
-    vendors = []
-    for line in stdout.splitlines():
-        device_class = _LSPCI_CLASS_RE.match(line)
-        if device_class is None or not device_class.group(1).startswith("03"):
-            continue
-        ids = _LSPCI_ID_RE.findall(line)
-        vendors.append(ids[-1][0].lower() if ids else UNKNOWN_VENDOR)
-    return vendors
-
-
-def _pnp_vendors(stdout: str) -> list[str]:
-    """Every `Win32_VideoController.PNPDeviceID`, by vendor id; a line without one is unknown."""
-    vendors = []
-    for line in stdout.splitlines():
-        if not line.strip():
-            continue
-        match = _PNP_VENDOR_RE.search(line)
-        vendors.append(match.group(1).lower() if match else UNKNOWN_VENDOR)
-    return vendors
 
 
 # --- the RAM limit, a note only -----------------------------------------------------------------
@@ -653,25 +402,32 @@ def measure_hardware(
     memory_bytes: MemoryBytes | None = None,
     cpu_only: bool = False,
     machine_class: MachineClass | None = None,
+    list_dir: ListDir | None = None,
+    reference: LlmfitReference | None = None,
 ) -> MeasuredHardware:
     """Every source of this machine at once, plus the notes a user has to read.
 
     `machine_class` (`hardware --machine-class`) is the user's own word for the class: it is taken
-    with the source `entered` and the chassis is not read.
+    with the source `entered` and the chassis is not read. `reference` is llmfit's reading of this
+    machine: the fallback where modelroom counts no card itself (AP9-GPU, mode B); without it llmfit
+    adds nothing. `list_dir` is the folder layer (`folder_layer`).
 
     `cpu_only` (`hardware --cpu-only`) is the user's own statement that this machine runs on the
-    CPU: no GPU source is asked at all, and the profile becomes an `entered` one, which carries
+    CPU: no GPU source is asked at all (F21), and the profile becomes an `entered` one, which carries
     no OS fingerprint -- so the OS identifier is not read either. It is a statement about the
     GPU, not about the platform: on a platform this does not measure, the state stays
-    `unsupported_platform` and the fit stays blocked, because the RAM reading there is display
-    only (probe: `--cpu-only` on macOS produced a computing profile before this).
+    `unsupported_platform` and the fit stays blocked.
     """
     active_runner = runner if runner is not None else SubprocessRunner(timeout=TIMEOUT_SECONDS)
     active_read = read_text if read_text is not None else read_file_text
     active_memory = memory_bytes if memory_bytes is not None else windows_physical_memory_bytes
+    active_list = folder_layer(read_text, list_dir)
 
     ram = measure_physical_ram(platform, active_runner, active_read, active_memory)
-    gpu = _CPU_ONLY_GPU if cpu_only and platform in MEASURED_PLATFORMS else measure_gpu(platform, active_runner)
+    if cpu_only and platform in MEASURED_PLATFORMS:
+        gpu = _CPU_ONLY_GPU
+    else:
+        gpu = measure_gpu(platform, active_runner, active_read, active_list, reference, ram.value)
     ram_limit = measure_ram_limit(platform, active_read)
     identity = (
         OsIdentity(None, "none", CPU_ONLY_IDENTITY_REASON)
@@ -725,25 +481,13 @@ def build_crosscheck(measured: MeasuredHardware, reference: LlmfitReference) -> 
     shown as one since a deviation is no block (2026-09-27).
 
     Cards of different sizes are `not_comparable`: llmfit multiplies one card's size by the count,
-    so its sum says nothing about them (decided 2026-09-27).
+    so its sum says nothing about them (decided 2026-09-27). The graphics memory follows the table
+    of ADR 0011 (`gpu_llmfit.vram_crosscheck`): compared only where llmfit's entries of the counted
+    backend are exactly the counted cards, never where llmfit itself gave the counted value.
     """
-    if measured.cpu_only:
-        # Skipped on purpose, whatever llmfit did: `absent` says "never asked", `error` would say
-        # the comparison was attempted and llmfit let it down.
-        vram = CrossCheck(status="absent", own_gib=measured.gpu.vram_gib)
-    elif measured.gpu.gpu_state == "multi_gpu" and len({card.vram_gib for card in measured.gpu.adapters}) > 1:
-        # llmfit multiplies one card's size by the count, so its sum says nothing about cards of
-        # different sizes (decided 2026-09-27): shown, never held against the 5 % rule.
-        llmfit_gib = reference.cuda_vram_gib if reference.status == "available" else None
-        vram = CrossCheck(status="not_comparable", own_gib=measured.gpu.vram_gib, llmfit_gib=llmfit_gib)
-    elif measured.gpu.gpu_state == "multi_gpu":
-        # Cards of one size against the sum of llmfit's CUDA cards, the way llmfit counts them itself.
-        vram = _one_check(measured.gpu.vram_gib, reference.cuda_vram_gib, reference.status)
-    else:
-        vram = _one_check(measured.gpu.vram_gib, reference.vram_gib, reference.status)
     return LlmfitCrosscheck(
         ram_physical=_one_check(measured.ram.value, reference.ram_gib, reference.status),
-        vram=vram,
+        vram=vram_crosscheck(measured.gpu, reference, measured.cpu_only),
     )
 
 
@@ -788,6 +532,7 @@ def build_profile(
         machine_class_source=measured.machine_class.source,
         llmfit_crosscheck=build_crosscheck(measured, reference),
         llmfit_version=reference.version,
+        adapters=list(measured.gpu.graphics),
     )
 
 

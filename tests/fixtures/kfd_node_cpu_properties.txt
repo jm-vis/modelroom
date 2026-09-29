@@ -1,0 +1,6 @@
+cpu_cores_count 16
+simd_count 0
+mem_banks_count 1
+location_id 0
+domain 0
+gfx_target_version 0

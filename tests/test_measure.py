@@ -9,6 +9,7 @@ bottom, guarded by the platform they belong to.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -16,21 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from modelroom.llmfit import FixtureRunner, LlmfitReference
+from modelroom.llmfit import FixtureRunner, LlmfitGpu, LlmfitReference
 from modelroom.measure import (
-    DISPLAY_ONLY_VENDORS,
-    INTEL_VENDOR,
-    LINUX_CHASSIS_FILE,
-    LINUX_MACHINE_ID_FILE,
-    LSPCI_ARGS,
-    MACOS_MEMSIZE_ARGS,
-    MACOS_PLATFORM_UUID_ARGS,
-    NVIDIA_SMI_ARGS,
-    PROC_MEMINFO_FILE,
-    PROC_SELF_CGROUP_FILE,
-    WINDOWS_ADAPTER_ARGS,
-    WINDOWS_CHASSIS_ARGS,
-    WINDOWS_MACHINE_GUID_ARGS,
+    DISPLAY_ONLY_VENDORS, INTEL_VENDOR, LINUX_CHASSIS_FILE, LINUX_MACHINE_ID_FILE, LSPCI_ARGS, MACOS_ARM64_ARGS, MACOS_CHIP_ARGS,
+    MACOS_MEMSIZE_ARGS, MACOS_PLATFORM_UUID_ARGS, NVIDIA_CC_ARGS, NVIDIA_SMI_ARGS, PROC_MEMINFO_FILE,
+    PROC_SELF_CGROUP_FILE, SYSTEM_PROFILER_ARGS, WINDOWS_ADAPTER_ARGS, WINDOWS_CHASSIS_ARGS,
+    WINDOWS_MACHINE_GUID_ARGS, WINDOWS_REGISTRY_ARGS,
     FixtureFiles,
     build_crosscheck,
     build_profile,
@@ -67,17 +59,17 @@ def _runner(**responses) -> FixtureRunner:
     """A `FixtureRunner` keyed by the argument lists `measure.py` uses, by short name.
 
     The chassis answers `10` (Notebook) unless a test gives a `chassis` response of its own: every
-    Windows measurement reads it, the way it reads the machine identifier.
+    Windows measurement reads it, the way it reads the machine identifier. The sources AP9-GPU added
+    are not installed unless a test answers them (`tests/test_gpu_*.py` test them).
     """
     responses.setdefault("chassis", _done(WINDOWS_CHASSIS_ARGS, stdout="10\n"))
+    for name in ("compute_cap", "lspci", "adapters", "registry", "arm64", "chip", "profiler"):
+        responses.setdefault(name, _missing(name))
     known = {
-        "chassis": WINDOWS_CHASSIS_ARGS,
-        "nvidia_smi": NVIDIA_SMI_ARGS,
-        "lspci": LSPCI_ARGS,
-        "adapters": WINDOWS_ADAPTER_ARGS,
-        "machine_guid": WINDOWS_MACHINE_GUID_ARGS,
-        "memsize": MACOS_MEMSIZE_ARGS,
-        "platform_uuid": MACOS_PLATFORM_UUID_ARGS,
+        "chassis": WINDOWS_CHASSIS_ARGS, "nvidia_smi": NVIDIA_SMI_ARGS, "lspci": LSPCI_ARGS, "adapters": WINDOWS_ADAPTER_ARGS,
+        "machine_guid": WINDOWS_MACHINE_GUID_ARGS, "memsize": MACOS_MEMSIZE_ARGS, "platform_uuid": MACOS_PLATFORM_UUID_ARGS,
+        "compute_cap": NVIDIA_CC_ARGS, "registry": WINDOWS_REGISTRY_ARGS, "arm64": MACOS_ARM64_ARGS, "profiler": SYSTEM_PROFILER_ARGS,
+        "chip": MACOS_CHIP_ARGS,
     }
     return FixtureRunner({known[name]: response for name, response in responses.items()})
 
@@ -87,7 +79,8 @@ def _missing(name: str) -> FileNotFoundError:
 
 
 def _windows_adapters(*pnp_device_ids: str) -> subprocess.CompletedProcess:
-    return _done(WINDOWS_ADAPTER_ARGS, stdout="".join(f"{value}\n" for value in pnp_device_ids))
+    """The video controllers as `ConvertTo-Json` lists them, without names (AP9-GPU G3)."""
+    return _done(WINDOWS_ADAPTER_ARGS, stdout=json.dumps([{"Name": None, "PNPDeviceID": value} for value in pnp_device_ids]))
 
 
 def _reg_query(guid: str = MACHINE_GUID) -> subprocess.CompletedProcess:
@@ -299,23 +292,20 @@ def test_a_virtual_display_adapter_is_no_gpu_with_a_display_adapter_only_note():
     assert gpu.note == "display adapter only"
 
 
-def test_intel_graphics_is_present_unmeasured_and_names_the_cpu_only_flag():
+def test_intel_graphics_is_no_counted_card_and_a_cpu_fit():
+    """AP9-GPU G7 row 6 (F6, F7): until 2026-09-28 `present_unmeasured`, the fit blocked."""
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_done(LSPCI_ARGS, stdout=_fixture("lspci_nn_intel_laptop.txt")))
     gpu = measure_gpu("linux", runner)
-    assert gpu.gpu_state == "present_unmeasured"
-    assert gpu.vram_gib is None and gpu.vram_source == "unknown"
-    assert "Ollama uses the CPU on Intel graphics" in gpu.note
-    assert "hardware --cpu-only" in gpu.note
+    assert (gpu.gpu_state, gpu.vram_gib, gpu.vram_source) == ("none", 0.0, "none")
+    assert "integrated graphics shares the system memory" in gpu.note
 
 
-def test_an_nvidia_adapter_without_nvidia_smi_is_present_unmeasured():
+def test_an_nvidia_adapter_without_nvidia_smi_is_no_counted_card_and_names_the_tools():
+    """AP9-GPU G7: until 2026-09-28 `present_unmeasured`; now a CPU fit that names the driver tools."""
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_done(LSPCI_ARGS, stdout=_fixture("lspci_nn_nvidia_laptop.txt")))
     gpu = measure_gpu("linux", runner)
-    assert gpu.gpu_state == "present_unmeasured"
-    assert "10de" in gpu.note
-    # The same machine also has Intel graphics, but a discrete card is present: the CPU advice
-    # that belongs to an Intel-only machine must not be given here.
-    assert "Ollama uses the CPU" not in gpu.note
+    assert gpu.gpu_state == "none"
+    assert "nvidia-smi did not answer" in gpu.note and "install the NVIDIA driver tools (nvidia-smi)" in gpu.note
 
 
 # Recorded 2026-09-27 on the two rented GPU machines; `lspci` is read only when `nvidia-smi` does
@@ -334,14 +324,12 @@ def test_a_recorded_gpu_server_lists_its_display_class_adapters_by_vendor(name, 
 
 
 @pytest.mark.parametrize(("name", "vendors"), RECORDED_GPU_SERVERS, ids=["two-a100", "two-l4"])
-def test_a_recorded_gpu_server_without_nvidia_smi_is_present_unmeasured(name, vendors):
+def test_a_recorded_gpu_server_without_nvidia_smi_is_no_counted_card(name, vendors):
+    """AP9-GPU G7 (Handprobe 5, never `present_unmeasured`): the cards are named, none counted."""
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_done(LSPCI_ARGS, stdout=_fixture(name)))
     gpu = measure_gpu("linux", runner)
-    assert (gpu.gpu_state, gpu.vram_gib, gpu.vram_source) == ("present_unmeasured", None, "unknown")
-    assert gpu.note == (
-        "a graphics adapter is present (PCI vendor 10de), but its memory was not measured; "
-        "run `hardware --cpu-only` for the CPU fit"
-    )
+    assert (gpu.gpu_state, gpu.vram_gib, gpu.vram_source) == ("none", 0.0, "none")
+    assert gpu.note.endswith("install the NVIDIA driver tools (nvidia-smi)")
 
 
 def test_an_adapter_list_that_cannot_be_read_is_present_unmeasured_not_no_gpu():
@@ -361,24 +349,25 @@ def test_the_display_only_vendor_list_is_exactly_the_eight_the_contract_names():
 
 @pytest.mark.parametrize("vendor", sorted(DISPLAY_ONLY_VENDORS))
 def test_every_listed_display_only_vendor_is_no_gpu_on_windows(vendor):
-    adapters = _windows_adapters(f"PCI\\VEN_{vendor.upper()}&DEV_1111&SUBSYS_11111234&REV_02\\3&2411e6fe&0&10")
+    adapters = _windows_adapters(f"PCI\\VEN_{vendor.upper()}&DEV_1111&SUBSYS_00000000&REV_02\\3&2411e6fe&0&10")
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), adapters=adapters)
     gpu = measure_gpu("win32", runner)
     assert gpu.gpu_state == "none" and gpu.vram_source == "none"
     assert gpu.note == "display adapter only"
 
 
-def test_a_windows_adapter_from_another_vendor_is_present_unmeasured():
+def test_an_amd_adapter_on_windows_is_no_counted_card():
+    """AP9-GPU F4: until 2026-09-28 `present_unmeasured`; ROCm on Windows is not checked, a CPU fit."""
     adapters = _windows_adapters("PCI\\VEN_1002&DEV_164E&SUBSYS_00000000&REV_C1\\3&2411e6fe&0&41")
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), adapters=adapters)
     gpu = measure_gpu("win32", runner)
-    assert gpu.gpu_state == "present_unmeasured" and "1002" in gpu.note
+    assert gpu.gpu_state == "none" and "ROCm on Windows needs a HIP7 driver" in gpu.note
 
 
-def test_a_windows_adapter_without_a_vendor_id_counts_as_an_unknown_vendor():
-    runner = _runner(nvidia_smi=_missing("nvidia-smi"), adapters=_windows_adapters("ROOT\\BasicDisplay\\0000"))
+def test_a_windows_adapter_without_a_vendor_id_or_a_name_is_present_unmeasured():
+    runner = _runner(nvidia_smi=_missing("nvidia-smi"), adapters=_windows_adapters("ROOT\\SomeDisplay\\0000"))
     gpu = measure_gpu("win32", runner)
-    assert gpu.gpu_state == "present_unmeasured" and "unknown" in gpu.note
+    assert gpu.gpu_state == "present_unmeasured" and "nothing about it could be read" in gpu.note
 
 
 def test_no_windows_display_adapter_at_all_is_no_gpu():
@@ -389,19 +378,19 @@ def test_no_windows_display_adapter_at_all_is_no_gpu():
 
 def test_a_measurable_vendor_wins_over_a_display_only_one_in_the_same_machine():
     adapters = _windows_adapters(
-        "PCI\\VEN_1234&DEV_1111&SUBSYS_11111234&REV_02\\3&2411e6fe&0&10",
+        "PCI\\VEN_1234&DEV_1111&SUBSYS_00000000&REV_02\\3&2411e6fe&0&10",
         f"PCI\\VEN_{INTEL_VENDOR.upper()}&DEV_7D51&SUBSYS_00000000&REV_08\\3&2411e6fe&0&10",
     )
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), adapters=adapters)
     gpu = measure_gpu("win32", runner)
-    assert gpu.gpu_state == "present_unmeasured"
+    assert gpu.gpu_state == "none" and "Ollama may use it through Vulkan" in gpu.note  # AP9-GPU: was present_unmeasured
 
 
-def test_macos_is_an_unsupported_platform_without_a_unified_memory_claim():
+def test_a_mac_without_a_proof_of_apple_silicon_is_a_cpu_machine():
+    """AP9-GPU G5 (F15): until 2026-09-28 every Mac was `unsupported_platform`."""
     gpu = measure_gpu("darwin", _runner())
-    assert gpu.gpu_state == "unsupported_platform"
-    assert gpu.vram_gib is None and gpu.vram_source == "unknown"
-    assert "unified" not in gpu.note.lower()
+    assert (gpu.gpu_state, gpu.vram_gib, gpu.vram_source) == ("none", 0.0, "none")
+    assert "Intel Macs" in gpu.note
 
 
 def test_an_unmeasured_platform_is_an_unsupported_platform():
@@ -581,11 +570,11 @@ def test_a_cgroup_limit_above_the_physical_ram_is_no_note():
     assert not any("cgroup" in line for line in measured.notes)
 
 
-def test_an_intel_laptop_measures_present_unmeasured_and_keeps_the_note():
+def test_an_intel_laptop_measures_as_a_cpu_machine_and_keeps_the_note():
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_done(LSPCI_ARGS, stdout=_fixture("lspci_nn_intel_laptop.txt")))
     measured = measure_hardware("linux", runner, _linux_files(), lambda: 0)
-    assert measured.gpu.gpu_state == "present_unmeasured"
-    assert any("Intel graphics" in line for line in measured.notes)
+    assert measured.gpu.gpu_state == "none"  # AP9-GPU F7: was present_unmeasured
+    assert any("integrated graphics" in line for line in measured.notes)
 
 
 def test_a_multi_gpu_machine_measures_every_card():
@@ -595,25 +584,24 @@ def test_a_multi_gpu_machine_measures_every_card():
     assert measured.notes != ()
 
 
-def test_macos_measures_ram_for_display_and_leaves_the_gpu_unsupported():
+def test_macos_measures_ram_and_an_apple_silicon_machine_as_unified_memory():
+    """AP9-GPU G5: until 2026-09-28 the RAM of a Mac was display only and its GPU unsupported."""
     runner = _runner(
-        memsize=_done(MACOS_MEMSIZE_ARGS, stdout="137438953472\n"),
+        memsize=_done(MACOS_MEMSIZE_ARGS, stdout="137438953472\n"), arm64=_done(MACOS_ARM64_ARGS, stdout="1\n"),
         platform_uuid=_done(MACOS_PLATFORM_UUID_ARGS, stdout=f'"IOPlatformUUID" = "{PLATFORM_UUID}"\n'),
     )
     measured = measure_hardware("darwin", runner, FixtureFiles({}), lambda: 0)
-    assert measured.ram.value == pytest.approx(128.0) and measured.gpu.gpu_state == "unsupported_platform"
+    assert measured.ram.value == pytest.approx(128.0) and measured.gpu.gpu_state == "unified_memory"
     assert measured.identity.source == "macos_platform_uuid"
 
 
-def test_cpu_only_does_not_override_the_platform_gate_on_macos():
-    """`--cpu-only` is a statement about the GPU, not about the platform: on macOS the state
-    stays `unsupported_platform`, so the fit stays blocked. Otherwise a `--cpu-only` run on a Mac
-    would produce a computing profile from a RAM reading the contract calls display only."""
+def test_cpu_only_on_macos_is_a_cpu_fit_now():
+    """AP9-GPU G5: the RAM of a Mac is a measurement now, so `--cpu-only` gives the CPU fit there too."""
     runner = _runner(memsize=_done(MACOS_MEMSIZE_ARGS, stdout="137438953472\n"))
     measured = measure_hardware("darwin", runner, FixtureFiles({}), lambda: 0, cpu_only=True)
-    assert measured.gpu.gpu_state == "unsupported_platform"
+    assert measured.gpu.gpu_state == "none" and runner.calls == [MACOS_MEMSIZE_ARGS]
     profile = build_profile(measured, _absent(), "3f9a0c21d4e6b870", "mac", RECORDED_AT)
-    assert fit_block_reason(profile) is not None
+    assert fit_block_reason(profile) is None
 
 
 def test_an_unrepresentable_vram_number_is_present_unmeasured_not_an_overflow():
@@ -673,7 +661,9 @@ def test_an_unknown_physical_ram_is_a_note_of_its_own():
 
 
 def _available(ram_gib: float = 127.46, vram_gib: float | None = 11.94) -> LlmfitReference:
-    return LlmfitReference(status="available", version=LLMFIT_VERSION, ram_gib=ram_gib, vram_gib=vram_gib, reason=None)
+    """llmfit's reading of the laptop; its one CUDA entry is the cross-check's other side (AP9-GPU G6)."""
+    gpus = (LlmfitGpu("NVIDIA RTX PRO 3000", "CUDA", vram_gib, 1),) if vram_gib else ()
+    return LlmfitReference(status="available", version=LLMFIT_VERSION, ram_gib=ram_gib, vram_gib=vram_gib, reason=None, gpus=gpus)
 
 
 def _absent() -> LlmfitReference:
@@ -712,7 +702,7 @@ def test_a_failing_llmfit_leaves_both_cross_checks_in_error():
 
 
 def test_an_unmeasured_vram_is_never_compared_with_llmfits_value():
-    runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_done(LSPCI_ARGS, stdout=_fixture("lspci_nn_intel_laptop.txt")))
+    runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_missing("lspci"))
     measured = measure_hardware("linux", runner, _linux_files(), lambda: 0)
     check = build_crosscheck(measured, _available(vram_gib=2.0))
     assert check.vram.status == "absent" and check.vram.own_gib is None

@@ -16,10 +16,13 @@ import pytest
 
 from modelroom.cli import hardware_with_config, main
 from modelroom.config import Configuration
-from modelroom.llmfit import FixtureRunner, LlmfitReference, cuda_vram_gib, read_llmfit_reference
+from modelroom.llmfit import FixtureRunner, LlmfitGpu, LlmfitReference, cuda_vram_gib, read_llmfit_reference
 from modelroom.measure import (
     LINUX_CHASSIS_FILE,
+    LSPCI_ARGS,
+    NVIDIA_CC_ARGS,
     NVIDIA_SMI_ARGS,
+    WINDOWS_ADAPTER_ARGS,
     PROC_MEMINFO_FILE,
     WINDOWS_CHASSIS_ARGS,
     FixtureFiles,
@@ -39,6 +42,8 @@ NOW = datetime(2026, 9, 26, 8, 0, 0, tzinfo=timezone.utc)
 # The cards of the two rented machines of 2026-09-27 (`tests/fixtures/README.md`, recorded).
 A100 = "NVIDIA A100-SXM4-80GB"
 L4 = "NVIDIA L4"
+# The server recordings next to the laptop's list of video controllers are two machines: no list (AP9-GPU r1-1).
+NO_LISTING = {WINDOWS_ADAPTER_ARGS: FileNotFoundError("powershell")}
 
 
 def _done(args, stdout: str = "", returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess:
@@ -46,7 +51,9 @@ def _done(args, stdout: str = "", returncode: int = 0, stderr: str = "") -> subp
 
 
 def _smi(stdout: str) -> FixtureRunner:
-    return FixtureRunner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, stdout)})
+    """`nvidia-smi` alone; the sources AP9-GPU added are not installed (`tests/test_gpu_*.py` test them)."""
+    missing = {args: FileNotFoundError(args[0]) for args in (NVIDIA_CC_ARGS, LSPCI_ARGS, WINDOWS_ADAPTER_ARGS)}
+    return FixtureRunner({**missing, NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, stdout)})
 
 
 def _chassis(response) -> FixtureRunner:
@@ -85,7 +92,7 @@ def test_one_card_stays_measured_with_its_one_adapter():
 def test_indexes_other_than_0_to_n_minus_1_are_present_unmeasured():
     reading = measure_gpu("win32", _smi(f"0, {A100}, 81920\n2, {A100}, 81920\n"))
     assert (reading.gpu_state, reading.vram_gib, reading.adapters) == ("present_unmeasured", None, ())
-    assert reading.note == "nvidia-smi reports the adapters at indexes 0, 2, not 0 to 1"
+    assert reading.note.startswith("not recognized: nvidia-smi reports the adapters at indexes 0, 2, not 0 to 1")  # AP9-GPU r1-2
 
 
 @pytest.mark.parametrize("second", [f"1, {A100}", f"1, {A100}, 0", f"1, {A100}, lots"])
@@ -100,9 +107,9 @@ def test_no_path_writes_multi_gpu_not_covered_any_more():
 
 
 def test_a_two_card_measurement_writes_a_valid_profile_the_fit_computes_for():
-    runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8"))})
+    runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8")), **NO_LISTING})
     measured = measure_hardware("win32", runner, FixtureFiles({}), lambda: LAPTOP_RAM_BYTES)
-    reference = LlmfitReference("available", "1.1.16", 127.46, 80.0, None, cuda_vram_gib=160.0)
+    reference = LlmfitReference("available", "1.1.16", 127.46, 80.0, None, cuda_vram_gib=160.0, gpus=(LlmfitGpu(A100, "CUDA", 80.0, 2),))
     profile = build_profile(measured, reference, "0123456789abcdef", "server", NOW)
     assert profile.gpu_state == "multi_gpu" and profile.vram_gib == 160.0 and len(profile.gpus) == 2
     assert profile.llmfit_crosscheck.vram.status == "confirmed"
@@ -147,11 +154,13 @@ def test_read_llmfit_reference_carries_the_sum():
     assert (reference.status, reference.ram_gib, reference.vram_gib, reference.cuda_vram_gib) == ("available", 235.92, 80.0, 160.0)
 
 
-@pytest.mark.parametrize(("llmfit_sum", "status"), [(160.0, "confirmed"), (80.0, "deviation"), (None, "absent")])
+@pytest.mark.parametrize(("llmfit_sum", "status"), [(160.0, "confirmed"), (80.0, "deviation"), (None, "not_comparable")])
 def test_several_cards_are_checked_against_the_sum_of_llmfits_cards(llmfit_sum, status):
-    runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8"))})
+    """AP9-GPU G6 row 5/6: compared against llmfit's CUDA entries; without them `not_comparable` (was `absent`)."""
+    runner = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8")), **NO_LISTING})
     measured = measure_hardware("win32", runner, FixtureFiles({}), lambda: LAPTOP_RAM_BYTES)
-    reference = LlmfitReference("available", "1.1.16", 127.46, 80.0, None, cuda_vram_gib=llmfit_sum)
+    gpus = (LlmfitGpu(A100, "CUDA", llmfit_sum / 2, 2),) if llmfit_sum else ()
+    reference = LlmfitReference("available", "1.1.16", 127.46, 80.0, None, cuda_vram_gib=llmfit_sum, gpus=gpus)
     assert build_crosscheck(measured, reference).vram.status == status
 
 
@@ -182,7 +191,9 @@ def test_the_recorded_two_l4_machine_is_confirmed_by_its_own_llmfit_answer():
     """
     smi = _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_l4.csv").read_text(encoding="utf-8"))
     files = FixtureFiles({PROC_MEMINFO_FILE: "MemTotal:       98870364 kB\n", LINUX_CHASSIS_FILE: "1\n"})
-    measured = measure_hardware("linux", FixtureRunner({NVIDIA_SMI_ARGS: smi}), files, lambda: 0)
+    lspci = _done(LSPCI_ARGS, (FIXTURES / "lspci_nnD_two_l4_server.txt").read_text(encoding="utf-8"))
+    runner = FixtureRunner({NVIDIA_SMI_ARGS: smi, NVIDIA_CC_ARGS: _done(NVIDIA_CC_ARGS, "0, 8.9, 00000000:01:00.0\n1, 8.9, 00000000:02:00.0\n"), LSPCI_ARGS: lspci})
+    measured = measure_hardware("linux", runner, files, lambda: 0)
     llmfit = _done(("llmfit", "system", "--json"), (FIXTURES / "llmfit_system_two_l4.json").read_text(encoding="utf-8"))
     version = _done(("llmfit", "--version"), (FIXTURES / "llmfit_version.txt").read_text(encoding="utf-8"))
     reference = read_llmfit_reference(FixtureRunner({("llmfit", "--version"): version, ("llmfit", "system", "--json"): llmfit}), "1.1.16")
@@ -332,7 +343,7 @@ def test_the_machine_class_flag_is_entered_and_printed(tmp_path: Path, capsys):
 
 def test_the_summary_line_names_the_cards_and_the_class(tmp_path: Path, capsys):
     config = _config(tmp_path)
-    two = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8"))})
+    two = windows_runner({NVIDIA_SMI_ARGS: _done(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_two_gpus.csv").read_text(encoding="utf-8")), **NO_LISTING})
     assert hardware_with_config(config, "workstation", _probes(two), NOW, tmp_path / "pointer.json") == 0
     out = capsys.readouterr().out
     assert "vram 160.00 GiB (nvidia-smi, 2 cards), gpu multi_gpu, class laptop (chassis)" in out

@@ -67,6 +67,7 @@ from .importer import (
 )
 from .llmfit import LlmfitReference, read_llmfit_reference
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware
+from .views_adapters import adapter_lines
 from .migrate import MigrationError, migrate
 from .profile import MACHINE_CLASSES, HardwareProfile, MachineClass, fit_block_reason, os_fingerprint, read_profile_document
 from .render_cmd import render_with_config
@@ -432,10 +433,10 @@ def hardware_with_config(
     recorded_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     pointer_file = pointer_path if pointer_path is not None else default_pointer_path()
 
-    measured = measure_hardware(
-        active.platform, active.runner, active.read_text, active.memory_bytes, cpu_only, machine_class
-    )
+    # llmfit first: where modelroom counts no card itself, llmfit's cards may count (AP9-GPU, mode B).
     reference = read_llmfit_reference(active.runner, config.llmfit.min_version)
+    measured = measure_hardware(active.platform, active.runner, active.read_text, active.memory_bytes, cpu_only,
+                                machine_class, active.list_dir, reference)
 
     try:
         handle = acquire_lock(config.paths.lock_file, "hardware", recorded_at)
@@ -630,6 +631,9 @@ def _print_hardware_summary(
             f"class {profile.machine_class} ({profile.machine_class_source}), "
             f"llmfit ram {checks.ram_physical.status} / vram {checks.vram.status}"
         )
+    # One line per graphics unit (AP9-GPU G8): printed as they are, or said like a note in the guided mode.
+    for line in adapter_lines(profile.adapters, profile.gpu_state, measured.gpu.note):
+        (say if note is not None else print)(line)
     for text in measured.notes:
         say(text)
     if reference.reason is not None:

@@ -125,6 +125,24 @@ LAPTOP_RAM_BYTES = 137_112_547_328  # 127.70 GiB
 NOTEBOOK_CHASSIS = 10
 
 
+def windows_gpu_responses() -> dict:
+    """The graphics sources AP9-GPU added, answered from the laptop recording (`tests/fixtures/README.md`):
+    the compute capability, the video controllers and the registry's memory sizes."""
+    import subprocess
+
+    from modelroom.measure import NVIDIA_CC_ARGS, WINDOWS_ADAPTER_ARGS, WINDOWS_REGISTRY_ARGS
+
+    files = {
+        NVIDIA_CC_ARGS: "nvidia_smi_compute_cap_laptop.csv",
+        WINDOWS_ADAPTER_ARGS: "win_video_controllers_laptop.json.txt",
+        WINDOWS_REGISTRY_ARGS: "win_registry_display_laptop.json.txt",
+    }
+    return {
+        args: subprocess.CompletedProcess(list(args), 0, stdout=(FIXTURES / name).read_text(encoding="utf-8"), stderr="")
+        for args, name in files.items()
+    }
+
+
 def windows_runner(overrides: dict | None = None):
     """Every command a Windows/NVIDIA measurement makes, answered from the recorded fixtures."""
     import subprocess
@@ -138,6 +156,7 @@ def windows_runner(overrides: dict | None = None):
 
     guid = f"\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\n    MachineGuid    REG_SZ    {MACHINE_GUID}\n"
     responses = {
+        **windows_gpu_responses(),
         NVIDIA_SMI_ARGS: completed(NVIDIA_SMI_ARGS, (FIXTURES / "nvidia_smi_one_gpu.csv").read_text(encoding="utf-8")),
         GPU_UTILIZATION_ARGS: completed(GPU_UTILIZATION_ARGS, "3\n"),
         WINDOWS_MACHINE_GUID_ARGS: completed(WINDOWS_MACHINE_GUID_ARGS, guid),

@@ -23,6 +23,7 @@ from .render import format_header_line
 from .result_card import _DASH, _folder_is_empty, _model_name, context_fact, context_short, empty_card
 from .result_card import relative_path, result_card
 from .scenario_text import document_scenario, load_hint, never_measured, scenario_line, unused_measurements
+from .views_adapters import ADAPTER_COLUMNS, ADAPTER_HINT, adapter_table_rows
 from .screen import (
     JOIN_WIDTH,
     MEASURE_HINT,
@@ -115,9 +116,9 @@ _AREA_COLUMNS = ("Source", "Base model", "Packager", "Status", "Last success", "
 # clause per word (decided 2026-09-27). The fit's own is `screen.FIT_HINT`, shared with the terminal.
 SPEED_HINT = "Speed is measured, see its column."
 GPU_STATE_HINT = (
-    "GPU state: measured = read from nvidia-smi; entered = typed in by hand; multi_gpu = several cards, "
-    "added up; present_unmeasured = a card may be there, its memory was not read; none = no usable card "
-    "(none found, display adapter only, or --cpu-only); unified_memory = system and card share one "
+    "GPU state: measured = a counted card, read by modelroom or llmfit; entered = typed in by hand; multi_gpu = "
+    "several counted cards, added up; present_unmeasured = a card may be there, nothing about it was read; none = "
+    "no counted card (none found, none usable, display adapter only, or --cpu-only); unified_memory = system and card share one "
     "memory; unsupported_platform = not read on this platform; multi_gpu_not_covered = several cards, "
     "measured before the fit covered them; legacy_unknown = from a schema-1 profile"
 )
@@ -287,6 +288,9 @@ def document_markdown(document: RenderDocument) -> str:
         CLASS_HINT,
         "",
     ]
+    adapters = [[_cell(value) for value in row] for block in document.machines for row in adapter_table_rows(block.machine, block.profile)]
+    if adapters:
+        sections += ["## Graphics adapters", "", _table(ADAPTER_COLUMNS, adapters), "", ADAPTER_HINT, ""]
     for block in document.machines:
         sections += _machine_sections(block, document)
     return "\n".join(sections)

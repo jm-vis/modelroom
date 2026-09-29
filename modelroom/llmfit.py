@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from typing import Callable, Literal, Protocol
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
+# The most cards one entry of llmfit's `gpus[]` may stand for; above it the list does not read (AP9-GPU).
+MAX_GPU_COUNT = 64
 # F9b (fix-round 5): `Which = (name) -> absolute path | None`, the same dependency-injection
 # shape `Transport`/`Runner` already use -- the real implementation is `_default_which` (an
 # explicit PATH walk, see its own docstring). Only `SubprocessRunner` takes one (a test never
@@ -229,8 +231,8 @@ def hardware_fields_from_llmfit_system(data: dict) -> dict:
 
     `system.gpu_vram_gb`/`total_ram_gb`/`available_ram_gb` are already GiB in llmfit's own
     output (division by 1024**3 in its source, e.g. 127.46 for a 128 GB machine), taken
-    unchanged (CONTRACTS.md, "Local llmfit binding"). `providers` and `gpus[]` are ignored in
-    v1. `total_ram_gb` is the one field this cannot proceed without, and (F12/R7) it must be a
+    unchanged (CONTRACTS.md, "Local llmfit binding"). `providers` is ignored; `gpus[]` is read
+    on its own (`llmfit_gpus`, `cuda_vram_gib`). `total_ram_gb` is the one field this cannot proceed without, and (F12/R7) it must be a
     real, finite positive number, not just present -- `null`, a string, zero, negative, `NaN` or
     infinite all raise `LlmfitError` naming the field, the same as `HardwareSnapshot.ram_gib`'s
     own `gt=0` would eventually reject, but caught here so it becomes an ordinary exit `2`, never
@@ -304,6 +306,21 @@ def _optional_bool(value: object, field: str) -> bool:
 
 
 @dataclass(frozen=True)
+class LlmfitGpu:
+    """One entry of llmfit's `system.gpus[]`: `count` cards of one name, backend and size (AP9-GPU G6).
+
+    `vram_gb` is llmfit's own number, unchanged -- `0` included, which it allows (a card whose
+    memory it could not read); the rule for Windows compares this raw value (F10).
+    """
+
+    name: str | None
+    backend: str
+    vram_gb: float
+    count: int
+    unified_memory: bool = False
+
+
+@dataclass(frozen=True)
 class LlmfitReference:
     """llmfit's own readings of this machine, for the cross-check -- never the authority.
 
@@ -312,7 +329,9 @@ class LlmfitReference:
     version); `error` means it was asked and failed. `reason` says which, in the tool's own
     words, for the note the command prints. `cuda_vram_gib` is the sum over llmfit's `gpus[]`
     entries of backend `CUDA`, `vram_gb x count` each, the way llmfit counts them itself; `None`
-    when that list is missing or an entry does not read (decided 2026-09-26).
+    when that list is missing or an entry does not read (decided 2026-09-26). `gpus` is that list
+    entry by entry, empty where it does not read (AP9-GPU G6): the fallback when modelroom counts
+    no card of its own, and the other side of the cross-check -- no call of its own.
     """
 
     status: Literal["available", "absent", "error"]
@@ -321,6 +340,7 @@ class LlmfitReference:
     vram_gib: float | None
     reason: str | None
     cuda_vram_gib: float | None = None
+    gpus: tuple[LlmfitGpu, ...] = ()
 
 
 def read_llmfit_reference(runner: Runner, min_version: str) -> LlmfitReference:
@@ -350,7 +370,27 @@ def read_llmfit_reference(runner: Runner, min_version: str) -> LlmfitReference:
         vram_gib=fields["vram_gib"],
         reason=None,
         cuda_vram_gib=cuda_vram_gib(data["system"]),
+        gpus=llmfit_gpus(data["system"]),
     )
+
+
+def llmfit_gpus(system: dict) -> tuple[LlmfitGpu, ...]:
+    """Every entry of `system.gpus[]`, checked like `cuda_vram_gib`; empty where one does not read."""
+    gpus = system.get("gpus")
+    if not isinstance(gpus, list):
+        return ()
+    read = []
+    for entry in gpus:
+        if not isinstance(entry, dict) or not isinstance(entry.get("backend"), str):
+            return ()
+        vram, count, name = entry.get("vram_gb"), entry.get("count"), entry.get("name")
+        unified = entry.get("unified_memory", False)
+        if not (_is_finite_number(vram) and vram >= 0 and isinstance(count, int) and not isinstance(count, bool) and 1 <= count <= MAX_GPU_COUNT):
+            return ()  # a count no machine has (`10**30`) is no reading: the list is unfolded card by card
+        if not (name is None or isinstance(name, str)) or not isinstance(unified, bool):
+            return ()
+        read.append(LlmfitGpu(name.strip() if isinstance(name, str) and name.strip() else None, entry["backend"], float(vram), count, unified))
+    return tuple(read)
 
 
 def cuda_vram_gib(system: dict) -> float | None:
