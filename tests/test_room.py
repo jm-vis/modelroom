@@ -186,32 +186,42 @@ def test_cards_that_differ_from_the_profile_are_unknown(stdout, cards):
     assert free_vram_mib(_smi(stdout), cards) is None
 
 
-def test_the_self_test_checks_the_free_line_for_its_form_only():
-    """`scripts/selftest.py` runs on the real machine: it checks the form of the `free` line, not its numbers.
+def test_the_self_test_checks_the_room_block_for_its_form_only():
+    """`scripts/selftest.py` runs on the real machine: it checks the form of the whole `room` block --
+    the labeled line and its continuations -- not its numbers (AP9-RM U10, Codex diff r1-2).
 
     Here and not in `tests/test_selftest.py`, which is over the size limit (AP9-UX2, size guard).
     """
     import importlib.util
 
-    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest.py"
+    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest_dialog.py"
     if not (script.parent.parent / ".git").exists():
         pytest.skip("scripts/ is not shipped in the sdist; the self-test is tested from a clone")
-    spec = importlib.util.spec_from_file_location("modelroom_selftest_free", script)
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_dialog_room", script)
     st = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(st)
     head = " #    Model                   Package                 Fit           Speed         Memory    Download"
     lines = [head, " shown     1 of 1 package", " install   #1  ollama pull x:y"]
+    graphics = " room      graphics 11.0 GB for models (12.0 GB card minus reserve)"
+    memory = "           memory 111.7 GB for models (127.7 GB minus reserve)"
+    disk = "           disk 41.2 GB free on C: (Ollama models)"
 
     def named(room: list[str]) -> bool:
         return any("room line" in problem for problem in st.result_table_problems([*room, *lines]))
 
-    # AP9-RM U10: the head names the budget; the free memory of the moment is no head any more.
-    assert named([])
-    assert not named([" room      graphics 41.4 GB for models (21.7 + 21.7 GB cards minus reserve)"])
-    assert not named([" room      graphics 11.0 GB for models (12.0 GB card minus reserve) · memory 111.7 GB for models (127.7 GB minus reserve)"])
+    assert not named([graphics, memory, disk])  # three lines, as the guided mode draws them
+    assert not named([" room      graphics 41.4 GB for models (21.7 + 21.7 GB cards minus reserve)", memory + " · disk unknown"])
     assert not named([" room      graphics unknown - memory unknown - disk unknown (two places Ollama may use)"])
     assert not named([" room      shared memory 95.0 GB for models (128.0 GB minus both reserves) · disk unknown"])
+    assert not named([" room      graphics 176.0 GB for models (8 cards, 184.0 GB in all minus reserve)", memory, disk])
+    assert named([])
+    assert named([graphics])  # no memory, no disk
+    assert named([graphics, memory])  # no disk
+    assert named([graphics, disk])  # no memory
+    assert named([" room      shared memory lots of it · disk unknown"])  # no number
+    assert named([" room      graphics 11 GB for models (12 GB card minus reserve)", memory, disk])  # one decimal
     assert named([" free      graphics 21.0 + 20.4 GB free now · disk 41.2 GB free on C: (Ollama models)"])
+    assert named([graphics, memory, disk, "           graphics 10.2 GB free now"])  # the moment is no piece of the head
     assert named([" room      graphics none · disk none"])
 
 

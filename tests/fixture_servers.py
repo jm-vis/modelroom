@@ -73,7 +73,9 @@ def loadtest_daemon(generates=None, observations=None, tags: str = "ollama_tags_
     """A `FixtureDaemon` that answers every call one whole load test makes.
 
     `generates` is the answer sequence of `/api/generate`, `observations` that of `/api/ps` --
-    one observation after every run, so four by default.
+    one observation after every run, so four by default. One answer more stands behind them: the
+    read of step 5 for its `loaded` line (AP9-RM U10), so a sequence the load test used up does not
+    end in an `IndexError` that the hint, which says nothing on any failure, would swallow.
     """
     from modelroom.daemon import FixtureDaemon
 
@@ -87,7 +89,7 @@ def _loadtest_answers(generates=None, observations=None, tags: str = "ollama_tag
         ("GET", VERSION_PATH): json_response("ollama_version_local.json"),
         ("GET", TAGS_PATH): json_response(tags),
         ("POST", SHOW_PATH): json_response("ollama_show_hf_gguf.json"),
-        ("GET", PS_PATH): list(observations if observations is not None else [ps_answer()] * 4),
+        ("GET", PS_PATH): [*(observations if observations is not None else [ps_answer()] * 4), ps_answer()],
         ("POST", GENERATE_PATH): default_generates() if generates is None else list(generates),
     }
 

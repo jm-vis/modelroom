@@ -24,6 +24,10 @@ _SPEC.loader.exec_module(st)
 _SET_SPEC = importlib.util.spec_from_file_location("modelroom_searchset", REPO / "scripts" / "searchset.py")
 searchset = importlib.util.module_from_spec(_SET_SPEC)
 _SET_SPEC.loader.exec_module(searchset)
+# Criterion 7's checks of the screen live in their own module since AP9-RM (size guard).
+_DIALOG_SPEC = importlib.util.spec_from_file_location("modelroom_selftest_dialog", REPO / "scripts" / "selftest_dialog.py")
+dialog = importlib.util.module_from_spec(_DIALOG_SPEC)
+_DIALOG_SPEC.loader.exec_module(dialog)
 
 RESULTS = Path("//models/results")
 
@@ -688,6 +692,8 @@ GOOD_DIALOG = [
     "",
     " workstation - context L 32k",
     " room      graphics 11.0 GB for models (12.0 GB card minus reserve)",
+    "           memory 111.7 GB for models (127.7 GB minus reserve)",
+    "           disk 41.2 GB free on C: (Ollama models)",
     " #    Model                   Package                 Fit           Speed         Memory    Download",
     " 1    Qwen3.5-9B              unsloth - Q4_K_S        tight         -             10.5 GB   5.0 GB",
     " shown     1 of 25 packages",
@@ -705,63 +711,63 @@ GOOD_MODELS = [
 
 
 def test_criterion_seven_passes_on_a_run_that_reads_as_a_guided_dialog():
-    assert st.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE, GOOD_MODELS) == []
+    assert dialog.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE, GOOD_MODELS) == []
 
 
 def test_criterion_seven_names_a_model_list_that_is_empty():
-    assert any("no model" in problem for problem in st.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE, []))
+    assert any("no model" in problem for problem in dialog.guided_mode_problems(GOOD_DIALOG, GOOD_SCALE, []))
 
 
 def test_criterion_seven_names_a_model_line_that_is_too_wide():
     wide = [GOOD_MODELS[0] + " " * 20]
 
-    assert any("characters wide" in problem for problem in st.model_list_problems(wide))
+    assert any("characters wide" in problem for problem in dialog.model_list_problems(wide))
 
 
 def test_criterion_seven_names_a_model_line_without_a_fit():
-    assert any("carries no fit" in problem for problem in st.model_list_problems(["Qwen3.5-9B    9B"]))
+    assert any("carries no fit" in problem for problem in dialog.model_list_problems(["Qwen3.5-9B    9B"]))
 
 
 def test_criterion_seven_names_a_result_table_without_the_model_column():
     without = [line for line in GOOD_DIALOG if "Package" not in line]
 
-    assert any("table head" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE, GOOD_MODELS))
+    assert any("table head" in problem for problem in dialog.guided_mode_problems(without, GOOD_SCALE, GOOD_MODELS))
 
 
 def test_criterion_seven_names_a_missing_start_screen():
     without = [line for line in GOOD_DIALOG if "ModelRoom" not in line]
 
-    assert any("start screen" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE))
+    assert any("start screen" in problem for problem in dialog.guided_mode_problems(without, GOOD_SCALE))
 
 
 def test_criterion_seven_names_a_missing_step_head():
     without = [line for line in GOOD_DIALOG if "Step 3" not in line]
 
-    assert any("step heads" in problem for problem in st.guided_mode_problems(without, GOOD_SCALE))
+    assert any("step heads" in problem for problem in dialog.guided_mode_problems(without, GOOD_SCALE))
 
 
 def test_criterion_seven_names_a_step_head_that_is_not_seventy_two_wide():
     short = [line.rstrip("-") if "Step 3" in line else line for line in GOOD_DIALOG]
 
-    assert any("characters wide, expected 72" in problem for problem in st.step_head_problems(short))
+    assert any("characters wide, expected 72" in problem for problem in dialog.step_head_problems(short))
 
 
 def test_criterion_seven_names_a_scale_without_its_last_column():
     bare = [label.split("  ")[0] for label in GOOD_SCALE]
 
-    assert any("no count of what fits" in problem for problem in st.guided_mode_problems(GOOD_DIALOG, bare))
+    assert any("no count of what fits" in problem for problem in dialog.guided_mode_problems(GOOD_DIALOG, bare))
 
 
 def test_criterion_seven_names_a_run_without_answer_lines():
     without = [line for line in GOOD_DIALOG if not line.strip().startswith("? ")]
 
-    assert any("answer lines" in problem for problem in st.answer_line_problems(without))
+    assert any("answer lines" in problem for problem in dialog.answer_line_problems(without))
 
 
 def test_criterion_seven_names_the_libraries_own_answer():
     with_library = [*GOOD_DIALOG, "? Which of these models should the result cover? done (2 selections)"]
 
-    assert any("library wrote an answer" in problem for problem in st.answer_line_problems(with_library))
+    assert any("library wrote an answer" in problem for problem in dialog.answer_line_problems(with_library))
 
 
 @pytest.mark.parametrize(
@@ -774,7 +780,7 @@ def test_criterion_seven_names_the_libraries_own_answer():
     ],
 )
 def test_criterion_seven_names_a_line_the_screen_no_longer_carries(line):
-    problems = st.answer_line_problems([*GOOD_DIALOG, line])
+    problems = dialog.answer_line_problems([*GOOD_DIALOG, line])
 
     assert any("no longer carries" in problem for problem in problems)
 
@@ -782,13 +788,13 @@ def test_criterion_seven_names_a_line_the_screen_no_longer_carries(line):
 def test_criterion_seven_names_a_run_that_closes_without_the_card():
     without = [line for line in GOOD_DIALOG if not line.strip().startswith(("models ", "speed ", "result "))]
 
-    assert any("card of step 5" in problem for problem in st.card_problems(without))
+    assert any("card of step 5" in problem for problem in dialog.card_problems(without))
 
 
 def test_criterion_seven_names_a_result_view_that_repeats_one_note_per_row():
     repeated = [*GOOD_DIALOG, " #2 fits into graphics memory", " #3 needs system memory", " #4 needs system memory"]
 
-    problems = st.result_table_problems(repeated)
+    problems = dialog.result_table_problems(repeated)
 
     assert any("notes about the memory pool" in problem for problem in problems)
 
@@ -803,7 +809,7 @@ def test_criterion_seven_reads_the_key_block_as_no_note_about_the_pool():
         *GOOD_DIALOG[-4:],
     ]
 
-    assert not [problem for problem in st.result_table_problems(with_key) if "memory pool" in problem]
+    assert not [problem for problem in dialog.result_table_problems(with_key) if "memory pool" in problem]
 
 
 def test_criterion_seven_names_a_row_that_still_says_unknown():
@@ -812,7 +818,7 @@ def test_criterion_seven_names_a_row_that_still_says_unknown():
         " 1    Qwen3.5-9B                unsloth - Q4_K_M        fits                  unknown       8.3 GB",
     ]
 
-    assert any("says `unknown`" in problem for problem in st.result_table_problems(with_unknown))
+    assert any("says `unknown`" in problem for problem in dialog.result_table_problems(with_unknown))
 
 
 # --- criterion 8: the search test set --------------------------------------------------------------------
