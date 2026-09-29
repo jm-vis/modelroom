@@ -17,11 +17,13 @@ from .contracts import Area, Fit, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
-from .pull_choice import collision_pieces, entry_pull_name, repo_lines
+from .disk_fit import DISK_LABEL, disk_words, over_disk
+from .pull_choice import collision_pieces, repo_lines
 from .ranking_words import EACH_MACHINE_SENTENCE, key_pieces, several_ranked, showing_line, shown_pieces
 from .render import format_header_line
-from .room import LiveRoom
+from .room import Disk, LiveRoom
 from .room_head import LOADED_LABEL, ROOM_LABEL, head_pieces, loaded_pieces, reserve_hint_rows
+from .views_install import INSTALL_LABEL, install_lines, install_target  # noqa: F401 -- `install_target` is re-exported
 from .result_card import _DASH, _folder_is_empty, _model_name, context_fact, context_short, empty_card
 from .result_card import relative_path, result_card
 from .scenario_text import document_scenario, load_hint, never_measured, scenario_line, unused_measurements
@@ -34,7 +36,6 @@ from .screen import (
     deviation_words,
     fit_word,
     head_line,
-    install_pull_line,
     joined,
     plain,
     ranks_text,
@@ -193,8 +194,8 @@ def _number(value: float | None) -> str:
     return _UNKNOWN if value is None else f"{value:.2f}"
 
 
-def _ranked_row(entry: RankedEntry, document: RenderDocument) -> list[str]:
-    return [
+def _ranked_row(entry: RankedEntry, document: RenderDocument, disk: Disk | None = None) -> list[str]:
+    row = [
         str(entry.rank),
         _cell(entry.base_model_hf_repo),
         _stars(document.ratings.get(entry.base_model_hf_repo)),
@@ -211,6 +212,8 @@ def _ranked_row(entry: RankedEntry, document: RenderDocument) -> list[str]:
         entry.provenance,
         _cell(entry.note.text),
     ]
+    row[6] += " ×" if over_disk(entry.weights_gib, disk) else ""  # AP9-RM U11: the download does not fit the disk
+    return row
 
 
 def _set_aside_row(entry: SetAsideEntry, document: RenderDocument) -> list[str]:
@@ -243,9 +246,11 @@ def _summary_lines(document: RenderDocument) -> list[str]:
     return lines
 
 
-def _machine_sections(block: MachineRanking, document: RenderDocument, first: bool = False) -> list[str]:
+def _machine_sections(block: MachineRanking, document: RenderDocument, first: bool = False, disk: Disk | None = None) -> list[str]:
     """One machine's sections: its ranking, then what was set aside, each as its own heading; the
-    reserve hint of 0.1.0 and, for the `first` of several, that each table is its machine's (AP9-RM)."""
+    reserve hint of 0.1.0 and, for the `first` of several, that each table is its machine's (AP9-RM);
+    with the free disk of a guided run, ` ×` behind a download too large for it and the `disk` line (U11)."""
+    over = disk_words(block, disk, "–", "×")
     headline = f"{block.label} -- {block.status}{_deviation(block)}"
     if block.reason is not None:
         headline = f"{headline}: {_cell(block.reason)}"
@@ -257,8 +262,9 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
         sections += [
             f"{showing_line(block)}{' ' + EACH_MACHINE_SENTENCE if first else ''}",
             "",
-            _table(_RANKED_COLUMNS, [_ranked_row(entry, document) for entry in block.ranked]),
+            _table(_RANKED_COLUMNS, [_ranked_row(entry, document, disk) for entry in block.ranked]),
             "",
+            *([f"{over}.", ""] if over else []),
             *([_cell(" · ".join(repos)), ""] if repos else []),
             " · ".join(key_pieces(block)),
             "",
@@ -279,8 +285,9 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
     return sections
 
 
-def document_markdown(document: RenderDocument) -> str:
-    """The Markdown view of `document`: the same numbers the JSON and the terminal view show."""
+def document_markdown(document: RenderDocument, disks: Mapping[str, Disk] | None = None) -> str:
+    """The Markdown view of `document`: the same numbers the JSON and the terminal view show; `disks`
+    is the free disk a guided run read, per machine name (U11), and marks nothing where it is `None`."""
     sections = [
         format_header_line(document.snapshot_run_at, document.rendered_at),
         "",
@@ -304,7 +311,7 @@ def document_markdown(document: RenderDocument) -> str:
         sections += ["## Graphics adapters", "", _table(ADAPTER_COLUMNS, adapters), "", ADAPTER_HINT, ""]
     first = next((block.machine for block in document.machines if block.ranked), None) if several_ranked(document) else None
     for block in document.machines:
-        sections += _machine_sections(block, document, first=block.machine == first)
+        sections += _machine_sections(block, document, block.machine == first, (disks or {}).get(block.machine))
     return "\n".join(sections)
 
 
@@ -316,14 +323,16 @@ def document_markdown(document: RenderDocument) -> str:
 # Since AP9-UX2 (U8) the table carries the download of each row, the weight files of its package:
 # `Fit` gave up 8 (its longest word, `tight (RAM)`, is 11) and `Model` 2, so the table stays 99 wide.
 # `Package` says a cut with `…` instead of ending mid-word; `Speed` holds up to `9999.9 tok/s`.
+# Since AP9-RM U11 a download too large for the free disk carries ` ×` (`100.5 GB ×`), so `Download`
+# is 10 wide and `Fit` (11, its longest word) and `Package` (21) gave up one each.
 _TERMINAL_COLUMNS = (
     ("#", 3),
     ("Model", 22),
-    ("Package", 22),
-    ("Fit", 12),
+    ("Package", 21),
+    ("Fit", 11),
     ("Speed", 12),
     ("Memory", 8),
-    ("Download", 8),
+    ("Download", 10),
 )
 _INDENT = " "
 # The labels of the lines under the table, in the order a reader reads them. They stand in the
@@ -337,12 +346,9 @@ SPEED_LABEL = "speed"
 # The words of the table's own columns, under the notes and above the install line (decided
 # 2026-09-27): the same hint the Markdown file carries under its ranking.
 KEY_LABEL = "key"
-INSTALL_LABEL = "install"
 # U4 (AP9-UX2): the repositories of rows that look alike. The `room` and `loaded` lines under the
-# head are `room_head`'s (AP9-RM U10).
+# head are `room_head`'s (AP9-RM U10), the `install` line `views_install`'s (U11).
 REPO_LABEL = "repo"
-OTHER_INSTALL_NOTE = "run it on that computer; this run pulls only onto this one"
-NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 # What is left of the 100 characters for the text of a labeled line: the label's own column, and
 # the one space every line of this screen carries.
 _NOTE_WIDTH = JOIN_WIDTH - LABEL_COLUMN - len(_INDENT)
@@ -546,53 +552,31 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     lines += _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
     lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash) + reserve_hint_rows(block))
+    lines += _disk_lines(block, _disk(block, view), dash)
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
         lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
-    lines += _install_lines(block, view)
-    return lines
+    return lines + install_lines(block, view.install_for, view.ambiguous, _disk(block, view), dash)
 
 
-def install_target(block: MachineRanking, install_for: str | None) -> tuple[RankedEntry, str] | None:
-    """The first row of the machine this run is on, and its local Ollama name -- or `None`.
-
-    Only for that machine: the local Ollama name of a package is about the machine that would
-    install it. A package with no such name has none. The install line stands on this choice; the
-    pull of step 5 lets the user choose another row (`pull_choice`, U6).
-    """
-    if install_for is None or block.machine != install_for or not block.ranked:
-        return None
-    entry = block.ranked[0]
-    name = entry_pull_name(entry)
-    return None if name is None else (entry, name)
+def _disk(block: MachineRanking, view: RunView) -> Disk | None:
+    """The free disk read for this block's machine, where one was (U11); `None` in `render`."""
+    live = None if view.live is None else view.live.get(block.machine)
+    return None if live is None else live.disk
 
 
-def _install_lines(block: MachineRanking, view: RunView) -> list[Line]:
-    """The one line a reader copies to get the first package of a machine.
-
-    Nothing is called and nothing is looked up for it, and a row without a local name has no line
-    (CONTRACTS.md, "Guided mode", "The screen"). It stands behind a blank line and the command
-    itself is drawn as a command: in running text under the table it went under (test round,
-    2026-09-25). It stays when step 5 offers the pull, for anyone who prefers to paste it. A pull
-    name more than one package answers to has a note instead (U4); another machine of a guided run
-    gets its command with the machine named, and the reminder that this run pulls only here (U3).
-    """
-    own = view.install_for is not None and block.machine == view.install_for
-    target = install_target(block, block.machine if view.install_for is not None else None)
-    if target is None:
+def _disk_lines(block: MachineRanking, disk: Disk | None, dash: str) -> list[Line]:
+    """The red `disk` line under `memory` (U11): the rows whose download does not fit the free disk,
+    broken before what to do where it passes the width."""
+    text = disk_words(block, disk, dash, glyphs().cross)
+    if text is None:
         return []
-    entry, name = target
-    if name in view.ambiguous:
-        return [[], label_line(INSTALL_LABEL, [("class:note", f"#{entry.rank} {NOT_UNIQUE_INSTALL}")])]
-    if own:
-        # The one line of this view that may pass 100 characters: it is a command to copy, and a
-        # command that was cut is worse than a line that wraps (second-model round, 2026-09-24).
-        return [[], label_line(INSTALL_LABEL, install_pull_line(entry.rank, name))]
-    other = [("class:note", f"#{entry.rank} on {block.label}"), ("", "  "), ("class:command", f"ollama pull {name}")]
-    return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", OTHER_INSTALL_NOTE)])]
+    head, sep, tail = text.partition(" -- ")
+    rows = [text] if len(text) <= _NOTE_WIDTH or not sep else [head, f"-- {tail}"]
+    return [label_line(DISK_LABEL if index == 0 else "", [("class:warn", row)]) for index, row in enumerate(rows)]
 
 
 def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
@@ -617,25 +601,14 @@ def _terminal_ranking(
     else:
         lines.append([("", _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))])
         lines.append([("", _terminal_rule())])
+        disk = _disk(block, view)
         for entry in block.ranked:
-            lines.append(
-                [
-                    (
-                        "",
-                        _terminal_row(
-                            [
-                                str(entry.rank),
-                                _model_name(entry),
-                                _package_cell(entry),
-                                fit_word(entry.fit.fit_class, entry.fit.mode),
-                                _terminal_speed(entry, dash),
-                                f"{entry.fit.need_gib:.1f} GB",
-                                f"{entry.weights_gib:.1f} GB",
-                            ]
-                        ),
-                    )
-                ]
-            )
+            # A download larger than the free disk: ` ×` behind it, and the whole row on the house red (U11).
+            over = over_disk(entry.weights_gib, disk)
+            download = f"{entry.weights_gib:.1f} GB" + (f" {glyphs().cross}" if over else "")
+            cells = [str(entry.rank), _model_name(entry), _package_cell(entry), fit_word(entry.fit.fit_class, entry.fit.mode)]
+            cells += [_terminal_speed(entry, dash), f"{entry.fit.need_gib:.1f} GB", download]
+            lines.append([("class:over-disk" if over else "", _terminal_row(cells))])
     lines += _note_lines(block, dash, dot, view, several)
     return lines
 

@@ -360,6 +360,11 @@ def _redirect_home(home: Path) -> Path:
     home.mkdir(parents=True, exist_ok=True)
     os.environ["HOME"] = str(home)
     os.environ["USERPROFILE"] = str(home)
+    # A Windows PowerShell of the hardware measurement started under this USERPROFILE without its
+    # `AppData\Local` writes its module analysis cache into the working directory (AP9-RM U11b).
+    for name, parts in (("LOCALAPPDATA", ("AppData", "Local")), ("APPDATA", ("AppData", "Roaming"))):
+        home.joinpath(*parts).mkdir(parents=True, exist_ok=True)
+        os.environ[name] = str(home.joinpath(*parts))
     from modelroom.binding import default_pointer_path
 
     pointer = default_pointer_path()

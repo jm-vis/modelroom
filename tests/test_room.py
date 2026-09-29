@@ -8,6 +8,7 @@ on Windows and Linux; the Windows cases name their folder through `OLLAMA_MODELS
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -288,3 +289,50 @@ def test_an_unreachable_daemon_is_none():
     from modelroom.room import loaded_models
 
     assert loaded_models(offline_daemon()) is None
+
+
+# --- a moved home takes its application data along (AP9-RM U11b) --------------------------------------
+
+
+def test_the_moved_home_of_a_test_carries_its_application_data():
+    """A Windows PowerShell under a USERPROFILE without `AppData\\Local` wrote its module analysis cache
+    into the working directory -- the repository. Every test's home has both folders."""
+    import os
+
+    home = Path(os.environ["USERPROFILE"])
+    assert Path(os.environ["LOCALAPPDATA"]) == home / "AppData" / "Local" and (home / "AppData" / "Local").is_dir()
+    assert Path(os.environ["APPDATA"]) == home / "AppData" / "Roaming" and (home / "AppData" / "Roaming").is_dir()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the folder of Windows' own application data")
+def test_a_powershell_under_the_moved_home_resolves_its_cache_folder_inside_it(tmp_path):
+    """The resolution PowerShell uses for its cache (`LocalApplicationData`) stays in the moved home."""
+    import os
+    import shutil
+
+    powershell = shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("no Windows PowerShell on this machine")
+    command = "[Environment]::GetFolderPath('LocalApplicationData')"
+    answer = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command", command], capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    assert Path(answer.stdout.strip()) == Path(os.environ["USERPROFILE"]) / "AppData" / "Local"
+    assert not (tmp_path / "Microsoft").exists()
+
+
+def test_the_self_test_moves_the_application_data_with_its_home(tmp_path, monkeypatch):
+    import importlib.util
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "selftest.py"
+    if not (script.parent.parent / ".git").exists():
+        pytest.skip("scripts/ is not shipped in the sdist; the self-test is tested from a clone")
+    for name in ("HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA"):
+        monkeypatch.setenv(name, "unchanged")  # restored after the test; `_redirect_home` writes os.environ
+    spec = importlib.util.spec_from_file_location("modelroom_selftest_home", script)
+    st = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(st)
+    home = tmp_path / "home"
+    st._redirect_home(home)
+    import os
+
+    assert os.environ["LOCALAPPDATA"] == str(home / "AppData" / "Local") and (home / "AppData" / "Local").is_dir()
+    assert os.environ["APPDATA"] == str(home / "AppData" / "Roaming") and (home / "AppData" / "Roaming").is_dir()

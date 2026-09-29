@@ -264,12 +264,17 @@ table say what is **shown** (ten of 45, one no fit), which rows fit into graphic
 which need system memory, which rows have their fit computed from the package size as its
 **basis** rather than from the architecture (the line appears only when there are such rows) and
 what was measured for **speed**; the **key** says what the fit words mean. The **install** line is the command for the first row, ready to
-paste. Under the head of the table a **free** line says how much graphics memory and disk is free
-right now, read when the step draws (the disk where Ollama keeps its models, with its drive;
-`unknown` where it cannot be read), and the **Download** column is what a pull of that row brings;
-the **memory** line names the budget the fit computed with. Where the local Ollama daemon answered,
+paste. Under the head of the table a **room** line says the budget the fit computes with and how
+much disk is free right now where Ollama keeps its models (with its drive; `unknown` where it cannot
+be read), and the **Download** column is what a pull of that row brings; the **memory** line names
+the budget of each pool. **A row whose download, plus 1 GB of room, is more than the free disk**
+stays where the fit puts it, but lies on red, carries ` ×` behind its download (also without color and in
+`docs/models.md`), and a red **disk** line under **memory** names those rows; the **install** line
+then takes the best row that also fits the disk, or says in red that no package fits and space
+must be freed first. Where the local Ollama daemon answered,
 the run lists the rows shown and asks **Which package should be pulled into Ollama?** -- any row,
-not only #1; a row without an Ollama name, or whose name more than one file answers to, is locked.
+not only #1; a row without an Ollama name, or whose name more than one file answers to, is locked,
+and so is a row too large for the free disk, shown in red with what it needs.
 The command of the choice follows, the disk is checked again, and **Pull #3 into Ollama now?** with
 the size of the package: **Yes** pulls it into the daemon and shows the progress, **No** leaves it
 at the line to paste; step 4 of the next run measures it. Too little disk says so and asks nothing.

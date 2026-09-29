@@ -59,10 +59,10 @@
            disk 41.2 GB free on C: (Ollama models)
  loaded    Ollama holds hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-… (5.7 GB, 5.7 GB of it on the card)
            graphics 10.2 GB free now
- #    Model                   Package                 Fit           Speed         Memory    Download
+ #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    DeepSeek-R1-0528-Qwen3  unsloth · Q4_K_M        fits          <speed>    6.8 GB    4.7 GB
- 2    Qwen3.5-9B              unsloth · Q8_0          tight         –             10.6 GB   8.9 GB
+ 1    DeepSeek-R1-0528-Qwen3  unsloth · Q4_K_M       fits         <speed>    6.8 GB    4.7 GB
+ 2    Qwen3.5-9B              unsloth · Q8_0         tight        –             10.6 GB   8.9 GB
  shown     2 rows of 24 packages, one row per model
  memory    #1–2 fit into graphics memory, budget 11.0 GB (card minus reserve, from the profile)
  speed     #1 measured <speed>

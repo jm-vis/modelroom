@@ -52,18 +52,18 @@
            disk 41.2 GB free on C: (Ollama models)
  loaded    Ollama holds hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-… (5.7 GB, 5.7 GB of it on the card)
            graphics 10.2 GB free now
- #    Model                   Package                 Fit           Speed         Memory    Download
+ #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    Qwen3.5-9B              unsloth · UD-Q6_K_XL    tight         –             10.5 GB   8.2 GB
- 2    Qwen3.5-9B              unsloth · Q6_K          fits          –             9.2 GB    6.9 GB
- 3    Qwen3.5-9B              unsloth · UD-Q5_K_XL    fits          –             8.5 GB    6.3 GB
- 4    Qwen3.5-9B              unsloth · Q5_K_M        fits          –             8.3 GB    6.1 GB
- 5    Qwen3.5-9B              unsloth · Q5_K_S        fits          –             8.1 GB    5.9 GB
- 6    Qwen3.5-9B              unsloth · UD-Q4_K_XL    fits          –             7.7 GB    5.6 GB
- 7    Qwen3.5-9B              ollama · Q4_K_M         fits          –             8.3 GB    6.1 GB
- 8    Qwen3.5-9B              unsloth · Q4_K_M        fits          –             7.4 GB    5.3 GB
- 9    Qwen3.5-9B              unsloth · Q4_K_S        fits          –             7.1 GB    5.0 GB
- 10   Qwen3.5-9B              unsloth · Q4_1          fits          –             7.5 GB    5.4 GB
+ 1    Qwen3.5-9B              unsloth · UD-Q6_K_XL   tight        –             10.5 GB   8.2 GB
+ 2    Qwen3.5-9B              unsloth · Q6_K         fits         –             9.2 GB    6.9 GB
+ 3    Qwen3.5-9B              unsloth · UD-Q5_K_XL   fits         –             8.5 GB    6.3 GB
+ 4    Qwen3.5-9B              unsloth · Q5_K_M       fits         –             8.3 GB    6.1 GB
+ 5    Qwen3.5-9B              unsloth · Q5_K_S       fits         –             8.1 GB    5.9 GB
+ 6    Qwen3.5-9B              unsloth · UD-Q4_K_XL   fits         –             7.7 GB    5.6 GB
+ 7    Qwen3.5-9B              ollama · Q4_K_M        fits         –             8.3 GB    6.1 GB
+ 8    Qwen3.5-9B              unsloth · Q4_K_M       fits         –             7.4 GB    5.3 GB
+ 9    Qwen3.5-9B              unsloth · Q4_K_S       fits         –             7.1 GB    5.0 GB
+ 10   Qwen3.5-9B              unsloth · Q4_1         fits         –             7.5 GB    5.4 GB
  shown     10 of 23 packages
  memory    #1–10 fit into graphics memory, budget 11.0 GB (card minus reserve, from the profile)
  speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package

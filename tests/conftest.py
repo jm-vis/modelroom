@@ -23,7 +23,20 @@ def _home_in_tmp_path(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    # The application-data folders move with it (AP9-RM U11b): a Windows PowerShell started under a
+    # USERPROFILE without `AppData\Local` gets an empty `LocalApplicationData` and writes its module
+    # analysis cache relative to its working directory -- into the repository.
+    for name, folder in home_app_data(home).items():
+        monkeypatch.setenv(name, str(folder))
     return home
+
+
+def home_app_data(home) -> dict:
+    """`LOCALAPPDATA` and `APPDATA` inside `home`, created: the folders Windows resolves them to."""
+    folders = {"LOCALAPPDATA": home / "AppData" / "Local", "APPDATA": home / "AppData" / "Roaming"}
+    for folder in folders.values():
+        folder.mkdir(parents=True, exist_ok=True)
+    return folders
 
 
 @pytest.fixture(autouse=True)

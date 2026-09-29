@@ -43,6 +43,12 @@ MIB = 1024**2
 # The disk a pull needs besides the weight files (U8): the manifest, the layers Ollama writes
 # alongside, and a margin. One GiB, in bytes.
 PULL_DISK_MARGIN_BYTES = 1 * GIB
+
+
+def pull_need_bytes(weights_bytes: float) -> float:
+    """The disk a pull of `weights_bytes` of weight files needs: the files plus the margin. The one rule
+    of the check before a pull and of the marks of the table and the pull list (AP9-RM U11)."""
+    return weights_bytes + PULL_DISK_MARGIN_BYTES
 NVIDIA_SMI_FREE_ARGS = ("nvidia-smi", "--query-gpu=index,name,memory.free", "--format=csv,noheader,nounits")
 UNKNOWN = "unknown"
 UNCLEAR_REASON = "two places Ollama may use"
@@ -252,11 +258,12 @@ class LiveRoom:
     graphics_free_mib: tuple[float, ...] | None = None
 
 
-def live_room(room: RoomProbes, profile, daemon=None) -> LiveRoom:
-    """This machine read now: the disk, the free graphics memory and, with a `daemon`, what it holds."""
+def live_room(room: RoomProbes, profile, daemon=None, disk: Disk | None = None) -> LiveRoom:
+    """This machine read now: the disk (or the one read a moment ago, `disk`), the free graphics
+    memory and, with a `daemon`, what it holds."""
     free = free_graphics_mib(room, profile)
     return LiveRoom(
-        disk=free_disk(room),
+        disk=disk if disk is not None else free_disk(room),
         loaded=loaded_models(daemon) if daemon is not None else None,
         graphics_free_mib=tuple(free) if free else None,
     )

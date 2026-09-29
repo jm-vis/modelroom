@@ -3964,11 +3964,34 @@ step's head; `modelroom render` writes the two files and stays silent unless a c
 The guided mode draws the head and the card itself and then prints `views.terminal_lines`, which is
 the blocks alone. It shows fewer columns than the Markdown table (a terminal is narrow) and the ones
 a reader recognizes a package by: `#` (3), `Model` (22, the base model's name without its account),
-`Package` (22, `packager · quant`, cut with `…` where it does not fit), `Fit` (12, the longest word
-`tight (RAM)` is 11), `Speed` (12, up to `9999.9 tok/s`), `Memory` (8, `need_gib` as `GB` with one
-decimal) and, since AP9-UX2 (U8), `Download` (8, `weights_gib` as `GB`: the weight files a pull
-brings). With the one space every line is indented by, that is 100 characters, and no line of this
-view is wider but the repository lines and the commands below.
+`Package` (21, `packager · quant`, cut with `…` where it does not fit), `Fit` (11, the longest word
+`tight (RAM)`), `Speed` (12, up to `9999.9 tok/s`), `Memory` (8, `need_gib` as `GB` with one
+decimal) and, since AP9-UX2 (U8), `Download` (10, `weights_gib` as `GB`: the weight files a pull
+brings; since AP9-RM U11 with ` ×` behind it where it does not fit the free disk, which is why it
+took one column each from `Package` and `Fit`). With the one space every line is indented by, that
+is 100 characters, and no line of this view is wider but the repository lines and the commands below.
+
+**A download larger than the free disk** (AP9-RM U11, GF 2026-09-29, ADR 0012; `modelroom/disk_fit.py`,
+`views_install.py`). Where the free disk of the machine a block is about was read (its
+`LiveRoom.disk`, known), every shown row whose download (`weights_gib`) plus the margin of the check
+before a pull (1 GiB, `room.pull_need_bytes` -- one rule for both, decided 2026-09-29) needs more
+than that free space is marked -- its rank and its class stay (ADR 0009: the fit is memory only). A
+download 0.5 GiB under the free disk is therefore marked. The row lies on
+the house red as a whole (`#C32F27` at 32 % over a terminal's black, mixed: `#471715`; the text
+white), the one background color of the table (GF 2026-09-29; until then modelroom colored the text
+only, `intro.py`), and carries ` ×` behind its download, which says the same without color
+(`NO_COLOR`, the answer file's log; ` x` on a console that cannot encode `×`). Under `memory` a line
+`disk` in the lighter red `#F07A72`: `× #1–10 need more than the 26.4 GB free on C: -- free space
+first, or pick a smaller model` (`#1 needs` for one row), the tail only where no shown row fits, broken before `--` where the
+line would pass the width, the ranks bundled as in `memory`. The `install` line takes the best row
+that also fits the disk and says under it in gray `the best row that also fits the disk; #1–4 need
+more space`; where none fits it says in red `install   no package fits the 26.4 GB free on C:; free
+space first` and offers no command. Another computer, whose disk nobody read, and a disk of this
+machine that could not be read change nothing. No row is offered that the check before a pull then
+refuses; the check stays all the same, as the second safety, since it reads the disk again. The Markdown file of a
+guided run carries ` ×` behind the download (`6.00 ×`) and the sentence of the `disk` line under the
+machine's table, no color (`render_with_config(..., disks=)`); `modelroom render` reads no disk and
+marks nothing.
 
 **Under the head, the budget** (AP9-RM U10, GF 2026-09-29, ADR 0012; until then AP9-UX2 U8's `free`
 line with the free graphics memory of the moment): a line `room`, built by `room_head.head_pieces`
@@ -4057,7 +4080,9 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    its own (decided 2026-09-27).
 6. `install` -- `#1  ollama pull <local name>`, behind a blank line, with the rank gray and the
    command drawn as a command, for the first row of the machine **the run passes in**
-   (`views.show_result(..., install_for)`; the guided mode passes its own machine key) --
+   (`views.show_result(..., install_for)`; the guided mode passes its own machine key) -- since
+   AP9-RM U11 the first row that also fits the free disk of that machine, see "A download larger
+   than the free disk" --
    `hf.co/<repo>:<quant>` for a Hugging Face build, `<name>:<tag>` for one of the Ollama registry,
    the two shapes the load test matches an installed model by. Nothing is called and nothing is
    looked up; a package with no such name has no line. `modelroom render` draws no such line at all:
@@ -5494,8 +5519,12 @@ its rule stay unchanged). Where a shown row of this machine has an Ollama name, 
 regular and appended measured ones, in table order -- `#1  unsloth · Q4_K_S  5.0 GB
 hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S`, the name last and whole, `local already` behind a row the
 daemon provably holds -- then `none, do not pull`. A row without an Ollama name is locked (`no pull
-name`), so is every row whose name is not unique (below). The pointer starts on the first row that
-can be chosen, nothing is marked. After the choice the pull part names it, `install   #3  ollama
+name`), so is every row whose name is not unique (below). Since AP9-RM U11 a row whose download is
+larger than the free disk of this machine, as step 5 read it, stands in light red with what it needs
+in place of its name -- `#1  unsloth · Q6_K  94.1 GB  needs 94.1 GB plus 1 GB room, 26.4 GB free` -- and is locked
+too (an answer file that names it is exit 2; one without `pull_package` then pulls nothing). The
+pointer starts on the first row that can be chosen, on `none, do not pull` where none can; nothing
+is marked. After the choice the pull part names it, `install   #3  ollama
 pull <name>`, then checks the disk, then asks `Pull #3 into Ollama now? (5.0 GB)`; a local row is
 the note instead and no question; `none` is nothing. An answer file without `pull_package` takes
 `#1` where it has a name of its own, else nothing -- the behavior before.

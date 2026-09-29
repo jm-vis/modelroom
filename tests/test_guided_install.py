@@ -565,8 +565,10 @@ def test_one_byte_short_does_not_ask(tmp_path: Path):
 
     _code, lines, asker = _run(tmp_path, {**ANSWERS, "pull": True}, pull_daemon(), room=room_with_disk(SequenceDisk(NEED - 1)))
 
+    # AP9-RM U11b: the table and the pull list apply the very rule of the check before a pull, so #1
+    # is marked and cannot be chosen; the check itself is covered by the test with two disk readings.
     assert "pull" not in asker.asked
-    assert any(line.startswith("install   not enough disk for #1") for line in lines)
+    assert next(line for line in lines if line.startswith("1    ")).endswith(" ×")
 
 
 def test_an_unknown_disk_asks_with_a_note(tmp_path: Path):
@@ -629,3 +631,35 @@ def test_the_download_column_is_the_weight_of_the_package(tmp_path: Path):
 
     row = next(line for line in lines if line.startswith("1 "))
     assert row.endswith(f"{_first_weights(tmp_path):.1f} GB") and row.endswith("8.9 GB")
+
+
+# --- AP9-RM U11: a download larger than the free disk ------------------------------------------------
+
+
+def test_a_disk_too_small_for_every_row_marks_them_all_and_offers_nothing(tmp_path: Path):
+    """1 GB free: every row carries ` ×`, the `disk` line says what to do, no command, no pull, the file too."""
+    from fixture_room import fixed_room
+
+    daemon = pull_daemon()
+    _code, lines, asker = _run(tmp_path, PULL, daemon, room=fixed_room(free_disk_bytes=1024**3))
+
+    rows = [line for line in lines if line[:2].strip().isdigit() and " GB" in line and "·" in line]
+    assert rows and all(row.endswith(" ×") for row in rows)
+    assert any(line.startswith("disk      × #1–") and "need more than the 1.0 GB free on C:" in line for line in lines)
+    assert "install   no package fits the 1.0 GB free on C:; free space first" in lines
+    assert not any(line.startswith("install   #") for line in lines)
+    assert _pull_calls(daemon) == [] and "pull" not in asker.asked
+    markdown = (tmp_path / "results" / "docs" / "models.md").read_text(encoding="utf-8")
+    assert " × |" in markdown and "need more than the 1.0 GB free on C:" in markdown
+
+
+def test_a_disk_that_holds_some_rows_moves_the_install_line(tmp_path: Path):
+    """8 GB free: `Q8_0` (#1, 8.9 GB and the margin of 1 GB) is marked; the install line takes the best row that fits."""
+    from fixture_room import fixed_room
+
+    _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon(), room=fixed_room(free_disk_bytes=8 * 1024**3))
+
+    assert next(line for line in lines if line.startswith("1 ")).endswith("8.9 GB ×")
+    install = next(index for index, line in enumerate(lines) if line.startswith("install   #"))
+    assert not lines[install].startswith("install   #1 ")
+    assert lines[install + 1].startswith("the best row that also fits the disk; #1")

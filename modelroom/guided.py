@@ -52,7 +52,7 @@ from .guided_folder import looks_like_results_folder as _looks_like_results_fold
 from .guided_folder import remember_folder as _remember_folder
 from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, pull_step
 from .pull_choice import ambiguous_names, run_packages
-from .room import RoomProbes, live_room
+from .room import RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
 from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices, _measured_here  # noqa: F401
 from .guided_machines import chosen_machines, machine_answer_words
@@ -663,16 +663,19 @@ def _render_step(
         # Read inside the callback, which runs while the render still holds the lock: the card, the
         # table and the packages of the pull rest on one snapshot (second-model round, 2026-09-24).
         packages = run_packages(config, chosen)  # before the eligibility filter (U4, Codex r3-1)
-        written.append((document, snapshot_facts(config, chosen), PullContext(document, here, packages, ambiguous_names(packages))))
+        written.append((document, snapshot_facts(config, chosen), PullContext(document, here, packages, ambiguous_names(packages), disk)))
 
-    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen)
+    # The free disk is read once, before the render: the Markdown file, the table and the pull list
+    # mark the same rows (AP9-RM U11); the check before a pull reads it again.
+    disk = free_disk(run.room)
+    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk})
     if not written:
         shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only
         show_nothing(run.screen, shown, config_file.parent, scenario, run.now, card_facts(run), chosen.origins)
         return code, None
     document, facts, context = written[0]
     own = next((block.profile for block in document.machines if block.machine == here), None)
-    live = {here: live_room(run.room, own, run.daemon if daemon_reachable else None)}  # U10: this machine only
+    live = {here: live_room(run.room, own, run.daemon if daemon_reachable else None, disk)}  # U10: this machine only
     view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context

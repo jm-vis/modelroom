@@ -198,6 +198,20 @@ All notable changes to this project are documented in this file. The format foll
   system memory too, the key says how the reserve is computed, the Markdown column `Reserve RAM GiB`
   says `(computed)`, and the document carries `reserve_ram_origin` (schema 3, additive). With two
   ranked machines or more, each `shown` line says the table is ranked for its own machine.
+- **A download larger than the free disk is marked, and not recommended** (`modelroom/disk_fit.py`,
+  `views_install.py`, `pull_choice.py`, `guided_install.py`; CONTRACTS.md, "A download larger than
+  the free disk"; ADR 0012; AP9-RM U11, GF 2026-09-29). Rank and fit class stay (ADR 0009). The
+  rule is the one of the check before a pull, download plus 1 GB, from one function
+  (`room.pull_need_bytes`). Where the free disk of this machine was read, such a row lies on the house
+  red with white text -- the first background color of modelroom -- and carries ` ×` behind its
+  download, also without color and in `docs/models.md`; a red `disk` line under `memory` names the
+  rows (`× #1–10 need more than the 26.4 GB free on C: -- free space first, or pick a smaller
+  model`); `install` takes the best row that fits the disk (`the best row that also fits the disk;
+  #1–4 need more space`) or says in red `no package fits the 26.4 GB free on C:; free space first`;
+  the pull list shows such rows in red with `needs 94.1 GB plus 1 GB room, 26.4 GB free`, they cannot
+  be chosen, and the pointer starts on the first row that can. The table's `Download` column is 10
+  wide for it (`Package` 21, `Fit` 11). Another computer and an unknown disk change nothing; the
+  check before the pull stays.
 - **The package to pull is chosen** (`modelroom/pull_choice.py`, `guided_install.py`; CONTRACTS.md,
   "The pull"; ADR 0010; AP9-UX2 U6, decided 2026-09-28). Step 5 lists the rows shown for this machine
   (`pull_package`), then names the command of the choice, checks the disk and asks `Pull #3 into

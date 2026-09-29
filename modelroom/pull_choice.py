@@ -21,8 +21,10 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from .contracts import Package
+from .disk_fit import over_disk, too_big_words
 from .document import MachineRanking, RankedEntry, RenderDocument
 from .quantization import package_identity_key
+from .room import Disk
 from .screen import install_name
 
 NONE_VALUE = "none"
@@ -122,6 +124,8 @@ class PullRow:
     name: str | None
     locked: str | None
     identity: tuple[str, str, str]
+    # Locked because its download is larger than the free disk (AP9-RM U11): `locked` says how much.
+    over_disk: bool = False
 
     @property
     def value(self) -> str:
@@ -129,8 +133,14 @@ class PullRow:
         return self.name if self.locked is None and self.name is not None else f"#{self.rank} locked"
 
 
-def pull_rows(document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·") -> list[PullRow]:
-    """One row per shown table row of `machine`, in table order (regular and appended measured rows)."""
+def pull_rows(
+    document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·", disk: Disk | None = None
+) -> list[PullRow]:
+    """One row per shown table row of `machine`, in table order (regular and appended measured rows).
+
+    With the free disk of this machine a row whose download does not fit it is locked with how much
+    it needs (AP9-RM U11); a lock of its name comes first.
+    """
     block = next((block for block in document.machines if block.machine == machine), None)
     if block is None:
         return []
@@ -138,8 +148,10 @@ def pull_rows(document: RenderDocument, machine: str, ambiguous: frozenset[str] 
     for entry in block.ranked:
         name = entry_pull_name(entry)
         locked = NO_PULL_NAME if name is None else NOT_UNIQUE if name in ambiguous else None
+        over = locked is None and over_disk(entry.weights_gib, disk)
+        locked = too_big_words(entry.weights_gib, disk) if over else locked
         cell = f"{entry.packager} {dot} {entry.quantization}"
-        rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity)))
+        rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over))
     return rows
 
 

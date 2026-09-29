@@ -44,6 +44,22 @@ budget at all.
    budgets never come from them. A pool of 0 or less is said in words, never as a memory below zero.
 7. **Each table ranks for its own machine** (question 5 (a)): with two ranked machines or more,
    `shown` says `ranked for this machine; another machine may show other rows`.
+8. **A download larger than the free disk is marked, not ranked away** (finding U11 of the hand
+   test, GF 2026-09-29: "(a), jetzt in RM", mockup approved). With 26.4 GB free the table, `install`
+   and the pull list recommended packages of 57 to 94 GB, and the no came only at the pull. Rank and
+   class stay (ADR 0009, the fit is memory only). Where the free disk of the machine was read, such a
+   row lies on the house red `#C32F27` at 32 % over the terminal's black (`#471715`, white text) and
+   carries ` ×` behind its download, also without color and in the Markdown file; a line `disk` in
+   the lighter red `#F07A72` names the rows; `install` takes the best row that also fits the disk or
+   says in red that none does; the pull list shows such rows in red with what they need, they cannot
+   be chosen, and the pointer starts on the first that can. Another computer and an unknown disk
+   change nothing. **The band is the first background color of modelroom** -- until now the colors
+   were foreground only and the background the terminal's (decided 2026-09-24, `intro.py`); the
+   exception holds for this band alone (the pointer row of a list keeps its own, `dialog.py`). The
+   rule is the one of the check before a pull, the download plus the margin of 1 GiB, read from one
+   function (`room.pull_need_bytes`; decided 2026-09-29 by the coordination, reported to the GF), so no
+   row is offered that the check then refuses; the texts say `need more than` and `needs 94.1 GB plus
+   1 GB room`. The check stays as the second safety. The `Download` column became 10 wide for the mark.
 
 ## Sources (retrieved 2026-09-29)
 
