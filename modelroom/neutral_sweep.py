@@ -1,62 +1,37 @@
 """`sweep`: the sink of `modelroom/neutral.py` over every file a results folder already holds (FR-N).
 
 Every writing command runs it first, under `modelroom.lock` (CONTRACTS.md, "Neutral names"): the
-profiles (`display_name` only), the configuration (keys and paths, `neutral_config`), the records
-(field by field), modelroom's own backups (a schema-1 profile's `<old key>.json.v1.bak` takes a neutral
-name), and the result documents -- removed where anything else changes or where they name a machine.
-A profile or record that does not read as a JSON object cannot be cleaned: `neutral.FAILED`, exit `1`;
-only a backup is a note instead. No new backup is ever made; a second sweep changes nothing. The
-folder is read without the lock first; only with something to change is the lock taken, the folder
-read again and checked to be that lock's, and the files written.
+profiles (`display_name` only), the configuration (keys, comments and paths, `neutral_config`), the
+records (field by field), modelroom's own backups (`neutral_backups`), and the result documents --
+removed where anything else changes or where either of them names a machine. A profile or record that
+does not read as a JSON object cannot be cleaned: `neutral.FAILED`, exit `1`; only a backup is a note
+instead. No new backup is ever made; a second sweep changes nothing. The folder is read without the
+lock first; only with something to change is the lock taken, the folder read again and checked to be
+that lock's, and the files written.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import re
 import sys
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from .binding import PointerFileError, default_pointer_path, read_pointer
 from .config import ConfigError, Configuration, config_from_text, load_config
-from .contracts import PROFILE_ID_RE, HardwareSnapshot, Package, SchemaVersionError
-from .neutral import FAILED, Names, NeutralError, display_name_for, is_alias, is_neutral, known_package, legacy_data
-from .neutral import machine_keys, neutral_name, old_key, record_data, renamed_note
+from .contracts import Package, SchemaVersionError
+from .neutral import FAILED, Names, NeutralError, display_name_for, is_alias, is_neutral, known_package, machine_keys, old_key, record_data
+from .neutral_backups import Plan, Swept, backups, legacy_owners, plan_backup, profile_id_of
 from .neutral_config import config_text, entries, expected
-from .profile import HardwareProfile, normalize_profile_v1, read_profile_document
 from .remote_store import RemoteStoreError, read_remote, remote_path_for, this_machine
 from .state import LockHandle, LockHeldError, UnreadableStateFileError, acquire_lock, atomic_write_json, atomic_write_text, read_snapshot, release_lock
 
-_BACKUP_NOTE = "a backup of modelroom could not be cleaned of machine names: {name}; delete it by hand"
 DOCUMENTS_NOTE = "the result documents were made from names this sweep changed; they were removed, the next render writes them"
-
-
-@dataclass
-class Swept:
-    """What a sweep did: the machines it renamed (old key -> new key) and its notes."""
-
-    renames: dict[str, str] = field(default_factory=dict)
-    notes: list[str] = field(default_factory=list)
-
-
-@dataclass
-class _Plan:
-    writes: list[tuple[Path, dict | str]] = field(default_factory=list)
-    moves: list[tuple[Path, Path, dict]] = field(default_factory=list)
-    removals: list[Path] = field(default_factory=list)
-    config_text: str | None = None
-    renames: dict[str, str] = field(default_factory=dict)
-    notes: list[str] = field(default_factory=list)
-
-    def writes_something(self) -> bool:
-        return bool(self.writes or self.moves or self.removals) or self.config_text is not None
-
-    def swept(self) -> Swept:
-        return Swept(dict(self.renames), [*(renamed_note(new) for new in self.renames.values()), *self.notes])
+_HEADING_RE = re.compile(r"^## [^:\n]+: (.+)$", re.M)
 
 
 def load_names(results_dir: Path, pointer_path: Path, hostname: str | None, remote_path: Path | None = None) -> Names:
@@ -130,26 +105,25 @@ def _config(config_file: Path) -> Configuration | None:
         return None
 
 
-def _plan(config_file: Path, config: Configuration, names: Names) -> _Plan:
+def _plan(config_file: Path, config: Configuration, names: Names) -> Plan:
     """Everything the sweep would write; writes nothing but, on first need, `this_machine`."""
-    plan = _Plan()
+    plan = Plan()
     profiles, entered = _profiles(config.paths.hardware_dir, names, plan)
     if names.bound in entered:  # a binding to a machine entered by hand makes no row this computer's
         names = replace(names, bound=None)
     classes = {key: str(data.get("machine_class") or "unknown") for key, data in profiles.items()}
     text = _read_text(config_file)
     raw = _toml(text)
-    if raw is not None and raw.get("schema_version") != 1:  # schema 1 is `migrate`'s: its keys name its profile files
+    current = raw is not None and raw.get("schema_version") != 1  # schema 1 is `migrate`'s: its keys name its profile files
+    if current:
         keys = machine_keys(entries(raw), classes, names)
         plan.renames = {old: new for old, new in keys.items() if old != new}
         if expected(raw, plan.renames, config_file.parent) != raw:
             plan.config_text = _valid(config_text(text, raw, plan.renames, config_file.parent), config_file)
     _records(config, plan)
-    for backup in _backups(config_file, config.paths.hardware_dir):
-        _backup(backup, config_file, classes, names, profiles, plan)
-    # A schema-1 configuration keeps its keys until `migrate` (its keys name its profile files), so its
-    # documents are judged by what the sweep changes alone.
-    _documents(config, names, plan, raw is not None and raw.get("schema_version") != 1)
+    for backup in backups(config_file, config.paths.hardware_dir):
+        plan_backup(backup, config_file, classes, names, profiles, plan)
+    documents(config, names, plan, by_names=current)
     return plan
 
 
@@ -161,14 +135,14 @@ def _valid(text: str, config_file: Path) -> str:
     return text
 
 
-def _profiles(hardware_dir: Path, names: Names, plan: _Plan) -> tuple[dict[str, dict], set[str]]:
+def _profiles(hardware_dir: Path, names: Names, plan: Plan) -> tuple[dict[str, dict], set[str]]:
     """Plan the `display_name` of every profile; return each profile as stored, and the ones entered by
     hand (`guided_machines._measured_here` counts none of them as measured here)."""
     profiles: dict[str, dict] = {}
     entered: set[str] = set()
     for path in sorted(hardware_dir.glob("*.json")) if hardware_dir.is_dir() else []:
         data = _strict(path)
-        profile_id = _profile_id(data)
+        profile_id = profile_id_of(data)
         if profile_id is None:
             if data.get("schema_version") == 1 and "machine" in data:
                 continue  # a schema-1 file: `migrate` converts it, and its name with it
@@ -194,7 +168,7 @@ def snapshot_packages(config: Configuration) -> list[Package]:
     return list(snapshot.packages) if snapshot is not None else []
 
 
-def _records(config: Configuration, plan: _Plan) -> None:
+def _records(config: Configuration, plan: Plan) -> None:
     """Plan every measurement record the record rules change, whether or not it validates otherwise."""
     root = config.paths.state / "measurements"
     packages = snapshot_packages(config)
@@ -205,123 +179,51 @@ def _records(config: Configuration, plan: _Plan) -> None:
             plan.writes.append((path, clean))
 
 
-def _backups(config_file: Path, hardware_dir: Path) -> list[Path]:
-    folder = config_file.parent
-    found = [*folder.glob(f"{config_file.name}.bak"), *folder.glob(f"{config_file.name}.v*.bak")]
-    found += sorted(hardware_dir.glob("*.json.v*.bak")) if hardware_dir.is_dir() else []
-    return [path for path in found if path.is_file()]
-
-
-def _backup(path: Path, config_file: Path, classes: dict, names: Names, profiles: dict[str, dict], plan: _Plan) -> None:
-    """Plan one backup, or note that it cannot be cleaned; its content is never shown."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return _note(plan, path)
-    if path.name.startswith(config_file.name):
-        return _config_backup(path, text, config_file.parent, classes, names, plan)
-    data = _loads(text)
-    if isinstance(data, dict) and data.get("schema_version") == 1 and "machine" in data:
-        return _legacy_backup(path, text, data, profiles, plan)
-    profile_id = _profile_id(data)
-    if profile_id is None:
-        return _note(plan, path)
-    name = display_name_for(profile_id, data.get("machine_class"), data.get("display_name"), names.aliases.get(profile_id))
-    if data.get("display_name") != name:
-        plan.writes.append((path, {**data, "display_name": name}))
-    return None
-
-
-def _config_backup(path: Path, text: str, folder: Path, classes: dict, names: Names, plan: _Plan) -> None:
-    """A backup of the configuration, by the same key rule; a key the configuration itself is renamed from
-    takes the same new name here."""
-    raw = _toml(text)
-    if raw is None:
-        return _note(plan, path)
-    rows = entries(raw)
-    keys = machine_keys({key: profile for key, profile in rows.items() if key not in plan.renames}, classes, names)
-    keys.update({key: plan.renames[key] for key in rows if key in plan.renames})
-    renames = {old: new for old, new in keys.items() if old != new}
-    if expected(raw, renames, folder) != raw:
-        plan.writes.append((path, config_text(text, raw, renames, folder)))
-    return None
-
-
-def _legacy_backup(path: Path, text: str, data: dict, profiles: dict[str, dict], plan: _Plan) -> None:
-    """A schema-1 profile kept by `migrate`: its name was the old key. It takes the name of the profile it
-    became (`<profile_id>.json.v1.bak`), else one of its own content (`legacy-<8 hex>`), and a neutral key."""
-    stem = path.name.split(".", 1)[0]
-    owners = legacy_owners(data, profiles)
-    short = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
-    if PROFILE_ID_RE.fullmatch(stem) or stem.startswith("legacy-"):
-        target, key = path, data.get("machine")
-    elif len(owners) == 1:
-        target, key = path.with_name(f"{owners[0]}.json.v1.bak"), neutral_name(owners[0], "unknown")
-    else:
-        target, key = path.with_name(f"legacy-{short}.json.v1.bak"), f"computer-{short}"
-    key = key if is_neutral(key) else f"computer-{short}"
-    clean = legacy_data(data, key)
-    if target == path:
-        if clean != data:
-            plan.writes.append((path, clean))
-    elif target.exists():
-        _note(plan, target)
-    else:
-        plan.moves.append((path, target, clean))
-    return None
-
-
-def legacy_owners(data: dict, profiles: dict[str, dict]) -> list[str]:
-    """Every profile a schema-1 file became: all of it the same but its id and its name (`migrate`)."""
-    try:
-        fresh = normalize_profile_v1(HardwareSnapshot.model_validate(data), "0" * 16)
-    except ValueError:
-        return []
-
-    def shape(profile: HardwareProfile) -> dict:
-        return {**profile.model_dump(mode="json"), "profile_id": None, "display_name": None}
-
-    owners = []
-    for profile_id, stored in profiles.items():
-        try:
-            profile = read_profile_document(stored)
-        except (SchemaVersionError, ValueError):
-            continue
-        if isinstance(profile, HardwareProfile) and profile.os_fingerprint_source == "legacy" and shape(profile) == shape(fresh):
-            owners.append(profile_id)
-    return owners
-
-
-def _documents(config: Configuration, names: Names, plan: _Plan, by_names: bool) -> None:
-    """The result documents go where the sweep changes anything else, or where they name a machine."""
+def documents(config: Configuration, names: Names, plan: Plan, *, by_names: bool) -> None:
+    """The result documents go where the plan changes anything else, or where either of them names a
+    machine by anything but a neutral name or an alias of this user (`by_names`; a schema-1
+    configuration's documents are `migrate`'s to judge, its keys being still the old ones)."""
     markdown = config.paths.markdown
-    present = [path for path in (markdown.with_suffix(".json"), markdown) if path.is_file()]
-    if present and (plan.writes_something() or (by_names and _names_a_machine(markdown.with_suffix(".json"), names))):
+    view = markdown.with_suffix(".json")
+    present = [path for path in (view, markdown) if path.is_file()]
+    named = by_names and any(not _allowed(value, names) for value in [*_view_shows(view), *_markdown_shows(markdown)])
+    if present and (plan.writes_something() or named):
         plan.removals += present
         plan.notes.append(DOCUMENTS_NOTE)
 
 
-def _names_a_machine(view: Path, names: Names) -> bool:
-    """Whether the JSON view names a machine by anything but a neutral name or an alias of this user."""
+def _allowed(value: object, names: Names) -> bool:
+    return is_neutral(value) or (is_alias(value) and value in set(names.aliases.values()))
+
+
+def _view_shows(view: Path) -> list[object]:
+    """What the JSON view names machines by; a view that does not read cannot be shown to be clean."""
+    if not view.is_file():
+        return []
     try:
         blocks = json.loads(view.read_text(encoding="utf-8"))["machines"]
-        shown = [(block["machine"], str(block["label"]).split(" ")[0], (block.get("profile") or {}).get("display_name")) for block in blocks]
+        rows = [(block["machine"], str(block["label"]).split(" ")[0], (block.get("profile") or {}).get("display_name")) for block in blocks]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return True  # a view that does not read cannot be shown to be clean
-    allowed = set(names.aliases.values())
-    return any(not (is_neutral(value) or (is_alias(value) and value in allowed)) for row in shown for value in row if value is not None)
+        return [None]
+    return [value for row in rows for value in row if value is not None]
 
 
-def _note(plan: _Plan, path: Path) -> None:
-    """Name the file only where its name is modelroom's own: the configuration's or a profile_id."""
-    stem = path.name.split(".", 1)[0]
-    own = path.name.startswith("modelroom.toml") or PROFILE_ID_RE.fullmatch(stem) is not None or stem.startswith("legacy-")
-    plan.notes.append(_BACKUP_NOTE.format(name=path.name if own else "a profile backup in hardware/"))
-
-
-def _profile_id(data: object) -> str | None:
-    profile_id = data.get("profile_id") if isinstance(data, dict) else None
-    return profile_id if isinstance(profile_id, str) and PROFILE_ID_RE.fullmatch(profile_id) else None
+def _markdown_shows(markdown: Path) -> list[object]:
+    """What the Markdown view names machines by: the machine headings (`## <what>: <machine>`) and the
+    first two columns of the Machines table (key; profile name or label)."""
+    if not markdown.is_file():
+        return []
+    try:
+        text = markdown.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return [None]
+    shown: list[object] = [value.strip() for value in _HEADING_RE.findall(text)]
+    table = re.split(r"^## Machines$", text, maxsplit=1, flags=re.M)
+    for line in (table[1].split("\n## ", 1)[0] if len(table) == 2 else "").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")] if line.startswith("|") else []
+        if len(cells) >= 2 and cells[0] != "Machine" and set(cells[0]) - set("-: "):
+            shown += [cells[0], cells[1].split(" ")[0]]
+    return shown
 
 
 def _read_text(path: Path) -> str:
@@ -334,17 +236,13 @@ def _read_text(path: Path) -> str:
 def _strict(path: Path) -> dict:
     """A profile or a record of the folder as a JSON object; anything else cannot be cleaned and ends
     the command -- a broken file may hold a name as well as any other."""
-    data = _loads(_read_text(path))
+    try:
+        data = json.loads(_read_text(path))
+    except (ValueError, RecursionError) as exc:
+        raise NeutralError(FAILED) from exc
     if not isinstance(data, dict):
         raise NeutralError(FAILED)
     return data
-
-
-def _loads(text: str) -> object | None:
-    try:
-        return json.loads(text)
-    except (ValueError, RecursionError):
-        return None
 
 
 def _toml(text: str) -> dict | None:
@@ -388,4 +286,15 @@ def moved_machine(name: str | None, swept: Swept) -> str | None:
     return swept.renames[name]
 
 
-__all__ = ["DOCUMENTS_NOTE", "Swept", "legacy_owners", "load_names", "moved_machine", "snapshot_packages", "sweep", "sweep_for_command", "sweep_locked"]
+__all__ = [
+    "DOCUMENTS_NOTE",
+    "Swept",
+    "documents",
+    "legacy_owners",
+    "load_names",
+    "moved_machine",
+    "snapshot_packages",
+    "sweep",
+    "sweep_for_command",
+    "sweep_locked",
+]

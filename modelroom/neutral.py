@@ -219,12 +219,18 @@ def neutral_record(record: MeasurementRecord, package: "Package | None" = None) 
         raise NeutralError(FAILED) from exc
 
 
+_REF_FIELDS = ("content_source", "hf_repo", "hf_file_digest", "ollama_manifest_digest")
+
+
 def known_package(ref: object, packages: "Sequence[Package]") -> "Package | None":
     """The package of the folder's own snapshot a record's reference (`package` as stored) names, by
     digest; else `None`. The identity modelroom itself fetched, never a name the daemon gave: so a
-    record keeps the name of its package in every folder that knows the package.
+    record keeps the name of its package in every folder that knows the package. A reference of another
+    shape (not an object, a field that is no text) cannot be judged: `NeutralError`.
     """
-    ref = ref if isinstance(ref, dict) else {}
+    ref = {} if ref is None else ref
+    if not isinstance(ref, dict) or any(not isinstance(ref.get(key), (str, type(None))) for key in _REF_FIELDS):
+        raise NeutralError(FAILED)
     for package in packages:
         if ref.get("content_source") == "ollama" and package.source == "ollama" and package.manifest_digest == ref.get("ollama_manifest_digest"):
             return package

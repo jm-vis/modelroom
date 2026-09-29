@@ -21,6 +21,7 @@ from fixture_support import (
     DEEPSEEK_REPO,
     DEEPSEEK_SHA,
     DEEPSEEK_WEIGHTS_DIGEST,
+    FIXTURES,
     GRANITE_MANIFEST_DIGEST,
     PROFILE_ID,
     build_transport,
@@ -442,6 +443,9 @@ def test_every_writing_command_sweeps_first(tmp_path, command, monkeypatch):
     config = _folder(results, {SENTINEL_HOST: PROFILE_ID}, writer=SENTINEL_HOST)
     _profile(results, PROFILE_ID, SENTINEL_HOST, "laptop")
     _snapshot(results)
+    if command == "migrate":  # a schema-3 profile of its own to rewrite: migrate's first file is its backup
+        stale = json.loads((FIXTURES / "profiles_v3" / "workstation.json").read_text(encoding="utf-8"))
+        _write(results / "state" / "hardware" / f"{OTHER_ID}.json", {**stale, "profile_id": OTHER_ID, "display_name": SENTINEL_HOST})
     home, probes = _pointer(tmp_path / "home"), windows_probes(host=SENTINEL_HOST)
     base = ["--config", str(config)]
     argv = {
@@ -463,9 +467,9 @@ def test_every_writing_command_sweeps_first(tmp_path, command, monkeypatch):
 
     assert SENTINEL_HOST not in _machines(config)
     assert neutral.is_neutral(_display(results, PROFILE_ID))  # `import-profile` then takes the newer export's
-    own = {"hardware": "guided.json", "fetch": "modelroom.json", "render": "models.json", "migrate": None,
+    own = {"hardware": "guided.json", "fetch": "modelroom.json", "render": "models.json", "migrate": f"{OTHER_ID}.json.v3.bak",
            "import-profile": "20260923T083000Z-5c1e9a07.json", "export-profile": "out.json", "guided": "search.json"}[command]
-    assert "modelroom.toml" in written and (own is None or written.index("modelroom.toml") < written.index(own)), written
+    assert "modelroom.toml" in written and written.index("modelroom.toml") < written.index(own), written
 
 
 def test_no_writer_bypasses_the_senke(tmp_path, monkeypatch):

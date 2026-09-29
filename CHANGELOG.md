@@ -14,8 +14,10 @@ All notable changes to this project are documented in this file. The format foll
   file `~/.modelroom/remote.json`), a measurement record keeps the package name built from the
   package, fixed sentences as reasons, and a daemon version only as `X.Y.Z`. Every writing command
   first sweeps its folder with the same rules -- profiles, configuration (keys renamed where they
-  stand, its comments kept; paths inside the folder made relative), records, modelroom's own backups
-  and the result documents (removed where they would keep an old name; the next render writes them)
+  stand, in comments too, the comments otherwise kept; paths inside the folder made relative, paths
+  below the home folder written as `~/...`), records, modelroom's own backups (a schema-1 profile's
+  under the name of the profile it became; a second copy merged, never written over) and the result
+  documents (either of them naming an old name removes both; the next render writes them)
   -- and writes nothing when that cannot be done (exit `1`). Exports carry the neutral name and hold
   `modelroom.lock`; an import neutralizes before it plans. The first key of this computer is made
   under a lock of the user account (`remote.lock`). The load test shows and stores a package by

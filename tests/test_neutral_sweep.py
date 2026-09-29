@@ -22,8 +22,10 @@ from modelroom import neutral_sweep, remote_store
 from modelroom.cli import main
 from modelroom.dialog import FileAsker
 from modelroom.guided import run_guided
+from modelroom.contracts import HardwareSnapshot
 from modelroom.migrate import MigrationError, migrate
-from modelroom.neutral import FAILED, NeutralError, is_neutral, old_key
+from modelroom.neutral import FAILED, NeutralError, is_neutral, legacy_data, neutral_name, old_key
+from modelroom.neutral_sweep import legacy_owners
 from modelroom.neutral_sweep import sweep
 from modelroom.state import acquire_lock, release_lock
 
@@ -166,34 +168,46 @@ def _v1_folder(root: Path, host: str = SENTINEL_HOST) -> Path:
     return root / "modelroom.toml"
 
 
-def _watch(monkeypatch, fail_after: int | None = None) -> list[str]:
-    """Every write of the package, checked: never a machine name in a path or a content; optionally a
-    stop (`OSError`) at the given write, as a crash would make it."""
+def _watch(monkeypatch, root: Path, fail_after: int | None = None) -> list[str]:
+    """Every write of the package and every removal below `root`, checked: never a machine name in a
+    written path or content; optionally a stop (`OSError`) at the given one, as a crash would make it.
+    The real writers are taken from `modelroom.state` once, before anything is patched (Codex r2-7)."""
     seen: list[str] = []
+    real = {name: getattr(state_module, name) for name in ("atomic_write_json", "atomic_write_text")}
+    real_unlink, top = Path.unlink, root.resolve()
 
-    def watched(real):
+    def step(path: Path) -> None:
+        if fail_after is not None and len(seen) >= fail_after:
+            raise OSError("stopped here")
+        seen.append(path.name)
+
+    def watched(name):
         def write(path, content, *args):
             text = content if isinstance(content, str) else json.dumps(content)
             assert SENTINEL_HOST not in text and SENTINEL_HOST not in Path(path).name, path
-            if fail_after is not None and len(seen) >= fail_after:
-                raise OSError("stopped here")
-            seen.append(Path(path).name)
-            return real(path, content, *args)
+            step(Path(path))
+            return real[name](path, content, *args)
 
         return write
+
+    def unlink(self, *args, **kwargs):
+        if self.resolve().is_relative_to(top) and not self.name.endswith((".tmp", ".lock")):
+            step(self)
+        return real_unlink(self, *args, **kwargs)
 
     import sys
 
     for module in [module for name, module in sys.modules.items() if name.startswith("modelroom") and module is not None]:
-        for name in ("atomic_write_json", "atomic_write_text"):
+        for name in real:
             if hasattr(module, name):
-                monkeypatch.setattr(module, name, watched(getattr(state_module, name)))
+                monkeypatch.setattr(module, name, watched(name))
+    monkeypatch.setattr(Path, "unlink", unlink)
     return seen
 
 
 def test_migrate_publishes_no_old_key_at_any_point(tmp_path, monkeypatch):
     config = _v1_folder(tmp_path / "old")
-    seen = _watch(monkeypatch)
+    seen = _watch(monkeypatch, tmp_path)
 
     migrate(config, NOW, fresh_id=lambda: "a1aaaaaaaaaaaaaa", pointer_path=_pointer(tmp_path / "home"))
 
@@ -201,17 +215,56 @@ def test_migrate_publishes_no_old_key_at_any_point(tmp_path, monkeypatch):
     assert _names(config.parent) == [] and files_with(config.parent, SENTINEL_HOST) == []
 
 
-def test_migrate_stopped_at_every_write_leaves_no_name_and_converges(tmp_path, monkeypatch):
-    for stop in range(6):
-        config = _v1_folder(tmp_path / f"run{stop}")
+def _v1_two(root: Path) -> tuple[Path, dict[str, dict]]:
+    """Two machines of 0.1.0 under their host names, their schema-1 files, and a document naming one."""
+    root.mkdir(parents=True)
+    text = (FIXTURES / "config_v1" / "config.toml").read_text(encoding="utf-8")
+    (root / "modelroom.toml").write_bytes(text.replace("[machines.laptop]", f"[machines.{SENTINEL_HOST}]").replace("[machines.server]", "[machines.buildhost]").encode("utf-8"))
+    sources = {}
+    for row, host, fixture in (("laptop", SENTINEL_HOST, "windows-nvidia-laptop"), ("server", "buildhost", "linux-cpu-server")):
+        sources[row] = {**json.loads((FIXTURES / "profiles_v1" / f"{fixture}.json").read_text(encoding="utf-8")), "machine": host}
+        _write(root / "state" / "hardware" / f"{host}.json", sources[row])
+    _write(root / "docs" / "models.md", f"## Ranking: {SENTINEL_HOST}\n")
+    return root / "modelroom.toml", sources
+
+
+def _ids(first: str):
+    drawn = iter(f"{first}{index:015x}" for index in range(1, 99))
+    return lambda: next(drawn)
+
+
+def _assigned(config: Path, sources: dict[str, dict]) -> None:
+    """Each row names the profile made of its own schema-1 file, with that file's backup; nothing else."""
+    raw = tomllib.loads(config.read_text(encoding="utf-8"))
+    hardware = config.parent / "state" / "hardware"
+    rows = {("laptop" if entry["writer"] else "server"): entry["profile"] for entry in raw["machines"].values()}
+    assert sorted(rows.values()) == sorted(path.name.removesuffix(".json") for path in hardware.glob("*.json"))
+    for row, source in sources.items():
+        profile_id, kept = rows[row], HardwareSnapshot.model_validate(source).model_dump(mode="json")
+        assert legacy_owners(source, {profile_id: json.loads((hardware / f"{profile_id}.json").read_text(encoding="utf-8"))}) == [profile_id]
+        assert json.loads((hardware / f"{profile_id}.json.v1.bak").read_text(encoding="utf-8")) == legacy_data(kept, neutral_name(profile_id, "unknown"))
+    assert {path.name for path in (config.parent / "state" / "measurements").iterdir()} <= set(rows.values())
+    assert files_with(config.parent, SENTINEL_HOST) == [] and files_with(config.parent, "buildhost") == []
+    assert not (config.parent / "docs" / "models.md").exists()
+
+
+def test_migrate_stopped_at_every_write_and_removal_resumes_with_other_ids_and_keeps_every_row(tmp_path, monkeypatch):
+    stop = 0
+    while True:
+        config, sources = _v1_two(tmp_path / f"run{stop}")
         with monkeypatch.context() as patch:
-            _watch(patch, fail_after=stop)
-            with pytest.raises(OSError):
-                migrate(config, NOW, fresh_id=lambda: "a1aaaaaaaaaaaaaa", pointer_path=_pointer(tmp_path / "home"))
-        written = [path for path in config.parent.rglob("*") if path.is_file() and path.name != f"{SENTINEL_HOST}.json"]
-        assert all(SENTINEL_HOST not in path.read_text(encoding="utf-8", errors="replace") or path.name == "modelroom.toml" for path in written)
-        migrate(config, NOW, fresh_id=lambda: "a1aaaaaaaaaaaaaa", pointer_path=_pointer(tmp_path / "home"))
-        assert _names(config.parent) == [] and files_with(config.parent, SENTINEL_HOST) == [], stop
+            seen = _watch(patch, config.parent, fail_after=stop)
+            try:
+                migrate(config, NOW, fresh_id=_ids("a"), pointer_path=_pointer(tmp_path / "home"))
+            except OSError:
+                seen = None
+        if seen is not None:  # the run went through: every place it writes or removes was a stop once
+            _assigned(config, sources)
+            break
+        migrate(config, NOW, fresh_id=_ids("b"), pointer_path=_pointer(tmp_path / "home"))
+        _assigned(config, sources)
+        stop += 1
+    assert stop == len(seen) and stop >= 8, seen
 
 
 def test_two_profiles_a_stopped_run_may_have_left_are_a_conflict(tmp_path):

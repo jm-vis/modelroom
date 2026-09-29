@@ -2931,32 +2931,45 @@ to the daemon alone. `render` builds its document from the files the sweep has l
 **The whole configuration** (`modelroom/neutral_config.py`). Besides its keys, a configuration may
 name its folder: `paths.state`, `paths.markdown` and `[guided].results` are written relative to the
 configuration's own folder where they lie inside it (`state`, `docs/models.md`, `.`), since a
-folder's path can carry a user's or a machine's name; a path outside the folder is the user's own
-choice and stays. The guided mode puts every configuration it writes -- the one read last, with what
+folder's path can carry a user's or a machine's name; a path outside the folder but below the user's
+home folder is written as `~/<the rest>` (`load_config` expands `~`). **Limits, by decision
+(2026-09-29):** a path outside both is the user's own choice and stays as written; the rest of a path
+below the home folder stays as well; the pointer file `~/.modelroom/guided.json` keeps the full path
+of each results folder -- it lives in the user's own account and is no file of the folder (FR-N scope,
+the GF decides). The guided mode puts every configuration it writes -- the one read last, with what
 another run wrote meanwhile -- through the key rule immediately before the write.
 
 **The sweep.** `neutral_sweep.sweep` runs the same rules over the files a folder already holds:
 the profiles (only `display_name` changes, in the schema they are stored in); the configuration --
-each renamed key replaced where it stands as a TOML key (a table head, a dotted key, an inline table,
-bare or quoted) and each path inside the folder made relative, so its comments stay; only a file that
-cannot be brought to the expected table that way (an escaped key, a key spelled like a field of the
-file) is written anew by the TOML writer; every measurement record, field by field and whether or
+each renamed key replaced where it is the key of a machine row (a table head, a dotted key, an inline
+table; bare, quoted or escaped, also a key spelled like a field of the file) and where it stands in a
+comment (the same word, in any case, the comment otherwise kept), and each path in its neutral form,
+so every other byte stays; which place is which, TOML decides: the place is replaced by a probe word
+and the file read again. Only a file that cannot be brought to the expected table that way is written
+anew by the TOML writer. A host name that was no key of the file, or a comment that spells a key
+otherwise (split, in other characters), is not found; every measurement record, field by field and whether or
 not the rest of it validates (written anew under its own `measurement_id`); modelroom's own backups
 (`modelroom.toml.bak`, `modelroom.toml.vN.bak`, `<profile_id>.json.vN.bak`: their keys, the key of a
 row the configuration is renamed from taking the same new name, and `display_name`); a schema-1
 profile backup `<old key>.json.v1.bak` of an earlier migration takes the name of the profile it became
-(`<profile_id>.json.v1.bak`, found by content), else a name of its content (`legacy-<8 hex>.json.v1.bak`),
-and a neutral key, its runtime text and the names of installed models dropped; and the result
-documents `docs/models.md` and its JSON view: made from the files as they were, they are removed
-where the sweep changes anything else, or where the JSON view names a machine by anything but a
-neutral name or an alias of this user (`the result documents were made from names this sweep changed;
+(`<profile_id>.json.v1.bak`, found by content), else a name of its content (`legacy-<8 hex>.json.v1.bak`;
+only that form counts as neutral), and a neutral key, its runtime text and the names of installed
+models dropped. Every target is reserved in the plan before anything is written: a target that holds
+(or will hold) the same cleaned content already -- a second copy, or a run that stopped between
+writing the target and removing the source -- takes the source's place, which is removed; one of
+other content sends the source on to its content name, and where that is taken too, the source
+stays with a note. And the result documents `docs/models.md` and its JSON view: made from the files
+as they were, both are removed where the sweep changes anything else, or where either of them names a
+machine by anything but a neutral name or an alias of this user -- the JSON view by its machine
+blocks, the Markdown view by its machine headings (`## <what>: <machine>`) and the first two columns
+of its Machines table (`the result documents were made from names this sweep changed;
 they were removed, the next render writes them`). The sweep makes no backup of its own. A backup
 that cannot be read is a note naming the file (`a backup of modelroom could not be cleaned of machine
 names: <file>; delete it by hand`). Each renamed machine is a note with its new name alone (`machine
 renamed to server-3f9a0c21 (no host names in files)`). A schema-1 configuration and schema-1 profiles
 are `migrate`'s: their keys name the profile files, and `migrate` plans the new configuration, the
-profiles, the records and both backups through the sink before it writes any of them ("Migration to
-schema 2"). Key, profile name and records are checked independently, so a run that stopped halfway
+profiles, the records, both backups and the removal of the result documents through the sink before
+it writes any of them ("Migration to schema 2"). Key, profile name and records are checked independently, so a run that stopped halfway
 converges, and a second sweep changes nothing.
 
 **The first step of every writing command:** the guided mode (once the configuration is found or
@@ -2991,7 +3004,8 @@ the machine list names this machine by its class alone (`this machine (laptop)`)
   files with `protocol: none` (`legacy_measurement_record`, whose 8 hex characters come from the
   SHA-256 of the old measurement, so the same input always gives the same id); the old file is
   kept as `<profile_id>.json.v1.bak`, through the sink (a neutral key, no runtime text, no names of
-  installed models; AP9-FR), and removed once its backup is there;
+  installed models; AP9-FR), and removed last, once the configuration that names its new profile is
+  written: a run that stopped before finds the new profile by it again, whatever ids it draws;
 - a schema-1 `modelroom.toml` becomes schema 2 (`normalize_config_v1`) with
   `[machines.<name>].profile` set for every migrated profile of that name; the rewritten text is
   validated like `load_config` would before it is written, the original bytes are kept as
@@ -3067,8 +3081,9 @@ binding of its own. The file is written with `atomic_write_json`, so a reader ne
 it. The whole export holds `modelroom.lock` (a lock another process holds is exit `1`): the sweep of
 machine names comes first under it ("Neutral names"), then its profile and every record go through
 the sink before the file is written, so it carries a neutral `display_name` (or the SSH alias of that
-profile) and no foreign text. An unreadable measurement file
-is reported and left out; it does not stop the export. `--profile` has to be a `profile_id` (16
+profile) and no foreign text. A profile or measurement file that does not read as a JSON object
+stops the export with exit `1` in that sweep (decided 2026-09-29, "Neutral names"); a measurement
+that reads but is no valid record is reported and left out. `--profile` has to be a `profile_id` (16
 lowercase hex characters), and `--out` must be none of the files this package writes itself:
 nothing inside `paths.state` (the same rule `PathsConfig` holds for `paths.markdown`), not the
 configuration file, not the pointer file -- otherwise an export object would replace a profile,

@@ -17,6 +17,8 @@ configuration, before anything is written (CONTRACTS.md, "Migration to schema 2"
 
 from __future__ import annotations
 
+import hashlib
+import itertools
 import json
 import tomllib
 from dataclasses import dataclass, field
@@ -48,7 +50,7 @@ from .profile import (
 from .binding import default_pointer_path
 from .neutral import Names, legacy_data, machine_keys, neutral_name, neutral_profile, neutral_records, renamed_note
 from .neutral_config import config_text, entries, expected
-from .neutral_sweep import legacy_owners, load_names, sweep
+from .neutral_sweep import DOCUMENTS_NOTE, legacy_owners, load_names, sweep
 from .state import LockHandle, acquire_lock, atomic_write_json, atomic_write_text, release_lock
 from .toml_writer import dump_toml
 
@@ -105,6 +107,7 @@ class _Plan:
     config_version: int = CONFIG_SCHEMA_VERSION
     config_backup: str | None = None  # the configuration as its backup holds it, through the sink
     renames: dict[str, str] = field(default_factory=dict)  # the machine keys it takes to neutral ones
+    documents: list[Path] = field(default_factory=list)  # the result documents, made from the old names
 
 
 def _scan_profiles(hardware_dir: Path) -> _ProfileScan:
@@ -211,9 +214,16 @@ def _plan(config_path: Path, config: Configuration, id_for: Callable[[str], str]
         steps.append(_plan_profile(config.paths.state, path, legacy, profile_id))
     rewrites = [_plan_rewrite(path, stored, profile) for path, (stored, profile) in scan.stale.items()]
     if version >= CONFIG_SCHEMA_VERSION:
-        return _Plan(steps, None, rewrites, version)
+        return _Plan(steps, None, rewrites, version, documents=_documents(config, bool(steps)))
     text, backup, renames = _plan_config(config_path, raw, ids_by_name if version == 1 else {}, version, names)
-    return _Plan(steps, text, rewrites, version, backup, renames)
+    return _Plan(steps, text, rewrites, version, backup, renames, _documents(config, bool(steps or renames)))
+
+
+def _documents(config: Configuration, converts: bool) -> list[Path]:
+    """The result documents, where this run converts a machine: they were made from its old names (the
+    sweep before the run leaves a schema-1 folder's documents to it, "Neutral names")."""
+    markdown = config.paths.markdown
+    return [path for path in (markdown.with_suffix(".json"), markdown) if converts and path.is_file()]
 
 
 def _left_by(path: Path, legacy: HardwareSnapshot, left: dict[str, dict], taken: set[str]) -> str | None:
@@ -317,7 +327,10 @@ def _plan_config(config_path: Path, raw: dict, ids_by_name: dict[str, str], vers
     for name, machine in normalized.get("machines", {}).items():
         if name in ids_by_name:
             machine["profile"] = ids_by_name[name]
-    keys = machine_keys(entries(normalized), {}, names)
+    # A key the rule has to draw is drawn from the file itself, not at random: a run that stopped after
+    # writing the backup draws the same keys again, and its backup stays the one this run plans.
+    seed, drawn = hashlib.sha256(config_path.read_bytes()).hexdigest(), itertools.count()
+    keys = machine_keys(entries(normalized), {}, names, lambda: f"computer-{hashlib.sha256(f'{seed}:{next(drawn)}'.encode()).hexdigest()[:8]}")
     renames = {old: new for old, new in keys.items() if old != new}
     normalized = expected(normalized, renames, config_path.parent)
     try:
@@ -340,8 +353,16 @@ def _plan_config(config_path: Path, raw: dict, ids_by_name: dict[str, str], vers
 
 def _execute(plan: _Plan, config_path: Path, config: Configuration, handle: LockHandle) -> list[str]:
     """Write what `_plan` checked. A file that is already there is identical (checked), so it is
-    skipped; a repeated run after a stop converges instead of duplicating."""
+    skipped; a repeated run after a stop converges instead of duplicating.
+
+    A schema-1 profile is removed last, once the configuration that names its new profile is written:
+    until then it is what a repeated run finds the new profile by (`_left_by`), whatever ids it draws.
+    """
     lines: list[str] = []
+    for path in plan.documents:
+        path.unlink(missing_ok=True)
+    if plan.documents:
+        lines.append(DOCUMENTS_NOTE)
     for step in plan.profiles:
         if not step.target.exists():
             atomic_write_json(step.target, step.profile.model_dump(mode="json"))
@@ -350,7 +371,6 @@ def _execute(plan: _Plan, config_path: Path, config: Configuration, handle: Lock
                 write_measurement(config.paths.state, record, handle)
         if not step.backup.exists():
             atomic_write_json(step.backup, step.kept)
-        step.source.unlink()
         count = len(step.records)
         lines.append(f"migrated {step.source.name} -> {step.target.name} ({count} measurement(s)), backup {step.backup.name}")
     lines += [_rewrite_profile(step) for step in plan.rewrites]
@@ -361,6 +381,8 @@ def _execute(plan: _Plan, config_path: Path, config: Configuration, handle: Lock
         atomic_write_text(config_path, plan.config_text)
         lines.append(f"migrated {config_path.name} to schema {CONFIG_SCHEMA_VERSION}, backup {backup.name}")
         lines += [renamed_note(new) for new in plan.renames.values()]
+    for step in plan.profiles:
+        step.source.unlink()
     return lines or [NOTHING_TO_DO]
 
 
