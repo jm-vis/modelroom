@@ -168,10 +168,12 @@ def export_profile(
     """Write one profile and all of its measurements to `out_path`; returns the report lines.
 
     The profile is the one named with `--profile`, else this machine's binding for the results
-    folder (the configuration file's own folder). A profile or measurement file that does not read
-    as a JSON object stops the export in the sweep (`NeutralError`, exit `1`; decided 2026-09-29); a
-    measurement that reads but is no valid record is reported and left out. Writing is atomic (`atomic_write_json`), so a
-    reader of `out_path` never sees a half-written file. The whole export holds `modelroom.lock`
+    folder (the configuration file's own folder). Two kinds of broken measurement differ: one the
+    sweep cannot clean -- a file that does not read as a JSON object, or a record whose package
+    reference is of another shape (`hf_file_digest: []`, a field that is no text) -- stops the export
+    before it writes (`NeutralError`, exit `1`; decided 2026-09-29); one the sweep has cleaned but that
+    is still no valid record (a value out of range) is reported and left out. Writing is atomic
+    (`atomic_write_json`), so a reader of `out_path` never sees a half-written file. The whole export holds `modelroom.lock`
     (`LockHeldError` otherwise): the sweep of machine names comes first under it (FR-N), then the
     profile and every record go through the sink before they are written.
     """

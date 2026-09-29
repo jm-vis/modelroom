@@ -108,7 +108,7 @@ def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None, name: str
     return [*rows, *chosen, Choice("import", "import a profile file"), Choice("enter", "enter a machine by hand"), *blocked]
 
 
-def machine_answer_words(scan: ProfileScan, bound: HardwareProfile | None, name: str) -> dict[str, str]:
+def machine_answer_words(scan: ProfileScan, bound: HardwareProfile | None) -> dict[str, str]:
     """The words of the answer line for each row that has words of its own (`screen.machines_words`)."""
     here = bound if _measured_here(bound) else None
     # The answer line names this machine by its class alone: its neutral key says nothing to a reader

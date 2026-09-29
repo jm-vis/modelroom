@@ -95,28 +95,29 @@ def config_text(text: str, raw: dict, renames: dict[str, str], folder: Path) -> 
 def _rename(text: str, raw: dict, renames: dict[str, str]) -> str:
     """Every renamed key where it is the key of a machine row or stands in a comment."""
     outside = {key: value for key, value in raw.items() if key != "machines"}
-    found: list[tuple[int, int, str]] = []
+    found: dict[tuple[int, int], tuple[bool, str]] = {}  # a place two keys match (other case) takes the exact one's
     for old, new in renames.items():
         for start, end, exact in _places(text, old):
             probe = _loads(text[:start] + _PROBE + text[end:])
             if probe is None:
                 continue
             row = exact and _PROBE in (probe.get("machines") or {}) and {k: v for k, v in probe.items() if k != "machines"} == outside
-            if row or probe == raw:  # a key of a row, or a comment (TOML reads the file the same)
-                found.append((start, end, new))
-    for start, end, new in sorted(set(found), reverse=True):
+            if (row or probe == raw) and (exact or (start, end) not in found):  # a key of a row, or a comment
+                found[(start, end)] = (exact, new)
+    for (start, end), (_exact, new) in sorted(found.items(), reverse=True):
         text = text[:start] + new + text[end:]
     return text
 
 
 def _places(text: str, old: str) -> list[tuple[int, int, bool]]:
-    """Where `old` may stand: bare (in any case, for a comment), or as a quoted key that reads as it."""
+    """Where `old` may stand: bare or quoted, in any case; only a place spelled exactly as `old` (read as
+    TOML reads it) can be the key of a row, a place in any case can be a comment (Codex r3-1)."""
     bare = re.compile(rf"""(?<![A-Za-z0-9_"'-]){re.escape(old)}(?![A-Za-z0-9_"'-])""", re.IGNORECASE)
     places = [(match.start(), match.end(), match.group() == old) for match in bare.finditer(text)]
     for match in _QUOTED_RE.finditer(text):
-        read = _loads(f"k = {match.group()}")
-        if read is not None and read.get("k") == old:
-            places.append((match.start(), match.end(), True))
+        read = (_loads(f"k = {match.group()}") or {}).get("k")
+        if isinstance(read, str) and read.lower() == old.lower():
+            places.append((match.start(), match.end(), read == old))
     return places
 
 

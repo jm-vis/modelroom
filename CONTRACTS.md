@@ -2980,7 +2980,8 @@ read again, checked to be the folder of that lock (a `[paths]` that moved meanwh
 the files written. A `--machine <old>` of the same call is led to the new key (`note: --machine now
 names <new>`); a later call with the old name meets the unknown-machine message of that command. A
 profile or a record that does not read as a JSON object of UTF-8 (it may hold a name as well as any
-other file), a profile that carries a name but no id to form its neutral one, a write that fails and
+other file), a record whose package reference is of another shape (it cannot be judged), a profile
+that carries a name but no id to form its neutral one, a write that fails and
 a lock another process holds end the command with exit `1` and `the files of this folder could not
 be cleaned of machine names; nothing else was written`, before it writes anything else. For a
 broken profile or record this is a deliberate change of 0.1.0, which listed it as broken and went on
@@ -3081,9 +3082,12 @@ binding of its own. The file is written with `atomic_write_json`, so a reader ne
 it. The whole export holds `modelroom.lock` (a lock another process holds is exit `1`): the sweep of
 machine names comes first under it ("Neutral names"), then its profile and every record go through
 the sink before the file is written, so it carries a neutral `display_name` (or the SSH alias of that
-profile) and no foreign text. A profile or measurement file that does not read as a JSON object
-stops the export with exit `1` in that sweep (decided 2026-09-29, "Neutral names"); a measurement
-that reads but is no valid record is reported and left out. `--profile` has to be a `profile_id` (16
+profile) and no foreign text. Two kinds of broken measurement differ. One the sweep cannot clean --
+a profile or measurement file that does not read as a JSON object, or a record whose package
+reference is of another shape (not an object, or `content_source`, `hf_repo`, `hf_file_digest`,
+`ollama_manifest_digest` that is no text, such as `hf_file_digest: []`) -- stops the export with exit
+`1` before it writes (decided 2026-09-29, "Neutral names"). One the sweep has cleaned but that is
+still no valid record (a value out of range) is reported and left out; it does not stop the export. `--profile` has to be a `profile_id` (16
 lowercase hex characters), and `--out` must be none of the files this package writes itself:
 nothing inside `paths.state` (the same rule `PathsConfig` holds for `paths.markdown`), not the
 configuration file, not the pointer file -- otherwise an export object would replace a profile,

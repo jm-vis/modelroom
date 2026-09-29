@@ -519,7 +519,7 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     configured = [machine.profile for machine in config.machines.values() if machine.profile is not None]
     run.screen.note(ANOTHER_COMPUTER)
     picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound, name, configured))
-    run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound, name)))
+    run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound)))
     if "this-machine" in picked:
         config = _measure_this_machine(run, config_file, config, scan, _measured_here(bound))
     imported: set[str] = set()

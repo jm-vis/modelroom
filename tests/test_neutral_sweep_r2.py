@@ -72,6 +72,20 @@ def test_a_comment_that_names_a_renamed_machine_is_kept_with_the_new_name(tmp_pa
     assert written.startswith("# written by hand, kept by the sweep")
 
 
+@pytest.mark.parametrize("quoted", [f"'{SENTINEL_HOST.upper()}'", f'"{SENTINEL_HOST.title()}"', f"'{SENTINEL_HOST}'"], ids=["single-upper", "double-title", "single-same"])
+def test_a_quoted_name_in_a_comment_goes_in_any_case(tmp_path, quoted):
+    """Codex r3-1: a quoted name in a comment is found in any case (a key itself is found exactly)."""
+    config = _folder(tmp_path / "f", {SENTINEL_HOST: None}, writer=SENTINEL_HOST)
+    text = config.read_text(encoding="utf-8").replace(f"[machines.{SENTINEL_HOST}]", f"# the desk {quoted}\n[machines.{SENTINEL_HOST}]")
+    config.write_bytes(text.encode("utf-8"))
+
+    sweep(config, NOW, "fetch", pointer_path=_pointer(tmp_path / "home"), hostname=SENTINEL_HOST)
+
+    written = config.read_text(encoding="utf-8")
+    assert SENTINEL_HOST not in written.lower() and f"# the desk {THIS_MACHINE}\n" in written and written.startswith("# written by hand")
+    assert list(tomllib.loads(written)["machines"]) == [THIS_MACHINE]
+
+
 def test_escaped_keys_and_keys_spelled_like_fields_keep_the_comments(tmp_path):
     folder = tmp_path / "f"
     folder.mkdir()
