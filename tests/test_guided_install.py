@@ -450,21 +450,29 @@ def test_pull_target_carries_every_field_the_helpers_read(tmp_path: Path):
 
 def test_a_first_row_without_weights_bytes_computes_them_from_the_package(tmp_path: Path):
     """An older `FirstRow(rank, name, weights_gib, package)` call, with no fifth argument, still
-    gets a real disk check -- not one against `0` bytes (Codex r1-4)."""
+    gets a real disk check -- not one against `0` bytes (Codex r1-4). The free disk here is chosen
+    above the margin alone but below the package's real need plus the margin (Codex r2-2): a check
+    that used `0` bytes instead of `needed_bytes` would pass on the margin alone and never notice
+    the difference, so a smaller free disk would not have told the two apart."""
     from fixture_room import fixed_room
-    from modelroom.room import free_disk
+    from modelroom.room import PULL_DISK_MARGIN_BYTES, free_disk
 
     package = granite_ollama_package()
     old_style = FirstRow(1, "granite4.2:8b", 5.0, package)  # no weights_bytes: the pre-A4 call shape
+    package_bytes = weights_bytes_of(package)
 
     assert old_style.weights_bytes is None
-    assert old_style.needed_bytes == weights_bytes_of(package) > 0
+    assert old_style.needed_bytes == package_bytes > 0
 
     daemon = pull_daemon()
     lines: list[str] = []
     run = _bare_run(tmp_path, daemon, {}, lines)
-    tiny_room = fixed_room(free_disk_bytes=1024)  # far less than the package needs
-    target = dataclasses.replace(pull_target_from_run(run), disk=lambda: free_disk(tiny_room))
+    # Above the margin alone (so a check that ignored the package would pass), below the package's
+    # own need plus the margin (so the real check must fail).
+    assert PULL_DISK_MARGIN_BYTES < package_bytes  # the fixture's own precondition
+    just_over_the_margin = PULL_DISK_MARGIN_BYTES + 1024
+    room = fixed_room(free_disk_bytes=just_over_the_margin)
+    target = dataclasses.replace(pull_target_from_run(run), disk=lambda: free_disk(room))
 
     assert _disk_allows(target, old_style) is False  # not silently allowed as a 0-byte download
     assert any("not enough disk" in line for line in lines)

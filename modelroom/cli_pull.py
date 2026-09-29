@@ -31,6 +31,9 @@ NOT_REACHABLE = "Ollama does not answer on this computer at 127.0.0.1:11434"
 ALREADY_LISTED = "Ollama lists {name} already; pulling it again updates it"
 UNKNOWN_SIZE = "the size of this download is not known; the disk is not checked before it"
 NO_TERMINAL = "no terminal to ask; add --yes"
+# State-neutral (Codex r2-1): a Ctrl-C in the inventory check right after a successful `POST` stops
+# the command with the package already pulled -- this says nothing about whether it landed.
+STOPPED = "stopped at your request"
 _GIB = 1024**3
 
 
@@ -56,12 +59,15 @@ def run_pull(
 
     Ctrl-C covers the whole of it (Codex r1-3): version check, the tags note, the disk check, the
     question and the pull itself all run under the one `try` below, so a `KeyboardInterrupt` in any
-    of them -- not only the dialog and the pull -- ends the command the same way, exit `130`.
+    of them -- not only the dialog and the pull -- ends the command the same way, exit `130`. The
+    message says nothing about whether the package landed: `_pull` reads the inventory again right
+    after a successful `POST`, and Ctrl-C there stops the command with the package already pulled
+    (Codex r2-1) -- `"nothing was pulled"` would be wrong in exactly that case.
     """
     try:
         return _run_checked(name, weights_bytes, yes, daemon, room, now, out, asker)
     except KeyboardInterrupt:
-        print("stopped at your request; nothing was pulled", file=sys.stderr)
+        print(STOPPED, file=sys.stderr)
         return 130
 
 
@@ -154,4 +160,4 @@ def _confirm(question: str, yes: bool, asker: Asker | None) -> bool:
     return active.confirm(KEY, question, default=False)
 
 
-__all__ = ["ALREADY_LISTED", "NOT_REACHABLE", "NOT_SAFE", "NO_TERMINAL", "UNKNOWN_SIZE", "run_pull"]
+__all__ = ["ALREADY_LISTED", "NOT_REACHABLE", "NOT_SAFE", "NO_TERMINAL", "STOPPED", "UNKNOWN_SIZE", "run_pull"]

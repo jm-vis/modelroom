@@ -154,17 +154,23 @@ def test_a_pull_error_is_exit_1_one_line(capsys):
 
 
 class _InterruptingDaemon:
-    """Answers version/tags/pull plainly; raises `KeyboardInterrupt` for one named call."""
+    """Answers version/tags/pull plainly; raises `KeyboardInterrupt` for one named call --
+    `interrupt_on_tags_after_pull` for the *second* `/api/tags` only, the one `_pull` reads right
+    after a successful `POST` (Codex r2-1: the package is already there by then)."""
 
     base_url = "http://127.0.0.1:11434"
 
-    def __init__(self, interrupt_on: tuple[str, str] | None = None) -> None:
+    def __init__(self, interrupt_on: tuple[str, str] | None = None, interrupt_on_tags_after_pull: bool = False) -> None:
         self._interrupt_on = interrupt_on
+        self._interrupt_on_tags_after_pull = interrupt_on_tags_after_pull
         self.calls: list[tuple[str, str, dict | None]] = []
 
     def __call__(self, method: str, path: str, body: dict | None = None, progress=None) -> Response:
+        pulled = any(call[1] == PULL_PATH for call in self.calls)
         self.calls.append((method, path, body))
         if (method, path) == self._interrupt_on:
+            raise KeyboardInterrupt
+        if self._interrupt_on_tags_after_pull and (method, path) == ("GET", TAGS_PATH) and pulled:
             raise KeyboardInterrupt
         if path == VERSION_PATH:
             return Response(status=200, body=b'{"version":"0.34.4"}')
@@ -226,3 +232,17 @@ def test_ctrl_c_during_the_pull_itself_is_exit_130(capsys):
     code = run_pull(NAME, weights_bytes=1024, yes=True, daemon=daemon, room=fixed_room(), now=NOW)
 
     assert code == 130
+
+
+def test_ctrl_c_after_a_successful_pull_says_nothing_about_the_package(capsys):
+    """The `POST` already succeeded when Ctrl-C stops the inventory check right after it (Codex
+    r2-1): the message must not claim `nothing was pulled` -- that would be wrong here."""
+    daemon = _InterruptingDaemon(interrupt_on_tags_after_pull=True)
+
+    code = run_pull(NAME, weights_bytes=1024, yes=True, daemon=daemon, room=fixed_room(), now=NOW)
+
+    err = capsys.readouterr().err
+    assert code == 130
+    assert "stopped at your request" in err
+    assert "nothing was pulled" not in err
+    assert any(call[1] == PULL_PATH for call in daemon.calls)  # the pull itself did go through
