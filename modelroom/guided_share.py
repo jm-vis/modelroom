@@ -4,11 +4,11 @@ question 7 (c)).
 Where the folder is, in this order: the environment variable `MODELROOM_PROFILE_SHARE` (for
 scripts, and it wins over anything stored), else `profile_share` of `~/.modelroom/remote.json`
 (set up here, in "Shared folder", and kept per user account), else none. `share_folder` is the
-**only** function that reads `profile_share` (`test_only_guided_share_reads_profile_share`): the
-row of the machine list, the menu step, the write probe and the import all go through it, and
-nothing this module writes ever carries the path further than `remote.json` and this step's own
-screen -- not a results folder, an export, a render, a failure sentence or a log
-(CONTRACTS.md, "Remote machines", "Why the path does not leave").
+**only** place `store.profile_share` is read as an attribute -- checked by AST, not a grep on the
+module name (Codex r1-4); a caller that wants the stored value alone calls `share_folder({}, store)`
+rather than touch the field. Nothing this module writes carries the path further than `remote.json`
+and this step's own screen -- not a results folder, an export, a render, a failure sentence or a
+log (CONTRACTS.md, "Remote machines", "Why the path does not leave").
 
 The menu step never touches the folder before it is chosen (`machine_list_row`, the row of the
 machine list): a network drive that happens to be unreachable must not hold up every run that
@@ -45,6 +45,7 @@ from .importer import (
     import_profile,
     read_export_file,
 )
+from .neutral import display_name_for
 from .profile import HardwareProfile
 from .remote_store import RemoteStore, is_share_path, read_remote, remote_path_for, set_profile_share
 from .state import LockHeldError
@@ -71,7 +72,7 @@ HINT_LINES = (
 CHECKING_NOTE = "checking that modelroom can write there"
 KEPT_NOTE = "shared folder kept for your user account"
 REMOVED_NOTE = "the shared folder is no longer kept"
-NOT_THIS_RUN_NOTE = "not stored; the folder set by the environment is still used in this run"
+NOT_THIS_RUN_NOTE = "the shared folder set by the environment is not used in this run"
 FORM_PROBLEM = "give the whole path of a folder, such as Z:\\profiles"
 WRITE_PROBLEM = "modelroom cannot write to that folder; check that it exists and that you may write there"
 UNREACHABLE_NOTE = "the shared folder cannot be read now; nothing was imported from it"
@@ -114,21 +115,31 @@ def machine_list_row(environ: Mapping[str, str], store: RemoteStore) -> str:
 
 
 def _stand_lines(environ: Mapping[str, str], store: RemoteStore) -> list[str]:
-    """The step's own head: what is stored or set, then the two-line hint (module docstring mockup)."""
+    """The step's own head: what is stored or set, then the two-line hint (module docstring mockup).
+
+    `share_folder({}, store)` -- an empty environment -- reads as `store.profile_share` exactly (no
+    variable can ever win against nothing), so this is `profile_share` alone, through the one
+    reader, not a second direct touch of the field (Codex r1-4).
+    """
     env = env_value(environ)
-    stand = SET_BY_ENV if env is not None else (store.profile_share or NONE_SET_YET)
+    stand = SET_BY_ENV if env is not None else (share_folder({}, store) or NONE_SET_YET)
     return [f"shared folder  {stand}", *HINT_LINES]
 
 
 def _setup_choices(environ: Mapping[str, str], store: RemoteStore) -> list[Choice]:
     """`use` only where a folder is there at all; `choose` always, grayed while the environment
-    wins; `none` always. The pointer starts on `use` where it exists, else on `choose`."""
+    wins; `none` always. The pointer starts on `use` where it exists, else on `choose`.
+
+    `stored`/`location` both come from `share_folder` (Codex r1-4): `share_folder({}, store)` for
+    the stored value alone, `share_folder(environ, store)` for the one this run would use.
+    """
     env = env_value(environ)
-    location = env or store.profile_share
+    stored = share_folder({}, store)
+    location = share_folder(environ, store)
     choices: list[Choice] = []
     if location is not None:
         choices.append(Choice("use", "take profiles from it", checked=True))
-    choose_label = "change the folder" if store.profile_share is not None else "choose a folder"
+    choose_label = "change the folder" if stored is not None else "choose a folder"
     choices.append(Choice("choose", choose_label, disabled=SET_BY_ENV if env is not None else None, checked=location is None))
     choices.append(Choice("none", "none, no shared folder"))
     return choices
@@ -139,16 +150,24 @@ def _form_problem(value: str) -> str | None:
 
 
 def _write_probe(folder: Path, token: Callable[[], str] = lambda: secrets.token_hex(4)) -> tuple[bool, str | None]:
-    """Write, then remove, a probe file of our own (FR-S): `(True, None)` on full success,
-    `(True, <note>)` when only the removal failed (the folder still counts), `(False, WRITE_PROBLEM)`
-    when nothing could be written there at all. `open(..., "xb")` refuses to follow a link or
-    overwrite anything -- the probe never touches a file that was already there."""
+    """Write, then remove, a probe file of our own: `(True, None)` on full success, `(True, <note>)`
+    when only the removal failed (the folder still counts), `(False, WRITE_PROBLEM)` when nothing
+    could be written there. `open(..., "xb")` never touches a file already there; a create that
+    fails outright never deletes one either (Codex r1-3) -- only a create that succeeded, with a
+    write or close that failed afterwards, is cleaned up on the way out."""
     name = f"{PROBE_PREFIX}{token()}.tmp"
     path = folder / name
+    created = False
     try:
         with open(path, "xb") as handle:
+            created = True
             handle.write(b"0")
     except OSError:
+        if created:
+            try:
+                path.unlink()
+            except OSError:
+                pass  # the write already failed; a leftover file is the lesser problem
         return False, WRITE_PROBLEM
     try:
         path.unlink()
@@ -182,11 +201,14 @@ def _ask_folder(run: "GuidedRun") -> str | None:
 
 
 def _apply_none(run: "GuidedRun", store_path: Path, store: RemoteStore, environ: Mapping[str, str]) -> None:
-    if store.profile_share is not None:
-        set_profile_share(store_path, None)
-        run.screen.note(REMOVED_NOTE)
+    """`none`: while the environment wins, a stored folder is untouched -- this run alone skips it
+    (Codex r1-2); only without the environment does `none` actually clear what is kept."""
     if env_value(environ) is not None:
         run.screen.note(NOT_THIS_RUN_NOTE)
+        return
+    if share_folder({}, store) is not None:
+        set_profile_share(store_path, None)
+        run.screen.note(REMOVED_NOTE)
 
 
 def share_step(run: "GuidedRun", config_file: Path, config: Configuration) -> tuple[Configuration, set[str]]:
@@ -260,13 +282,21 @@ def _by_profile(files: Sequence[_ShareFile]) -> dict[str, list[_ShareFile]]:
     return grouped
 
 
+def _safe_name(profile: HardwareProfile) -> str:
+    """The name shown for `profile`: itself where it is already neutral, else the sink's own
+    fallback (`neutral.display_name_for`, FR-N) -- a foreign export whose source forgot to
+    neutralize never reaches a list, an answer line or a failure sentence with its real name
+    (Codex r1-6). No alias applies here: the shared folder is not the SSH way."""
+    return display_name_for(profile.profile_id, profile.machine_class, profile.display_name, None)
+
+
 def _rows(grouped: dict[str, list[_ShareFile]]) -> list[Choice]:
     """One row per `profile_id`, described from the file with the newest `recorded_at`; the file
     names themselves never reach a label (`test_file_names_never_appear`)."""
     labeled = []
     for profile_id, entries in grouped.items():
         newest = max(entries, key=lambda entry: entry.profile.recorded_at).profile
-        label = f"{newest.display_name}  {_hardware_class(newest)}  recorded {newest.recorded_at.date().isoformat()}"
+        label = f"{_safe_name(newest)}  {_hardware_class(newest)}  recorded {newest.recorded_at.date().isoformat()}"
         labeled.append((label, profile_id))
     labeled.sort()
     return [Choice(profile_id, label) for label, profile_id in labeled]
@@ -277,7 +307,7 @@ def _bad_note(bad: int) -> str:
 
 
 def _picked_words(picked: Sequence[str], grouped: dict[str, list[_ShareFile]]) -> str:
-    names = [grouped[profile_id][0].profile.display_name for profile_id in picked if profile_id in grouped]
+    names = [_safe_name(grouped[profile_id][0].profile) for profile_id in picked if profile_id in grouped]
     return ", ".join(names) if names else "none"
 
 
@@ -307,7 +337,7 @@ def _import_chosen(run: "GuidedRun", config_file: Path, grouped: dict[str, list[
     failure never stops the others, of this id or of the next one (`test_one_failing_file_does_not_stop_the_others`)."""
     for profile_id in picked:
         entries = sorted(grouped.get(profile_id, ()), key=lambda entry: (entry.profile.recorded_at, entry.path.name))
-        name = entries[0].profile.display_name if entries else profile_id
+        name = _safe_name(entries[0].profile) if entries else profile_id
         for entry in entries:
             _import_one(run, config_file, entry.path, profile_id, name)
 

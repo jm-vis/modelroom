@@ -92,6 +92,15 @@ class StaleExportError(ImportConflictError):
     """
 
 
+class ExportTooLargeError(StoredFileError):
+    """`read_export_file` refused a file over `max_bytes` (a `StoredFileError`, so a plain listing
+    that never passes `expected_profile_id` still treats it as one broken file among others). A
+    caller of `import_profile` that passed `max_bytes` -- only FR-S does -- turns this into
+    `StaleExportError` instead (Codex r1-1): the file grew past the limit after it was listed, the
+    same story as a `profile_id` that no longer matches.
+    """
+
+
 # --- reading what is stored --------------------------------------------------------------------
 
 
@@ -153,16 +162,17 @@ def read_export_file(path: Path, *, max_bytes: int | None = None) -> ExportObjec
     `StoredFileError` when it does not read or does not validate (both exit `3`).
 
     `max_bytes` is enforced on the bytes this call actually reads (FR-S), not on a size read
-    earlier by a lister: a file is read once, as a whole, and checked before it is decoded, so a
-    file that grew past the limit since it was listed is refused the same way a file that was
-    always too large is.
+    earlier by a lister: at most `max_bytes + 1` bytes are ever read (Codex r1-1) -- enough to
+    know the file is over the limit, never the whole of an oversized one -- so a file that grew
+    past the limit since it was listed is refused (`ExportTooLargeError`) without first loading it.
     """
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            raw = handle.read(max_bytes + 1) if max_bytes is not None else handle.read()
     except OSError as exc:
         raise StoredFileError(f"{path}: cannot read export file: {exc}") from exc
     if max_bytes is not None and len(raw) > max_bytes:
-        raise StoredFileError(f"{path}: {len(raw)} bytes, over the allowed {max_bytes}")
+        raise ExportTooLargeError(f"{path}: over the allowed {max_bytes} bytes")
     try:
         data = json.loads(raw.decode("utf-8"))
     # ValueError: bad UTF-8/JSON, over-long integers. RecursionError is neither a ValueError nor
@@ -330,7 +340,10 @@ def import_profile(
     _read_raw_config(resolved_config)
     if name is not None and not is_alias(name):
         raise PrerequisiteError("the name for this machine is no host alias (letters, digits, dashes)")
-    incoming = read_export_file(export_path, max_bytes=max_bytes)
+    try:
+        incoming = read_export_file(export_path, max_bytes=max_bytes)
+    except ExportTooLargeError as exc:
+        raise StaleExportError(f"{export_path}: grew past the allowed size\n{NOTHING_WRITTEN}") from exc
     if expected_profile_id is not None and incoming.profile.profile_id != expected_profile_id:
         raise StaleExportError(f"{export_path}: no longer the profile it was listed as\n{NOTHING_WRITTEN}")
     names = load_names(resolved_config.parent, pointer_path or default_pointer_path(), hostname)

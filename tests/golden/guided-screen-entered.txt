@@ -12,7 +12,6 @@
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
    another computer: pick its profile below, or import the file made there
-   set up a shared folder for profiles
  ? Which machines should the result cover?  this machine, a machine entered by hand
  ? What kind of machine is this?  laptop
    graphics  NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU · 12.0 GB · nvidia-smi · usable (CUDA)

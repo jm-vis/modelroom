@@ -525,8 +525,10 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     name = _machine_key(run)
     configured = [machine.profile for machine in config.machines.values() if machine.profile is not None]
     run.screen.note(ANOTHER_COMPUTER)
+    # Row 5's own label (FR-S): a `Choice`, like `import`/`enter` next to it -- the checkbox itself
+    # is the one place it is shown, never a note of its own beside it (Codex r1-5: that was a
+    # product-visible double display, not the "always in the list" the row asks for).
     share_label = machine_list_row(run.room.environ, read_remote(remote_path_for(run.pointer_path)))
-    run.screen.note(share_label)
     picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound, name, configured, share_label))
     run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound)))
     if "this-machine" in picked:

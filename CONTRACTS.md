@@ -2922,36 +2922,50 @@ the path further than `remote.json` and this step's own screen ("Remote machines
 (stored or from the environment). It never reads the folder -- an unreachable network drive must
 not hold up a run that never opens this step.
 
-**The step, "Shared folder"** (value `share`). Its head names the stand -- `none set yet`, the
-stored path, or `set by environment (MODELROOM_PROFILE_SHARE)` without a path -- then one choice
-(`share_setup`): `use` (only where a folder is there, stored or from the environment) takes
-profiles from it; `choose`/`change the folder` asks a path (grayed out, with the reason, while the
-environment wins) and, once typed (`share_folder`): checked for form (after `expanduser`, absolute,
-not empty, no NUL, at most 1024 characters, no Windows device or pipe prefix `\\.\`/`\\?\` -- a
-write there could open a pipe instead of a file), then for writing (a probe file, created
-exclusively, written, removed; a leftover probe file is a note, the folder counts all the same),
-stored as typed (never `resolve`d) on success; `none` clears a stored folder and, with the
-environment set, notes that this run still uses it. A form or write problem asks the question
-again at a terminal, ends the step on an empty answer, and is `AnswerInvalidError` (exit `2`) from
-an answer file, the same shape as `_allowed_folder` above.
+**The step, "Shared folder"** (value `share`, a `Choice` of the machine list's own checkbox --
+shown once, there, never repeated as an interactive note beside it). Its head names the stand --
+`none set yet`, the stored path, or `set by environment (MODELROOM_PROFILE_SHARE)` without a path
+-- then one choice (`share_setup`): `use` (only where a folder is there, stored or from the
+environment) takes profiles from it; `choose`/`change the folder` asks a path (grayed out, with the
+reason, while the environment wins) and, once typed (`share_folder`): checked for form (after
+`expanduser`, absolute, not empty, no NUL, at most 1024 characters, no Windows device or pipe
+prefix `\\.\`/`\\?\` -- a write there could open a pipe instead of a file), then for writing (a
+probe file, created exclusively; a write or close that fails after the create still removes it, a
+create that fails outright never deletes anything that was already there; a leftover probe file
+that could not be removed is a note, the folder counts all the same), stored as typed (never
+`resolve`d) on success; `none` **while the environment is set skips this run only, and leaves a
+stored folder exactly as it was** -- the environment always wins, so clearing storage under it
+would be a promise the run cannot keep; without the environment it clears a stored folder. A form
+or write problem asks the question again at a terminal, ends the step on an empty answer, and is
+`AnswerInvalidError` (exit `2`) from an answer file, the same shape as `_allowed_folder` above.
+`store.profile_share` itself is read in exactly one place, `share_folder`; everything else that
+needs to know the stored value alone calls `share_folder({}, store)` (no variable can win against
+an empty environment), never the field.
 
 **Reading the folder**, on `use` or a successful `choose`: every `*.json` directly in it (never a
-subfolder), at most 200 files, each read as an export of at most 16 MiB -- a file beyond either
-limit is left alone, not counted as broken. An unreadable folder is `the shared folder cannot be
-read now; nothing was imported from it`, the run goes on; files that do not read as an export are
-one note with their count; one row per `profile_id` (`share_files`, a checkbox), described from the
-file with the newest `recorded_at`, never from a file name.
+subfolder), at most 200 files -- a file beyond that count is left alone, not even opened. Each is
+read as an export of at most `max_bytes + 1` bytes (16 MiB the limit; never the whole file, however
+large), and one over it counts as broken, exactly like a file that does not parse or does not
+validate (`ExportTooLargeError`, a `StoredFileError`). An unreadable folder is `the shared folder
+cannot be read now; nothing was imported from it`, the run goes on; files that do not read as an
+export are one note with their count; one row per `profile_id` (`share_files`, a checkbox),
+described from the file with the newest `recorded_at`, never from a file name, and never from a
+`display_name` that is not itself neutral (`neutral.display_name_for`, the FR-N sink's own fallback
+-- a foreign export whose source forgot to neutralize is shown, answered and named in a failure
+sentence under its neutral name, never the one the file actually carries).
 
 **Importing a chosen `profile_id`**: every readable export of it, oldest `recorded_at` first (ties
 by file name), each through the unchanged `import_profile` with `expected_profile_id` and
-`max_bytes` (16 MiB) -- checked on the object it actually reads, before it is planned, so a file
-that changed after it was listed is refused the same way a file that was always wrong would be
-(`StaleExportError`, an `ImportConflictError`). Every exception is one of three fixed sentences,
-none of them naming the file: `a file in the shared folder changed after it was listed` (the check
-above), `a file of <name> in the shared folder contradicts one imported before` (any other
-conflict -- a contradicting measurement, most often), `a file of <name> in the shared folder could
-not be imported` (everything else). One file's failure never stops the others of the same
-`profile_id`, or the next `profile_id`. Herkunft `imported`, the same as `import a profile file`.
+`max_bytes` (16 MiB). Both are checked on the object it actually reads, before it is planned, so a
+file that changed after it was listed -- a different profile now, or grown past the limit -- is
+`StaleExportError` (an `ImportConflictError`) either way, never the plain `StoredFileError` a size
+limit alone would be without `expected_profile_id` in play. Every exception is one of three fixed
+sentences, none of them naming the file: `a file in the shared folder changed after it was listed`
+(the check above), `a file of <name> in the shared folder contradicts one imported before` (any
+other conflict -- a contradicting measurement, most often), `a file of <name> in the shared folder
+could not be imported` (everything else); `<name>` is the neutral name as well. One file's failure
+never stops the others of the same `profile_id`, or the next `profile_id`. Herkunft `imported`, the
+same as `import a profile file`.
 
 ### Neutral names
 

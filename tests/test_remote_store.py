@@ -7,9 +7,14 @@ writer of an alias is FR-B1's; its tests follow there.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+# UNC paths and drive letters are a Windows path shape; `Path(...).is_absolute()` reads them as
+# absolute only there (Codex r1-7), so the tests that rely on that stay Windows-only.
+WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="drive letters and UNC paths are a Windows path shape")
 
 from fixture_neutral import THIS_MACHINE
 from modelroom.cli import main
@@ -66,15 +71,24 @@ def test_a_broken_file_is_refused(tmp_path, content):
         read_remote(_write(tmp_path / "remote.json", content))
 
 
-def test_is_share_path_accepts_absolute_paths_and_rejects_the_rest():
-    assert is_share_path("Z:\\profiles")
-    assert is_share_path("\\\\sentinel-nas\\share\\profiles")
+def test_is_share_path_accepts_a_native_absolute_path_and_rejects_the_rest(tmp_path):
+    assert is_share_path(str(tmp_path / "profiles"))
     assert not is_share_path("relative")
-    assert not is_share_path("\\\\.\\pipe\\x")
-    assert not is_share_path("\\\\?\\C:\\x")
     assert not is_share_path("")
     assert not is_share_path("a\x00b")
     assert not is_share_path("x" * 1025)
+
+
+@WINDOWS_ONLY
+def test_is_share_path_accepts_unc_and_a_drive_letter():
+    assert is_share_path("Z:\\profiles")
+    assert is_share_path("\\\\sentinel-nas\\share\\profiles")
+
+
+@WINDOWS_ONLY
+def test_is_share_path_rejects_device_and_pipe_prefixes():
+    assert not is_share_path("\\\\.\\pipe\\x")
+    assert not is_share_path("\\\\?\\C:\\x")
 
 
 @pytest.mark.parametrize(

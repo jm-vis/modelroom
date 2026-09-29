@@ -162,26 +162,30 @@ and offers `<home>/modelroom` instead.
 #### Another computer
 
 A folder can hold the profiles of several machines -- the laptop you sit at and a server you rent,
-say. There are three ways to get another computer into the result:
+say. There are four ways to get another computer into the result:
 
 1. **Run modelroom on that computer** and measure it there -- for a rented instance, over SSH.
    This is the only way that measures a vLLM server as well.
 2. **Measure it there and bring the file here**: on that computer `modelroom hardware` and
-   `modelroom export-profile`, send the file over, and answer step 1 here with `import a profile
-   file`.
+   `modelroom export-profile` (name the file after the neutral name the export already carries,
+   such as `server-3f9a0c21.json`, so nothing about the sending machine sits in the file name),
+   send the file over, and answer step 1 here with `import a profile file`.
 3. **Drop it in a shared folder**, for a computer without SSH: step 1 always offers `set up a
    shared folder for profiles` (or, once one is set, `profiles from the shared folder`). A folder
    on this computer, a network drive, or a cloud sync folder -- other computers leave their
-   `export-profile` files there, and this run picks them up by machine, never by file name. The
-   folder is set up once, in that step, and kept per user account (`~/.modelroom/remote.json`,
-   never in a results folder); `MODELROOM_PROFILE_SHARE` overrides it for a script, without storing
-   anything.
+   `export-profile` files there (again best named after the profile's own neutral name), and this
+   run picks them up by machine, never by file name. The folder is set up once, in that step, and
+   kept per user account (`~/.modelroom/remote.json`, never in a results folder);
+   `MODELROOM_PROFILE_SHARE` overrides it for a script, without storing anything.
 4. **Enter it by hand** from its data sheet (`enter a machine by hand`).
 
 Every profile the folder already holds stands in step 1 as a row of its own and can be picked;
 the result shows only the ones you marked. A folder collects profiles through `import`, which checks
 the file's schema and its name; a file copied by hand into `state/hardware/` is taken up by the next
-run. modelroom itself never connects to another computer.
+run. modelroom itself never opens a network connection of its own to another computer: the shared
+folder is read and written like any local one, whatever the operating system mounted there for you
+-- a network share or a cloud sync folder included -- and the only other way it reaches a second
+machine is the SSH way above, through the system's own `ssh`.
 
 ### Step 2, Packages
 

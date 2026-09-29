@@ -604,16 +604,47 @@ def test_a_file_replaced_after_the_choice_by_another_profiles_export_changes_not
 
 def test_a_file_grown_over_the_limit_after_the_listing_is_refused(tmp_path, capsys):
     """`max_bytes` is enforced on the bytes actually read, not on a size a lister saw earlier: a
-    file over the limit -- whether it always was or grew since it was listed -- is refused the
-    same way, and nothing of it is written."""
+    file over the limit -- whether it always was or grew since it was listed -- is `StaleExportError`
+    (Codex r1-1: the same story as a file that changed to another profile), not the generic
+    `StoredFileError` a caller without `expected_profile_id` would get, and nothing of it is written."""
     config_path = _deployment(tmp_path / "target")
     before = _tree(tmp_path / "target")
     export_path = _write_json(tmp_path / "e.json", EXPORT)
 
-    with pytest.raises(StoredFileError):
+    with pytest.raises(StaleExportError):
         import_profile(config_path, export_path, NOW, expected_profile_id=PROFILE_ID, max_bytes=10)
 
     assert _tree(tmp_path / "target") == before
+
+
+def test_max_bytes_reads_at_most_one_byte_past_the_limit(tmp_path):
+    """`read_export_file` never loads a whole oversized file into memory (Codex r1-1): with
+    `max_bytes=10` on a file many kilobytes long, at most 11 bytes are ever read."""
+    from modelroom.importer import read_export_file
+
+    export_path = _write_json(tmp_path / "e.json", EXPORT)
+    real_open = Path.open
+    reads: list[int] = []
+
+    def counting_open(self, mode="r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        real_read = handle.read
+
+        def counting_read(size=-1):
+            data = real_read(size)
+            reads.append(len(data))
+            return data
+
+        handle.read = counting_read
+        return handle
+
+    import unittest.mock as mock
+
+    with mock.patch.object(Path, "open", counting_open):
+        with pytest.raises(StoredFileError):
+            read_export_file(export_path, max_bytes=10)
+
+    assert reads == [11]
 
 
 # --- import: broken files in the target ----------------------------------------------------------
