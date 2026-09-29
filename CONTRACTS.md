@@ -2887,18 +2887,71 @@ renders or copies it. `this_machine` is this computer's key in `[machines.<name>
 `computer-<8 random hex>` (`secrets.token_hex`), made on first need and kept, the same in every
 results folder this user runs on this computer, and not derivable from the host name. `ssh` maps
 a `profile_id` to the host alias it was read over SSH under (written by the SSH way, FR-B1); an
-alias belongs to one `profile_id` at most. Every write reads the file, changes one field and
+alias belongs to one `profile_id` at most. `profile_share` is the shared folder of "Shared folder"
+below (FR-S, GF question 7 (c)): stored exactly as it was typed, after `expanduser`, never
+`resolve`d -- a UNC path stays a UNC path, so a Windows drive letter (which only exists for the
+signed-in session) is never substituted for it. Every write reads the file, changes one field and
 writes it back atomically. The first `this_machine` is made under a lock of the user account
 (`remote.lock` next to the file, the kernel lock of "Lock file"), the file read again under it: of
 two processes that start at once the second waits (10 s at most) and takes the first one's key. A
 missing file reads as empty; a broken one (not JSON, a field of its own, a `this_machine` of another
-shape, an alias outside the alias rule, schema 2) and one that cannot be written are
-`RemoteStoreError`, exit `3` for every command, said in a fixed sentence that names neither a path
-of the user account nor a value of the file.
+shape, an alias outside the alias rule, a `profile_share` outside its own form, schema 2) and one
+that cannot be written are `RemoteStoreError`, exit `3` for every command, said in a fixed sentence
+that names neither a path of the user account nor a value of the file.
 
 ```json
-{"schema_version": 1, "this_machine": "computer-5c1e9a07", "ssh": {"3f9a0c21d4e6b870": "gpu1"}}
+{
+  "schema_version": 1,
+  "this_machine": "computer-5c1e9a07",
+  "ssh": {"3f9a0c21d4e6b870": "gpu1"},
+  "profile_share": "Z:\\profiles"
+}
 ```
+
+### Shared folder (FR-S, `modelroom/guided_share.py`, GF question 7 (c))
+
+A folder of export files a computer without SSH drops profiles into and reads them back from, for
+a laptop and a server too far apart for a direct connection. Where it is, read only by
+`guided_share.share_folder(environ, store)`, in this order: the environment variable
+`MODELROOM_PROFILE_SHARE` when it is set and not empty (an empty variable counts as unset
+everywhere), else `profile_share` of `remote.json`, else none. Nothing this module writes carries
+the path further than `remote.json` and this step's own screen ("Remote machines").
+
+**Row 5 of the machine list** ("Guided mode", step 1) is always there, whatever the folder holds:
+`set up a shared folder for profiles` with no folder, `profiles from the shared folder` with one
+(stored or from the environment). It never reads the folder -- an unreachable network drive must
+not hold up a run that never opens this step.
+
+**The step, "Shared folder"** (value `share`). Its head names the stand -- `none set yet`, the
+stored path, or `set by environment (MODELROOM_PROFILE_SHARE)` without a path -- then one choice
+(`share_setup`): `use` (only where a folder is there, stored or from the environment) takes
+profiles from it; `choose`/`change the folder` asks a path (grayed out, with the reason, while the
+environment wins) and, once typed (`share_folder`): checked for form (after `expanduser`, absolute,
+not empty, no NUL, at most 1024 characters, no Windows device or pipe prefix `\\.\`/`\\?\` -- a
+write there could open a pipe instead of a file), then for writing (a probe file, created
+exclusively, written, removed; a leftover probe file is a note, the folder counts all the same),
+stored as typed (never `resolve`d) on success; `none` clears a stored folder and, with the
+environment set, notes that this run still uses it. A form or write problem asks the question
+again at a terminal, ends the step on an empty answer, and is `AnswerInvalidError` (exit `2`) from
+an answer file, the same shape as `_allowed_folder` above.
+
+**Reading the folder**, on `use` or a successful `choose`: every `*.json` directly in it (never a
+subfolder), at most 200 files, each read as an export of at most 16 MiB -- a file beyond either
+limit is left alone, not counted as broken. An unreadable folder is `the shared folder cannot be
+read now; nothing was imported from it`, the run goes on; files that do not read as an export are
+one note with their count; one row per `profile_id` (`share_files`, a checkbox), described from the
+file with the newest `recorded_at`, never from a file name.
+
+**Importing a chosen `profile_id`**: every readable export of it, oldest `recorded_at` first (ties
+by file name), each through the unchanged `import_profile` with `expected_profile_id` and
+`max_bytes` (16 MiB) -- checked on the object it actually reads, before it is planned, so a file
+that changed after it was listed is refused the same way a file that was always wrong would be
+(`StaleExportError`, an `ImportConflictError`). Every exception is one of three fixed sentences,
+none of them naming the file: `a file in the shared folder changed after it was listed` (the check
+above), `a file of <name> in the shared folder contradicts one imported before` (any other
+conflict -- a contradicting measurement, most often), `a file of <name> in the shared folder could
+not be imported` (everything else). One file's failure never stops the others of the same
+`profile_id`, or the next `profile_id`. Herkunft `imported`, the same as `import a profile file`.
 
 ### Neutral names
 
@@ -5176,8 +5229,11 @@ matter, so the move is invisible to it.
 | 1 | `results_path` | Path to the results folder | text (only after `path`, or after `write_home` false: then `<home>/modelroom` is offered) |
 | 1 | `write_home` | Write the results into this folder anyway? | true/false, default false (only when the chosen folder is the home folder or the top of a drive, AP9-UX2 U7; an answer file whose `results_path` names one again ends with exit 2) |
 | 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
-| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `enter` and `profile:<profile_id>` for a profile of the folder a machine names (AP9-UX C1) |
+| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `share`, `enter` and `profile:<profile_id>` for a profile of the folder a machine names (AP9-UX C1; `share` FR-S) |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
+| 1 | `share_setup` | What should modelroom do with the shared folder? | `use`, `choose`, `none` (only after `share`, FR-S) |
+| 1 | `share_folder` | Folder for the profile exports: | text, the form "Shared folder" checks (only after `choose`) |
+| 1 | `share_files` | Which profiles should be imported? | a list of `profile_id`s the shared folder holds (only once that list is shown) |
 | 1 | `entered_name` | What is the machine called? | text, 1 to 128 characters after trimming (only after `enter`) |
 | 1 | `entered_class` | What kind of machine is it? | `laptop`, `workstation`, `server` or `unknown` ("not sure") (only after `enter`, always; since 2026-09-26) |
 | 1 | `entered_ram` | How much memory does it have, in GiB? | a number above 0: `16` … `256` from the list, or any other, decimals allowed as text (`"31.5"`); a TOML float is no answer (only after `enter`) |
@@ -5285,8 +5341,10 @@ from the top, nothing marked:
    `profile:<profile_id>`, `<label>  <hardware>`: the label as the import forms it, with the short
    id where two carry one name; the hardware as `2 x NVIDIA L4 44.98 GiB VRAM / 94.29 GiB RAM`, a
    machine entered by hand as `shared memory 32.00 GiB (entered)`), by hardware, then label;
-4. `import a profile file`; 5. `enter a machine by hand`;
-6. grayed out: a profile no machine of the configuration names (`no machine of the configuration
+4. `import a profile file`; 5. the shared folder (value `share`, FR-S: `set up a shared folder for
+   profiles` with none set, else `profiles from the shared folder` -- always there, and never a
+   look at the folder itself, "Shared folder" below); 6. `enter a machine by hand`;
+7. grayed out: a profile no machine of the configuration names (`no machine of the configuration
    names this profile` -- each run gives every profile of the folder an entry at its start, so this
    happens only when one was removed by hand afterwards), then the schema-1 files (`run modelroom
    migrate`), then the files that do not read (with their reason).
@@ -5322,7 +5380,8 @@ leaves `unknown`, with the chassis note. So an answer file that measures this ma
 `machine_class`; an earlier answer is never taken over, the class is read again on every
 measurement.
 `import a profile file` runs `import-profile`, which never changes the
-binding; a file that does not import is reported and the run goes on.
+binding; a file that does not import is reported and the run goes on. **The shared folder**
+(FR-S) is "Shared folder" below.
 
 **`enter a machine by hand`** (decided 2026-09-26, `modelroom/guided_entered.py`) sizes a machine
 from its data sheet -- one that is not in the house yet, or one no measurement here covers (the

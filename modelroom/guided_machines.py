@@ -9,8 +9,10 @@ The list, from the top (CONTRACTS.md, "Guided mode", step 1; AP9-UX C and C1):
 1. the bound profile of this machine, where it was measured here (`profile:<profile_id>`);
 2. `this machine (<name>, measure again)` with row 1, else `(<name>, measure now)` (`this-machine`);
 3. every other profile of the folder a machine of the configuration names, by class, then label;
-4. `import a profile file`; 5. `enter a machine by hand`;
-6. grayed out: profiles no machine names, then `legacy` files, then files that do not read.
+4. `import a profile file`; 5. the shared folder (`share`, `modelroom/guided_share.py`, FR-S) --
+   always there, its label carried in from outside since this module never touches `remote.json` or
+   the environment; 6. `enter a machine by hand`;
+7. grayed out: profiles no machine names, then `legacy` files, then files that do not read.
 
 Nothing is marked in advance: `Enter` alone takes the first row -- the profile this machine already
 has, where there is one, else a first measurement.
@@ -90,13 +92,17 @@ def _profile_choices(scan: ProfileScan, configured: set[str], skip: str | None =
     return chosen, blocked
 
 
-def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None, name: str, configured: Iterable[str]) -> list[Choice]:
-    """The machine list of step 1, rows 1 to 6 (module docstring); nothing is marked.
+def _machine_choices(
+    scan: ProfileScan, bound: HardwareProfile | None, name: str, configured: Iterable[str], share_label: str
+) -> list[Choice]:
+    """The machine list of step 1, rows 1 to 7 (module docstring); nothing is marked.
 
     `bound` is the profile this folder binds this machine to, `name` this machine's key in
     `[machines.<name>]`, `configured` every `profile` a machine of the configuration names. A binding
     to a profile entered by hand is no row 1: nothing of this machine was measured here, so its row
     says `measure now` and the profile stands among the others (decided 2026-09-26, Review r3-N3).
+    `share_label` is row 5's own text (FR-S, `guided_share.machine_list_row`): always there, whatever
+    it says -- the shared folder is meant to be found in this list.
     """
     here = bound if _measured_here(bound) else None
     rows = []
@@ -105,7 +111,8 @@ def _machine_choices(scan: ProfileScan, bound: HardwareProfile | None, name: str
         rows.append(Choice(f"{PROFILE_PREFIX}{here.profile_id}", this_machine_words(name, _class_word(here), measured)))
     rows.append(Choice("this-machine", this_machine_words(name, "measure again" if here is not None else "measure now")))
     chosen, blocked = _profile_choices(scan, set(configured), here.profile_id if here is not None else None)
-    return [*rows, *chosen, Choice("import", "import a profile file"), Choice("enter", "enter a machine by hand"), *blocked]
+    tail = [Choice("import", "import a profile file"), Choice("share", share_label), Choice("enter", "enter a machine by hand")]
+    return [*rows, *chosen, *tail, *blocked]
 
 
 def machine_answer_words(scan: ProfileScan, bound: HardwareProfile | None) -> dict[str, str]:

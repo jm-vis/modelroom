@@ -24,6 +24,23 @@ All notable changes to this project are documented in this file. The format foll
   the name built from the package, never by the name the daemon holds it under. The host name of this
   computer stands only in the start line, read live.
 
+- **A shared folder of profile exports, for a computer without SSH** (AP9-FR, FR-S, GF question
+  7 (c); `modelroom/guided_share.py`, `modelroom/remote_store.py`; CONTRACTS.md, "Remote machines",
+  "Shared folder"). Step 1's machine list always offers a row for it -- `set up a shared folder for
+  profiles`, or `profiles from the shared folder` once one is set -- next to `import a profile
+  file`. Picking it opens "Shared folder": where it is (`none set yet`, the stored path, or `set by
+  environment (MODELROOM_PROFILE_SHARE)`), then `take profiles from it`, `choose a folder`/`change
+  the folder`, or `none, no shared folder`. A chosen folder is checked once, by writing and removing
+  a probe file, and kept per user account in the new `profile_share` field of
+  `~/.modelroom/remote.json` -- exactly as typed, a UNC path (`\\nas\share\profiles`) included, only
+  the Windows device prefixes `\\.\`/`\\?\` refused. `MODELROOM_PROFILE_SHARE` overrides it for a
+  script, without storing anything; an empty variable counts as unset. Reading the folder lists one
+  row per profile still there, described from its newest export; choosing one imports every export
+  of that machine, oldest first, through the unchanged `import-profile` -- a file that changed since
+  it was listed changes nothing, and one file's problem never stops the others. The path itself
+  never reaches a results folder, an export, a render or a failure sentence: `remote.json` and this
+  step's own screen are the only places it is ever written or shown.
+
 - **A package for another computer, and the command that installs it there** (AP9-FR, FR-A;
   `modelroom/pull_other.py`, `modelroom/cli_pull.py`; CONTRACTS.md, "Guided mode", "`modelroom
   pull`"). Step 5's own pull now checks every name it would ever print or send against

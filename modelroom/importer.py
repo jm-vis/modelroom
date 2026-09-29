@@ -83,6 +83,15 @@ class ImportConflictError(Exception):
     """
 
 
+class StaleExportError(ImportConflictError):
+    """The file `import_profile` actually read is not the one a caller listed it as (FR-S, Codex
+    r6-2): its `profile_id` no longer matches `expected_profile_id`, or it grew past `max_bytes`
+    between the listing and the read. An `ImportConflictError` like any other -- nothing is written,
+    and a caller that does not distinguish it still ends the run the same way -- but `guided_share`
+    tells it apart from a real conflict, because the two read as different sentences to the user.
+    """
+
+
 # --- reading what is stored --------------------------------------------------------------------
 
 
@@ -139,15 +148,27 @@ def scan_profiles(hardware_dir: Path) -> ProfileScan:
     return scan
 
 
-def read_export_file(path: Path) -> ExportObject:
+def read_export_file(path: Path, *, max_bytes: int | None = None) -> ExportObject:
     """Validate an export file: `SchemaVersionError` outside the accepted range, else
-    `StoredFileError` when it does not read or does not validate (both exit `3`)."""
+    `StoredFileError` when it does not read or does not validate (both exit `3`).
+
+    `max_bytes` is enforced on the bytes this call actually reads (FR-S), not on a size read
+    earlier by a lister: a file is read once, as a whole, and checked before it is decoded, so a
+    file that grew past the limit since it was listed is refused the same way a file that was
+    always too large is.
+    """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise StoredFileError(f"{path}: cannot read export file: {exc}") from exc
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise StoredFileError(f"{path}: {len(raw)} bytes, over the allowed {max_bytes}")
+    try:
+        data = json.loads(raw.decode("utf-8"))
     # ValueError: bad UTF-8/JSON, over-long integers. RecursionError is neither a ValueError nor
     # an OSError, and `json.loads` raises it for extreme nesting (measured: 20000 nested arrays
     # on CPython 3.12), so without it a prepared file would end in a traceback instead of exit 3.
-    except (OSError, ValueError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise StoredFileError(f"{path}: cannot read export file: {exc}") from exc
     if not isinstance(data, dict):
         raise StoredFileError(f"{path}: expected a JSON object at the root")
@@ -276,6 +297,8 @@ def import_profile(
     name: str | None = None,
     pointer_path: Path | None = None,
     hostname: str | None = None,
+    expected_profile_id: str | None = None,
+    max_bytes: int | None = None,
 ) -> list[str]:
     """Import an export file into the results folder of `config_path`; returns the report lines.
 
@@ -287,6 +310,12 @@ def import_profile(
     goes through the sink before the plan (`neutral.neutral_export`): the freshness and the conflict
     rule compare neutral with neutral. `name` is a host alias, and only the SSH way passes one
     (FR-B1): the machine is then `[machines.<name>]` and its profile carries the alias as its name.
+
+    `expected_profile_id` and `max_bytes` are the shared folder's own safety net (FR-S, Codex
+    r6-2): checked on the object this call actually reads, before it is planned. A file over
+    `max_bytes` is `StoredFileError` (`read_export_file`); a file whose `profile.profile_id` is not
+    `expected_profile_id` is `StaleExportError` -- both mean the file changed after a caller listed
+    it, and nothing of it is written.
 
     The configuration is read twice: once before the lock, to refuse a missing, invalid or
     schema-1 file without even creating a lock file, and once under the lock, because the run
@@ -301,7 +330,9 @@ def import_profile(
     _read_raw_config(resolved_config)
     if name is not None and not is_alias(name):
         raise PrerequisiteError("the name for this machine is no host alias (letters, digits, dashes)")
-    incoming = read_export_file(export_path)
+    incoming = read_export_file(export_path, max_bytes=max_bytes)
+    if expected_profile_id is not None and incoming.profile.profile_id != expected_profile_id:
+        raise StaleExportError(f"{export_path}: no longer the profile it was listed as\n{NOTHING_WRITTEN}")
     names = load_names(resolved_config.parent, pointer_path or default_pointer_path(), hostname)
     handle = acquire_lock(config.paths.lock_file, "import-profile", now)
     try:

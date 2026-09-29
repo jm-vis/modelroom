@@ -9,6 +9,11 @@ It holds what the neutral names of AP9-FR need to know about this user:
   every results folder this user runs on this computer.
 - `ssh`: `profile_id -> alias`, the host alias a profile was read over SSH under (FR-B1 writes it; a
   results folder may name that profile's machine by the alias, and by nothing else of the SSH side).
+- `profile_share`: the shared folder `modelroom/guided_share.py` offers in step 1 (FR-S, GF question
+  7 (c)), set up in its own menu step and kept exactly as it was typed (after `expanduser`, never
+  `resolve`d -- CONTRACTS.md, "Remote machines"). It may carry a user's or a machine's name, because
+  this file never leaves the account it lives in: no export, render, results folder or backup ever
+  reads it, and `guided_share.share_folder` is its only reader.
 
 Every write reads the file, changes exactly one field and writes it back atomically, so the fields
 never overwrite one another. A missing file is an empty one; a broken one is `RemoteStoreError`, which
@@ -36,6 +41,21 @@ LOCK_FILE_NAME = "remote.lock"
 # Fixed sentences: no path of the user account, no value of the file (FR-N, the screen).
 BROKEN = "remote.json of your user account (next to guided.json) does not read as modelroom's; move it away and run again"
 UNWRITTEN = "remote.json of your user account (next to guided.json) could not be written; nothing else was written"
+# The form `profile_share` may take (FR-S): after `expanduser`, absolute, not empty, no NUL, at most
+# this many characters, and never a Windows device or pipe prefix (a write there could open a named
+# pipe instead of a file) -- checked again here because the file may be edited by hand.
+SHARE_PATH_MAX = 1024
+SHARE_DEVICE_PREFIXES = ("\\\\.\\", "\\\\?\\")
+
+
+def is_share_path(value: str) -> bool:
+    """Whether `value` is a form `profile_share` may take: `guided_share`'s own rule, checked again
+    on every read so a hand-edited file is caught the same way an interactive answer would be."""
+    if not value or len(value) > SHARE_PATH_MAX or "\x00" in value:
+        return False
+    if value.startswith(SHARE_DEVICE_PREFIXES):
+        return False
+    return Path(value).is_absolute()
 
 
 class RemoteStoreError(Exception):
@@ -55,12 +75,20 @@ class RemoteStore(BaseModel):
     schema_version: int
     this_machine: str | None = None
     ssh: dict[str, str] = Field(default_factory=dict)
+    profile_share: str | None = None
 
     @field_validator("this_machine")
     @classmethod
     def _check_this_machine(cls, value: str | None) -> str | None:
         if value is not None and not THIS_MACHINE_RE.fullmatch(value):
             raise ValueError(f"this_machine must be computer-<8 lowercase hex>: {value!r}")
+        return value
+
+    @field_validator("profile_share")
+    @classmethod
+    def _check_profile_share(cls, value: str | None) -> str | None:
+        if value is not None and not is_share_path(value):
+            raise ValueError("profile_share does not read as a folder path")
         return value
 
     @field_validator("ssh")
@@ -149,13 +177,34 @@ def aliases(path: Path) -> dict[str, str]:
     return dict(read_remote(path).ssh)
 
 
+def set_profile_share(path: Path, value: str | None) -> None:
+    """Store or clear `profile_share`, the one field `guided_share` ever writes here (FR-S).
+
+    Read, changed, written back atomically under the account lock (`_account_lock`), like every
+    other write of this file -- a concurrent write of `this_machine` or `ssh` is never lost. `value`
+    is stored exactly as given (already checked by `is_share_path`); `None` removes it.
+    """
+    handle = _account_lock(path)
+    try:
+        stored = read_remote(path)
+        atomic_write_json(path, stored.model_copy(update={"profile_share": value}).model_dump(mode="json"))
+    except OSError as exc:
+        raise RemoteStoreError(UNWRITTEN) from exc
+    finally:
+        release_lock(handle)
+
+
 __all__ = [
     "REMOTE_FILE_NAME",
     "REMOTE_SCHEMA_VERSION",
+    "SHARE_DEVICE_PREFIXES",
+    "SHARE_PATH_MAX",
     "RemoteStore",
     "RemoteStoreError",
     "aliases",
+    "is_share_path",
     "read_remote",
     "remote_path_for",
+    "set_profile_share",
     "this_machine",
 ]

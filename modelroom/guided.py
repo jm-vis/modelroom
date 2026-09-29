@@ -88,12 +88,14 @@ from .importer import (
     import_profile,
     scan_profiles,
 )
+from .guided_share import QUESTIONS as SHARE_QUESTIONS
+from .guided_share import machine_list_row, share_step
 from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_machine_class, read_os_identity
 from .measurements import Scenario
 from .migrate import MigrationError, backup_suffix, migrate
 from .neutral_sweep import load_names, sweep
-from .remote_store import remote_path_for, this_machine
+from .remote_store import read_remote, remote_path_for, this_machine
 from .profile import MACHINE_CLASSES, HardwareProfile, os_fingerprint
 from .screen import (
     CLONE_QUESTION,
@@ -137,6 +139,7 @@ QUESTIONS: dict[str, str] = {
     "clone": "Is this the same machine or a clone?",
     "machine_class": "What kind of machine is this?",  # on every measurement (decided 2026-09-27)
     **ENTERED_QUESTIONS,  # step 1's machine entered by hand (`modelroom/guided_entered.py`)
+    **SHARE_QUESTIONS,  # step 1's shared folder (`modelroom/guided_share.py`, FR-S)
     # Step 2's two search questions live with the search (`modelroom/guided_search.py`).
     "search": SEARCH_QUESTION,
     "filter_owners": FILTER_QUESTION,
@@ -522,14 +525,19 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     name = _machine_key(run)
     configured = [machine.profile for machine in config.machines.values() if machine.profile is not None]
     run.screen.note(ANOTHER_COMPUTER)
-    picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound, name, configured))
+    share_label = machine_list_row(run.room.environ, read_remote(remote_path_for(run.pointer_path)))
+    run.screen.note(share_label)
+    picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound, name, configured, share_label))
     run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound)))
     if "this-machine" in picked:
         config = _measure_this_machine(run, config_file, config, scan, _measured_here(bound))
     imported: set[str] = set()
+    shared: set[str] = set()
     entered: set[str] = set()
     if "import" in picked:
         config, imported = _import_a_profile(run, config_file, config)
+    if "share" in picked:
+        config, shared = share_step(run, config_file, config)
     if "enter" in picked:
         before = set(scan_profiles(config.paths.hardware_dir).profiles)
         config = enter_step(run, config_file, config)
@@ -537,8 +545,10 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     # An empty choice stays empty -- nothing marked in a file, or an import that failed: no machine the
     # run did not choose is added, the bound one included (Codex r2, finding 1). At a terminal `Enter`
     # takes the pointer row, so a terminal run always chooses one.
-    machines = chosen_machines(config, picked, name, imported | entered)
-    run.selection = replace(run.selection, machines=machines, origins=_origins(run, config, config_file, machines, picked, imported, entered))
+    machines = chosen_machines(config, picked, name, imported | shared | entered)
+    run.selection = replace(
+        run.selection, machines=machines, origins=_origins(run, config, config_file, machines, picked, imported | shared, entered)
+    )
     return config
 
 

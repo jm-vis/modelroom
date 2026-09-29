@@ -169,7 +169,14 @@ say. There are three ways to get another computer into the result:
 2. **Measure it there and bring the file here**: on that computer `modelroom hardware` and
    `modelroom export-profile`, send the file over, and answer step 1 here with `import a profile
    file`.
-3. **Enter it by hand** from its data sheet (`enter a machine by hand`).
+3. **Drop it in a shared folder**, for a computer without SSH: step 1 always offers `set up a
+   shared folder for profiles` (or, once one is set, `profiles from the shared folder`). A folder
+   on this computer, a network drive, or a cloud sync folder -- other computers leave their
+   `export-profile` files there, and this run picks them up by machine, never by file name. The
+   folder is set up once, in that step, and kept per user account (`~/.modelroom/remote.json`,
+   never in a results folder); `MODELROOM_PROFILE_SHARE` overrides it for a script, without storing
+   anything.
+4. **Enter it by hand** from its data sheet (`enter a machine by hand`).
 
 Every profile the folder already holds stands in step 1 as a row of its own and can be picked;
 the result shows only the ones you marked. A folder collects profiles through `import`, which checks

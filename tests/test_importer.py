@@ -23,6 +23,7 @@ import pytest
 from modelroom.binding import read_pointer
 from modelroom.cli import main
 from modelroom.config import load_config
+from modelroom.importer import StaleExportError, StoredFileError, import_profile
 from modelroom.neutral import is_neutral, key_for
 from modelroom.measurements import load_export, measurement_path, read_measurements
 from modelroom.profile import HardwareProfile, read_profile_document
@@ -582,6 +583,37 @@ def test_a_file_in_the_way_of_an_imported_measurement_is_a_conflict(tmp_path, ca
     assert code == 1
     assert _tree(tmp_path / "target") == before
     assert "could not be cleaned of machine names" in capsys.readouterr().err  # FR-N: the sweep first
+
+
+# --- import: `expected_profile_id` and `max_bytes` (FR-S, Codex r6-2) -----------------------------
+
+
+def test_a_file_replaced_after_the_choice_by_another_profiles_export_changes_nothing(tmp_path, capsys):
+    """A caller that listed this file under `OTHER_ID` (a lister of a shared folder, FR-S) finds it
+    reads as `PROFILE_ID` instead by the time it is actually read: `expected_profile_id` catches
+    that the object is not the one it was chosen as, and nothing of the file is written."""
+    config_path = _deployment(tmp_path / "target")
+    before = _tree(tmp_path / "target")
+    export_path = _write_json(tmp_path / "e.json", EXPORT)
+
+    with pytest.raises(StaleExportError):
+        import_profile(config_path, export_path, NOW, expected_profile_id=OTHER_ID, max_bytes=16 * 1024 * 1024)
+
+    assert _tree(tmp_path / "target") == before
+
+
+def test_a_file_grown_over_the_limit_after_the_listing_is_refused(tmp_path, capsys):
+    """`max_bytes` is enforced on the bytes actually read, not on a size a lister saw earlier: a
+    file over the limit -- whether it always was or grew since it was listed -- is refused the
+    same way, and nothing of it is written."""
+    config_path = _deployment(tmp_path / "target")
+    before = _tree(tmp_path / "target")
+    export_path = _write_json(tmp_path / "e.json", EXPORT)
+
+    with pytest.raises(StoredFileError):
+        import_profile(config_path, export_path, NOW, expected_profile_id=PROFILE_ID, max_bytes=10)
+
+    assert _tree(tmp_path / "target") == before
 
 
 # --- import: broken files in the target ----------------------------------------------------------
