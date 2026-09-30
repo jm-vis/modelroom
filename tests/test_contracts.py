@@ -759,11 +759,14 @@ def test_load_snapshot_accepts_a_valid_snapshot():
 
 
 def _snapshot_of_0_1_0() -> dict:
-    """The Snapshot example as 0.1.0 wrote it: schema 1, provenance spelled `metadata_ok`."""
+    """The Snapshot example as 0.1.0 wrote it: schema 1, provenance spelled `metadata_ok`, and no
+    `quantization_source` (AP9-SV2-0 added that field after 0.1.0 shipped, so a genuine 0.1.0
+    file never carries it -- leaving it in would make this fixture not a valid 0.1.0 file)."""
     payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
     payload["schema_version"] = 1
     for package in payload["packages"]:
         package["provenance"] = "metadata_ok"
+        package.pop("quantization_source", None)
     return payload
 
 
@@ -774,8 +777,17 @@ def test_load_snapshot_reads_the_0_1_0_provenance_metadata_ok_as_from_metadata()
     snapshot = load_snapshot(payload)
 
     # AP9-SV2-0: a stored schema 1 reads as the current schema (2, "1 reads as 2, unchanged").
-    assert snapshot.schema_version == SNAPSHOT_SCHEMA_VERSION == 2
-    assert [package.provenance for package in snapshot.packages] == ["from_metadata"] * len(payload["packages"])
+    # Compare every field of the result against the schema-2 shape the same content would
+    # validate as directly (provenance already renamed, quantization_source at its None
+    # default) -- not just schema_version and a couple of package fields.
+    expected_payload = json.loads(json.dumps(payload))
+    expected_payload["schema_version"] = SNAPSHOT_SCHEMA_VERSION
+    for package in expected_payload["packages"]:
+        package["provenance"] = "from_metadata"
+        package["quantization_source"] = None
+    expected = Snapshot.model_validate(expected_payload)
+
+    assert snapshot.model_dump(mode="json") == expected.model_dump(mode="json")
     assert payload == before
 
 

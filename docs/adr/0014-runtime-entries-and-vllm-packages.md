@@ -105,26 +105,6 @@ profile or one read from the results folder's sharing point still shows vLLM pac
 without a live connection to that machine. `RuntimeKey = Literal["ollama", "vllm"]` today; a
 third runtime (LM Studio, AP9-LS) is a fourth value of the same `Literal`, additive again.
 
-## Consequences
-
-- A 0.1.0 reader meets a schema-2 snapshot with the named refusal and exit `3`, not a field
-  error -- the GF's own ask at E8.
-- **Shared results folders need updated readers** once one machine writes schema 2, the same
-  rule this project has stated for every schema step since ADR 0004.
-- A 0.1.0 reader meets a hardware profile with `runtimes` (or `adapters`) the same way it always
-  has: a field error, not a schema refusal -- unchanged behavior, restated here because the two
-  additive fields now sit side by side.
-- Every later AP9-SV2 sub-package (L, P, F, I, R) builds inside this contract rather than
-  touching it again: SV2-L fills `RUNTIMES` and moves Ollama onto it; SV2-P's `tensor_quant.py`
-  reads `config.json` per the `QUANT_ORDER` rule above and sets `quantization_source`;
-  SV2-F computes vLLM's `Fit` (the tensor-parallel rule, `num_attention_heads` on `Architecture`,
-  out of this ADR's scope -- it is SV2-P's/SV2-F's field to add, not SV2-0's: `Architecture`
-  lives in `contracts.py`, which SV2-P does not own in the build brief's file table, a gap the
-  next sub-package's brief should close explicitly); SV2-I builds the install/disk rule; SV2-R
-  carries vLLM over SSH.
-- `contracts.py` stays under the 799-line size guard as this and later schema growth land,
-  because `Fit`/`Rating` moved out to `contracts_fit.py` first (decision 5).
-
 ### 5. `Fit`/`Rating` move to `contracts_fit.py`, unchanged, re-exported
 
 Both classes move verbatim (no field, validator or docstring changed) into a new
@@ -137,6 +117,107 @@ of its own, and the render-document additions the build brief sketches for `Fit`
 (`Fit.runtime`, `Fit.at_once`, `Fit.cards`, for AP9-SV2-L/F) are **not** part of this move --
 adding them here would have made the "unchanged" claim false. They land with the sub-package
 that first has a value to put in them.
+
+### 6. How many cards a vLLM package uses (F4), and the divisibility rule it rests on
+
+**Recorded here as the GF's decision; SV2-F computes it, SV2-I writes it into the command.**
+vLLM only splits a model across several cards when the model can be cut into that many equal
+pieces: the number of its attention heads must be divisible by the tensor-parallel size `t`
+(external, documented by vLLM's own error message -- vLLM issues #4232 and #2652). Beyond that,
+modelroom itself proposes using only 1, 2, 4 or 8 cards -- the build brief is explicit that this
+is modelroom's own simplification, not a proven limit of vLLM, chosen to keep the arithmetic and
+the paid-GPU-hour check small.
+
+The GF answered build-brief question F4 with option **(a)**, "as many equal-sized cards as
+possible": the largest of 1, 2, 4, 8 that is at most the count of equal-sized cards and still
+divides the model's head count. Four cards usually give `t = 4`; three cards give `t = 2` (the
+third stays free); a model with 14 heads on four cards gives `t = 2`. Consequence (the GF's own
+framing): the highest number of concurrent requests, one simple rule, and unused cards stay free
+while the command names the ones actually used. Two further cases the build brief's table of
+edge cases states for this rule: the card count is unknown -> `t = 1`, with the reason named;
+unequal cards -> the group of the largest equal-sized cards is used, noted at the head of the
+table. `Architecture.num_attention_heads`, the field this rule needs to read, is not part of
+this sub-package (see "Alternatives and why not").
+
+### 7. vLLM is started by pasting a command, never by modelroom itself (F1)
+
+**Recorded here as the GF's decision; SV2-I writes the command line, SV2-R carries the same rule
+to a server over SSH.** A vLLM server is a program that keeps running until someone stops it.
+Build-brief question F1 asked who starts it; the GF answered option **(a)**: modelroom shows the
+finished start command, the operator pastes it at the machine and leaves that window open --
+modelroom never starts a program itself. The GF's own stated consequence: one extra manual step,
+against the alternative of modelroom starting vLLM itself in the background (a real background
+process, a log file, a stop command, one more thing to get wrong per operating system) -- kept
+out for exactly that reason (see "Rejected simplifications" below). The same rule holds at a
+server reached over SSH: `modelroom remote vllm`/`vllm-measure` only read there, matching the
+Security DoD line this sub-package adds to `AGENTS.md` ("no start, no loading").
+
+### 8. Assumptions A1-A3: unconfirmed until the paid GPU hour, named as assumptions in the code
+
+The build brief names eight assumptions behind the vLLM work (A1-A8); three of them touch
+contracts and fit arithmetic this sub-package's later siblings compute with, and are recorded
+here so the assumption -- and the paid-GPU-hour check that will confirm or refute it -- is not
+lost between sub-packages:
+
+- **A1**: the 1.50 GiB runtime reserve (`VLLM_RUNTIME_OVERHEAD_GIB`, E9) applies *per card* even
+  under tensor-parallel; it is documented for one card only. The rented-GPU check **H6** compares
+  it against `Available KV cache memory` in vLLM's own start log.
+- **A2**: with fewer KV heads than cards, vLLM replicates KV heads, so each card counts
+  `per_token / min(t, num_key_value_heads)`; a hybrid model's state divides by `t`. A later
+  Codex round on this build brief (r1-9) noted that a test of the formula alone proves nothing
+  about vLLM's own behavior: A2 counts as confirmed only once the rented-GPU check **H6b**
+  matches the token count from vLLM's start log, both for a model with fewer KV heads than cards
+  and for a hybrid model; until then, the code's `memory` line for such a row is labeled
+  `(assumed)`.
+- **A3**: a non-interactive SSH command finds `vllm` only on the `PATH` or under `~/.local/bin`
+  (where `uv tool install vllm` places it) -- the same assumption AP9-FR's build brief (FR B1)
+  already makes for finding `modelroom` itself over SSH.
+
+None of A1-A3 is confirmed by this sub-package; it only carries the assumption and its named
+rented-GPU check forward so the sub-package that computes with it (SV2-F for A1/A2, SV2-R for
+A3) does not have to rediscover or silently drop the caveat.
+
+## Consequences
+
+- A 0.1.0 reader meets a schema-2 snapshot with the named refusal and exit `3`, not a field
+  error -- the GF's own ask at E8.
+- **Shared results folders need updated readers** once one machine writes schema 2, the same
+  rule this project has stated for every schema step since ADR 0004.
+- A 0.1.0 reader meets a hardware profile with `runtimes` (or `adapters`) the same way it always
+  has: a field error, not a schema refusal -- unchanged behavior, restated here because the two
+  additive fields now sit side by side.
+- Every later AP9-SV2 sub-package (L, P, F, I, R) builds inside this contract rather than
+  touching it again: SV2-L fills `RUNTIMES` and moves Ollama onto it; SV2-P's `tensor_quant.py`
+  reads `config.json` per the `QUANT_ORDER` rule above and sets `quantization_source`;
+  SV2-F computes vLLM's `Fit` (the tensor-parallel rule of decision 6, `num_attention_heads` on
+  `Architecture`, out of this ADR's scope -- it is SV2-P's/SV2-F's field to add, not SV2-0's:
+  `Architecture` lives in `contracts.py`, which SV2-P does not own in the build brief's file
+  table, a gap the next sub-package's brief should close explicitly); SV2-I writes the start
+  command of decision 7 and the install/disk rule; SV2-R carries both over SSH.
+- `contracts.py` stays under the 799-line size guard as this and later schema growth land,
+  because `Fit`/`Rating` moved out to `contracts_fit.py` first (decision 5).
+- A1-A3 (decision 8) stay unconfirmed, and every value the later sub-packages compute from them
+  is labeled as such, until the rented-GPU checks (H6, H6b) report back.
+
+## Rejected simplifications (from the build brief's "Not here" table)
+
+Entries the build brief itself states as deliberately left out, where they touch a decision
+above:
+
+- **modelroom starts vLLM itself, locally or over SSH, in the background.** Rejected: process
+  management across operating systems and over SSH (detaching, logs, stopping) is a new attack
+  surface for little gain; the GF can paste the command herself (decision 7, F1).
+- **Optimizing `t` beyond the power-of-two rule, tensor-parallel over unequal cards, or
+  pipeline-parallel.** Rejected: one rule is enough for the command the build brief needs;
+  unequal cards are excluded via `CUDA_VISIBLE_DEVICES`, never mixed into one group (decision 6).
+- **A `latest` Docker tag, modelroom's own image choice, or Docker Compose.** Rejected: a fixed
+  tag (A8) and one output line are enough (build-brief question F2, answered **b**: a Docker line
+  is shown beside the plain `vllm serve` command, not a replacement for it).
+- **Saving a vLLM measurement, a measurement schema 3, or an export schema 2.** Rejected: E3
+  already says a vLLM measurement never ranks, so there is nothing new to persist.
+- **Port or GPU utilization as configuration values.** Rejected: both are fixed already (E2 the
+  origin `127.0.0.1:8000`, E4 `gpu_memory_utilization = 0.92`), so a setting would only invite a
+  value vLLM itself was never asked to honor.
 
 ## Alternatives and why not
 

@@ -13,6 +13,8 @@ collection error could never prove, so it is not counted as red proof.
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -27,13 +29,23 @@ from modelroom.contracts import (
     load_snapshot,
 )
 from modelroom.examples import EXAMPLES
-from modelroom.profile import HardwareProfile
+from modelroom.profile import HardwareProfile, read_profile_document
 from modelroom.quantization import QUANT_ORDER
+from modelroom.state import atomic_write_json
+
+FIXTURES = Path(__file__).parent / "fixtures"
+PROFILE_FIXTURE = FIXTURES / "profiles_v4" / "two_l4_server.json"
 
 
 def _snapshot_payload(schema_version: int) -> dict:
+    """A Snapshot payload for schema-version-boundary tests, shaped like a genuine file of that
+    era: `quantization_source` (added by AP9-SV2-0) is stripped from every package, since no
+    file written before this sub-package -- a schema-1 file included -- could ever have carried
+    it. Present only to prove reader behavior at the boundary, not package content by itself."""
     payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
     payload["schema_version"] = schema_version
+    for package in payload["packages"]:
+        package.pop("quantization_source", None)
     return payload
 
 
@@ -43,12 +55,23 @@ def _snapshot_payload(schema_version: int) -> dict:
 def test_snapshot_1_reads_as_2():
     """`load_snapshot`, the real reader `fetch`/`render` use, accepts a stored schema-1 file and
     reads it as 2 with no other change to its content (E8; the precedent of ADR 0007's "old
-    spelling reads as the new one", but as a real version step this time)."""
+    spelling reads as the new one", but as a real version step this time). Compared field by
+    field against the schema-2 shape the very same content would validate as directly -- every
+    field of every package and base model, not a couple of hand-picked ones."""
     payload = _snapshot_payload(1)
+
     snapshot = load_snapshot(payload)
-    assert snapshot.schema_version == SNAPSHOT_SCHEMA_VERSION == 2
-    assert snapshot.packages[0].base_model_hf_repo == payload["packages"][0]["base_model_hf_repo"]
-    assert snapshot.packages[0].quantization == payload["packages"][0]["quantization"]
+
+    # Hard-coded 2, not the `SNAPSHOT_SCHEMA_VERSION` constant: at a1ca1a2 that constant was 1,
+    # which would make this assertion vacuously true there instead of red.
+    assert snapshot.schema_version == 2
+
+    expected_payload = json.loads(json.dumps(payload))
+    expected_payload["schema_version"] = SNAPSHOT_SCHEMA_VERSION
+    expected = Snapshot.model_validate(expected_payload)
+    assert snapshot.model_dump(mode="json") == expected.model_dump(mode="json")
+    # Spot-check that the comparison above is not vacuous (two empty structures matching):
+    assert snapshot.packages and snapshot.base_models
 
 
 def test_a_snapshot_3_is_refused_with_exit_3():
@@ -249,25 +272,47 @@ def _profile_payload(**overrides) -> dict:
     return payload
 
 
-def test_a_profile_without_runtimes_writes_as_before():
-    """Red at `a1ca1a2`, but for a trivial reason: `.runtimes` did not exist yet, so reading it
-    back raised `AttributeError` there. What the test actually pins is not trivial: once the
-    field exists, a profile built without it still dumps to exactly the same keys as before
-    (an empty `runtimes` is excluded, the `adapters` precedent of ADR 0011) -- byte-identical
-    serialization for the unchanged case is F6's GF decision."""
-    profile = HardwareProfile.model_validate(_profile_payload())
+def test_a_profile_without_runtimes_writes_the_same_bytes_as_a1ca1a2():
+    """Golden/fixed expectation, through the real writer (`state.atomic_write_json`, the same
+    function `cli._hardware_locked` calls to store a measured profile): the committed fixture
+    `tests/fixtures/profiles_v4/two_l4_server.json` already *is* an a1ca1a2-authored round trip
+    through this exact writer -- confirmed empirically for this report by extracting `modelroom/`
+    at `a1ca1a2` (`git archive`) into an isolated directory and running
+    `state.atomic_write_json(path, HardwareProfile.model_validate(json.loads(fixture)).model_dump(mode="json"))`
+    from there against this same fixture, which reproduced it byte for byte (no `runtimes` key
+    existed to write). If today's writer put anything under that key for an empty list, or
+    changed any other byte, this test catches the regression against that real, committed file.
+    Red at `a1ca1a2` only in the narrow sense that `.runtimes` itself did not exist yet
+    (`AttributeError`); the byte-equality claim already held there by construction."""
+    original_bytes = PROFILE_FIXTURE.read_bytes()
+    profile = HardwareProfile.model_validate(json.loads(original_bytes))
     assert profile.runtimes == []
-    dumped = profile.model_dump(mode="json")
-    assert "runtimes" not in dumped
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "profile.json"
+        atomic_write_json(out, profile.model_dump(mode="json"))
+        written_bytes = out.read_bytes()
+
+    assert written_bytes == original_bytes
 
 
-def test_a_profile_with_runtimes_round_trips():
-    """Red at `a1ca1a2`: `runtimes` was an unknown field under `extra="forbid"`, so this
-    construction raised `ValidationError` there."""
-    profile = HardwareProfile.model_validate(_profile_payload(runtimes=["vllm"]))
-    assert profile.runtimes == ["vllm"]
-    dumped = profile.model_dump(mode="json")
-    assert dumped["runtimes"] == ["vllm"]
+def test_a_profile_with_runtimes_round_trips_through_write_and_read():
+    """Red at `a1ca1a2`: `runtimes` was an unknown field under `extra="forbid"`, so
+    `HardwareProfile.model_validate` already raised `ValidationError` on the payload below there.
+    Goes through the real writer (`state.atomic_write_json`) and the real reader
+    (`profile.read_profile_document`, the same one `cli._read_profile_file` calls for every
+    stored profile), not just `model_validate`/`model_dump` in memory."""
+    payload = json.loads(PROFILE_FIXTURE.read_bytes())
+    payload["runtimes"] = ["vllm"]
+    profile = HardwareProfile.model_validate(payload)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "profile.json"
+        atomic_write_json(out, profile.model_dump(mode="json"))
+        reread = read_profile_document(json.loads(out.read_text(encoding="utf-8")))
+
+    assert isinstance(reread, HardwareProfile)
+    assert reread.runtimes == ["vllm"]
 
 
 def test_an_unknown_runtime_key_is_rejected():
