@@ -347,7 +347,9 @@ def test_pull_remote_checks_the_disk_again_and_pulls_over_ssh(tmp_path):
     daemon = FixtureDaemon(
         {
             ("GET", "/api/version"): Response(200, {}, b"{}"),
-            ("GET", "/api/tags"): [tags_before, tags_after],
+            # Three reads (FR-B2): step 4's own `candidates` call (nothing installed yet), then the
+            # pre-pull digest check, then `pulled_problem` after the pull -- `tags_before` twice.
+            ("GET", "/api/tags"): [tags_before, tags_before, tags_after],
             ("POST", "/api/pull"): Response(200, {}, pull_body),
         }
     )

@@ -15,9 +15,11 @@ Every request is validated against its own strict Pydantic model first (`remote_
 Codex r1 finding 4) -- a missing, extra or mis-typed field is `bad_request` before anything about
 it is read a second time, by hand.
 
-`candidates`/`measure` are FR-B2's own ops; this module answers only `hello`, `profile`, `room` and
-`daemon` (0.1.0's four verbs plus the fixed HTTP allowlist `daemon.py` already has). `main()` is the
-one entry point the CLI (`cli_remote.py`) and the in-process fake ssh of the test suite both call.
+`hello`/`profile`/`room`/`daemon` are 0.1.0's four verbs plus the fixed HTTP allowlist `daemon.py`
+already has; `candidates`/`measure` (FR-B2) run stage 1's digest rule and the load test itself at
+the server, never with this machine's own installed name -- `candidates_result`/`measure_result`
+below. `main()` is the one entry point the CLI (`cli_remote.py`) and the in-process fake ssh of the
+test suite both call.
 """
 
 from __future__ import annotations
@@ -31,20 +33,23 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from . import remote_protocol
+from .contracts import Package
 from .daemon import ALLOWED_CALLS, Daemon, DaemonError, LocalDaemon
 from .llmfit import read_llmfit_reference
+from .loadtest import installed_candidates, installed_models, run_load_test, weight_digest
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware, read_os_identity
-from .measurements import EXPORT_SCHEMA_VERSION, ExportObject
-from .neutral import neutral_version
+from .measurements import EXPORT_SCHEMA_VERSION, ExportObject, Scenario, shipped_protocol
+from .neutral import neutral_record, neutral_version
 from .profile import os_fingerprint
 from .pull_choice import PULL_NAME_RE
+from .quantization import package_identity_key
 from . import room as room_module
 from .room import RoomProbes, free_disk, free_vram_mib
 from .room import UNCLEAR_REASON as _UNCLEAR
 
 MAX_INPUT_BYTES = 1 * 1024 * 1024
 PROTOCOL_VERSION = 1
-OPS = ("hello", "profile", "room", "daemon")
+OPS = ("hello", "profile", "room", "daemon", "candidates", "measure")
 # The 0.1.0 default (`config.LlmfitConfig.min_version`): the server has no configuration to read one
 # from, so the profile op uses the same floor a fresh configuration would.
 _DEFAULT_LLMFIT_MIN_VERSION = "1.1.16"
@@ -230,6 +235,67 @@ def _pull_done(body: bytes) -> bool:
     return isinstance(payload, dict) and payload.get("status") == "success"
 
 
+def _local_inventory(packages: list[dict], context: ServerContext):
+    """This server's own installed candidates for `packages` (B2): the same digest rule
+    `loadtest.installed_candidates` applies against this machine, never a name the daemon's
+    owner gave a package. `packages` are payload dicts (already validated), turned back into
+    `Package` objects here -- the one place either op needs them as such."""
+    parsed = [Package.model_validate(entry) for entry in packages]
+    installed, _reason = installed_models(context.daemon, context.now())
+    if installed is None:
+        raise RemoteRequestError(ERROR_OLLAMA_UNREACHABLE)
+    inventory = installed_candidates(parsed, installed, lambda name: weight_digest(context.daemon, name))
+    return inventory, parsed
+
+
+def candidates_result(payload: dict, context: ServerContext) -> dict:
+    """Stage 1's own rule, run at the server (B2): identities only, cloud and unmatched entries as
+    one count -- never an installed name of this machine."""
+    inventory, _packages = _local_inventory(payload["packages"], context)
+    identities = [{"package_identity": list(package_identity_key(candidate.package))} for candidate in inventory.candidates]
+    set_aside = len(inventory.unmatched) + len(inventory.cloud)
+    return {"candidates": identities, "set_aside": set_aside}
+
+
+def _measure_progress(write: Write, warmup_runs: int, measured_runs: int):
+    """`{"stage", "number", "of"}` (B2), counted from the order `run_load_test` already calls its
+    `progress` callback in -- the first `warmup_runs` calls are the warm-up, the rest the measured
+    runs -- never the text `run_load_test` builds for the local screen, which names the package."""
+    seen = {"n": 0}
+
+    def progress(_line: str) -> None:
+        seen["n"] += 1
+        number = seen["n"]
+        if number <= warmup_runs:
+            write(_progress({"stage": "warmup", "number": number, "of": warmup_runs}))
+        else:
+            write(_progress({"stage": "run", "number": number - warmup_runs, "of": measured_runs}))
+
+    return progress
+
+
+def measure_result(payload: dict, context: ServerContext, write: Write) -> None:
+    """B2: the server finds its own candidate by identity (the digest rule again, freshly), runs
+    the protocol against its own daemon with its own load, and sends the record through the sink
+    (FR-N) with the package it just matched -- so `ollama_name` is the built name, never this
+    machine's own. A candidate the fresh lookup no longer finds is `internal` (Codex: no code of
+    the five names this specific case, and it is this server's own state that changed)."""
+    identity = tuple(payload["package_identity"])
+    inventory, packages = _local_inventory(payload["packages"], context)
+    candidate = next((c for c in inventory.candidates if package_identity_key(c.package) == identity), None)
+    if candidate is None:
+        raise RemoteRequestError(ERROR_INTERNAL)
+    protocol = shipped_protocol()
+    scenario = Scenario.model_validate(payload["scenario"])
+    record = run_load_test(
+        context.daemon, candidate, scenario, payload["profile_id"],
+        probes=context.probes, measured_at=context.now(),
+        progress=_measure_progress(write, protocol.warmup_runs, protocol.measured_runs),
+    )
+    clean = neutral_record(record, candidate.package)
+    write(_result({"record": clean.model_dump(mode="json")}))
+
+
 def dispatch(op: str, payload: dict, context: ServerContext, write: Write) -> None:
     if op == "hello":
         write(_result(hello_result(context)))
@@ -239,6 +305,10 @@ def dispatch(op: str, payload: dict, context: ServerContext, write: Write) -> No
         write(_result(room_result(payload, context)))
     elif op == "daemon":
         daemon_lines(payload, context, write)
+    elif op == "candidates":
+        write(_result(candidates_result(payload, context)))
+    elif op == "measure":
+        measure_result(payload, context, write)
     else:
         raise RemoteRequestError(ERROR_BAD_REQUEST)
 
@@ -275,10 +345,12 @@ __all__ = [
     "RemoteRequestError",
     "ServerContext",
     "Write",
+    "candidates_result",
     "daemon_lines",
     "dispatch",
     "hello_result",
     "main",
+    "measure_result",
     "profile_result",
     "read_request",
     "room_result",

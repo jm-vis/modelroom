@@ -262,7 +262,7 @@ def test_the_server_writes_nothing(tmp_path):
 
 
 def test_an_unknown_op_is_bad_request():
-    error = _one(_run("candidates", b"{}", _context())[0])
+    error = _one(_run("sentinel-op", b"{}", _context())[0])
     assert error["error"] == ERROR_BAD_REQUEST
 
 

@@ -60,6 +60,8 @@ from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices
 from .guided_machines import chosen_machines, machine_answer_words
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
+from .guided_remote_measure import QUESTIONS as REMOTE_MEASURE_QUESTIONS
+from .guided_remote_measure import combine_measured
 from .local_servers import QUESTIONS as SERVER_QUESTIONS, ServerRun, card_facts, default_transports, load_tests
 from .guided_models import (
     ModelChoice,
@@ -156,7 +158,7 @@ QUESTIONS: dict[str, str] = {
     USERS_KEY: USERS_QUESTION,
     # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`),
     # then a package for another chosen machine (`pull_other.py`, A3).
-    **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS, **SERVER_QUESTIONS,
+    **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS, **SERVER_QUESTIONS, **REMOTE_MEASURE_QUESTIONS,
     PULL_OTHER_KEY: PULL_OTHER_QUESTION,
 }
 
@@ -770,6 +772,7 @@ def run_guided(
     # `views.context_short` names a context the way the scale of step 3 does: `L 32k`, or the number.
     run.screen.done(3, context_short(scenario.context_requested))
     measured = load_tests(run, config, scenario, config_file.parent)
+    measured = combine_measured(run, config, scenario, measured)  # B2: the active SSH target, if any
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
     code, first = _render_step(run, config_file, config, scenario, intro.daemon_reachable)
     pull_step(run, first, intro.daemon_reachable)

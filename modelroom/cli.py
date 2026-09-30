@@ -173,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="The gegenstelle of another computer's SSH way in (FR-B1): reads one JSON request from "
         "stdin, writes JSON answer lines to stdout. Not interactive; run by modelroom itself, over SSH.",
     )
-    remote_parser.add_argument("op", choices=REMOTE_OPS, help="hello, profile, room, or daemon")
+    remote_parser.add_argument("op", choices=REMOTE_OPS, help="hello, profile, room, daemon, candidates, or measure")
 
     return parser
 

@@ -3029,13 +3029,15 @@ RemoteCommand=none -o RequestTTY=no -o LogLevel=ERROR -- <alias> <program> remot
 program tried as `modelroom` first and, on exit 127 with no protocol line, once more as
 `~/.local/bin/modelroom`. All request data travels as **one JSON object on stdin**, then stdin is
 closed (EOF); nothing about the request ever reaches argv. The gegenstelle (`modelroom/
-remote_server.py`) reads at most `MAX_INPUT_BYTES`, 1 MiB, of it -- the same bound for every op
-this module answers (`hello`, `profile`, `room`, `daemon`); `candidates`/`measure` are FR-B2's own
-ops, no part of this module, and will need their own limit -- writes JSON lines to stdout and
-nothing to the disk of the machine it runs on (Ollama's own pull writes excepted), and exits `0`
-whether or not the call itself succeeded -- a fault is an `error` line, never a process exit code;
-exit codes 127/2/255 are read by the caller only for the pre-checks (program missing, too old,
-connection/host-key/login) before any line is trusted.
+remote_server.py`) reads at most `MAX_INPUT_BYTES`, 1 MiB, of it -- the same bound for every op this
+module answers (`hello`, `profile`, `room`, `daemon`, and `candidates`/`measure`, FR-B2, "Load test
+on the server" below; a `candidates`/`measure` request carries the run's own packages, so a very
+large snapshot can reach this bound before it reaches Ollama's own limits) -- writes JSON lines to
+stdout and nothing to the disk of the machine it runs on (Ollama's own pull writes and the load
+test's own generate calls excepted), and exits `0` whether or not the call itself succeeded -- a
+fault is an `error` line, never a process exit code; exit codes 127/2/255 are read by the caller
+only for the pre-checks (program missing, too old, connection/host-key/login) before any line is
+trusted.
 
 **The envelope.** Every line is one JSON object, `{"protocol": 1, <exactly one of "progress",
 "result", "error">}` -- exactly these two keys, `protocol` the JSON integer `1` (not `true`, not
@@ -3056,7 +3058,7 @@ other value is a form fault. Each has one fixed sentence at the laptop (`ssh.ERR
 |---|---|---|
 | `bad_request` | the request is no JSON object, or fails the op's strict request model (`remote_protocol.REQUEST_MODELS`), or the op is unknown | `modelroom on <alias> could not read the request of this one; update the older one` |
 | `call_refused` | a `daemon` call outside `daemon.ALLOWED_CALLS`, or a pull name outside `pull_choice.PULL_NAME_RE` | `modelroom on <alias> refused the call to its Ollama` |
-| `ollama_unreachable` | the server's own Ollama does not answer a `daemon` call | `Ollama does not answer on <alias>` |
+| `ollama_unreachable` | the server's own Ollama does not answer a `daemon`, `candidates` or `measure` call | `Ollama does not answer on <alias>` |
 | `too_large` | the request is over `MAX_INPUT_BYTES` (1 MiB) | `the request to <alias> was larger than modelroom there reads` |
 | `internal` | any other fault while the server answers (its text is dropped) | `modelroom on <alias> failed on its own side before it could answer` |
 
@@ -3073,7 +3075,8 @@ did not finish: the connection ended; Ollama keeps what arrived, the same pull r
 pull, any other `255` is `<alias> could not be reached over SSH; try ssh <alias> yourself to see
 why`, anything else `the connection to <alias> ended before the answer`.
 
-**Ops (FR-B1: `hello`, `profile`, `room`, `daemon`; `candidates`/`measure` are FR-B2's):**
+**Ops (FR-B1: `hello`, `profile`, `room`, `daemon`; FR-B2: `candidates`, `measure`, "Load test on the
+server" below):**
 
 | op | request | `result` |
 |---|---|---|
@@ -3081,6 +3084,8 @@ why`, anything else `the connection to <alias> ended before the answer`.
 | `profile` | `{"profile_id": "<16 hex>", "machine_class": null\|"laptop"\|"workstation"\|"server"}` | `{"export": <ExportObject v1>}`, `display_name` the placeholder `"remote"`, `measurements` empty, `Probes.hostname` never called |
 | `room` | `{"cards": [[index, name], ...]}` | `{"disk": {"known": bool, "free_bytes": int\|null, "unclear": bool}, "graphics_free_mib": [..]\|null}` -- no drive, no path |
 | `daemon` | `{"method", "path", "body"}` | short calls: `{"status": int, "body": <JSON>\|null}`; `POST /api/pull` also emits `progress` lines and ends with `{"status": int, "done": bool}` |
+| `candidates` | `{"packages": [<Package>, ...]}` | `{"candidates": [{"package_identity": [source, repo\|name, stem\|tag]}, ...], "set_aside": int}` |
+| `measure` | `{"package_identity": [...], "packages": [<Package>, ...], "scenario": <Scenario>, "profile_id": "<16 hex>"}` | `progress` `{"stage": "warmup"\|"run", "number": int, "of": int}`, `result` `{"record": <MeasurementRecord>}` |
 
 `daemon` is checked against `daemon.ALLOWED_CALLS` on the server, a pull name additionally against
 `pull_choice.PULL_NAME_RE` (`call_refused` for either); a pull's Ollama status line is kept only where it is one of
@@ -3133,11 +3138,14 @@ thread) and pipe are then left behind rather than closed under a blocked read.
 
 **Time limits** (seconds, from the ssh process's own start; a limit reached kills the process):
 `hello`/`room` 30, `profile` 180, `daemon` short calls 30, `POST /api/generate` 660, `POST
-/api/pull` no total limit but 60 s **per line** (a pull that keeps sending status lines is not
-caught by this; a truly silent connection is). **Answer limits:** every line at most 1 MiB (pull
-lines 64 KiB); the whole answer at most 64 KiB (`hello`/`room`), 4 MiB (`profile`), 16 MiB
-(`daemon` short calls and `/api/generate`) -- a pull has no total limit, only its per-line one.
-Either limit reached: `<alias> answered with more than modelroom reads`, the process killed.
+/api/pull` no total limit but 60 s **per line**, `candidates` 60 (one list plus one `/api/show` per
+candidate), `measure` no total limit but 660 s **per line** (between two progress lines lies a whole
+`generate`, B1's own table; a pull or a measurement that keeps sending lines is not caught by this, a
+truly silent connection is). **Answer limits:** every line at most 1 MiB (pull lines 64 KiB); the
+whole answer at most 64 KiB (`hello`/`room`), 4 MiB (`profile`), 16 MiB (`daemon` short calls and
+`/api/generate`), 4 MiB (`candidates`) -- `measure` has no total limit, only its 1 MiB per-line one
+(a `MeasurementRecord` fits well inside it), like a pull's own per-line rule. Either limit reached:
+`<alias> answered with more than modelroom reads`, the process killed.
 
 **What is not checked**: whether the alias truly names the intended computer (only the identity
 check of "Another computer" below judges that), whether the alias itself is a neutral name (a
@@ -3270,6 +3278,63 @@ imported before` (any other conflict -- a contradicting measurement, most often)
 in the shared folder could not be imported` (everything else); `<name>` is the neutral name as well.
 One file's failure never stops the others of the same `profile_id`, or the next `profile_id`. Herkunft `imported`, the
 same as `import a profile file`.
+
+### Load test on the server (AP9-FR, FR-B2)
+
+Step 4's second question round, only for the run's one active SSH target (B4) and only after the
+local servers' own round (`local_servers.load_tests`) -- no active target, no question at all.
+
+**Fremde Namen (foreign names, Codex r2-3).** A registry package can be installed at the server
+under any local name (proven only by the digest, `loadtest.installed_candidates`), and `/api/ps` can
+name other models loaded there. Neither ever reaches the laptop: **every** package name the laptop
+shows or stores it builds itself, from the package identity the request already carries
+(`screen.install_name`, "Neutral names" above); what is stored is whatever the sink (FR-N) allows.
+
+**`candidates`** (`modelroom/remote_client.py:candidates`, `remote_server.candidates_result`):
+request `{"packages": [<Package>, ...]}` -- the run's own packages (`pull_choice.run_packages`).
+The server runs stage 1's own rule against its own `/api/tags` (no download, installed only) and
+answers `{"candidates": [{"package_identity": [source, repo\|name, stem\|tag]}, ...], "set_aside":
+int}`: identity only, never an installed name; cloud and unmatched entries counted together as one
+number, never named or broken out by reason. The laptop builds the row of each candidate (name,
+base model, quantization, weight size) from its own copy of the package the identity names --
+`guided_remote_measure._remote_rows`, the same four columns and widths as the local list.
+
+**`measure`** (`remote_client.measure`, `remote_server.measure_result`): request
+`{"package_identity": [...], "packages": [<Package>, ...], "scenario": <Scenario>, "profile_id":
+"<16 hex>"}`. The server looks its candidate up again itself (the same digest rule, since its own
+state could have changed between the two calls -- no match is `internal`, this server's own fault)
+and uses its local name only internally, for the calls to its own Ollama; `loadtest.run_load_test`
+runs **at the server**: its own GPU utilization (`nvidia-smi`) and its own one-minute load average
+are read there, not on the laptop, because the process that reads them is the server's own.
+Progress carries only `{"stage": "warmup"\|"run", "number": int, "of": int}` (B1's own protocol
+counts: 1 warm-up run, 3 measured), never a package name. Before the `result` line, the record goes
+through the neutral sink (`neutral.neutral_record`, FR-N) with the package the server just matched,
+so `ollama_name` is the name built from that package, never the name the server's own Ollama holds
+it under, and every other field (`daemon_version`, `comparable_reason`, `validity_reason`,
+`runs[].done_reason`) is in its sink-allowed form already at the server.
+
+**The double sink.** The laptop validates the answer against the wire's own strict shape
+(`remote_protocol.MeasureResult`), then runs the record through the very same sink **again**, with
+its own copy of the matched package, before it is ever offered to `store_measurement`. Where the
+result differs from what the server sent -- the server did not hold the rules, or its
+`MeasurementRecord.profile_id` is not the alias's own -- the whole record is discarded, never
+stored, with the one fixed sentence `<alias> answered in a form this modelroom does not read`
+(`remote_client.FORM_ERROR`, the same sentence a malformed envelope gets). A local measurement goes
+through the identical single sink pass it always has (`loadtest.store_measurement`); there is no
+special case for the remote path (Codex r3-2).
+
+**Stored under the alias's own `profile_id`** (B3/B4): the id the laptop already resolved for this
+alias (`remote_store.aliases`), sent in the `measure` request and never chosen by the server. Time
+limit as B1's own table: no total, 660 s between two lines of one call (a whole `generate` between
+two progress lines).
+
+**Step 4's question, gated on the active target alone (B4, Codex r1-6, r4-2, GF question 6):**
+`Measure the speed on <alias> now?` (`load_test_remote`, yes/no, default no, optional; missing under
+`--answers` is no), then, only on yes, `Which of these should be measured on <alias>?`
+(`load_test_remote_packages`, the candidate list, the local list's own row form). No candidate at
+all: neither question is asked. Several stored SSH targets: only the one active target's own
+candidates are ever fetched or measured (`guided_remote.resolve_active`, unchanged) -- the other
+stored profiles are ranked without a connection, as B4 already has it.
 
 ### Migration to schema 2
 

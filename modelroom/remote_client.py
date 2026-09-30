@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Sequence
 
+from .contracts import Package
 from .daemon import DaemonError, GENERATE_PATH, PULL_PATH, Progress
 from .http import Response
+from .measurements import Scenario
 from .ssh import SshError, SshRunner, call
 
 FORM_ERROR = "{alias} answered in a form this modelroom does not read"
@@ -55,6 +58,34 @@ def room(alias: str, cards, runner: SshRunner, ssh_path: str | None = None) -> d
     """`{"disk": {...}, "graphics_free_mib": [...] | None}` of `alias`, read now, no path, no drive."""
     request = {"cards": [[index, name] for index, name in cards]}
     return _result_of(alias, call(alias, "room", request, runner, ssh_path=ssh_path))
+
+
+def candidates(alias: str, packages: Sequence[Package], runner: SshRunner, ssh_path: str | None = None) -> dict:
+    """`{"candidates": [{"package_identity": [...]}, ...], "set_aside": int}` of `alias`'s own
+    installed packages (B2, stage 1's digest rule run at the server) -- never an installed name."""
+    request = {"packages": [package.model_dump(mode="json") for package in packages]}
+    return _result_of(alias, call(alias, "candidates", request, runner, ssh_path=ssh_path))
+
+
+def measure(
+    alias: str,
+    package_identity: tuple[str, str, str],
+    packages: Sequence[Package],
+    scenario: Scenario,
+    profile_id: str,
+    runner: SshRunner,
+    ssh_path: str | None = None,
+    on_progress=None,
+) -> dict:
+    """`{"record": <MeasurementRecord>}` of `alias`'s own measurement of `package_identity` under
+    `profile_id` (B2); `on_progress` is called with `{"stage", "number", "of"}`, never a name."""
+    request = {
+        "package_identity": list(package_identity),
+        "packages": [package.model_dump(mode="json") for package in packages],
+        "scenario": scenario.model_dump(mode="json"),
+        "profile_id": profile_id,
+    }
+    return _result_of(alias, call(alias, "measure", request, runner, ssh_path=ssh_path, on_progress=on_progress))
 
 
 @dataclass
@@ -116,4 +147,4 @@ class SshDaemon:
         return Response(status=result["status"], headers={}, body=success)
 
 
-__all__ = ["SshDaemon", "hello", "profile", "room"]
+__all__ = ["SshDaemon", "candidates", "hello", "measure", "profile", "room"]

@@ -17,8 +17,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
-from .contracts import PROFILE_ID_RE
-from .measurements import ExportObject
+from .contracts import PROFILE_ID_RE, Package
+from .measurements import ExportObject, MeasurementRecord, Scenario
 from .profile import MACHINE_CLASSES
 from .ssh_process import Limits
 
@@ -36,8 +36,7 @@ class OpBudget:
     limits: Limits
 
 
-# The time and answer limits per op (B1). `candidates`/`measure` are FR-B2's own ops, reserved here
-# so the transport already knows their budget -- `remote_server.py` does not answer them yet.
+# The time and answer limits per op (B1). `candidates`/`measure` are FR-B2's own ops.
 _MIB = 1024 * 1024
 OP_BUDGETS: dict[str, OpBudget] = {
     "hello": OpBudget(30.0, None, Limits(_MIB, 64 * 1024)),
@@ -97,11 +96,28 @@ class DaemonRequest(_Strict):
     body: dict | None = None
 
 
+class CandidatesRequest(_Strict):
+    # The run's own packages (`pull_choice.run_packages`, B2): the server matches them against its
+    # own `/api/tags` by digest, exactly as `loadtest.installed_candidates` does for this machine.
+    packages: list[Package] = Field(default_factory=list)
+
+
+class MeasureRequest(_Strict):
+    # The candidate this call measures, by identity (B2, Codex r2-3): never an installed name of
+    # either side -- the server re-derives its own local name from `packages` and this identity.
+    package_identity: tuple[StrictStr, StrictStr, StrictStr]
+    packages: list[Package] = Field(default_factory=list)
+    scenario: Scenario
+    profile_id: StrictStr = Field(pattern=PROFILE_ID_RE.pattern)
+
+
 REQUEST_MODELS: dict[str, type[_Strict]] = {
     "hello": HelloRequest,
     "profile": ProfileRequest,
     "room": RoomRequest,
     "daemon": DaemonRequest,
+    "candidates": CandidatesRequest,
+    "measure": MeasureRequest,
 }
 
 
@@ -157,6 +173,27 @@ class PullErrorProgress(_Strict):
     error: Literal[True]
 
 
+class PackageIdentity(_Strict):
+    package_identity: tuple[StrictStr, StrictStr, StrictStr]
+
+
+class CandidatesResult(_Strict):
+    # Identity only (B2, Codex r2-3): never the installed name the server holds a candidate under.
+    candidates: list[PackageIdentity] = Field(default_factory=list)
+    # Cloud and unmatched entries as one number each op call, never their names (B2).
+    set_aside: StrictInt = Field(ge=0)
+
+
+class MeasureProgress(_Strict):
+    stage: Literal["warmup", "run"]
+    number: StrictInt = Field(ge=1)
+    of: StrictInt = Field(ge=1)
+
+
+class MeasureResult(_Strict):
+    record: MeasurementRecord
+
+
 RESULT_MODELS: dict[str, type[_Strict]] = {
     "hello": HelloResult,
     "profile": ProfileResult,
@@ -164,11 +201,14 @@ RESULT_MODELS: dict[str, type[_Strict]] = {
     "daemon_short": DaemonShortResult,
     "daemon_generate": DaemonShortResult,
     "daemon_pull": DaemonPullResult,
+    "candidates": CandidatesResult,
+    "measure": MeasureResult,
 }
-# `daemon_pull` is the one op with a `progress` line at all (in this package's own scope, FR-B1);
-# every other budget key never carries one, so a `progress` field there is already a form fault.
+# `daemon_pull`/`measure` are the only ops with a `progress` line at all; every other budget key
+# never carries one, so a `progress` field there is already a form fault.
 PROGRESS_MODELS: dict[str, tuple[type[_Strict], ...]] = {
     "daemon_pull": (PullProgress, PullErrorProgress),
+    "measure": (MeasureProgress,),
 }
 
 
@@ -228,12 +268,18 @@ __all__ = [
     "REQUEST_MODELS",
     "RESULT_MODELS",
     "SYSTEMS",
+    "CandidatesRequest",
+    "CandidatesResult",
     "DaemonPullResult",
     "DaemonRequest",
     "DaemonShortResult",
     "DiskResult",
     "HelloRequest",
     "HelloResult",
+    "MeasureProgress",
+    "MeasureRequest",
+    "MeasureResult",
+    "PackageIdentity",
     "ProfileRequest",
     "ProfileResult",
     "PullErrorProgress",

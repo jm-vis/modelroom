@@ -86,6 +86,22 @@ All notable changes to this project are documented in this file. The format foll
   always about exactly one machine. Its rows stand in `pull_other`'s list; the row chosen there, of
   any rank, is pulled onto it over SSH.
 
+- **The load test runs on the server, one active SSH machine per run** (AP9-FR, FR-B2;
+  `modelroom/remote_server.py`, `remote_client.py`, `remote_protocol.py`, `guided_remote_measure.py`;
+  CONTRACTS.md, "The remote protocol v1", "Load test on the server"). Two new ops of the wire,
+  `candidates` and `measure`: the server runs stage 1's own digest rule (`loadtest.installed_candidates`)
+  against its own `/api/tags`, and answers with package identities only -- never a name the server's
+  own Ollama holds a package under, cloud and unmatched entries counted, not named. `measure` runs
+  the shipped protocol at the server (its own GPU and CPU load, read there, not on the laptop) and
+  sends the record through the neutral sink (FR-N) with the package it just matched, so `ollama_name`
+  is the name built from the package, never the server's own. The laptop runs every record through
+  the same sink again before it stores it, and discards it with `<alias> answered in a form this
+  modelroom does not read` where the two disagree, or the `profile_id` is not the alias's own. Step
+  4 asks a second round, only for the run's one active SSH target and only after the local servers'
+  own: `Measure the speed on <alias> now?`, then `Which of these should be measured on <alias>?` --
+  no active target, no question. Measured under the `profile_id` the alias is bound to (B3/B4); a
+  purely local measurement is unchanged, through the same sink, no special case for the remote path.
+
 - **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
   `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).
   `hardware` reads each vendor's own source -- NVIDIA from `nvidia-smi` with the compute

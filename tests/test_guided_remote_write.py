@@ -173,11 +173,14 @@ def test_the_chosen_row_of_the_active_target_is_pulled_over_ssh_not_the_first(tm
     name #3, never #1."""
     third = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q6_K"
     pull_body = b"\n".join([json.dumps({"status": "pulling manifest"}).encode(), json.dumps({"status": "success"}).encode()])
+    tags_before = Response(200, {}, b'{"models": []}')
     tags_after = Response(200, {}, json.dumps({"models": [{"name": third, "digest": "e" * 64}]}).encode())
     daemon = FixtureDaemon(
         {
             ("GET", "/api/version"): Response(200, {}, b"{}"),
-            ("GET", "/api/tags"): [Response(200, {}, b'{"models": []}'), tags_after],
+            # Three reads (FR-B2): step 4's own `candidates` call (nothing installed yet), then the
+            # pre-pull digest check, then `pulled_problem` after the pull -- `tags_before` twice.
+            ("GET", "/api/tags"): [tags_before, tags_before, tags_after],
             ("POST", PULL_PATH): Response(200, {}, pull_body),
         }
     )
