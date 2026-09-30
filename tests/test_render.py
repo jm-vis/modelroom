@@ -238,7 +238,7 @@ def _config(machines: dict[str, MachineConfig | dict] | None = None) -> Configur
 
 def _snapshot(packages: list[Package], *, base_models: list[BaseModelSpec] | None = None) -> Snapshot:
     return Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=NOW,
         areas=[
             Area(

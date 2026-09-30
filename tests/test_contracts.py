@@ -444,7 +444,17 @@ def test_check_schema_version_rejects_out_of_range_version():
 
 def test_snapshot_model_itself_rejects_wrong_schema_version():
     payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
+    with pytest.raises(ValidationError):
+        Snapshot.model_validate(payload)
+
+
+def test_snapshot_model_itself_rejects_schema_1_unlike_load_snapshot():
+    """`Snapshot.model_validate` alone (no `load_snapshot` normalization) accepts only the
+    version `fetch` writes (2, AP9-SV2-0); reading a stored schema-1 file needs `load_snapshot`,
+    documented as the model's "second line of defense" versus that entry point's own rule."""
+    payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    payload["schema_version"] = 1
     with pytest.raises(ValidationError):
         Snapshot.model_validate(payload)
 
@@ -532,10 +542,19 @@ def test_shards_complete_qwen_split_shard_missing_one_is_incomplete():
 
 def test_non_gguf_package_must_be_unresolved_format():
     payload = dict(EXAMPLES["Package"])
-    payload["format"] = "tensor"
+    payload["format"] = "unknown"
     # provenance/unresolved_reason still say from_metadata/None from the gguf example -> rejected
     with pytest.raises(ValidationError):
         Package.model_validate(payload)
+
+
+def test_a_huggingface_tensor_package_is_the_one_exception_to_the_format_lock():
+    """AP9-SV2-0 (E8): only a Hugging Face `tensor` package may leave `unresolved`/`format`; an
+    `unknown`-format package (the case above) and an Ollama `tensor` package
+    (`tests/test_sv2_0_contract.py`) both stay locked."""
+    payload = dict(EXAMPLES["Package"])
+    payload["format"] = "tensor"
+    Package.model_validate(payload)
 
 
 def test_non_gguf_package_with_unresolved_format_is_accepted():
@@ -713,7 +732,7 @@ def test_package_manifest_digest_with_trailing_newline_is_rejected():
 
 def test_load_snapshot_rejects_out_of_range_version_with_schema_version_error():
     payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
     with pytest.raises(SchemaVersionError):
         load_snapshot(payload)
 
@@ -740,10 +759,14 @@ def test_load_snapshot_accepts_a_valid_snapshot():
 
 
 def _snapshot_of_0_1_0() -> dict:
-    """The Snapshot example as 0.1.0 wrote it: schema 1, provenance spelled `metadata_ok`."""
+    """The Snapshot example as 0.1.0 wrote it: schema 1, provenance spelled `metadata_ok`, and no
+    `quantization_source` (AP9-SV2-0 added that field after 0.1.0 shipped, so a genuine 0.1.0
+    file never carries it -- leaving it in would make this fixture not a valid 0.1.0 file)."""
     payload = json.loads(json.dumps(EXAMPLES["Snapshot"]))
+    payload["schema_version"] = 1
     for package in payload["packages"]:
         package["provenance"] = "metadata_ok"
+        package.pop("quantization_source", None)
     return payload
 
 
@@ -753,8 +776,18 @@ def test_load_snapshot_reads_the_0_1_0_provenance_metadata_ok_as_from_metadata()
 
     snapshot = load_snapshot(payload)
 
-    assert snapshot.schema_version == 1
-    assert [package.provenance for package in snapshot.packages] == ["from_metadata"] * len(payload["packages"])
+    # AP9-SV2-0: a stored schema 1 reads as the current schema (2, "1 reads as 2, unchanged").
+    # Compare every field of the result against the schema-2 shape the same content would
+    # validate as directly (provenance already renamed, quantization_source at its None
+    # default) -- not just schema_version and a couple of package fields.
+    expected_payload = json.loads(json.dumps(payload))
+    expected_payload["schema_version"] = SNAPSHOT_SCHEMA_VERSION
+    for package in expected_payload["packages"]:
+        package["provenance"] = "from_metadata"
+        package["quantization_source"] = None
+    expected = Snapshot.model_validate(expected_payload)
+
+    assert snapshot.model_dump(mode="json") == expected.model_dump(mode="json")
     assert payload == before
 
 

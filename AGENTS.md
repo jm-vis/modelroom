@@ -182,7 +182,11 @@ broken input each:
   by the transport alone and used by the install step alone, and no module names `/api/delete`;
 - the vLLM transport refuses every origin but `http://127.0.0.1:8000` (a path, query, fragment or
   user info included) and every call outside its three, carries no proxy handler, follows no
-  redirect, sends no key and refuses an answer above 4 MiB.
+  redirect, sends no key and refuses an answer above 4 MiB;
+- vLLM on another computer is reached only through `modelroom remote vllm`/`vllm-measure`
+  (AP9-SV2-R), which binds the very same origin `http://127.0.0.1:8000` and the very same three
+  calls *there*, at the server -- nothing about it is started or loaded from here, and no
+  name, address or path of it travels back to this machine.
 
 ## Versioning and releases
 

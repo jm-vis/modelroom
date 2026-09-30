@@ -15,6 +15,14 @@ Schema 4 (decided 2026-09-26) adds every graphics card `nvidia-smi` lists (`gpus
 `multi_gpu` for two cards or more, and the machine class with its source. A schema-3 file reads
 as schema 4 (`normalize_profile_v3`), a schema-2 file through both steps. Schema 4, still
 unreleased, also carries the cross-check status `not_comparable` (decided 2026-09-27).
+
+Schema 4 is extended again without a step (AP9-SV2-0, decided 2026-09-29, the precedent of ADR
+0011's `adapters`): `runtimes` lists the local-server runtimes this machine detected serving or
+installed at the last measurement (F6's GF decision -- a run without a live connection, an
+import or the sharing point included, still sees a remembered machine's vLLM packages). Empty
+by default and excluded when empty, so a profile written before it reads unchanged, byte for
+byte. `RuntimeKey` names only `"ollama"` and `"vllm"` here; a later runtime (LM Studio, AP9-LS)
+is a new value in the same list, additive again.
 """
 
 from __future__ import annotations
@@ -59,6 +67,9 @@ GpuState = Literal[
 MachineClass = Literal["laptop", "workstation", "server", "unknown"]
 # The classes a user may state for a machine (`hardware --machine-class`, the guided questions).
 MACHINE_CLASSES: tuple[str, ...] = ("laptop", "workstation", "server")
+# The local-server runtimes a machine's profile may remember (AP9-SV2-0, `HardwareProfile.runtimes`
+# below). A new runtime is a new value here, never a plug-in -- "Laufzeit als Eintrag" (AP9-SV2-L).
+RuntimeKey = Literal["ollama", "vllm"]
 # The GPU states the fit computes for: no GPU at all (CPU), one measured GPU, one GPU entered by
 # hand, two graphics cards or more (decided 2026-09-26), and unified memory (one pool shared by
 # the system and the model; decided 2026-09-25).
@@ -219,6 +230,17 @@ class HardwareProfile(BaseModel):
     # every profile: older files, machines entered by hand, `--cpu-only`, exports. An empty list is
     # not written, so every file of those shapes stays as it was, byte for byte.
     adapters: list[GraphicsAdapter] = Field(default_factory=list, exclude_if=lambda value: not value)
+    # The local-server runtimes this machine's last measurement detected serving or installed
+    # (AP9-SV2-0, F6); each value once, order not meaningful. Empty is valid for every profile
+    # and is not written, same rule as `adapters` (ADR 0011).
+    runtimes: list[RuntimeKey] = Field(default_factory=list, exclude_if=lambda value: not value)
+
+    @field_validator("runtimes")
+    @classmethod
+    def _check_runtimes(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError(f"runtimes must name each runtime once: {value!r}")
+        return value
 
     @field_validator("profile_id")
     @classmethod

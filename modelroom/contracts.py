@@ -3,6 +3,16 @@
 Pydantic v2 models with `extra="forbid"`, explicit value ranges and validators for coupled
 fields. This is the only definition; `CONTRACTS.md` describes each model for readers and
 repeats `EXAMPLES` verbatim. See `CONTRACTS.md` for the rules these models follow.
+
+Snapshot schema 2 (AP9-SV2-0, decided 2026-09-29, docs/adr/0014-runtime-entries-and-vllm-
+packages.md, E8) is the first real version step this form takes: earlier additive changes
+(`aliases`, the provenance rename of ADR 0007) stayed inside schema 1. A tensor package may now
+be `from_metadata`/`approved` when it came from Hugging Face (`Package.quantization_source`,
+the provenance invariant below), and `quantization.QUANT_ORDER` gained the vLLM labels -- a
+0.1.0 reader meeting either would fail on a field it does not know, an opaque validation error
+rather than the named schema-version refusal (exit `3`) this step gives it instead. Schema 1 is
+still accepted and reads as 2 unchanged (`load_snapshot`, the one entry point that normalizes;
+`Snapshot.model_validate` alone still enforces the current version only).
 """
 
 from __future__ import annotations
@@ -13,12 +23,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .contracts_fit import Fit, Rating  # noqa: F401 -- re-exported, see "render (AP5)" below
 from .quantization import QUANT_ORDER, package_identity_key
 
-SNAPSHOT_SCHEMA_VERSION = 1
-# Half-open range: a reader accepts schema_version >= low and < high. Readers accept exactly
-# schema_version 1 for now.
-SNAPSHOT_SCHEMA_RANGE: tuple[int, int] = (1, 2)
+SNAPSHOT_SCHEMA_VERSION = 2
+# Half-open range: a reader accepts schema_version >= low and < high. Readers accept 1 and 2
+# (AP9-SV2-0, 2026-09-29): 1 reads as 2, unchanged (`load_snapshot`'s own normalization, below).
+SNAPSHOT_SCHEMA_RANGE: tuple[int, int] = (1, 3)
 
 HARDWARE_SCHEMA_VERSION = 1
 # Own range, same half-open convention as SNAPSHOT_SCHEMA_RANGE -- a hardware profile and a
@@ -340,6 +351,10 @@ class Package(BaseModel):
     files: list[PackageFile] = Field(default_factory=list)
     complete: bool
     quantization: str | None = None
+    # Where `quantization` came from: a GGUF filename, a tensor repo's `config.json`, or nothing
+    # yet (also Ollama's own case, which reads a tag, never a config -- AP9-SV2-0, E8). Additive,
+    # defaults to `None`, so a snapshot written before it reads unchanged.
+    quantization_source: Literal["filename", "config"] | None = None
     default_context: int | None = Field(default=None, gt=0)
     provenance: Literal["from_metadata", "approved", "unresolved"]
     unresolved_reason: str | None = None
@@ -425,9 +440,15 @@ class Package(BaseModel):
 
     @model_validator(mode="after")
     def _check_provenance_invariants(self) -> "Package":
-        if self.format != "gguf" and (self.provenance != "unresolved" or self.unresolved_reason != "format"):
+        # AP9-SV2-0 (E8, docs/adr/0014-…): a Hugging Face tensor package is the one exception to
+        # the format lock below -- SV2-P's provenance rule may resolve it. Every other non-gguf
+        # package (Ollama's own `tensor` packages, an MLX tag included -- noted 2026-09-28 --
+        # and any `unknown` format) stays locked, same as before this step.
+        is_hf_tensor = self.format == "tensor" and self.source == "huggingface"
+        if self.format != "gguf" and not is_hf_tensor and (self.provenance != "unresolved" or self.unresolved_reason != "format"):
             raise ValueError(
-                "a non-gguf package must have provenance='unresolved' and unresolved_reason='format'"
+                "a non-gguf package must have provenance='unresolved' and unresolved_reason='format', "
+                "unless it is a Hugging Face tensor package"
             )
         if self.provenance == "unresolved":
             if not self.unresolved_reason:
@@ -531,7 +552,21 @@ def load_snapshot(data: dict) -> Snapshot:
     if not isinstance(version, int) or isinstance(version, bool):
         raise SchemaVersionError(f"snapshot: schema_version is missing or not an integer: {version!r}")
     check_schema_version(version, SNAPSHOT_SCHEMA_RANGE, "snapshot")
-    return Snapshot.model_validate(_read_provenance_of_0_1_0(data))
+    return Snapshot.model_validate(_read_schema_1_as_2(_read_provenance_of_0_1_0(data)))
+
+
+def _read_schema_1_as_2(data: dict) -> dict:
+    """The snapshot dict with `schema_version` 1 read as 2; `data` is left unchanged otherwise.
+
+    Schema 2 (AP9-SV2-0) is purely additive over schema 1 -- every new field
+    (`Package.quantization_source`, the new `QUANT_ORDER` labels a tensor package's
+    `quantization` may now carry) has a default, so a schema-1 file needs no other change to
+    validate as schema 2. This is the one place that makes the substitution; `data["schema_version"]`
+    is otherwise never rewritten by a reader.
+    """
+    if data.get("schema_version") == 1:
+        return {**data, "schema_version": SNAPSHOT_SCHEMA_VERSION}
+    return data
 
 
 def _read_provenance_of_0_1_0(data: dict) -> dict:
@@ -723,66 +758,9 @@ def load_hardware_snapshot(data: dict) -> HardwareSnapshot:
     return HardwareSnapshot.model_validate(data)
 
 
-class Fit(BaseModel):
-    """Whether one GGUF package fits one measured machine (fit contract v1).
-
-    Computed by `modelroom/fit.py::compute_fit`, never persisted by AP4 -- a later renderer
-    (AP5) calls it fresh against the current snapshot and hardware profile every time it
-    renders, and always labels the result "fit (computed, v1)", never "runs" (CONTRACTS.md,
-    "Fit contract v1").
-
-    `basis` says what the KV cache was computed from: the base model's own `architecture`, or
-    the `size` of the package alone, for a package whose architecture fit v1 cannot read
-    (decided 2026-09-24). The provenance of both is `computed`; `size` is the coarser of the two
-    and never reaches `ample` (CONTRACTS.md, "Fit from size (basis `size`)").
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    fit_class: Literal["ample", "fits", "tight", "no_fit", "unknown"]
-    mode: Literal["gpu", "gpu_split", "cpu_gpu", "cpu"] | None
-    need_gib: float = Field(ge=0)
-    weights_gib: float = Field(ge=0)
-    kv_gib: float = Field(ge=0)
-    pool_gib: float
-    reserve_gib: float = Field(ge=0)
-    context: int = Field(ge=0)
-    context_assumed: bool
-    basis: Literal["architecture", "size"] = "architecture"
-    reason: str | None
-    # The parallel requests the KV cache was computed for, once per request (decided 2026-09-25).
-    requests: int = Field(default=1, ge=1, le=1024)
-
-
 # --- render (AP5) ---------------------------------------------------------------------------
 
-
-class Rating(BaseModel):
-    """A market-index star rating for one base model, as a `render.RatingSource` returns it.
-
-    AP5's only new contract: `render` (`modelroom/render.py`) calls a `RatingSource` once per
-    base model it renders and turns the result into the Package table's Stars column
-    (CONTRACTS.md, "Render (AP5)"). Not persisted anywhere -- a `RatingSource` is a live
-    callable, never a file this module reads or writes.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    stars: float
-    source: str
-
-    @field_validator("stars")
-    @classmethod
-    def _check_stars(cls, value: float) -> float:
-        if not (0.5 <= value <= 5.0):
-            raise ValueError(f"stars must be between 0.5 and 5.0: {value!r}")
-        if round(value * 2) != value * 2:
-            raise ValueError(f"stars must be a multiple of 0.5: {value!r}")
-        return value
-
-    @field_validator("source")
-    @classmethod
-    def _check_source(cls, value: str) -> str:
-        if not value:
-            raise ValueError("source must be a non-empty label")
-        return value
+# `Fit` and `Rating` moved to `contracts_fit.py` (AP9-SV2-0, docs/adr/0014-runtime-entries-and-
+# vllm-packages.md) to keep this module under the size guard as the snapshot schema grows; both
+# names are imported and re-exported at the top of this module, so every existing
+# `from .contracts import Fit`/`Rating` keeps working, unchanged and pointing at the same classes.
