@@ -605,7 +605,7 @@ def test_write_snapshot_then_load_existing_snapshot_round_trips(tmp_path: Path):
             "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "models.md")},
         }
     )
-    snapshot = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[_base_model()], packages=[])
+    snapshot = Snapshot(schema_version=2, run_at=RUN1, areas=[], base_models=[_base_model()], packages=[])
 
     write_snapshot(config, snapshot.model_dump(mode="json"))
     loaded = load_existing_snapshot(config)
@@ -637,7 +637,7 @@ def test_write_snapshot_writes_from_metadata_for_a_0_1_0_metadata_ok_package(tmp
 
     written = json.loads(config.paths.snapshot_file.read_text(encoding="utf-8"))
     assert [package["provenance"] for package in written["packages"]] == ["from_metadata"] * len(payload["packages"])
-    assert written["schema_version"] == 1
+    assert written["schema_version"] == 2
 
 
 def test_load_existing_snapshot_returns_none_when_no_file_exists(tmp_path: Path):
@@ -663,18 +663,18 @@ def test_check_run_is_newer_passes_when_no_old_snapshot():
 
 
 def test_check_run_is_newer_passes_for_a_strictly_newer_run():
-    old = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[], packages=[])
+    old = Snapshot(schema_version=2, run_at=RUN1, areas=[], base_models=[], packages=[])
     check_run_is_newer(old, RUN2)  # must not raise
 
 
 def test_check_run_is_newer_raises_for_an_older_run():
-    old = Snapshot(schema_version=1, run_at=RUN2, areas=[], base_models=[], packages=[])
+    old = Snapshot(schema_version=2, run_at=RUN2, areas=[], base_models=[], packages=[])
     with pytest.raises(StaleRunError):
         check_run_is_newer(old, RUN1)
 
 
 def test_check_run_is_newer_raises_for_the_same_instant():
-    old = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[], packages=[])
+    old = Snapshot(schema_version=2, run_at=RUN1, areas=[], base_models=[], packages=[])
     with pytest.raises(StaleRunError):
         check_run_is_newer(old, RUN1)
 
@@ -704,7 +704,7 @@ def test_merge_snapshot_first_run_has_no_old_snapshot():
 def test_merge_snapshot_complete_area_deactivates_a_package_that_disappeared():
     old_package = _hf_package(repo="packager/Nova-7B-GGUF", filename="Nova-7B-Q4_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
     old = Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=RUN1,
         areas=[
             Area(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", last_success=RUN1, error=None)
@@ -734,7 +734,7 @@ def test_merge_snapshot_never_deactivates_a_package_another_area_published_this_
     shared_repo = "packager/Shared-GGUF"
     moved = _hf_package(repo=shared_repo, filename="Nova-7B-Q4_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
     kept = _hf_package(repo="packager/Nova-7B-GGUF", filename="Nova-7B-Q5_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
-    old = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[_base_model()], packages=[moved, kept])
+    old = Snapshot(schema_version=2, run_at=RUN1, areas=[], base_models=[_base_model()], packages=[moved, kept])
     reassigned = moved.model_copy(update={"base_model_hf_repo": "other/Nebula-9B"})
     area_b = AreaOutcome(
         source="huggingface", base_model_hf_repo="other/Nebula-9B", packager="packager", status="complete", error=None, packages=[reassigned]
@@ -758,7 +758,7 @@ def test_merge_snapshot_never_deactivates_a_package_another_area_published_this_
 def test_merge_snapshot_complete_area_keeps_observed_at_and_bumps_last_seen_for_a_still_present_package():
     old_package = _hf_package(repo="packager/Nova-7B-GGUF", filename="Nova-7B-Q4_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
     old = Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=RUN1,
         areas=[
             Area(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", last_success=RUN1, error=None)
@@ -782,7 +782,7 @@ def test_merge_snapshot_complete_area_keeps_observed_at_and_bumps_last_seen_for_
 def test_merge_snapshot_incomplete_area_keeps_old_packages_untouched_and_records_the_error():
     old_package = _hf_package(repo="packager/Nova-7B-GGUF", filename="Nova-7B-Q4_K_M.gguf", observed_at=RUN1, last_seen=RUN1)
     old = Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=RUN1,
         areas=[
             Area(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", last_success=RUN1, error=None)
@@ -828,7 +828,7 @@ def test_merge_snapshot_drops_packages_of_an_area_no_longer_configured():
         repo="other-packager/Nova-7B-GGUF", filename="Nova-7B-BF16.gguf", observed_at=RUN1, last_seen=RUN1
     )
     old = Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=RUN1,
         areas=[
             Area(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", last_success=RUN1, error=None),
@@ -856,7 +856,7 @@ def test_merge_snapshot_drops_packages_of_an_area_no_longer_configured():
 
 
 def test_merge_snapshot_base_models_are_always_replaced_by_this_runs_results():
-    old = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[_base_model(parameters_b=1.0)], packages=[])
+    old = Snapshot(schema_version=2, run_at=RUN1, areas=[], base_models=[_base_model(parameters_b=1.0)], packages=[])
 
     snapshot = merge_snapshot(old, RUN2, [], [_base_model(parameters_b=99.0)])
 
@@ -888,7 +888,7 @@ def test_write_run_status_lists_every_area_with_run_at_budget_and_candidates(tmp
         }
     )
     snapshot = Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=RUN1,
         areas=[
             Area(source="huggingface", base_model_hf_repo="acme/Nova-7B", packager="packager", status="complete", last_success=RUN1, error=None),

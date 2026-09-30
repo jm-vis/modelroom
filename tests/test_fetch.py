@@ -75,7 +75,7 @@ def test_run_fetch_parameters_b_falls_back_to_the_previous_snapshots_value(tmp_p
     )
     transport = build_transport(mapping)
     old_snapshot = Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=RUN1,
         areas=[],
         base_models=[
@@ -247,7 +247,7 @@ def test_run_fetch_carries_forward_an_approval_bound_to_the_current_content(tmp_
         active=True,
     )
     old_snapshot = Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=RUN1,
         areas=[],
         base_models=[
@@ -337,7 +337,7 @@ def test_run_fetch_budget_zero_from_the_start_never_touches_any_base_model(tmp_p
     old_spec = BaseModelSpec(
         hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=7.0, architecture=old_architecture
     )
-    old_snapshot = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[old_spec], packages=[])
+    old_snapshot = Snapshot(schema_version=2, run_at=RUN1, areas=[], base_models=[old_spec], packages=[])
     transport = build_transport({})  # must never be called
 
     result = run_fetch(config, transport, RUN2, old_snapshot=old_snapshot, budget=0)
@@ -431,7 +431,7 @@ def test_run_fetch_budget_end_never_touches_a_base_model_it_did_not_reach(tmp_pa
     old_other_spec = BaseModelSpec(
         hf_repo="other-org/Other-7B", repo_aliases=[], publisher="other-org", parameters_b=7.0, architecture=old_architecture
     )
-    old_snapshot = Snapshot(schema_version=1, run_at=RUN1, areas=[], base_models=[old_other_spec], packages=[])
+    old_snapshot = Snapshot(schema_version=2, run_at=RUN1, areas=[], base_models=[old_other_spec], packages=[])
 
     result = run_fetch(config, transport, RUN2, old_snapshot=old_snapshot, budget=2)
 

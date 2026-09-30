@@ -269,6 +269,7 @@ EXAMPLES: dict[str, dict] = {
         ],
         "complete": True,
         "quantization": "Q4_K_M",
+        "quantization_source": "filename",
         "default_context": None,
         "provenance": "from_metadata",
         "unresolved_reason": None,
@@ -286,7 +287,7 @@ EXAMPLES: dict[str, dict] = {
         "error": None,
     },
     "Snapshot": {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_at": "2026-09-22T09:00:00Z",
         "areas": [
             {
@@ -335,6 +336,7 @@ EXAMPLES: dict[str, dict] = {
                 ],
                 "complete": True,
                 "quantization": "Q4_K_M",
+                "quantization_source": "filename",
                 "default_context": None,
                 "provenance": "from_metadata",
                 "unresolved_reason": None,

@@ -465,6 +465,11 @@ def test_quant_order_is_exactly_this_tuple_in_order_after_ap3_extension():
         "Q4_1",
         "Q4_K_S",
         "Q4_K_M",
+        # AP9-SV2-0 (E8, docs/adr/0014-…): vLLM's tensor labels, read from config.json, placed
+        # by bits per weight between the GGUF steps they sit closest to.
+        "W4A16",
+        "AWQ",
+        "GPTQ-4",
         "UD-Q4_K_XL",
         "MXFP4",
         "MXFP4_MOE",
@@ -474,12 +479,15 @@ def test_quant_order_is_exactly_this_tuple_in_order_after_ap3_extension():
         "Q6_K",
         "UD-Q6_K_XL",
         "Q8_0",
+        "GPTQ-8",
+        "W8A8",
+        "FP8",
         "UD-Q8_K_XL",
         "F16",
         "BF16",
         "F32",
     )
-    assert len(QUANT_ORDER) == 50
+    assert len(QUANT_ORDER) == 56
 
 
 def test_unsloth_ud_iq4_builds_parse_to_the_ud_member():

@@ -61,6 +61,13 @@ QUANT_ORDER: tuple[str, ...] = (
     "Q4_1",
     "Q4_K_S",
     "Q4_K_M",
+    # The four vLLM (tensor) labels below (AP9-SV2-0, E8, docs/adr/0014-…) are read from a
+    # Hugging Face tensor repo's `config.json`, never from a filename or an Ollama tag
+    # (`Package.quantization_source == "config"`; the reader is SV2-P's `tensor_quant.py`).
+    # Placement is by bits per weight, the same yardstick GGUF's own labels already sort by:
+    "W4A16",  # compressed-tensors, weights num_bits 4, type int (e.g. RedHatAI *-quantized.w4a16)
+    "AWQ",  # quant_method "awq", bits 4
+    "GPTQ-4",  # quant_method "gptq", bits 4
     "UD-Q4_K_XL",
     "MXFP4",
     "MXFP4_MOE",
@@ -70,7 +77,14 @@ QUANT_ORDER: tuple[str, ...] = (
     "Q6_K",
     "UD-Q6_K_XL",
     "Q8_0",
+    "GPTQ-8",  # quant_method "gptq", bits 8
+    "W8A8",  # compressed-tensors, weights num_bits 8, type int
+    "FP8",  # quant_method "fp8"; or compressed-tensors, weights num_bits 8, type float
     "UD-Q8_K_XL",
+    # `BF16`/`F16` below already cover a tensor repo with no `quantization_config`: its
+    # `torch_dtype` (top level) or `dtype`, else `text_config.dtype` (Qwen3.5's own shape,
+    # `dtype` only under `text_config`) -- read in that order, a documented search order rather
+    # than a new label (AP9-SV2-0; the reader is again SV2-P's).
     "F16",
     "BF16",
     "F32",

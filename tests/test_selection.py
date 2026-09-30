@@ -49,7 +49,7 @@ def _package(base: str) -> Package:
 def _snapshot() -> Snapshot:
     areas = [Area(source="huggingface", base_model_hf_repo=base, packager="packager", status="complete") for base in (NOVA, VEGA)]
     return Snapshot(
-        schema_version=1,
+        schema_version=2,
         run_at=NOW,
         areas=areas,
         base_models=[_base(NOVA), _base(VEGA)],

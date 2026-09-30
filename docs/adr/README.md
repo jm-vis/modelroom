@@ -21,3 +21,4 @@ One line per decision; an ADR is immutable, a changed situation gets a new one t
 | [0011](0011-graphics-adapters-llmfit-fallback.md) | Graphics adapters of every vendor, llmfit as fallback, schema 4 extended without a step | accepted, 2026-09-28 |
 | [0012](0012-memory-reserve-and-table-head.md) | The memory reserve after the machine's size, the table head names the budget | accepted, 2026-09-29 |
 | [0013](0013-another-computer-three-ways-neutral-names.md) | Another computer: three ways in (copy the command, a shared folder, over SSH), a neutral name at every machine boundary | accepted, 2026-09-29 |
+| [0014](0014-runtime-entries-and-vllm-packages.md) | A local-server runtime is one table entry, never a plug-in; snapshot schema steps to 2 for vLLM's tensor packages and the new `QUANT_ORDER` labels; `HardwareProfile.runtimes` extended without a step | accepted, 2026-09-29 |

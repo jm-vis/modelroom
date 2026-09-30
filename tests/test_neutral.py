@@ -124,7 +124,7 @@ def _snapshot(root: Path, packages: list | None = None) -> None:
     unknown = {"source_revision": None, "kind": "unknown"}
     repos = {package.base_model_hf_repo for package in packages or []}
     bases = [BaseModelSpec(hf_repo=repo, publisher=repo.split("/")[0], architecture={"source_repo": repo, **unknown}) for repo in repos]
-    snapshot = Snapshot(schema_version=1, run_at=NOW, areas=[], base_models=bases, packages=packages or [])
+    snapshot = Snapshot(schema_version=2, run_at=NOW, areas=[], base_models=bases, packages=packages or [])
     _write(root / "state" / "modelroom.json", snapshot.model_dump(mode="json"))
 
 

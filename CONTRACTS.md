@@ -8,7 +8,10 @@ consumer build against the same expectations.
 ## Source of truth
 
 - `modelroom/contracts.py` holds Pydantic models with `extra="forbid"`, explicit value ranges
-  and validators for coupled fields. It is the only definition.
+  and validators for coupled fields. It is the only definition. `Fit` and `Rating` are defined in
+  `modelroom/contracts_fit.py` (AP9-SV2-0, a file split for the size guard) and re-exported from
+  `contracts.py`; both count as the definition, and every import site keeps using
+  `from .contracts import Fit`/`Rating`.
 - This file describes each model for readers and repeats its examples verbatim. A contract
   test loads every example from the module and validates it; another test checks that every
   model named here exists in the module and vice versa.
@@ -67,9 +70,9 @@ documented decision (`docs/adr/`), never a side effect.
 
 | Form | Writes | Reads | Earlier versions | Decision |
 |---|---|---|---|---|
-| Snapshot | 1 | `[1, 2)` | the value `metadata_ok` of 0.1.0 reads as `from_metadata` | ADR 0007, 2026-09-27 |
+| Snapshot | 2 | `[1, 3)` | 1 reads as 2, unchanged; the value `metadata_ok` of 0.1.0 reads as `from_metadata` | ADR 0007, 2026-09-27; ADR 0014, 2026-09-29 (schema step) |
 | Configuration (`modelroom.toml`) | 3 | `[1, 4)` | 1 and 2 read as 3 in memory; `migrate` and the guided mode write 1 and 2 back, `import-profile` writes 2 back (1 needs `migrate`) | ADR 0002, 2026-09-25 |
-| Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26; ADR 0006, 2026-09-27; ADR 0011, 2026-09-28 (`adapters`, no step) |
+| Hardware profile | 4 | `[1, 5)` | 1 read as `HardwareSnapshot`; 2 and 3 read as 4 everywhere (2 through 3), `migrate` writes them back | ADR 0001, 2026-09-25; ADR 0004, 2026-09-26; ADR 0006, 2026-09-27; ADR 0011, 2026-09-28 (`adapters`, no step); ADR 0014, 2026-09-29 (`runtimes`, no step) |
 | Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26; ADR 0006, 2026-09-27 (the fit words) |
 | Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
 | Measurement file | 2 | 2 | -- | -- |
@@ -100,6 +103,21 @@ measurement 2 stay. What changes is which values they may hold ("Neutral names")
 export, a profile and a configuration carry a neutral `display_name` and neutral machine keys, and a
 record the forms of its fields the sink allows. The file of the user account `remote.json` is new
 ("Remote machines").
+AP9-SV2-0 (ADR 0014, 2026-09-29, E8) steps snapshot schema to 2: a Hugging Face `tensor` package
+may now be `from_metadata`/`approved` (Ollama's own `tensor` packages, an MLX tag included, stay
+locked to `unresolved`/`format`, see "Package" below), `Package` gains `quantization_source`
+(additive, default `None`), and `quantization.QUANT_ORDER` gains six vLLM labels (`W4A16`, `AWQ`,
+`GPTQ-4`, `GPTQ-8`, `W8A8`, `FP8`, see "Package" below for their placement). This is a real
+version step, not an additive one without a step (the precedent of ADR 0006/0010/0011): a 0.1.0
+reader that met either new shape under schema 1 would fail with an opaque field error instead of
+the named, exit-`3` schema refusal this step gives it -- the choice the GF made at E8. A schema-1
+file still reads as schema 2 unchanged (`load_snapshot`'s own normalization; every new field has a
+default, so nothing else needs converting). Hardware profile schema 4 is extended again without a
+step (the ADR 0011 precedent): `runtimes: list[RuntimeKey]`, additive, excluded when empty (F6's
+GF decision; see "Hardware profile v2" / `HardwareProfile` below). `RuntimeKey` and the planned
+`RUNTIMES` table (one local-server runtime as one entry, "Laufzeit als Eintrag") are AP9-SV2-L's
+subject; this step only reserves the field so later sub-packages do not need a schema change of
+their own to fill it.
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -339,7 +357,25 @@ One packaged build of a base model, as observed on Hugging Face or in the Ollama
 Exactly the fields of its `source` are set. Only `format == "gguf"` takes part in fit,
 provenance and rendering; a `tensor`-format package stays in the snapshot with
 `provenance == "unresolved"` and `unresolved_reason == "format"` -- enforced as a model
-invariant, not just a convention `decide_provenance` happens to follow.
+invariant, not just a convention `decide_provenance` happens to follow. **The one exception**
+(AP9-SV2-0, E8, ADR 0014): a `tensor`-format package whose `source` is `"huggingface"` may
+instead be `"from_metadata"` or `"approved"`, for SV2-P's tensor packages (safetensors, read by
+vLLM). A `tensor`-format package of `source` `"ollama"` (an MLX tag, noted 2026-09-28) stays
+locked to `unresolved`/`format` -- it is never a vLLM package.
+
+`quantization_source` says where `quantization` was read from: `"filename"` for a GGUF package
+(the packager's own naming convention), `"config"` for a Hugging Face tensor package (its
+`config.json`), `None` for an Ollama package (a tag, never a config) or wherever `quantization`
+itself is still unknown. Additive, default `None` (AP9-SV2-0).
+
+`quantization.QUANT_ORDER` gained six labels for vLLM's tensor formats (AP9-SV2-0, E8), read
+from a tensor repo's `config.json` by SV2-P's reader, never from a filename: `W4A16` (behind
+`Q4_K_M`, before `UD-Q4_K_XL`), `AWQ` (behind `W4A16`), `GPTQ-4` (behind `AWQ`, before
+`UD-Q4_K_XL`), `GPTQ-8` (behind `Q8_0`), `W8A8` (behind `GPTQ-8`), `FP8` (behind `W8A8`, before
+`UD-Q8_K_XL`) -- placed by bits per weight, the same yardstick the existing GGUF labels already
+sort by. `BF16`/`F16` need no new label: a tensor repo with no `quantization_config` reads its
+`torch_dtype` (top level) or `dtype`, else `text_config.dtype` (Qwen3.5's own shape), in that
+search order.
 
 `complete` is never accepted as a bare caller-supplied fact: a model validator derives it from
 `files` with `shards_complete` and rejects a `Package` whose `complete` contradicts that
@@ -362,7 +398,8 @@ carry-forward across fetch runs"; the binding to the base model is unchanged).
 
 Three more invariants tie `provenance`, `unresolved_reason`, `format` and `approval` together:
 a non-`"gguf"` `format` requires `provenance == "unresolved"` and `unresolved_reason ==
-"format"`; `provenance == "unresolved"` requires a non-empty `unresolved_reason` (never `None`,
+"format"`, **unless the package is a Hugging Face `tensor` package** (the one exception above,
+AP9-SV2-0); `provenance == "unresolved"` requires a non-empty `unresolved_reason` (never `None`,
 the reverse of the "not unresolved -> reason must be `None`" rule below it already stated); and
 `provenance == "approved"` requires an `approval` whose `content` equals the package's
 *current* `revision` (Hugging Face) or `manifest_digest` (Ollama) -- an approval bound to
@@ -381,6 +418,7 @@ different content does not validate, it has to be re-approved or left to the met
 | `files` | `list[PackageFile]` | -- | the files that make up this package |
 | `complete` | `bool` | derived from `files` by `shards_complete`, see above | whether all weight shards are present |
 | `quantization` | `str \| None` | a `QUANT_ORDER` member, or `None` | `None` means unknown and sorts last |
+| `quantization_source` | `"filename" \| "config" \| None` | -- | where `quantization` was read from: a GGUF filename, a tensor repo's `config.json`, or unknown/not applicable (AP9-SV2-0) |
 | `default_context` | `int \| None` | `> 0` | Ollama's `num_ctx`; `None` for Hugging Face |
 | `provenance` | `"from_metadata" \| "approved" \| "unresolved"` | -- | see `modelroom/provenance.py` |
 | `unresolved_reason` | `str \| None` | non-empty iff `provenance == "unresolved"`, see above | why provenance could not be resolved |
@@ -406,6 +444,7 @@ different content does not validate, it has to be re-approved or left to the met
   ],
   "complete": true,
   "quantization": "Q4_K_M",
+  "quantization_source": "filename",
   "default_context": null,
   "provenance": "from_metadata",
   "unresolved_reason": null,
@@ -448,7 +487,7 @@ filename-or-tag)` must be unique across `packages`.
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
-| `schema_version` | `int` | must equal `SNAPSHOT_SCHEMA_VERSION` (currently `1`) | the snapshot's schema version; schema 1 written by 0.1.0 spells the provenance `metadata_ok`, the reader takes it as `from_metadata` and `fetch` writes it back (ADR 0007) |
+| `schema_version` | `int` | must equal `SNAPSHOT_SCHEMA_VERSION` (currently `2`) | the snapshot's schema version; schema 1 written by 0.1.0 spells the provenance `metadata_ok`, the reader takes it as `from_metadata` and `fetch` writes it back (ADR 0007); `load_snapshot` reads a stored schema 1 as 2, unchanged (ADR 0014) |
 | `run_at` | `datetime` | -- | when this `fetch` run started |
 | `areas` | `list[Area]` | -- | the fetch units this run covered |
 | `base_models` | `list[BaseModelSpec]` | -- | the base models this run knows |
@@ -456,7 +495,7 @@ filename-or-tag)` must be unique across `packages`.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "run_at": "2026-09-22T09:00:00Z",
   "areas": [
     {
@@ -505,6 +544,7 @@ filename-or-tag)` must be unique across `packages`.
       ],
       "complete": true,
       "quantization": "Q4_K_M",
+      "quantization_source": "filename",
       "default_context": null,
       "provenance": "from_metadata",
       "unresolved_reason": null,
@@ -2441,6 +2481,7 @@ The two cross-checked quantities of one profile.
 | `llmfit_crosscheck` | `LlmfitCrosscheck` | -- |
 | `llmfit_version` | `str \| None` | -- |
 | `adapters` | `list[GraphicsAdapter]` | see "Graphics adapters"; not written when empty |
+| `runtimes` | `list["ollama" \| "vllm"]` | each once; not written when empty (AP9-SV2-0) |
 
 ```json
 {
@@ -2525,6 +2566,21 @@ counted card and, beside it, integrated graphics that is shown and not counted:
   ]
 }
 ```
+
+**`runtimes`** (AP9-SV2-0, F6's GF decision) names the local-server runtimes this profile's
+machine detected serving or installed at the last measurement, same rule as `adapters`: an empty
+list is not written, so every earlier file stays as it was, byte for byte. A machine with vLLM
+detected carries:
+
+```json
+{
+  "runtimes": ["ollama", "vllm"]
+}
+```
+
+`RuntimeKey` (`modelroom/profile.py`) names only `"ollama"` and `"vllm"` today; a later runtime
+(LM Studio, AP9-LS) is a new value in the same list, additive again -- never a plug-in, "Laufzeit
+als Eintrag" (AP9-SV2-L builds the `RUNTIMES` table this field feeds).
 
 ### Scenario
 
