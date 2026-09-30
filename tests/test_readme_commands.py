@@ -13,7 +13,9 @@ What counts as a command (Codex r2 finding 2, round 3): every `modelroom` follow
 inside code -- an inline code span, even one wrapped across two source lines, or any line of a
 fenced block, with or without a language tag. It is read when it stands where a shell reads a
 program name: at the start, after a prompt or a separator (`$`, `&&`, `;`, `|`), after a path
-(`~/.local/bin/modelroom`), or run on another computer after `ssh <alias>`. A `modelroom` in code
+(`~/.local/bin/modelroom`), quoted (`"modelroom"`), after a runner (`uvx`), or run on another
+computer after `ssh <alias>`. Where it is the package's name -- `uv tool install modelroom --force`,
+`pip install`, `pipx install`, the value of `--from` -- it is no command. A `modelroom` in code
 anywhere else, an unclosed fence, and a `modelroom` followed by a subcommand or an option in plain
 prose are all reported as unreadable, with their line, and fail the test instead of being skipped.
 Plain prose that only names modelroom ("modelroom keeps whatever you type") is not a command.
@@ -40,11 +42,21 @@ _WEIGHTS_BYTES = re.compile(r"(--weights-bytes)\s+<[^>]+>")
 _FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
 _BACKTICK_RUN = re.compile(r"`+")
 # The program word: not part of a file name (`modelroom.toml`) or a longer word, and followed by
-# more text on its own line or span -- a bare `uv tool install modelroom` passes nothing to it.
-_PROGRAM = re.compile(r"(?<![\w.\-])modelroom(?=[ \t]+\S)")
+# more text on its own line or span -- a bare `uv tool install modelroom` passes nothing to it. A
+# shell drops quotes around a program name, so `"modelroom" hardware` is the same call.
+_PROGRAM = re.compile(r"(?<![\w.\-])[\"']?modelroom[\"']?(?=[ \t]+\S)")
 _SEPARATOR = re.compile(r"&&|\|\||[;|]")
 _PROMPT = re.compile(r"^(?:\$|>|PS>)\s*")
 _SSH = re.compile(r"^ssh(?:\s+\S+)+$")
+# A runner that starts the program itself: `uvx modelroom ...`, `uv tool run --from modelroom modelroom ...`.
+_RUNNER = re.compile(r"^(?:uvx|uv\s+tool\s+run)(?:\s+--from\s+\S+)?$")
+# Where the word is the package's name, not the program: an install or removal, or the value of
+# `--from`, whatever options follow it.
+_PACKAGE = re.compile(
+    r"^(?:uv\s+tool\s+(?:install|upgrade|uninstall)|uv\s+(?:add|remove)|uv\s+pip\s+(?:install|uninstall)"
+    r"|(?:python3?\s+-m\s+)?pip3?\s+(?:install|uninstall)|pipx\s+(?:install|upgrade|uninstall|reinstall))\b.*$"
+    r"|^(?:uvx|uv\s+tool\s+run)\b.*\s--from$"
+)
 
 
 def _subcommands() -> frozenset[str]:
@@ -80,13 +92,15 @@ def _read_code(code: str, line: int, invocations: list, unreadable: list) -> Non
         segment = _SEPARATOR.split(before)[-1]
         segment = re.sub(r"\S*[/\\]$", "", segment).strip()  # `~/.local/bin/` before the word
         segment = _PROMPT.sub("", segment)
-        if segment and not _SSH.match(segment):
+        if _PACKAGE.match(segment):
+            continue
+        if segment and not _SSH.match(segment) and not _RUNNER.match(segment):
             unreadable.append(Unreadable(line, code, f"modelroom after {segment!r} is no command position"))
             continue
-        rest = code[match.start() :]
+        rest = code[match.end() :]
         rest = _SEPARATOR.split(rest)[0]
         rest = re.split(r"\s#", rest)[0]
-        invocations.append(Invocation(line, " ".join(rest.split())))
+        invocations.append(Invocation(line, " ".join(("modelroom" + rest).split())))
 
 
 def _read_prose(text: str, first_line: int, invocations: list, unreadable: list) -> None:
@@ -251,9 +265,29 @@ def test_a_missing_required_option_is_rejected():
 
 
 def test_modelroom_in_code_at_no_command_position_is_reported_with_its_line():
-    invocations, unreadable = extract("x\n`uv tool install modelroom --force`\n")
+    invocations, unreadable = extract("x\n`echo modelroom --help`\n")
     assert invocations == []
-    assert [(u.line, u.reason) for u in unreadable] == [(2, "modelroom after 'uv tool install' is no command position")]
+    assert [(u.line, u.reason) for u in unreadable] == [(2, "modelroom after 'echo' is no command position")]
+
+
+def test_a_quoted_program_name_is_read():
+    markdown = "```sh\n\"modelroom\" hardware\n'modelroom' hardware --config c.toml\n```\n"
+    assert _commands(markdown) == ["modelroom hardware", "modelroom hardware --config c.toml"]
+    assert problem_with("modelroom hardware") is not None
+
+
+def test_the_package_name_after_an_install_command_is_no_command():
+    markdown = (
+        "```sh\n"
+        "uv tool install modelroom --force\n"
+        "uv tool upgrade modelroom --reinstall\n"
+        "pip install modelroom --upgrade\n"
+        "python -m pip install modelroom -U\n"
+        "pipx install modelroom --force\n"
+        "uvx --from modelroom modelroom hardware --config c.toml\n"
+        "```\n"
+    )
+    assert _commands(markdown) == ["modelroom hardware --config c.toml"]
 
 
 def test_an_unclosed_fence_is_reported_with_its_line():
