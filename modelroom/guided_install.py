@@ -185,7 +185,7 @@ def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: boo
     if _is_local(target, first) if local is None else local:
         target.screen.write(label_line(INSTALL_LABEL, install_local_note(first.rank, target.screen.glyphs.dot, target.where)))
         return
-    target.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name)))
+    target.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name, target.where)))
     if not _disk_allows(target, first):
         return
     question = pull_question(first.rank, first.weights_gib, first.name, target.where)

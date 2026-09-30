@@ -554,14 +554,16 @@ def _safe_pull_name(name: str | None) -> str | None:
     return name if name is not None and PULL_NAME_RE.fullmatch(name) is not None else None
 
 
-def install_pull_line(rank: int, name: str) -> Line:
+def install_pull_line(rank: int, name: str, where: str = "") -> Line:
     """The line a reader copies to get the first package of their own machine.
 
     The rank is a side remark and the command is the thing: `to install #1: ollama pull …` read as
     one sentence and the command went under in it (test round, 2026-09-25). So the rank is gray, the
-    command is drawn as a command, and two spaces keep them apart.
+    command is drawn as a command, and two spaces keep them apart. `where` is a `PullTarget`'s own
+    machine name (FR-B1, B5): `#3 on gpu1  ollama pull …`.
     """
-    return [("class:note", f"#{rank}"), ("", "  "), ("class:command", f"ollama pull {name}")]
+    place = f" on {where}" if where else ""
+    return [("class:note", f"#{rank}{place}"), ("", "  "), ("class:command", f"ollama pull {name}")]
 
 
 def install_local_note(rank: int, dot: str = "·", where: str = "") -> Line:

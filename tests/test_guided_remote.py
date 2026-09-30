@@ -62,7 +62,7 @@ def _server_context(machine_id: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"):
 def _measurable_context(guid: str = "11111111-2222-3333-4444-555555555555", daemon=None, now=RUN1):
     """A server whose hardware measures fully (the same Windows/NVIDIA fixture `this-machine`'s own
     tests use, `fixture_support.windows_runner`): enough for the render to rank a package and give
-    `pull_remote_step` a real row to pull."""
+    `pull_remote_row` a real row to pull."""
     from modelroom.measure import WINDOWS_MACHINE_GUID_ARGS
     from modelroom.remote_server import ServerContext
     import subprocess
@@ -354,16 +354,19 @@ def test_pull_remote_checks_the_disk_again_and_pulls_over_ssh(tmp_path):
     ssh = FakeSsh(context=_measurable_context(daemon=daemon))
 
     code, lines, _asker = _run(
-        tmp_path, {"ssh_alias": "gpu1", "ssh_machine_class": "server", "pull_remote": True}, ssh=ssh
+        tmp_path,
+        {"ssh_alias": "gpu1", "ssh_machine_class": "server", "pull_other": f"gpu1 {first_name}", "pull_remote": True},
+        ssh=ssh,
     )
 
+    assert any(f"#1 on gpu1  ollama pull {first_name}" in line for line in lines)
     assert any("onto gpu1" in line for line in lines)
     assert any("Pulled" in line and "gpu1" in line for line in lines)
 
 
 def test_a_package_local_on_the_server_is_a_note_not_a_pull(tmp_path):
-    """Codex r1 finding 9: `pull_remote_step` reuses `pull_chosen` whole, including its
-    local-already branch -- proven directly on a `PullTarget` built the way `pull_remote_step`
+    """Codex r1 finding 9: `pull_remote_row` reuses `pull_chosen` whole, including its
+    local-already branch -- proven directly on a `PullTarget` built the way `pull_remote_row`
     builds one (`where="gpu1"`, `key="pull_remote"`, FR-B1), against a real daemon fixture
     (`granite4.2:8b`, already local by its manifest digest -- `fixture_servers.pull_daemon`'s own
     pinned `/api/tags` -- no monkeypatch of a private helper)."""

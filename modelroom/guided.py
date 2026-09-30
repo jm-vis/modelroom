@@ -52,7 +52,7 @@ from .guided_folder import looks_like_results_folder as _looks_like_results_fold
 from .guided_folder import remember_folder as _remember_folder
 from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, pull_step
 from .pull_other import KEY as PULL_OTHER_KEY, QUESTION as PULL_OTHER_QUESTION
-from .pull_other import eligible_other_machines, pull_other_skip, pull_other_step
+from .pull_other import eligible_other_machines, pull_other_step
 from .pull_choice import ambiguous_names, run_packages
 from .room import RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
@@ -91,7 +91,7 @@ from .importer import (
 from .guided_share import QUESTIONS as SHARE_QUESTIONS
 from .guided_share import machine_list_row
 from .guided_remote import QUESTIONS as SSH_QUESTIONS
-from .guided_remote import active_room, gather_arrivals, pull_remote_step, resolve_active
+from .guided_remote import active_room, gather_arrivals, resolve_active
 from . import ssh as ssh_module
 from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_machine_class, read_os_identity
@@ -711,7 +711,7 @@ def _render_step(
     live.update(active_room(run, document))  # B5: the active SSH machine's own room, if it has a table here
     # A3 (AP9-FR): the other machines `pull_other_step` will list a row for, after this table --
     # computed once, here, so the note under a table and the list that may follow never disagree.
-    other_machines = eligible_other_machines(document, here, context.ambiguous, pull_other_skip(run.pointer_path, run.ssh_active))
+    other_machines = eligible_other_machines(document, here, context.ambiguous)
     view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines, ssh_active=run.ssh_active)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
@@ -773,9 +773,7 @@ def run_guided(
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
     code, first = _render_step(run, config_file, config, scenario, intro.daemon_reachable)
     pull_step(run, first, intro.daemon_reachable)
-    pull_other_step(run, first)
-    if run.ssh_active is not None:
-        pull_remote_step(run, run.ssh_active, first)
+    pull_other_step(run, first)  # a row of the active SSH target is pulled there (B5)
     if code == 0 and run.problems:
         # The document was written, but a step did not do what it was asked -- the pull included.
         # Exit `1` is the documented "a step reported it": an automated caller must not read this

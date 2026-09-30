@@ -12,15 +12,48 @@ are the same short-call envelope, only the time budget differs).
 from __future__ import annotations
 
 import re
-from typing import Literal, Union
+from dataclasses import dataclass
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 from .contracts import PROFILE_ID_RE
 from .measurements import ExportObject
 from .profile import MACHINE_CLASSES
+from .ssh_process import Limits
 
+PROTOCOL_VERSION = 1
+# The five codes an `error` line may carry (B2), nothing else; the laptop has one sentence for each
+# (`ssh.ERROR_SENTENCES`), the server one constant for each (`remote_server.ERROR_*`).
+ERROR_CODES = ("bad_request", "call_refused", "ollama_unreachable", "too_large", "internal")
 SYSTEMS = ("linux", "win32", "darwin")
+
+
+@dataclass(frozen=True)
+class OpBudget:
+    total_seconds: float | None
+    per_line_seconds: float | None
+    limits: Limits
+
+
+# The time and answer limits per op (B1). `candidates`/`measure` are FR-B2's own ops, reserved here
+# so the transport already knows their budget -- `remote_server.py` does not answer them yet.
+_MIB = 1024 * 1024
+OP_BUDGETS: dict[str, OpBudget] = {
+    "hello": OpBudget(30.0, None, Limits(_MIB, 64 * 1024)),
+    "room": OpBudget(30.0, None, Limits(_MIB, 64 * 1024)),
+    "profile": OpBudget(180.0, None, Limits(_MIB, 4 * _MIB)),
+    "daemon_short": OpBudget(30.0, None, Limits(_MIB, 16 * _MIB)),
+    "daemon_generate": OpBudget(660.0, None, Limits(_MIB, 16 * _MIB)),
+    "daemon_pull": OpBudget(None, 60.0, Limits(64 * 1024, None)),
+    "candidates": OpBudget(60.0, None, Limits(_MIB, 4 * _MIB)),
+    "measure": OpBudget(None, 660.0, Limits(_MIB, None)),
+}
+# The op name that reaches the wire (`modelroom remote <op>`) for each budget key above.
+WIRE_OP: dict[str, str] = {
+    "hello": "hello", "room": "room", "profile": "profile", "candidates": "candidates", "measure": "measure",
+    "daemon_short": "daemon", "daemon_generate": "daemon", "daemon_pull": "daemon",
+}
 _DIGEST_STAGE_RE = re.compile(r"^pulling [0-9a-f]{64}$")
 PULL_STAGES = ("pulling manifest", "verifying sha256 digest", "writing manifest", "success", "working")
 # The `Literal` above is spelled out (a variable cannot feed `Literal[...]` portably); this keeps
@@ -76,11 +109,13 @@ REQUEST_MODELS: dict[str, type[_Strict]] = {
 
 
 class HelloResult(_Strict):
-    version: StrictStr | None
+    # `X.Y.Z` or null (the sink's own version rule, B2) and a salted 16-hex digest or `none`: a
+    # server cannot slip free text through either field.
+    version: Annotated[StrictStr, Field(pattern=r"^\d{1,4}\.\d{1,5}\.\d{1,6}$")] | None
     system: Literal["linux", "win32", "darwin"]
     ollama: Literal["reachable", "unreachable"]
     agent_forwarded: StrictBool
-    os_fingerprint: StrictStr
+    os_fingerprint: StrictStr = Field(pattern=r"^(?:[0-9a-f]{16}|none)$")
 
 
 class ProfileResult(_Strict):
@@ -183,6 +218,11 @@ def validate_request(op: str, data: object) -> dict:
 
 
 __all__ = [
+    "ERROR_CODES",
+    "OP_BUDGETS",
+    "PROTOCOL_VERSION",
+    "WIRE_OP",
+    "OpBudget",
     "PULL_STAGES",
     "PROGRESS_MODELS",
     "REQUEST_MODELS",

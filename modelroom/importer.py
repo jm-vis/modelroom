@@ -355,6 +355,9 @@ def import_profile(
                 f"{resolved_config}: [paths] changed while waiting for the lock; run again\n{NOTHING_WRITTEN}"
             )
         swept = sweep_locked(resolved_config, names, handle)
+        # The plan reads the rows as the sweep left them (a row it renamed -- B4's old row behind an
+        # alias -- is taken under its new key, never overwritten by the new one).
+        current = _load_config(resolved_config)
         export = neutral_export(incoming, name, snapshot_packages(current))
         plan = plan_import(current, resolved_config, _read_raw_config(resolved_config), export, name)
         return [*(f"note: {note}" for note in swept.notes), *_execute(plan, current, resolved_config, handle)]

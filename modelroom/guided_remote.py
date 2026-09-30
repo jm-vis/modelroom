@@ -6,8 +6,9 @@ One SSH target is active in a run (GF question 6, B4): a freshly entered alias -
 whether it succeeds or fails, and never falls back to a stored one (Codex r1 finding 8: a failed
 fresh attempt still "used the slot") -- else the one stored SSH profile chosen, else -- with
 several -- the answer to `ssh_active`, which always offers an explicit `none`. Every other chosen
-SSH profile is ranked from what the folder already holds, without a connection, exactly like a
-computer without SSH (`pull_other.pull_other_skip`, B4).
+SSH profile is ranked from what the folder already holds, without a connection, and in
+`pull_other`'s list its row is handed over like a computer without SSH (B4); a row of the active
+target chosen there is pulled over SSH instead (`pull_remote_row`, B5).
 
 B3's own mechanics -- binding a freshly entered alias to a profile id, and the write order of its
 answer -- live in `guided_remote_bind.py` (Codex r2: split this module by topic once it grows too
@@ -49,6 +50,7 @@ if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never const
     from .document import RenderDocument
     from .guided import GuidedRun
     from .guided_install import PullContext
+    from .pull_choice import PullRow
 
 KEY_ACTIVE = "ssh_active"
 KEY_PULL = "pull_remote"
@@ -101,20 +103,16 @@ def ssh_step(run: "GuidedRun", config_file: Path, config: Configuration, scan: P
     except SshError as exc:
         run.failed(str(exc))
         return config, set(), None
-    old_id = _resolve_profile_id(run, scan, alias)
-    profile_id = old_id
-    rename_from: str | None = None
-    known = scan.profiles.get(profile_id)
-    if _identity_changed(known, info["os_fingerprint"]) and _ask_clone(run, alias) == "new":
+    profile_id = _resolve_profile_id(run, scan, alias)
+    if _identity_changed(scan.profiles.get(profile_id), info["os_fingerprint"]) and _ask_clone(run, alias) == "new":
         profile_id = _fresh_id(run, scan)
-        rename_from = old_id
     machine_class = _ask_class(run, alias)
     try:
         result = ssh_profile(alias, profile_id, machine_class, run.ssh)
     except SshError as exc:
         run.failed(str(exc))
         return config, set(), None
-    return _bind_and_import(run, config_file, config, alias, profile_id, result, rename_from, scan)
+    return _bind_and_import(run, config_file, config, alias, profile_id, result)
 
 
 # --- B4: a stored SSH profile picked directly, and the one active target of the run ----------------
@@ -167,7 +165,7 @@ def verify_active(run: "GuidedRun", config: Configuration, config_file: Path, sc
     except SshError as exc:
         run.failed(str(exc))
         return False
-    _bind_and_import(run, config_file, config, alias, fresh_id, result, profile_id, scan)
+    _bind_and_import(run, config_file, config, alias, fresh_id, result)
     return False  # this run's table still counts the old profile; nothing more is done with `alias`
 
 
@@ -217,22 +215,21 @@ def read_room(run: "GuidedRun", alias: str, document: "RenderDocument") -> LiveR
     return LiveRoom(disk=disk, graphics_free_mib=tuple(graphics) if graphics else None)
 
 
-def pull_remote_step(run: "GuidedRun", alias: str, context: "PullContext | None") -> None:
-    """B5's own pull for the active SSH machine's row -- through the unchanged `PullTarget`/
-    `pull_chosen` chain (Codex r1 finding 9), not a separate implementation: the digest proof
-    (`_is_local`/`_holds`, over `SshDaemon`), a fresh disk reading (`target.disk`, called right when
-    it is checked -- B5's own "frische room-Lesung"), the question (key `pull_remote`, not the
-    guided run's own `pull`), and the pull itself with its progress/error/completion handling
-    (`_send`/`_check_line`/`_end_reason`/`pulled_problem`) all run exactly as they do for this
-    machine's own row, with `target.where=alias` naming it in every message instead of nothing."""
-    if context is None:
-        return
-    from .guided_install import PullTarget, first_row, pull_chosen
+def pull_remote_row(run: "GuidedRun", alias: str, row: "PullRow", context: "PullContext") -> None:
+    """B5: the row of the active SSH machine chosen in `pull_other`'s list (A3) -- whichever rank it
+    is -- goes through the unchanged `PullTarget`/`pull_chosen` chain, not a separate implementation:
+    the install line `#<rank> on <alias>  ollama pull <name>`, the digest proof (`_is_local`/`_holds`,
+    over `SshDaemon`), a fresh disk reading (`target.disk`, called right when it is checked), the
+    question (key `pull_remote`), and the pull with its progress/error/completion handling
+    (`_send`/`_check_line`/`_end_reason`/`pulled_problem`), `target.where=alias` naming the machine."""
+    from .guided_install import FirstRow, PullTarget, pull_chosen
+    from .pull_choice import package_of, weights_bytes_of
     from .remote_client import SshDaemon
 
-    first = first_row(context.document, alias, context.packages)
-    if first is None:
+    package = package_of(row, context.packages)
+    if package is None or row.name is None:
         return
+    first = FirstRow(row.rank, str(row.name), row.weights_gib, package, weights_bytes_of(package))
     target = PullTarget(
         daemon=SshDaemon(alias, run.ssh),
         disk=lambda: _fresh_disk(run, alias, context.document),
@@ -264,7 +261,7 @@ __all__ = [
     "active_room",
     "active_target",
     "gather_arrivals",
-    "pull_remote_step",
+    "pull_remote_row",
     "read_room",
     "resolve_active",
     "ssh_step",

@@ -6,10 +6,8 @@
 changes for a pull over SSH, only where the bytes come from -- a pull's progress reaches that
 callback line by line, streamed by `ssh.call`'s own `on_progress`, never collected first (Codex r1
 finding 1). `hello`/`profile`/`room` are the three read-only calls `guided_remote.py` (B3-B5) makes
-directly; each raises `ssh.SshError` on a business error the server sent back (`bad_request`,
-`internal`, …), since a well-formed request from this client should never draw one -- if it does,
-the fixed "answered in a form this modelroom does not read" sentence is the honest one, not a guess
-at what went wrong on the other end.
+directly; an `error` line of the server is already one fixed sentence per code by the time it
+reaches this module (`ssh.ERROR_SENTENCES`, raised by `ssh.call` as `SshError`).
 
 `ssh_path` is `None` by default everywhere in this module (Codex r1 finding 5): `ssh.call`'s own
 `which` resolves it, so a missing `ssh` binary is always the fixed `NO_SSH` sentence, never an
@@ -94,17 +92,27 @@ class SshDaemon:
         return Response(status=status, headers={}, body=b"" if answer_body is None else json.dumps(answer_body).encode("utf-8"))
 
     def _pull(self, method: str, path: str, body: dict | None, progress: Progress | None) -> Response:
+        """B2: a status other than 200 and an error line of Ollama end the pull with the brief's own
+        fixed sentences (`Ollama on <alias> answered with status <n>`, `Ollama on <alias> reported an
+        error; run ollama pull <name> there to see it`, `<name>` the laptop's own checked name) --
+        raised here, turned into a `DaemonError` by `__call__`, and read by the unchanged `_pull` as
+        the reason the pull did not finish."""
+        errors: list[bool] = []
+
         def on_progress(entry: dict) -> None:
-            if progress is None:
-                return
             if entry.get("error") is True:
-                progress({"error": f"Ollama on {self.alias} reported an error"})
-            else:
+                errors.append(True)
+                entry = {"error": f"Ollama on {self.alias} reported an error"}
+            if progress is not None:
                 progress(entry)
 
         envelope = call(self.alias, "daemon_pull", {"method": method, "path": path, "body": body}, self.runner, ssh_path=self.ssh_path, on_progress=on_progress)
         result = _result_of(self.alias, envelope)
-        success = b'{"status":"success"}' if result.get("done") else b""
+        if result["status"] != 200:
+            raise SshError(f"Ollama on {self.alias} answered with status {result['status']}")
+        if errors and not result["done"]:
+            raise SshError(f"Ollama on {self.alias} reported an error; run ollama pull {(body or {}).get('model')} there to see it")
+        success = b'{"status":"success"}' if result["done"] else b""
         return Response(status=result["status"], headers={}, body=success)
 
 

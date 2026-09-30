@@ -54,11 +54,12 @@ All notable changes to this project are documented in this file. The format foll
   never measured or ranked this computer at all; choosing one hands over
   `modelroom pull <name> --weights-bytes <n>` to paste there -- a new
   subcommand, with no results folder and no configuration, that checks Ollama and the free disk on
-  that computer and asks before it pulls (`--yes` for a terminal-less run). A machine already read
-  over SSH is left to the SSH way (FR-B1, below) instead.
+  that computer and asks before it pulls (`--yes` for a terminal-less run). A row of the machine
+  this run reads over SSH is pulled there over SSH instead (FR-B1, below).
 
 - **A computer read over SSH, chosen at the laptop, installed on the server** (AP9-FR, FR-B1;
-  `modelroom/ssh.py`, `remote_server.py`, `remote_client.py`, `guided_remote.py`, `remote_store.py`;
+  `modelroom/ssh.py`, `ssh_process.py`, `remote_protocol.py`, `remote_server.py`, `remote_client.py`,
+  `guided_remote.py`, `guided_remote_bind.py`, `remote_store.py`;
   CONTRACTS.md, "The remote protocol v1", "Another computer"). Step 1's machine list gains a row, `a
   computer over SSH (its host alias)`, next to `import a profile file`: a host alias (never an
   address or a domain), then the same system `ssh` this computer's own configuration already knows
@@ -70,11 +71,15 @@ All notable changes to this project are documented in this file. The format foll
   unchanged `guided_install.py`/`PullTarget` machinery -- nothing there was written twice. Only the
   alias is ever stored, per user account in `~/.modelroom/remote.json`, never a host name, address,
   user name, port, key path, jump host, ssh's own stderr or the server's own text (Ollama's error
-  text included) -- every failure is one fixed local sentence naming the alias. A rented server that
-  answers as another machine behind the same alias asks once, `same` or `new`; one SSH target
-  connects per run (several stored ones ask `ssh_active`, optional), so the question is always about
-  exactly one machine. `pull_other`'s own list leaves out every machine already read over SSH --
-  the row above is its own way in for those.
+  text included) -- every failure is one fixed local sentence naming the alias, an `error` line of
+  the server one of five codes with a sentence each. The answer is read to its end and checked line
+  by line (exactly one final line, nothing after it); every way a call ends -- a fault, a limit, a
+  timeout, Ctrl-C -- ends the `ssh` process, its threads and its pipes. A rented server that answers
+  as another machine behind the same alias asks once, `same` or `new`; `new` keeps the old machine
+  under its neutral key and imports the new one exactly under the alias, in one import. One SSH
+  target connects per run (several stored ones ask `ssh_active`, optional), so the question is
+  always about exactly one machine. Its rows stand in `pull_other`'s list; the row chosen there, of
+  any rank, is pulled onto it over SSH.
 
 - **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
   `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).

@@ -1,15 +1,13 @@
 """`modelroom/ssh.py` (FR-B1, B1): the fixed argument vector, the alias check, the timeouts and
 limits, and the mapping of every failure to one fixed local sentence -- never ssh's own stderr,
-never a text of the server. The real process boundary itself (bounded reads, a bounded queue, a
-deadline from process start, guaranteed cleanup) is proven against real child processes below, not
-just canned `FaultSsh` outcomes -- Codex r1 findings 1-3.
+never a text of the server; and the strict reading of the answer stream to EOF (one envelope per
+line, exactly one terminal line, known error codes). The real process boundary itself is proven
+against real child processes in `tests/test_ssh_process.py`.
 """
 
 from __future__ import annotations
 
 import json
-import sys
-import time
 
 import pytest
 
@@ -17,10 +15,8 @@ from fixture_ssh import FakeSsh, FaultSsh
 from modelroom.remote_server import ServerContext
 from modelroom.ssh import (
     OP_BUDGETS,
-    Limits,
     ProcessOutcome,
     SshError,
-    SubprocessSsh,
     build_argv,
     call,
     default_ssh,
@@ -149,9 +145,33 @@ def test_ssh_stderr_never_reaches_screen_or_problems():
         assert "sentinel-host" not in str(exc)
 
 
+_PULL = {"method": "POST", "path": "/api/pull", "body": {}}
+_PROGRESS = json.dumps({"protocol": 1, "progress": {"status": "pulling manifest"}}).encode()
+
+
 def test_a_connection_cut_mid_pull_gets_its_own_resumable_sentence():
     with pytest.raises(SshError, match="the same pull resumes"):
-        call("gpu1", "daemon_pull", {"method": "POST", "path": "/api/pull", "body": {}}, FaultSsh(ProcessOutcome(0)))
+        call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(0), lines=(_PROGRESS,)))
+
+
+@pytest.mark.parametrize(
+    ("stderr", "message"),
+    [
+        (b"Host key verification failed.", "host key of gpu1 is not known"),
+        (b"Permission denied (publickey).", "refused the login"),
+        (b"ssh: connect to host gpu1 port 22: Connection refused", "could not be reached over SSH"),
+    ],
+)
+def test_a_pull_that_never_began_keeps_the_sentence_of_its_ssh_fault(stderr, message):
+    """Codex FR-B1 r2 finding 3: the resumable hint only where the pull had begun (a `progress`
+    line arrived) -- a host-key or login fault before that is named as what it is."""
+    with pytest.raises(SshError, match=message):
+        call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(255, stderr=stderr)))
+
+
+def test_a_pull_that_ends_before_its_first_line_is_a_connection_end_not_a_resume():
+    with pytest.raises(SshError, match="ended before the answer"):
+        call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(0)))
 
 
 def test_a_pull_cut_by_exit_255_after_progress_also_gets_the_resumable_sentence():
@@ -179,134 +199,122 @@ def test_the_real_ssh_is_refused_under_pytest():
         default_ssh()
 
 
-# --- real child processes (Codex r1 findings 1-3): the process boundary itself ---------------------
+def test_no_test_reaches_the_real_ssh():
+    """The autouse fixture of `tests/conftest.py` stands in for `ssh.default_ssh` in every test: the
+    runner a guided run gets without `ssh=` fails loudly instead of starting a process."""
+    from modelroom import ssh
+
+    with pytest.raises(AssertionError, match="default ssh runner"):
+        ssh.default_ssh().run(["ssh"], b"{}", 1.0, None, OP_BUDGETS["hello"].limits, lambda raw: None)
 
 
-def _write_script(tmp_path, text: str):
-    script = tmp_path / "fake_ssh.py"
-    script.write_text(text, encoding="utf-8")
-    return script
+# --- the stream to EOF: one envelope per line, exactly one terminal line (Codex FR-B1 r2 finding 1) ---
+
+_HELLO_RESULT = {"version": "0.2.0", "system": "linux", "ollama": "reachable", "agent_forwarded": False, "os_fingerprint": "none"}
 
 
-def _real_argv(tmp_path, script, op="hello"):
-    return [sys.executable, str(script), *build_argv("ssh", "gpu1", op, "modelroom")[1:]]
+def _line(**fields) -> bytes:
+    return json.dumps(fields).encode()
 
 
-def test_the_real_ssh_argv_is_exact_as_a_subprocess(tmp_path):
-    """A small Python script stands in for `ssh`; it echoes its own argv back, so the test checks
-    the *actual* vector a real process received, not one this module merely built and never sent."""
-    script = _write_script(
-        tmp_path,
-        "import sys, json\n"
-        "sys.stdin.read()\n"
-        "print(json.dumps({'protocol': 1, 'result': {'argv': sys.argv[1:]}}))\n",
-    )
-    seen = []
-    SubprocessSsh().run(_real_argv(tmp_path, script), b"{}", 10.0, None, OP_BUDGETS["hello"].limits, seen.append)
-    # `outcome.returncode` is not asserted here: once the terminal line is read, this module stops
-    # the process itself rather than waiting for its own natural exit, and a `terminate()` on an
-    # already-exiting process can report a code of its own (e.g. 1 on Windows) instead of the
-    # child's -- harmless, since `call()` never reads `returncode` once it has a terminal envelope.
-    payload = json.loads(seen[0])
-    received = payload["result"]["argv"]
-    assert received[received.index("--") + 1 :] == ["gpu1", "modelroom", "remote", "hello"]
-    assert "StrictHostKeyChecking=yes" in received and "BatchMode=yes" in received
+def _hello_with(*lines: bytes, code: int = 0):
+    return call("gpu1", "hello", {}, FaultSsh(ProcessOutcome(code), lines=lines))
 
 
-def test_a_delayed_progress_line_survives_a_generous_deadline_but_a_short_one_times_out(tmp_path):
-    """Codex r1 finding 3: the deadline is counted from process start, not after `stdin.write` --
-    a script that sleeps *before reading stdin* still finishes well inside a generous total, and a
-    short one still times out close to its own limit, not close to "generous minus the sleep"."""
-    script = _write_script(
-        tmp_path,
-        "import sys, json, time\n"
-        "time.sleep(1.5)\n"
-        "sys.stdin.read()\n"
-        "print(json.dumps({'protocol': 1, 'result': {'ok': True}}))\n",
-    )
-    argv = _real_argv(tmp_path, script)
-    started = time.monotonic()
-    outcome = SubprocessSsh().run(argv, b"{}", 10.0, None, OP_BUDGETS["hello"].limits, lambda raw: True)
-    assert outcome.timed_out is False
-    assert time.monotonic() - started >= 1.5
-
-    started = time.monotonic()
-    outcome = SubprocessSsh().run(argv, b"{}", 0.3, None, OP_BUDGETS["hello"].limits, lambda raw: True)
-    elapsed = time.monotonic() - started
-    assert outcome.timed_out is True
-    assert elapsed < 1.0, f"the deadline should fire near 0.3s, not after the full 1.5s sleep (took {elapsed:.2f}s)"
+def test_a_clean_hello_reads_to_eof_and_returns_its_result():
+    assert _hello_with(_line(protocol=1, result=_HELLO_RESULT))["result"]["system"] == "linux"
 
 
-def test_an_oversized_line_from_a_real_process_is_caught_without_reading_it_all(tmp_path):
-    """Codex r1 finding 2: a process that writes one endless line (no newline at all) must be
-    caught on its first bounded read, not after megabytes of it arrived."""
-    script = _write_script(
-        tmp_path,
-        "import sys, time\n"
-        "sys.stdin.read()\n"
-        "sys.stdout.write('x' * (8 * 1024 * 1024))\n"
-        "sys.stdout.flush()\n"
-        "time.sleep(5)\n",
-    )
-    argv = _real_argv(tmp_path, script)
-    started = time.monotonic()
-    outcome = SubprocessSsh().run(argv, b"{}", 10.0, None, Limits(line_bytes=1024), lambda raw: True)
-    elapsed = time.monotonic() - started
-    assert outcome.over_limit is True
-    assert elapsed < 2.0, f"an oversized line should be caught almost immediately, not after {elapsed:.2f}s"
+@pytest.mark.parametrize(
+    "after",
+    [
+        _line(protocol=1, result=_HELLO_RESULT),
+        _line(protocol=1, error="internal"),
+        _line(protocol=1, progress={"status": "pulling manifest"}),
+        b"trailing text of the server",
+    ],
+)
+def test_a_line_after_the_last_is_a_fault(after):
+    with pytest.raises(SshError, match="form this modelroom does not read"):
+        _hello_with(_line(protocol=1, result=_HELLO_RESULT), after)
 
 
-def test_stdin_the_child_never_reads_does_not_hang(tmp_path):
-    """A script that never touches stdin at all, and answers right away regardless -- writing
-    stdin must not block waiting for a reader that will never come."""
-    script = _write_script(
-        tmp_path,
-        "import sys, json\n"
-        "print(json.dumps({'protocol': 1, 'result': {'ok': True}}))\n",
-    )
-    argv = _real_argv(tmp_path, script)
-    huge_stdin = b'{"pad": "' + b"x" * 200_000 + b'"}'
-    started = time.monotonic()
-    outcome = SubprocessSsh().run(argv, huge_stdin, 10.0, None, OP_BUDGETS["hello"].limits, lambda raw: True)
-    assert time.monotonic() - started < 5.0
-    assert outcome.timed_out is False and outcome.over_limit is False
+def test_a_line_after_the_last_pull_result_is_a_fault():
+    done = _line(protocol=1, result={"status": 200, "done": True})
+    with pytest.raises(SshError, match="form this modelroom does not read"):
+        call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(0), lines=(_PROGRESS, done, _PROGRESS)))
 
 
-def test_the_process_is_reaped_after_a_timeout(tmp_path):
-    """A script that sleeps far longer than the deadline is still gone (not a zombie, not still
-    running) once `run` returns -- proven by starting another one right after and getting a fresh
-    PID that answers normally, which a leaked process table entry would not prevent either, but a
-    hung *thread* from the previous call would still show up as a long total test time."""
-    script = _write_script(
-        tmp_path,
-        "import sys, time\n"
-        "time.sleep(30)\n",
-    )
-    argv = _real_argv(tmp_path, script)
-    started = time.monotonic()
-    outcome = SubprocessSsh().run(argv, b"{}", 0.3, None, OP_BUDGETS["hello"].limits, lambda raw: True)
-    elapsed = time.monotonic() - started
-    assert outcome.timed_out is True
-    assert elapsed < 2.0, f"the process should be killed near the 0.3s deadline, not wait out its 30s sleep (took {elapsed:.2f}s)"
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        {"protocol": 1, "result": _HELLO_RESULT, "note": "extra"},
+        {"protocol": 1, "result": _HELLO_RESULT, "error": "internal"},
+        {"protocol": True, "result": _HELLO_RESULT},
+        {"protocol": 1.0, "result": _HELLO_RESULT},
+        {"protocol": "1", "result": _HELLO_RESULT},
+        {"result": _HELLO_RESULT},
+        {"protocol": 1},
+    ],
+    ids=["extra-field", "two-fields", "protocol-true", "protocol-1.0", "protocol-string", "no-protocol", "no-field"],
+)
+def test_every_line_has_protocol_1_and_exactly_one_field(envelope):
+    with pytest.raises(SshError, match="form this modelroom does not read"):
+        _hello_with(json.dumps(envelope).encode())
 
 
-def test_an_exception_from_on_line_still_kills_and_reaps_the_process(tmp_path):
-    """Codex r1 finding 3: an exception raised inside `on_line` (a form fault, in real use) must
-    still end the process promptly through the same cleanup -- proven by timing, since a leaked
-    process holding the pipe open would otherwise stall the next read indefinitely."""
-    script = _write_script(
-        tmp_path,
-        "import sys, json, time\n"
-        "print(json.dumps({'protocol': 1, 'progress': {'status': 'pulling manifest'}}))\n"
-        "sys.stdout.flush()\n"
-        "time.sleep(30)\n",
-    )
-    argv = _real_argv(tmp_path, script, op="daemon")
+def test_a_line_with_a_duplicate_key_is_a_fault():
+    raw = b'{"protocol": 1, "result": {}, "result": ' + json.dumps(_HELLO_RESULT).encode() + b"}"
+    with pytest.raises(SshError, match="form this modelroom does not read"):
+        _hello_with(raw)
 
-    def blows_up(raw):
-        raise SshError("boom")
 
-    started = time.monotonic()
-    with pytest.raises(SshError, match="boom"):
-        SubprocessSsh().run(argv, b"{}", 10.0, None, OP_BUDGETS["daemon_pull"].limits, blows_up)
-    assert time.monotonic() - started < 2.0
+@pytest.mark.parametrize("code", ["unknown", "", "internal error on sentinel-host.example", 7, None])
+def test_an_unknown_error_code_is_a_form_fault(code):
+    with pytest.raises(SshError, match="form this modelroom does not read") as excinfo:
+        _hello_with(_line(protocol=1, error=code))
+    assert "sentinel" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("code", "sentence"),
+    [
+        ("bad_request", "modelroom on gpu1 could not read the request of this one; update the older one"),
+        ("call_refused", "modelroom on gpu1 refused the call to its Ollama"),
+        ("ollama_unreachable", "Ollama does not answer on gpu1"),
+        ("too_large", "the request to gpu1 was larger than modelroom there reads"),
+        ("internal", "modelroom on gpu1 failed on its own side before it could answer"),
+    ],
+)
+def test_each_error_code_has_its_own_sentence(code, sentence):
+    with pytest.raises(SshError) as excinfo:
+        _hello_with(_line(protocol=1, error=code))
+    assert str(excinfo.value) == sentence
+
+
+def test_an_error_code_during_a_pull_that_began_is_its_own_sentence_not_a_resume():
+    with pytest.raises(SshError) as excinfo:
+        call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(0), lines=(_PROGRESS, _line(protocol=1, error="ollama_unreachable"))))
+    assert str(excinfo.value) == "Ollama does not answer on gpu1"
+
+
+def test_the_error_codes_of_both_ends_are_the_same_five():
+    from modelroom import remote_server
+    from modelroom.remote_protocol import ERROR_CODES
+    from modelroom.ssh import ERROR_SENTENCES
+
+    server = {getattr(remote_server, name) for name in dir(remote_server) if name.startswith("ERROR_")}
+    assert server == set(ERROR_CODES) == set(ERROR_SENTENCES)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {**_HELLO_RESULT, "version": "0.2.0 on sentinel-host.example"},
+        {**_HELLO_RESULT, "os_fingerprint": "/srv/sentinel-path"},
+        {**_HELLO_RESULT, "agent_forwarded": "false"},
+    ],
+)
+def test_a_hello_field_with_free_text_is_a_form_fault(result):
+    with pytest.raises(SshError, match="form this modelroom does not read"):
+        _hello_with(_line(protocol=1, result=result))

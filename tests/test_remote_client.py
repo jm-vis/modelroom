@@ -77,12 +77,21 @@ def test_ssh_daemon_turns_error_true_into_the_fixed_string_check_line_accepts():
     daemon = FixtureDaemon({("POST", "/api/pull"): pull})
     runner = FakeSsh(context=_context(daemon=daemon))
     seen = []
-    answer = SshDaemon("gpu1", runner)("POST", "/api/pull", {"model": "qwen3.5:9b"}, progress=seen.append)
+    with pytest.raises(DaemonError) as excinfo:
+        SshDaemon("gpu1", runner)("POST", "/api/pull", {"model": "qwen3.5:9b"}, progress=seen.append)
     for line in seen:
         _check_line(line)  # would raise DaemonError if the shape were wrong
     assert seen == [{"error": "Ollama on gpu1 reported an error"}]
-    assert answer.status == 200
-    assert answer.body == b""
+    assert str(excinfo.value) == "Ollama on gpu1 reported an error; run ollama pull qwen3.5:9b there to see it"
+    assert "sentinel" not in str(excinfo.value)
+
+
+def test_a_pull_status_other_than_200_is_its_own_sentence():
+    daemon = FixtureDaemon({("POST", "/api/pull"): Response(500, {}, b'{"error": "sentinel text"}')})
+    runner = FakeSsh(context=_context(daemon=daemon))
+    with pytest.raises(DaemonError) as excinfo:
+        SshDaemon("gpu1", runner)("POST", "/api/pull", {"model": "qwen3.5:9b"})
+    assert str(excinfo.value) == "Ollama on gpu1 answered with status 500"
 
 
 def test_ssh_daemon_turns_done_into_a_success_body():

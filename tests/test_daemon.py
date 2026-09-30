@@ -146,7 +146,7 @@ _PULL_PATH_MODULES = (
     "guided_install.py",
     # FR-B1: the pull over SSH is the same `PULL_PATH`, translated at the SSH boundary
     # (`remote_client.SshDaemon`), dispatched on the server (`remote_server.py`) and asked for
-    # in step 5's own question for the active SSH machine (`guided_remote.pull_remote_step`).
+    # for the row of the active SSH machine chosen in step 5 (`guided_remote.pull_remote_row`).
     "remote_client.py",
     "remote_server.py",
     "guided_remote.py",

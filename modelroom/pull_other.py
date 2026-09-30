@@ -4,10 +4,10 @@
 with the rows of every *other* chosen machine, one list, headed by machine (`dialog.Choice(heading=True)`,
 the shape U6's own list uses). A row of a machine the run cannot reach over SSH has no daemon here to
 check or pull for: the choice only ever hands back a **command to paste elsewhere**, never a POST --
-`modelroom pull` (A4) is what runs it, on the machine it names. Only the run's **active** SSH target
-(`run.ssh_active`, B4) is left out: FR-B1 offers it its own way, `guided_remote.pull_remote_step`.
-Every other machine with a stored SSH alias but not connected this run is ranked here exactly like
-one without SSH at all -- its own handover line, nothing more (`pull_other.pull_other_skip`).
+`modelroom pull` (A4) is what runs it, on the machine it names. A row of the run's **active** SSH
+target (`run.ssh_active`, B4) is pulled there over SSH instead, whichever rank was chosen
+(`guided_remote.pull_remote_row`, B5); every other machine with a stored SSH alias, not connected
+this run, is handed over exactly like one without SSH at all.
 
 The question is skipped outright where no other chosen machine has a single named row (A2): the
 list would only ever offer `none`. It is asked whether or not this machine itself has a row here --
@@ -26,8 +26,6 @@ from .dialog import AnswerMissingError, Choice
 from .document import RenderDocument
 from .intro import label_line
 from .pull_choice import NONE_VALUE, PullRow, has_named_row, package_of, pull_rows, weights_bytes_of
-from .remote_store import aliases as remote_aliases
-from .remote_store import remote_path_for
 from .views_install import INSTALL_LABEL
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -54,46 +52,23 @@ class OtherRow:
         return f"{self.machine} {self.row.value}"
 
 
-def other_rows(
-    document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·", skip: frozenset[str] = frozenset()
-) -> list[OtherRow]:
+def other_rows(document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·") -> list[OtherRow]:
     """Every shown row of every chosen machine but `machine`, in document order, each machine's own
-    rows in table order -- `skip` are profile ids left to FR-B1 (a stored SSH alias)."""
+    rows in table order."""
     rows: list[OtherRow] = []
     for block in document.machines:
-        if block.machine == machine or (block.profile is not None and block.profile.profile_id in skip):
-            continue
-        rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot)]
+        if block.machine != machine:
+            rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot)]
     return rows
 
 
-def pull_other_skip(pointer_path, active_alias: str | None = None) -> frozenset[str]:
-    """Only the **active** SSH target's profile id (B4, Codex r1 finding 10): it gets its own way
-    in, `guided_remote.pull_remote_step`. Every other machine with a stored SSH alias -- not
-    connected this run -- is ranked like a computer without SSH and belongs in this very list, so
-    `active_alias=None` (no active target at all) skips nothing. The one place both the step
-    itself and the table's note (`views_install.py`) read this from, so they never disagree."""
-    if active_alias is None:
-        return frozenset()
-    aliases = remote_aliases(remote_path_for(pointer_path))
-    return frozenset(profile_id for profile_id, alias in aliases.items() if alias == active_alias)
-
-
-def eligible_other_machines(
-    document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), skip: frozenset[str] = frozenset()
-) -> frozenset[str]:
+def eligible_other_machines(document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset()) -> frozenset[str]:
     """The other machines whose table gets the "or choose a package for it below" note, and that
     `pull_other_step`'s list will show a row for -- both read this, under the one condition A3
     names: the other machine has a shown row with a name. An import-only run (this machine has no
     row of its own in the document at all) is asked all the same -- there is no "also" here, but
     another chosen machine's own package still needs somewhere to go (Codex r1, finding 1)."""
-    return frozenset(
-        block.machine
-        for block in document.machines
-        if block.machine != machine
-        and not (block.profile is not None and block.profile.profile_id in skip)
-        and has_named_row(block)
-    )
+    return frozenset(block.machine for block in document.machines if block.machine != machine and has_named_row(block))
 
 
 def pull_other_choices(rows: Sequence[OtherRow]) -> list[Choice]:
@@ -118,13 +93,13 @@ def _row_words(entry: OtherRow) -> str:
 
 
 def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
-    """Ask, then hand over the chosen row's command; nothing where nothing is eligible or chosen."""
+    """Ask, then pull the chosen row over SSH where it belongs to the active target (B5), else hand
+    over its command (A3); nothing where nothing is eligible or chosen."""
     if context is None:
         return
-    skip = pull_other_skip(run.pointer_path, run.ssh_active)
-    if not eligible_other_machines(context.document, context.machine, context.ambiguous, skip):
+    if not eligible_other_machines(context.document, context.machine, context.ambiguous):
         return
-    rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, skip)
+    rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot)
     choices = pull_other_choices(rows)
     try:
         value = run.asker.select(KEY, QUESTION, choices)
@@ -133,6 +108,11 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
     chosen = next((entry for entry in rows if entry.row.locked is None and entry.value == value), None)
     run.screen.answer(QUESTION, NONE_WORDS if chosen is None else f"{chosen.machine}  #{chosen.row.rank}  {chosen.row.name}")
     if chosen is None:
+        return
+    if chosen.machine == run.ssh_active:
+        from .guided_remote import pull_remote_row  # imported here: only an SSH row needs the SSH layer
+
+        pull_remote_row(run, chosen.machine, chosen.row, context)
         return
     package = package_of(chosen.row, context.packages)
     if package is None:
@@ -164,6 +144,5 @@ __all__ = [
     "handover_lines",
     "other_rows",
     "pull_other_choices",
-    "pull_other_skip",
     "pull_other_step",
 ]

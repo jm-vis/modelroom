@@ -31,6 +31,7 @@ from .importer import (
 )
 from .importer import import_profile as _import_profile
 from .measurements import ExportObject
+from .neutral import NeutralError
 from .profile import HardwareProfile
 from .remote_store import RemoteStoreError, aliases as remote_aliases
 from .remote_store import remote_path_for, set_alias
@@ -115,46 +116,19 @@ def _identity_changed(known: HardwareProfile | None, live_fingerprint: str) -> b
     return known.os_fingerprint != live_fingerprint
 
 
-def _rename_old_row(run: "GuidedRun", config_file: Path, config: Configuration, alias: str, old_profile_id: str, scan: ProfileScan) -> None:
-    """B4, "new": the row `[machines.<alias>]` still names the old profile -- moved to a neutral key
-    (`neutral.key_for`, the profile's own `neutral_name`, else a free `computer-<8 hex>`) before the
-    fresh id is imported exactly under `[machines.<alias>]` (Codex r6-1). Called only once `profile`'s
-    answer already validated (Codex r1 finding 7): nothing here runs on a call that will not be
-    written after all. A failure is reported, not swallowed (Codex r1 finding 7) -- the next `sweep`
-    still fixes a row two profiles would otherwise share no key for."""
-    from .config import ConfigError
-    from .guided_write import update_config, neutral_change
-    from .neutral import key_for
-    from .neutral_sweep import load_names
+def _bind_and_import(run: "GuidedRun", config_file: Path, config: Configuration, alias: str, profile_id: str, result: dict):
+    """The write order (B3, B4): the answer is validated fully *first*; then (1) `remote.json` maps
+    `profile_id` to `alias`, atomically; then (2) the import, which renames and plans under one lock.
 
-    old = scan.profiles.get(old_profile_id)
-    if old is None or alias not in config.machines:
-        return
-    taken = set(config.machines) - {alias}
-    new_key = key_for(old_profile_id, old.machine_class, old.display_name, taken)
-
-    def change(current: Configuration):
-        if alias not in current.machines or new_key in current.machines:
-            return None
-        data = current.model_dump(mode="json")
-        data["machines"][new_key] = data["machines"].pop(alias)
-        return Configuration.from_dict(data)
-
-    names = load_names(config_file.parent, run.pointer_path, run.probes.hostname())
-    try:
-        update_config(config_file, neutral_change(change, names), now=run.now)
-    except (ConfigError, OSError):
-        run.failed(f"the old row of {alias} could not be renamed to a neutral key; the next sweep will fix it")
-
-
-def _bind_and_import(
-    run: "GuidedRun", config_file: Path, config: Configuration, alias: str, profile_id: str, result: dict,
-    rename_from: str | None, scan: ProfileScan,
-):
-    """The write order (B3, Codex r1 finding 7): the answer is validated fully *first*; only then
-    -- in order -- the old row is renamed (when `rename_from` says so), `remote.json` gets the new
-    mapping, and the profile is imported. Nothing above is touched while the answer is still being
-    read or judged."""
+    B4, `new`: the old profile's row `[machines.<alias>]` must move to a neutral key before the fresh
+    id is imported exactly under `[machines.<alias>]`. Nothing extra is written for that here: once
+    (1) moved the alias to the fresh id, the old row's key is no longer an alias of its own profile,
+    so the import's own sweep (`neutral_sweep.sweep_locked`, the first thing `import_profile` does
+    under its lock) renames it to the old profile's neutral name -- or a free `computer-<8 hex>`
+    where that is taken (`neutral.machine_keys`) -- before `plan_import` reads the rows. A failure
+    of that rename is a failure of this import: nothing of the profile is written, and `remote.json`
+    points at a profile not (yet) in the folder, which the next run with the same alias converges
+    (B3)."""
     try:
         export = ExportObject.model_validate(result["export"])
     except Exception:  # noqa: BLE001 - any shape mismatch is one fixed sentence, never a traceback
@@ -163,8 +137,6 @@ def _bind_and_import(
     if export.profile.profile_id != profile_id or export.measurements:
         run.failed(_form_error(alias))
         return config, set(), None
-    if rename_from is not None:
-        _rename_old_row(run, config_file, config, alias, rename_from, scan)
     store_path = remote_path_for(run.pointer_path)
     try:
         set_alias(store_path, profile_id, alias)
@@ -188,7 +160,7 @@ def _import_export(run: "GuidedRun", config_file: Path, alias: str, profile_id: 
             config_file, tmp, run.now, name=alias, pointer_path=run.pointer_path, hostname=run.probes.hostname(),
             expected_profile_id=profile_id,
         )
-    except (StoredFileError, SchemaVersionError, ConfigError, PrerequisiteError, ImportConflictError, LockHeldError, OSError):
+    except (StoredFileError, SchemaVersionError, ConfigError, PrerequisiteError, ImportConflictError, LockHeldError, NeutralError, OSError):
         run.failed(f"the profile of {alias} could not be imported")
     finally:
         tmp.unlink(missing_ok=True)

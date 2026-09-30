@@ -180,8 +180,9 @@ say. There are five ways to get another computer into the result:
 4. **Enter it by hand** from its data sheet (`enter a machine by hand`).
 5. **Choose it at this computer, over SSH**, with modelroom 0.2.0 or newer and Ollama on the
    server: step 1's row `a computer over SSH (its host alias)` asks for your own SSH alias for it
-   (`~/.ssh/config`), reads its profile, and lets step 5 check its free disk and pull a package
-   onto it -- checked, asked, one Yes -- without you ever running modelroom there by hand. Only
+   (`~/.ssh/config`), reads its profile, and lets step 5 check its free disk and pull the package
+   you choose for it in the list for another computer onto it -- checked, asked, one Yes --
+   without you ever running modelroom there by hand. Only
    your alias is kept, in `~/.modelroom/remote.json`; a password prompt never appears, and a host
    key modelroom does not already know stops the connection rather than accepting it.
 
