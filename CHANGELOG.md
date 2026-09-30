@@ -74,9 +74,10 @@ All notable changes to this project are documented in this file. The format foll
   text included) -- every failure is one fixed local sentence naming the alias, an `error` line of
   the server one of five codes with a sentence each. The answer is read to its end and checked line
   by line (exactly one final line, nothing after it); every way a call ends -- an answer, a fault, a
-  limit, a timeout, Ctrl-C -- ends the `ssh` process and every process it started (a job object on
-  Windows, a process group on POSIX), its reader threads and its pipes; a helper that leaves that
-  job or group is the one thing outside this (CONTRACTS.md, "The remote protocol v1"). A rented server that answers
+  limit, a timeout, Ctrl-C -- ends the `ssh` process and every process it started (on Windows a job
+  object `ssh` belongs to before it runs, else the call ends before anything is sent; on POSIX a
+  process group, signaled once and before its leader is reaped), its reader threads and its pipes; a
+  helper that explicitly leaves that job or group is the one thing outside this (CONTRACTS.md, "The remote protocol v1"). A rented server that answers
   as another machine behind the same alias asks once, `same` or `new`; `new` keeps the old machine
   under its neutral key and imports the new one exactly under the alias, in one import. One SSH
   target connects per run (several stored ones ask `ssh_active`, optional), so the question is

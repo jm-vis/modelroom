@@ -3103,13 +3103,22 @@ decides what is shown, exactly as it does against `LocalDaemon`.
 **The process** (`modelroom/ssh_process.py`): one reader thread per output pipe, one writer thread
 for stdin, the caller's thread the only consumer; the stdout reader hands bounded lines over through
 a small bounded queue whose hand-over gives up at the stop signal. The `ssh` process and every
-process it starts form one tree (`modelroom/process_tree.py`): on Windows a job object of its own,
-on POSIX a session and process group of its own. Every way a call ends -- an answer, a form fault, a
-limit, a timeout, Ctrl-C, any exception -- sets the stop signal, ends the process (terminate, then
-kill) and the rest of its tree (the job terminated, the group sent `SIGKILL`; after an answer too, so
-a helper such as a `ProxyJump` hop cannot hold stderr open), joins the reader threads and closes each
-pipe whose thread has ended, before `SshError` or the interrupt reaches the caller. **Limit:** a
-descendant that leaves that job or starts a session of its own is outside the tree; a read it still
+process it starts form one tree (`modelroom/process_tree.py`). On Windows `ssh` is created suspended,
+put into a job object of its own and only then resumed, so it belongs to the job before it runs its
+first instruction and every helper it starts belongs to it too; where the job cannot be created or
+assigned, or the resume fails, the suspended process is ended before it ran and the call ends fail
+closed: `modelroom could not start ssh for <alias> under its own control on this computer; nothing
+was sent to <alias>`. On POSIX `ssh` starts a session and process group of its own. Every way a call
+ends -- an answer, a form fault, a limit, a timeout, Ctrl-C, any exception -- sets the stop signal,
+ends the whole tree (the job terminated; on POSIX one `SIGKILL` to the group, sent while its leader
+is not yet reaped -- its exit is seen with `waitid(WNOWAIT)` -- and never a second time, so a reused
+PID is never hit; where Python has no `os.waitid` -- macOS with Python 3.11 or 3.12 -- the exit is
+seen with `poll()`, which reaps the leader, so after an `ssh` that ended on its own the group is not
+signaled at all and a helper it left behind can survive and hold stderr open until it ends; while
+`ssh` still runs the group is signaled as everywhere else), after an answer too, so a helper such as a `ProxyJump` hop cannot hold stderr open;
+then reaps `ssh`, joins the reader threads and closes each pipe whose thread has ended, before
+`SshError` or the interrupt reaches the caller. **Limit:** a descendant that explicitly breaks away
+from the job (Windows) or starts a session of its own (POSIX) is outside the tree; a read it still
 blocks is canceled on Windows (`CancelSynchronousIo`), on POSIX it cannot be, and its thread (a
 daemon thread) and pipe are then left behind rather than closed under a blocked read.
 

@@ -29,8 +29,12 @@ from typing import Callable, Protocol, Sequence
 from . import remote_protocol
 from .neutral import ALIAS_RE, is_alias  # noqa: F401 -- re-exported, B1's own name for the check
 from .remote_protocol import ERROR_CODES, OP_BUDGETS, WIRE_OP, OpBudget  # noqa: F401 -- re-exported
+from .process_tree import ProcessTreeError
 from .ssh_process import Limits, OnLine, ProcessOutcome, SubprocessSsh
 
+# Fail closed (B1): the `ssh` process could not be put under this module's control on Windows (its
+# job object); it was ended before it ran, so nothing reached the other computer.
+NO_JOB = "modelroom could not start ssh for {alias} under its own control on this computer; nothing was sent to {alias}"
 NO_SSH = "no ssh command on this computer; on Windows: Settings, Optional features, OpenSSH Client (see README)"
 INVALID_ALIAS = "a host alias is a short name of your own, like gpu1 (letters, digits, dashes)"
 
@@ -166,7 +170,10 @@ def _run_once(runner: SshRunner, ssh_path: str, alias: str, budget_key: str, pro
     budget = OP_BUDGETS[budget_key]
     argv = build_argv(ssh_path, alias, WIRE_OP[budget_key], program)
     state = _CallState(alias, budget_key, on_progress)
-    outcome = runner.run(argv, payload, budget.total_seconds, budget.per_line_seconds, budget.limits, state.on_line)
+    try:
+        outcome = runner.run(argv, payload, budget.total_seconds, budget.per_line_seconds, budget.limits, state.on_line)
+    except ProcessTreeError:
+        raise SshError(NO_JOB.format(alias=alias)) from None
     return state, outcome
 
 
