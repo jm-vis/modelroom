@@ -4,13 +4,18 @@ AP9-UX2 U4 and U6 (GF F4, F7, ADR 0010). The ranking rule stays as ADR 0009 has 
 only reads what the render wrote.
 
 - `pull_collisions` finds the pull names (`hf.co/<repo>:<quant>`, or an Ollama name) that more than
-  one package answers to -- over every active, complete GGUF or Ollama package of the run's base
-  models, **before** the eligibility filter and whatever the provenance (Codex r2-3, r3-1): an
+  one package answers to -- over every active, complete package a runtime of `runtimes.RUNTIMES`
+  accepts, **before** the eligibility filter and whatever the provenance (Codex r2-3, r3-1): an
   approved row can have a hidden counterpart of another file form with the same name, and the pull
   name does not tell file forms apart. Such a name belongs to no row: every row with it is locked,
   has no install line and no disk check.
 - `pull_rows` is one row per shown table row of this machine, in table order, each with its pull
-  name or the reason it cannot be pulled.
+  name or the reason it cannot be pulled -- one row per runtime that accepts its package where the
+  caller passes the run's `packages` (AP9-SV2-L, the Paar-Regel: two runtimes accepting the same
+  GGUF package give it two rows, each with a list value no answer file can confuse with the
+  other's -- `runtime.words.package_prefix`, empty for Ollama, so today's single-runtime shape and
+  its values stay exactly what they are). Without `packages` (every caller before AP9-SV2-L, and
+  `pull_other.py` still) each shown row stays the one row it always was.
 - `repo_lines` names the repository of every shown row whose `packager · quant` another shown row
   of the same block has too (F7), with the file form where one repository has both.
 """
@@ -21,6 +26,7 @@ import re
 from dataclasses import dataclass
 from typing import Sequence
 
+from . import runtimes
 from .contracts import Package
 from .disk_fit import entry_over_disk, too_big_words
 from .document import MachineRanking, RankedEntry, RenderDocument
@@ -34,7 +40,10 @@ NONE_VALUE = "none"
 NO_PULL_NAME = "no safe pull name"
 NOT_UNIQUE = "pull name not unique"
 LOCAL_ALREADY = "local already"
-QUESTION = "Which package should be pulled into Ollama?"
+# AP9-SV2-L: Ollama's own question, read off the table now -- `runtimes.OLLAMA.words.question`,
+# unchanged (today's literal moved there, "Laufzeit als Eintrag"; `words.question` becomes a real
+# choice again once a vLLM row exists, AP9-SV2-F/I).
+QUESTION = runtimes.OLLAMA.words.question
 KEY = "pull_package"
 
 # A2 (AP9-FR, Codex r1-1): the two shapes `screen.install_name` may build, and no other -- checked
@@ -62,19 +71,30 @@ def weights_bytes_of(package: Package) -> float:
     return float(sum(file.size_bytes for file in package.files if file.role in ("weights", "weights_shard")))
 
 
+def _prefixed_pull_name(package: Package, runtime: "runtimes.Runtime") -> str | None:
+    """`package_pull_name`, with the runtime's own prefix in front (empty for Ollama, unchanged)."""
+    name = package_pull_name(package)
+    return None if name is None else f"{runtime.words.package_prefix}{name}"
+
+
 def pull_collisions(packages: Sequence[Package]) -> dict[str, list[tuple[str, str, str]]]:
     """Every pull name more than one package identity answers to, with those identities.
 
-    Over every package that is `active` and `complete` and a GGUF build or an Ollama package --
-    independent of its provenance, so an `unresolved` counterpart the render hides counts too.
+    Over every package that is `active` and `complete` and that a runtime of `runtimes.RUNTIMES`
+    accepts -- independent of its provenance, so an `unresolved` counterpart the render hides
+    counts too. A name two different runtimes would give the very same package never collides
+    with itself (`runtime.words.package_prefix` tells them apart, AP9-SV2-L); today only Ollama
+    ever accepts a package, so this is `package.format == "gguf" or package.source == "ollama"`,
+    unchanged.
     """
     by_name: dict[str, set[tuple[str, str, str]]] = {}
     for package in packages:
-        if not (package.active and package.complete and (package.format == "gguf" or package.source == "ollama")):
+        if not (package.active and package.complete):
             continue
-        name = package_pull_name(package)
-        if name is not None:
-            by_name.setdefault(name, set()).add(package_identity_key(package))
+        for runtime in runtimes.accepting_runtimes(package):
+            name = _prefixed_pull_name(package, runtime)
+            if name is not None:
+                by_name.setdefault(name, set()).add(package_identity_key(package))
     return {name: sorted(identities) for name, identities in by_name.items() if len(identities) > 1}
 
 
@@ -160,10 +180,25 @@ class PullRow:
         return self.name if self.locked is None and self.name is not None else f"#{self.rank} locked"
 
 
+def _runtime_pull_name(entry: RankedEntry, runtime: "runtimes.Runtime") -> str | None:
+    """A shown row's pull name for one accepting runtime: `entry_pull_name`, prefixed (empty for
+    Ollama, so its own value never changes)."""
+    name = entry_pull_name(entry)
+    return None if name is None else f"{runtime.words.package_prefix}{name}"
+
+
 def pull_rows(
-    document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·", disk: Disk | None = None
+    document: RenderDocument,
+    machine: str,
+    ambiguous: frozenset[str] = frozenset(),
+    dot: str = "·",
+    disk: Disk | None = None,
+    packages: Sequence[Package] = (),
 ) -> list[PullRow]:
-    """One row per shown table row of `machine`, in table order (regular and appended measured rows).
+    """One row per shown table row of `machine`, in table order (regular and appended measured rows);
+    one row per runtime that accepts a shown row's package where `packages` names it (AP9-SV2-L,
+    the Paar-Regel) -- without `packages` (every caller before AP9-SV2-L) each row stays the one
+    row it always was, its name computed exactly as before.
 
     With the free disk of this machine a row whose download does not fit it is locked with how much
     it needs (AP9-RM U11); a lock of its name comes first. A package in `disk.held` needs no disk
@@ -172,14 +207,18 @@ def pull_rows(
     block = next((block for block in document.machines if block.machine == machine), None)
     if block is None:
         return []
+    by_identity = {package_identity_key(package): package for package in packages}
     rows = []
     for entry in block.ranked:
-        name = entry_pull_name(entry)
-        locked = NO_PULL_NAME if name is None else NOT_UNIQUE if name in ambiguous else None
-        over = locked is None and entry_over_disk(entry, disk)  # a package held already is never over (U11c)
-        locked = too_big_words(entry.weights_gib, disk) if over else locked
+        package = by_identity.get(tuple(entry.package_identity))
+        accepting = runtimes.accepting_runtimes(package) if package is not None else ()
+        names = [(runtime, _runtime_pull_name(entry, runtime)) for runtime in accepting] or [(None, entry_pull_name(entry))]
         cell = f"{entry.packager} {dot} {entry.quantization}"
-        rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over))
+        for _runtime, name in names:
+            locked = NO_PULL_NAME if name is None else NOT_UNIQUE if name in ambiguous else None
+            over = locked is None and entry_over_disk(entry, disk)  # a package held already is never over (U11c)
+            locked = too_big_words(entry.weights_gib, disk) if over else locked
+            rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over))
     return rows
 
 

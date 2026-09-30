@@ -154,7 +154,7 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     """The list of the rows shown, the command of the choice, the disk, the question; a fault is `run.failed`."""
     if context is None or not reachable:
         return
-    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot)
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, packages=context.packages)
     if not any(row.name is not None for row in rows):
         return
     run.screen.blank()
@@ -162,7 +162,7 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     # already needs no disk, so it stays a choice and its note -- in the table as in this list.
     held = held_identities(run, [package for package in (package_of(row, context.packages) for row in rows) if package])
     disk = None if context.disk is None else replace(context.disk, held=context.disk.held | held)
-    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk)
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk, context.packages)
     locals_ = {row.rank for row in rows if row.locked is None and row.identity in held}
     row = _choose(run, rows, locals_)
     if row is None:

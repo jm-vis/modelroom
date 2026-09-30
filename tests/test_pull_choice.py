@@ -169,6 +169,57 @@ def test_a_missing_answer_takes_row_one_only_when_it_has_a_pull_name():
     assert default_row(pull_rows(document([unnamed, Q4]), "workstation")) is None
 
 
+# --- the Paar-Regel: a second runtime doubles a row (AP9-SV2-L, "Laufzeit als Eintrag") --------------
+
+
+def test_passing_packages_changes_nothing_while_ollama_is_the_only_accepting_runtime():
+    """AP9-SV2-L is a pure refactor: `packages` only ever matters once a second runtime accepts the
+    very same package (below) -- today it never does, so every row stays the one row and the one
+    name it always was, with or without it."""
+    assert pull_rows(document([Q8, Q5, Q4]), "workstation", packages=[Q8, Q5, Q4]) == pull_rows(
+        document([Q8, Q5, Q4]), "workstation"
+    )
+
+
+def test_a_second_runtime_accepting_the_same_gguf_package_gives_it_a_second_row(monkeypatch):
+    """The probe AP9-LS needs before it gives a real second runtime a `gguf`-accepting `accepts`:
+    two runtimes claiming the same package double its row, each with a list value no answer file
+    can confuse with the other's (`runtime.words.package_prefix`) -- `test_ollama_list_values_...`
+    right below is the control proving Ollama's own value never moves."""
+    from modelroom import runtimes
+
+    third = runtimes.OLLAMA.__class__(
+        **{**runtimes.OLLAMA.__dict__, "key": "third", "words": runtimes.RuntimeWords("Third · ", None, "q")}
+    )
+    monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
+
+    rows = pull_rows(document([Q4]), "workstation", packages=[Q4])
+
+    assert [(row.rank, row.name) for row in rows] == [(1, f"{NAME}:Q4_K_M"), (1, f"Third · {NAME}:Q4_K_M")]
+    assert len({row.name for row in rows}) == 2  # eindeutig: an answer file can tell the two apart
+
+
+def test_ollama_list_values_and_answers_are_unchanged(monkeypatch):
+    """Control (green on the base already, AP9-SV2-L's Kernkriterium): with the real table, whether
+    or not `packages` is passed, Ollama's own rows, names and lock reasons are exactly today's."""
+    from modelroom import runtimes
+
+    assert [runtime.key for runtime in runtimes.RUNTIMES] == ["ollama", "vllm"]
+    rows = pull_rows(document([BF16_FILE, Q4, BF16_FOLDER]), "workstation", ambiguous_names([BF16_FILE, Q4, BF16_FOLDER]))
+    with_packages = pull_rows(
+        document([BF16_FILE, Q4, BF16_FOLDER]),
+        "workstation",
+        ambiguous_names([BF16_FILE, Q4, BF16_FOLDER]),
+        packages=[BF16_FILE, Q4, BF16_FOLDER],
+    )
+    assert rows == with_packages
+    assert [(row.name, row.locked) for row in rows] == [
+        (f"{NAME}:BF16", NOT_UNIQUE),
+        (f"{NAME}:Q4_K_M", None),
+        (f"{NAME}:BF16", NOT_UNIQUE),
+    ]
+
+
 def test_a_missing_answer_with_an_ambiguous_row_one_pulls_nothing(tmp_path: Path):
     packages = [BF16_FILE, BF16_FOLDER, Q4]
     asker = _Recording({"pull": True})
