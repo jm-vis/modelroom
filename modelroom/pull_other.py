@@ -4,8 +4,10 @@
 with the rows of every *other* chosen machine, one list, headed by machine (`dialog.Choice(heading=True)`,
 the shape U6's own list uses). A row of a machine the run cannot reach over SSH has no daemon here to
 check or pull for: the choice only ever hands back a **command to paste elsewhere**, never a POST --
-`modelroom pull` (A4) is what runs it, on the machine it names. A machine this user already read over
-SSH (`remote_store.aliases`) is left out: FR-B1 offers it its own way.
+`modelroom pull` (A4) is what runs it, on the machine it names. Only the run's **active** SSH target
+(`run.ssh_active`, B4) is left out: FR-B1 offers it its own way, `guided_remote.pull_remote_step`.
+Every other machine with a stored SSH alias but not connected this run is ranked here exactly like
+one without SSH at all -- its own handover line, nothing more (`pull_other.pull_other_skip`).
 
 The question is skipped outright where no other chosen machine has a single named row (A2): the
 list would only ever offer `none`. It is asked whether or not this machine itself has a row here --
@@ -65,10 +67,16 @@ def other_rows(
     return rows
 
 
-def pull_other_skip(pointer_path) -> frozenset[str]:
-    """Profile ids with a stored SSH alias (FR-B1's own way to offer them): the one place both the
-    step itself and the table's note (`views_install.py`) read this from, so they never disagree."""
-    return frozenset(remote_aliases(remote_path_for(pointer_path)))
+def pull_other_skip(pointer_path, active_alias: str | None = None) -> frozenset[str]:
+    """Only the **active** SSH target's profile id (B4, Codex r1 finding 10): it gets its own way
+    in, `guided_remote.pull_remote_step`. Every other machine with a stored SSH alias -- not
+    connected this run -- is ranked like a computer without SSH and belongs in this very list, so
+    `active_alias=None` (no active target at all) skips nothing. The one place both the step
+    itself and the table's note (`views_install.py`) read this from, so they never disagree."""
+    if active_alias is None:
+        return frozenset()
+    aliases = remote_aliases(remote_path_for(pointer_path))
+    return frozenset(profile_id for profile_id, alias in aliases.items() if alias == active_alias)
 
 
 def eligible_other_machines(
@@ -113,7 +121,7 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
     """Ask, then hand over the chosen row's command; nothing where nothing is eligible or chosen."""
     if context is None:
         return
-    skip = pull_other_skip(run.pointer_path)
+    skip = pull_other_skip(run.pointer_path, run.ssh_active)
     if not eligible_other_machines(context.document, context.machine, context.ambiguous, skip):
         return
     rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, skip)

@@ -9,13 +9,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from fixture_ssh import FakeSsh
+from fixture_ssh import FakeSsh, FaultSsh
 from modelroom.daemon import DaemonError, FixtureDaemon
 from modelroom.http import Response
 from modelroom.remote_client import SshDaemon, hello, profile, room
 from modelroom.remote_server import ServerContext
 from modelroom.room import RoomProbes
-from modelroom.ssh import SshError
+from modelroom.ssh import ProcessOutcome, SshError
 
 NOW = datetime(2026, 9, 30, tzinfo=timezone.utc)
 
@@ -104,6 +104,59 @@ def test_ssh_daemon_short_call_carries_status_and_body():
     answer = SshDaemon("gpu1", runner)("GET", "/api/tags")
     assert answer.status == 200
     assert json.loads(answer.body) == {"models": []}
+
+
+def test_ssh_daemon_and_the_read_only_calls_default_to_no_hardcoded_ssh_path():
+    """Codex r1 finding 5: a literal `ssh_path="ssh"` default would bypass `ssh.call`'s own
+    `which` resolution (its `ssh_path` parameter short-circuits it whenever it is not `None`), so
+    a missing `ssh` binary would raise an uncaught process-start error instead of the fixed `NO_SSH`
+    sentence. Every one of this module's own entry points must default to `None`, letting `call`
+    resolve it."""
+    import inspect
+
+    for func in (hello, profile, room):
+        assert inspect.signature(func).parameters["ssh_path"].default is None, func.__name__
+    assert SshDaemon("gpu1", FakeSsh(context=_context())).ssh_path is None
+
+
+def test_an_sshserror_from_a_pull_is_translated_to_daemonerror_not_left_uncaught():
+    """Codex r1 finding 5: the pull path in `guided_install.py` only ever catches `DaemonError`."""
+    runner = FaultSsh(ProcessOutcome(None, timed_out=True))
+    daemon = SshDaemon("gpu1", runner)
+    with pytest.raises(DaemonError):
+        daemon("POST", "/api/pull", {"model": "qwen3.5:9b"})
+
+
+def test_a_connection_lost_mid_pull_keeps_the_resumable_hint_through_daemonerror():
+    """Codex r1 finding 5: exit 255 after progress already arrived must carry the resumable
+    sentence, not the generic connection sentence, even once wrapped as a `DaemonError`."""
+    progress_line = json.dumps({"protocol": 1, "progress": {"status": "pulling manifest"}}).encode()
+    runner = FaultSsh(ProcessOutcome(255, stderr=b"kex_exchange_identification: read: reset"), lines=(progress_line,))
+    daemon = SshDaemon("gpu1", runner)
+    with pytest.raises(DaemonError, match="the same pull resumes"):
+        daemon("POST", "/api/pull", {"model": "qwen3.5:9b"})
+
+
+def test_ssh_daemon_pull_progress_streams_through_not_collected():
+    """Codex r1 finding 1/2: the progress callback is called as each `FakeSsh`-produced line
+    arrives -- proven by asserting the count inside the callback itself, before the call returns."""
+    lines = [
+        Response(200, {}, json.dumps({"status": "pulling manifest"}).encode()),
+        Response(200, {}, json.dumps({"status": "downloading", "total": 10, "completed": 3}).encode()),
+        Response(200, {}, json.dumps({"status": "success"}).encode()),
+    ]
+    body = b"\n".join(json.dumps(json.loads(line.body)).encode() for line in lines)
+    daemon_fixture = FixtureDaemon({("POST", "/api/pull"): Response(200, {}, body)})
+    runner = FakeSsh(context=_context(daemon=daemon_fixture))
+    seen: list[dict] = []
+
+    def progress(entry):
+        seen.append(entry)
+
+    SshDaemon("gpu1", runner)("POST", "/api/pull", {"model": "qwen3.5:9b"}, progress=progress)
+    assert len(seen) == 3
+    assert seen[0]["status"] == "pulling manifest"
+    assert seen[-1]["status"] == "success"
 
 
 def test_names_from_the_servers_tags_are_never_shown():

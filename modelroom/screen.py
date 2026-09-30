@@ -564,8 +564,13 @@ def install_pull_line(rank: int, name: str) -> Line:
     return [("class:note", f"#{rank}"), ("", "  "), ("class:command", f"ollama pull {name}")]
 
 
-def install_local_note(rank: int, dot: str = "·") -> Line:
-    """What stands under the install line when the first row is on this machine already."""
+def install_local_note(rank: int, dot: str = "·", where: str = "") -> Line:
+    """What stands under the install line when the row is already there. `where` is a `PullTarget`'s
+    own machine name (FR-B1, `"gpu1"`, empty for this machine); on another machine the hint about
+    step 4 -- this machine's own next run -- does not apply, so the row simply says where it is
+    local already, nothing more."""
+    if where:
+        return [("class:note", f"#{rank} is local already on {where}")]
     return [("class:note", f"#{rank} is local already {dot} say Yes in step 4 to measure it")]
 
 
@@ -576,16 +581,19 @@ PULL_CANCELED = "a canceled pull resumes with the same command"
 _GIB = 1024**3
 
 
-def pull_question(rank: int | None, weights_gib: float | None, name: str = "") -> str:
+def pull_question(rank: int | None, weights_gib: float | None, name: str = "", where: str = "") -> str:
     """The question after the card: the row, and what it weighs (the weights, not the memory need).
 
     `rank` is `None` outside a table (`modelroom pull`, A4): the question then names `name` instead
     of `#<rank>`. `weights_gib` is `None` where the download's size was never given at all (A4
-    without `--weights-bytes`), and the question then says nothing about its weight.
+    without `--weights-bytes`), and the question then says nothing about its weight. `where` is a
+    `PullTarget`'s own machine name (FR-B1, `"gpu1"`): `Pull #3 onto gpu1 now?`, in place of the
+    guided run's own `Pull #1 into Ollama now?`.
     """
     who = f"#{rank}" if rank is not None else name
     size = f" ({weights_gib:.1f} GB)" if weights_gib is not None else ""
-    return f"Pull {who} into Ollama now?{size}"
+    place = f"onto {where}" if where else "into Ollama"
+    return f"Pull {who} {place} now?{size}"
 
 
 def pull_progress_text(line: dict) -> str:

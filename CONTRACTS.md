@@ -2921,69 +2921,6 @@ that names neither a path of the user account nor a value of the file.
 }
 ```
 
-### Shared folder (FR-S, `modelroom/guided_share.py`, GF question 7 (c))
-
-A folder of export files a computer without SSH drops profiles into and reads them back from, for
-a laptop and a server too far apart for a direct connection. Where it is, read only by
-`guided_share.share_folder(environ, store)`, in this order: the environment variable
-`MODELROOM_PROFILE_SHARE` when it is set and not empty (an empty variable counts as unset
-everywhere), else `profile_share` of `remote.json`, else none. Nothing this module writes carries
-the path further than `remote.json` and this step's own screen ("Remote machines").
-
-**Row 5 of the machine list** ("Guided mode", step 1) is always there, whatever the folder holds:
-`set up a shared folder for profiles` with no folder, `profiles from the shared folder` with one
-(stored or from the environment). It never reads the folder -- an unreachable network drive must
-not hold up a run that never opens this step.
-
-**The step, "Shared folder"** (value `share`, a `Choice` of the machine list's own checkbox --
-shown once, there, never repeated as an interactive note beside it). Its head names the stand --
-`none set yet`, the stored path, or `set by environment (MODELROOM_PROFILE_SHARE)` without a path
--- then one choice (`share_setup`): `use` (only where a folder is there, stored or from the
-environment) takes profiles from it; `choose`/`change the folder` asks a path (grayed out, with the
-reason, while the environment wins) and, once typed (`share_folder`): checked for form (after
-`expanduser`, absolute, not empty, no NUL, at most 1024 characters, no Windows device or pipe
-prefix `\\.\`/`\\?\` -- a write there could open a pipe instead of a file), then for writing (a
-probe file, created exclusively; a write or close that fails after the create still removes it, a
-create that fails outright never deletes anything that was already there; a leftover probe file
-that could not be removed is a note, the folder counts all the same), stored as typed (never
-`resolve`d) on success; `none` **while the environment is set skips this run only, and leaves a
-stored folder exactly as it was** -- the environment always wins, so clearing storage under it
-would be a promise the run cannot keep; without the environment it clears a stored folder. A form
-or write problem asks the question again at a terminal, ends the step on an empty answer, and is
-`AnswerInvalidError` (exit `2`) from an answer file, the same shape as `_allowed_folder` above.
-`store.profile_share` itself is read in exactly one place, `share_folder`; everything else that
-needs to know the stored value alone calls `share_folder({}, store)` (no variable can win against
-an empty environment), never the field.
-
-**Reading the folder**, on `use` or a successful `choose`: every `*.json` directly in it (never a
-subfolder), at most 200 files -- a file beyond that count is left alone, not even opened. Each is
-read as an export of at most `max_bytes + 1` bytes (16 MiB the limit; never the whole file, however
-large), and one over it counts as broken, exactly like a file that does not parse or does not
-validate (`ExportTooLargeError`, a `StoredFileError`). An unreadable folder is `the shared folder
-cannot be read now; nothing was imported from it`, the run goes on; files that do not read as an
-export are one note with their count; one row per `profile_id` (`share_files`, a checkbox),
-described from the file with the newest `recorded_at`, never from a file name, and never from a
-`display_name` that is not itself neutral (`neutral.display_name_for`, the FR-N sink's own fallback
--- a foreign export whose source forgot to neutralize is shown, answered and named in a failure
-sentence under its neutral name, never the one the file actually carries).
-
-**Importing a chosen `profile_id`**: every readable export of it, oldest `recorded_at` first (ties
-by file name), each through the unchanged `import_profile` with `expected_profile_id` and
-`max_bytes` (16 MiB). Both are checked on the object it actually reads, before it is planned, so a
-file that changed after it was listed -- a different profile now, or grown past the limit -- is
-`StaleExportError` (an `ImportConflictError`) either way. The two checks do not depend on each
-other: `read_export_file(..., max_bytes=...)` alone (no `expected_profile_id`, the plain listing's
-own use) still raises `ExportTooLargeError` for an oversized file, a `StoredFileError`; it is
-`import_profile(..., max_bytes=...)` that turns that `ExportTooLargeError` into `StaleExportError`,
-on `max_bytes` alone -- `expected_profile_id` plays no part in that particular translation, it only
-adds its own, separate `StaleExportError` for a `profile_id` that no longer matches. Every exception
-is one of three fixed sentences, none of them naming the file: `a file in the shared folder changed
-after it was listed` (either check above), `a file of <name> in the shared folder contradicts one
-imported before` (any other conflict -- a contradicting measurement, most often), `a file of <name>
-in the shared folder could not be imported` (everything else); `<name>` is the neutral name as well.
-One file's failure never stops the others of the same `profile_id`, or the next `profile_id`. Herkunft `imported`, the
-same as `import a profile file`.
-
 ### Neutral names
 
 **No file of modelroom carries a machine name** (AP9-FR, FR-N: nothing about the machines of whoever
@@ -3092,11 +3029,13 @@ RemoteCommand=none -o RequestTTY=no -o LogLevel=ERROR -- <alias> <program> remot
 program tried as `modelroom` first and, on exit 127 with no protocol line, once more as
 `~/.local/bin/modelroom`. All request data travels as **one JSON object on stdin**, then stdin is
 closed (EOF); nothing about the request ever reaches argv. The gegenstelle (`modelroom/
-remote_server.py`) reads at most 1 MiB of it (`profile`/`candidates` 16 MiB, FR-B2), writes JSON
-lines to stdout and nothing to the disk of the machine it runs on (Ollama's own pull writes
-excepted), and exits `0` whether or not the call itself succeeded -- a fault is an `error` line,
-never a process exit code; exit codes 127/2/255 are read by the caller only for the pre-checks
-(program missing, too old, connection/host-key/login) before any line is trusted.
+remote_server.py`) reads at most `MAX_INPUT_BYTES`, 1 MiB, of it -- the same bound for every op
+this module answers (`hello`, `profile`, `room`, `daemon`); `candidates`/`measure` are FR-B2's own
+ops, no part of this module, and will need their own limit -- writes JSON lines to stdout and
+nothing to the disk of the machine it runs on (Ollama's own pull writes excepted), and exits `0`
+whether or not the call itself succeeded -- a fault is an `error` line, never a process exit code;
+exit codes 127/2/255 are read by the caller only for the pre-checks (program missing, too old,
+connection/host-key/login) before any line is trusted.
 
 **The envelope.** Every line is one JSON object, `{"protocol": 1, <exactly one of "progress",
 "result", "error">}`. `progress`: zero or more, before the end. `result`: at most one, the last
@@ -3188,7 +3127,9 @@ op), named by the alias, never a path; a second, fresh `room` reading precedes i
 question, `Pull #<rank> onto <alias> now? (<size>)` (`pull_remote`, default No, optional), with the
 same disk check, the same digest proof (over `SshDaemon`, `local already on <alias>`) and the same
 success line (`✓ Pulled <name> · <size> · on <alias>`) the guided run's own pull uses, through the
-unchanged `PullTarget`/`pull_chosen` machinery (`where=" on <alias>"`).
+unchanged `PullTarget`/`pull_chosen` machinery (Codex r1 finding 9: the same chain end to end, no
+separate implementation) -- `where=<alias>`, bare; the "on"/"onto" wording is `pull_question`'s and
+`install_local_note`'s own, not part of the field.
 
 **What `remote.json`/a file never carries** (B6): `HostName`, address, user name, port, key path,
 jump host, ssh's own stderr, the server's own text (error, Ollama's), its paths and drive, its
@@ -3197,6 +3138,70 @@ export, and this computer's own name (live in the start line only, FR-N). The al
 thing kept, as `display_name`, as the machine key, and in `remote.json`. **Grenze:** if the alias
 *is* the server's real short name, that name stands in the folder -- `ALIAS_RE` blocks an address
 or a domain, not a user's own naming choice; README and the question text ask for a neutral one.
+
+#### Shared folder (FR-S, `modelroom/guided_share.py`, GF question 7 (c))
+
+The other way of reading another computer, for a laptop and a server too far apart for a direct
+`ssh` connection: a folder of export files a computer without SSH drops profiles into and reads
+them back from. Where it is, read only by `guided_share.share_folder(environ, store)`, in this
+order: the environment variable `MODELROOM_PROFILE_SHARE` when it is set and not empty (an empty
+variable counts as unset everywhere), else `profile_share` of `remote.json`, else none. Nothing
+this module writes carries the path further than `remote.json` and this step's own screen ("Remote
+machines").
+
+**Row 5 of the machine list** ("Guided mode", step 1) is always there, whatever the folder holds:
+`set up a shared folder for profiles` with no folder, `profiles from the shared folder` with one
+(stored or from the environment). It never reads the folder -- an unreachable network drive must
+not hold up a run that never opens this step.
+
+**The step, "Shared folder"** (value `share`, a `Choice` of the machine list's own checkbox --
+shown once, there, never repeated as an interactive note beside it). Its head names the stand --
+`none set yet`, the stored path, or `set by environment (MODELROOM_PROFILE_SHARE)` without a path
+-- then one choice (`share_setup`): `use` (only where a folder is there, stored or from the
+environment) takes profiles from it; `choose`/`change the folder` asks a path (grayed out, with the
+reason, while the environment wins) and, once typed (`share_folder`): checked for form (after
+`expanduser`, absolute, not empty, no NUL, at most 1024 characters, no Windows device or pipe
+prefix `\\.\`/`\\?\` -- a write there could open a pipe instead of a file), then for writing (a
+probe file, created exclusively; a write or close that fails after the create still removes it, a
+create that fails outright never deletes anything that was already there; a leftover probe file
+that could not be removed is a note, the folder counts all the same), stored as typed (never
+`resolve`d) on success; `none` **while the environment is set skips this run only, and leaves a
+stored folder exactly as it was** -- the environment always wins, so clearing storage under it
+would be a promise the run cannot keep; without the environment it clears a stored folder. A form
+or write problem asks the question again at a terminal, ends the step on an empty answer, and is
+`AnswerInvalidError` (exit `2`) from an answer file, the same shape as `_allowed_folder` above.
+`store.profile_share` itself is read in exactly one place, `share_folder`; everything else that
+needs to know the stored value alone calls `share_folder({}, store)` (no variable can win against
+an empty environment), never the field.
+
+**Reading the folder**, on `use` or a successful `choose`: every `*.json` directly in it (never a
+subfolder), at most 200 files -- a file beyond that count is left alone, not even opened. Each is
+read as an export of at most `max_bytes + 1` bytes (16 MiB the limit; never the whole file, however
+large), and one over it counts as broken, exactly like a file that does not parse or does not
+validate (`ExportTooLargeError`, a `StoredFileError`). An unreadable folder is `the shared folder
+cannot be read now; nothing was imported from it`, the run goes on; files that do not read as an
+export are one note with their count; one row per `profile_id` (`share_files`, a checkbox),
+described from the file with the newest `recorded_at`, never from a file name, and never from a
+`display_name` that is not itself neutral (`neutral.display_name_for`, the FR-N sink's own fallback
+-- a foreign export whose source forgot to neutralize is shown, answered and named in a failure
+sentence under its neutral name, never the one the file actually carries).
+
+**Importing a chosen `profile_id`**: every readable export of it, oldest `recorded_at` first (ties
+by file name), each through the unchanged `import_profile` with `expected_profile_id` and
+`max_bytes` (16 MiB). Both are checked on the object it actually reads, before it is planned, so a
+file that changed after it was listed -- a different profile now, or grown past the limit -- is
+`StaleExportError` (an `ImportConflictError`) either way. The two checks do not depend on each
+other: `read_export_file(..., max_bytes=...)` alone (no `expected_profile_id`, the plain listing's
+own use) still raises `ExportTooLargeError` for an oversized file, a `StoredFileError`; it is
+`import_profile(..., max_bytes=...)` that turns that `ExportTooLargeError` into `StaleExportError`,
+on `max_bytes` alone -- `expected_profile_id` plays no part in that particular translation, it only
+adds its own, separate `StaleExportError` for a `profile_id` that no longer matches. Every exception
+is one of three fixed sentences, none of them naming the file: `a file in the shared folder changed
+after it was listed` (either check above), `a file of <name> in the shared folder contradicts one
+imported before` (any other conflict -- a contradicting measurement, most often), `a file of <name>
+in the shared folder could not be imported` (everything else); `<name>` is the neutral name as well.
+One file's failure never stops the others of the same `profile_id`, or the next `profile_id`. Herkunft `imported`, the
+same as `import a profile file`.
 
 ### Migration to schema 2
 

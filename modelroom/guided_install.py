@@ -40,7 +40,7 @@ from .room import Disk, free_disk, gb, pull_need_bytes
 from .screen import PULL_CANCELED as CANCELED_LINE
 from .screen import Screen
 from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
-from .screen import pulled_line, yes_no
+from .screen import DEFAULT_PULLED_HINT, pulled_line, yes_no
 from .views import INSTALL_LABEL, install_target
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -109,9 +109,13 @@ class PullTarget:
     `_is_local`, `_holds`, `_pull` and `_send` read; no helper reads a `GuidedRun` any more.
 
     `disk` is measured again right when it is checked (U8): a callable, not a value, so a target
-    built once still reads the free disk of the moment it is asked. `where` names the machine in a
-    message that is not about this one (`" on gpu1"`, FR-B1); the guided run's own row and A4 both
-    say nothing extra (`""`, the default).
+    built once still reads the free disk of the moment it is asked. `where` names the machine a
+    message is not about this one (the bare name, `"gpu1"`, FR-B1) -- `pull_chosen`, `_disk_allows`,
+    `pull_question`, `install_local_note` and the success line all read it to say "on gpu1"/"onto
+    gpu1" instead of "into Ollama"/"this machine"; the guided run's own row and A4 both say nothing
+    extra (`""`, the default). `key` is the answer file's key for the yes/no question (`_wants_pull`):
+    `"pull"` (`KEY`, the default) for this machine's own row and A4, `"pull_remote"` for FR-B1's --
+    two distinct keys, since a run can ask both in the same answer file.
     """
 
     daemon: Daemon
@@ -121,6 +125,7 @@ class PullTarget:
     asker: Asker | None
     failed: Callable[[str], None]
     where: str = ""
+    key: str = KEY
 
 
 def pull_target_from_run(run: "GuidedRun") -> PullTarget:
@@ -178,12 +183,12 @@ def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: boo
     """
     target = target if isinstance(target, PullTarget) else pull_target_from_run(target)
     if _is_local(target, first) if local is None else local:
-        target.screen.write(label_line(INSTALL_LABEL, install_local_note(first.rank, target.screen.glyphs.dot)))
+        target.screen.write(label_line(INSTALL_LABEL, install_local_note(first.rank, target.screen.glyphs.dot, target.where)))
         return
     target.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name)))
     if not _disk_allows(target, first):
         return
-    question = pull_question(first.rank, first.weights_gib, first.name)
+    question = pull_question(first.rank, first.weights_gib, first.name, target.where)
     wants = _wants_pull(target, question)
     target.screen.answer(question, yes_no(wants))
     if wants:
@@ -193,7 +198,9 @@ def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: boo
 def _disk_allows(target: PullTarget, first: FirstRow) -> bool:
     """Measured again now (U8): enough disk asks; too little says so and asks nothing; unknown asks
     with a note. `first.needed_bytes` is `None` only where A4 was given no `--weights-bytes` at
-    all and no package (`cli_pull.py` skips this call then; its own note covers that case)."""
+    all and no package (`cli_pull.py` skips this call then; its own note covers that case).
+    `target.where` (FR-B1): `not enough disk on gpu1 for #3: ... free`, the machine named once, up
+    front, never repeated as `disk.drive` at the end the way this machine's own row says it."""
     disk = target.disk()
     if not disk.known:
         target.screen.note(DISK_UNKNOWN)
@@ -202,7 +209,10 @@ def _disk_allows(target: PullTarget, first: FirstRow) -> bool:
     if disk.free_bytes >= need:
         return True
     which = f" for #{first.rank}" if first.rank is not None else ""
-    said = f"not enough disk{which}: needs {gb(need)}, {gb(disk.free_bytes)} free on {disk.drive}"
+    if target.where:
+        said = f"not enough disk on {target.where}{which}: needs {gb(need)}, {gb(disk.free_bytes)} free"
+    else:
+        said = f"not enough disk{which}: needs {gb(need)}, {gb(disk.free_bytes)} free on {disk.drive}"
     target.screen.write(label_line(INSTALL_LABEL, [("class:note", said)]))
     return False
 
@@ -277,13 +287,14 @@ def _is_local(target: "PullTarget", first: FirstRow) -> bool:
 
 
 def _wants_pull(target: "PullTarget", question: str) -> bool:
-    """The `pull` answer, with `no` for an answer file that does not mention it.
+    """The `target.key` answer (`"pull"` here, `"pull_remote"` for FR-B1), with `no` for an answer
+    file that does not mention it.
 
     Optional like `load_test`, for the same reason: whether this question is reached depends on
     the machine -- its daemon, and what the daemon already holds -- not on the answer file.
     """
     try:
-        return target.asker.confirm(KEY, question, default=False)
+        return target.asker.confirm(target.key, question, default=False)
     except AnswerMissingError:
         return False
 
@@ -311,7 +322,8 @@ def _pull(target: "PullTarget", first: FirstRow, live: "LiveLine | None") -> Non
     if problem is not None:
         target.failed(problem)
         return
-    target.screen.write(pulled_line(first.name, first.weights_gib, target.screen.glyphs))
+    hint = f"on {target.where}" if target.where else DEFAULT_PULLED_HINT
+    target.screen.write(pulled_line(first.name, first.weights_gib, target.screen.glyphs, hint=hint))
 
 
 def _send(target: "PullTarget", first: FirstRow, live: "LiveLine | None") -> Response:

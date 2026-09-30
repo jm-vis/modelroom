@@ -548,8 +548,13 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     # run did not choose is added, the bound one included (Codex r2, finding 1). At a terminal `Enter`
     # takes the pointer row, so a terminal run always chooses one.
     machines = chosen_machines(config, picked, name, imported | ssh_ids | shared | entered)
-    run.ssh_active = resolve_active(run, config, config_file, scan_profiles(config.paths.hardware_dir), machines, ssh_alias)
-    origins = _origins(run, config, config_file, machines, picked, imported | shared, entered, ssh_ids)
+    run.ssh_active = resolve_active(
+        run, config, config_file, scan_profiles(config.paths.hardware_dir), machines, ssh_alias, "ssh" in picked
+    )
+    # Every machine with a stored SSH alias, active or not this run (Codex r1 finding 10) -- not
+    # only the ones that arrived just now (`ssh_ids`), which a re-chosen stored profile never is.
+    all_ssh_ids = set(ssh_aliases_of(remote_path_for(run.pointer_path)))
+    origins = _origins(run, config, config_file, machines, picked, imported | shared, entered, all_ssh_ids)
     run.selection = replace(run.selection, machines=machines, origins=origins)
     return config
 
@@ -706,7 +711,7 @@ def _render_step(
     live.update(active_room(run, document))  # B5: the active SSH machine's own room, if it has a table here
     # A3 (AP9-FR): the other machines `pull_other_step` will list a row for, after this table --
     # computed once, here, so the note under a table and the list that may follow never disagree.
-    other_machines = eligible_other_machines(document, here, context.ambiguous, pull_other_skip(run.pointer_path))
+    other_machines = eligible_other_machines(document, here, context.ambiguous, pull_other_skip(run.pointer_path, run.ssh_active))
     view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines, ssh_active=run.ssh_active)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context

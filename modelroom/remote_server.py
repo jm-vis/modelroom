@@ -1,11 +1,19 @@
 """The gegenstelle `modelroom remote <op>` (AP9-FR, FR-B1, B2): what runs on the other computer.
 
-Not interactive: reads exactly one JSON object from stdin (at most `MAX_INPUT_BYTES`), writes JSON
-lines to stdout, and writes nothing to the disk of the machine it runs on -- except what Ollama
-itself writes during a pull. Every line is one envelope object, `{"protocol": 1, <one of "progress",
-"result", "error">}` (CONTRACTS.md, "The remote protocol v1"); free text of this machine -- its own
-error text, a foreign package name, its host name -- never stands in one, because nothing here reads
-`socket.gethostname()` or forwards a caught exception's own message to the wire.
+Not interactive: reads at most `MAX_INPUT_BYTES` from stdin (never more, even off a stream that
+keeps sending -- `read_request` is handed an already-bounded read, `cli_remote.py`'s own job),
+writes JSON lines to stdout **as each one is ready, not collected** (Codex r1 finding 1: a pull's
+`progress` lines reach the pipe while Ollama is still sending them, through the same callback
+`daemon.py`'s own streaming reader already calls per line), and writes nothing to the disk of the
+machine it runs on -- except what Ollama itself writes during a pull. Every line is one envelope
+object, `{"protocol": 1, <one of "progress", "result", "error">}` (CONTRACTS.md, "The remote
+protocol v1"); free text of this machine -- its own error text, a foreign package name, its host
+name -- never stands in one, because nothing here reads `socket.gethostname()` or forwards a caught
+exception's own message to the wire.
+
+Every request is validated against its own strict Pydantic model first (`remote_protocol.py`,
+Codex r1 finding 4) -- a missing, extra or mis-typed field is `bad_request` before anything about
+it is read a second time, by hand.
 
 `candidates`/`measure` are FR-B2's own ops; this module answers only `hello`, `profile`, `room` and
 `daemon` (0.1.0's four verbs plus the fixed HTTP allowlist `daemon.py` already has). `main()` is the
@@ -16,18 +24,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
 
-from .contracts import PROFILE_ID_RE
+from . import remote_protocol
 from .daemon import ALLOWED_CALLS, Daemon, DaemonError, LocalDaemon
 from .llmfit import read_llmfit_reference
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware, read_os_identity
 from .measurements import EXPORT_SCHEMA_VERSION, ExportObject
 from .neutral import neutral_version
-from .profile import MACHINE_CLASSES, os_fingerprint
+from .profile import os_fingerprint
 from .pull_choice import PULL_NAME_RE
 from . import room as room_module
 from .room import RoomProbes, free_disk, free_vram_mib
@@ -46,6 +55,8 @@ ERROR_CALL_REFUSED = "call_refused"
 ERROR_OLLAMA_UNREACHABLE = "ollama_unreachable"
 ERROR_TOO_LARGE = "too_large"
 ERROR_INTERNAL = "internal"
+
+Write = Callable[[bytes], None]
 
 
 class RemoteRequestError(Exception):
@@ -84,7 +95,10 @@ def _progress(payload: dict) -> bytes:
 
 
 def read_request(stdin: bytes) -> dict:
-    """The one JSON object of the call, or `RemoteRequestError` (`too_large`/`bad_request`)."""
+    """The one JSON object of the call, or `RemoteRequestError` (`too_large`/`bad_request`).
+    `stdin` is expected already bounded to at most `MAX_INPUT_BYTES + 1` by the caller
+    (`cli_remote.run_remote` reads no more than that) -- checked again here regardless, so this
+    function is safe to call with an unbounded buffer too (every test that builds one by hand)."""
     if len(stdin) > MAX_INPUT_BYTES:
         raise RemoteRequestError(ERROR_TOO_LARGE)
     try:
@@ -94,6 +108,13 @@ def read_request(stdin: bytes) -> dict:
     if not isinstance(payload, dict):
         raise RemoteRequestError(ERROR_BAD_REQUEST)
     return payload
+
+
+def _validated_request(op: str, payload: dict) -> dict:
+    try:
+        return remote_protocol.validate_request(op, payload)
+    except ValueError:
+        raise RemoteRequestError(ERROR_BAD_REQUEST) from None
 
 
 def hello_result(context: ServerContext) -> dict:
@@ -117,12 +138,8 @@ def _ollama_reachable(daemon: Daemon) -> bool:
 
 
 def profile_result(payload: dict, context: ServerContext) -> dict:
-    profile_id = payload.get("profile_id")
-    if not isinstance(profile_id, str) or not PROFILE_ID_RE.fullmatch(profile_id):
-        raise RemoteRequestError(ERROR_BAD_REQUEST)
+    profile_id = payload["profile_id"]
     machine_class = payload.get("machine_class")
-    if machine_class is not None and machine_class not in MACHINE_CLASSES:
-        raise RemoteRequestError(ERROR_BAD_REQUEST)
     reference = read_llmfit_reference(context.probes.runner, _DEFAULT_LLMFIT_MIN_VERSION)
     measured: MeasuredHardware = measure_hardware(
         context.probes.platform, context.probes.runner, context.probes.read_text, context.probes.memory_bytes,
@@ -134,7 +151,7 @@ def profile_result(payload: dict, context: ServerContext) -> dict:
 
 
 def room_result(payload: dict, context: ServerContext) -> dict:
-    cards = _cards(payload.get("cards"))
+    cards = [tuple(card) for card in payload.get("cards", [])]
     disk = free_disk(context.room)
     graphics = free_vram_mib(context.room, cards) if cards else None
     return {
@@ -143,43 +160,30 @@ def room_result(payload: dict, context: ServerContext) -> dict:
     }
 
 
-def _cards(value: object) -> list[tuple[int, str | None]]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise RemoteRequestError(ERROR_BAD_REQUEST)
-    cards: list[tuple[int, str | None]] = []
-    for entry in value:
-        if not (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], int) and isinstance(entry[0], bool) is False):
-            raise RemoteRequestError(ERROR_BAD_REQUEST)
-        name = entry[1]
-        if name is not None and not isinstance(name, str):
-            raise RemoteRequestError(ERROR_BAD_REQUEST)
-        cards.append((entry[0], name))
-    return cards
-
-
 PULL_PATH = "/api/pull"
 _STATUS_STAGES = ("pulling manifest", "verifying sha256 digest", "writing manifest", "success")
+_DIGEST_STAGE_RE = re.compile(r"^pulling [0-9a-f]{64}$")
 
 
 def _pull_status(status: object) -> str:
-    if isinstance(status, str) and (status in _STATUS_STAGES or status.startswith("pulling ")):
+    """One of Ollama's own fixed stages, or the digest stage with its exact 64-hex digest -- never
+    any other text after `pulling `, which could otherwise carry a server path or name through
+    (Codex r1 finding 4: the old check only looked at the prefix, not the whole of what followed it)."""
+    if isinstance(status, str) and (status in _STATUS_STAGES or _DIGEST_STAGE_RE.fullmatch(status)):
         return status
     return "working"
 
 
-def daemon_lines(payload: dict, context: ServerContext) -> list[bytes]:
-    method, path, body = payload.get("method"), payload.get("path"), payload.get("body")
-    if not isinstance(method, str) or not isinstance(path, str) or not (body is None or isinstance(body, dict)):
-        raise RemoteRequestError(ERROR_BAD_REQUEST)
+def daemon_lines(payload: dict, context: ServerContext, write: Write) -> None:
+    method, path, body = payload["method"], payload["path"], payload.get("body")
     if (method, path) not in ALLOWED_CALLS:
         raise RemoteRequestError(ERROR_CALL_REFUSED)
-    if (method, path) == ("POST", PULL_PATH) and not _safe_pull_body(body):
-        raise RemoteRequestError(ERROR_CALL_REFUSED)
     if (method, path) == ("POST", PULL_PATH):
-        return _pull_lines(context.daemon, body)
-    return _short_lines(context.daemon, method, path, body)
+        if not _safe_pull_body(body):
+            raise RemoteRequestError(ERROR_CALL_REFUSED)
+        _pull_lines(context.daemon, body, write)
+        return
+    _short_lines(context.daemon, method, path, body, write)
 
 
 def _safe_pull_body(body: dict | None) -> bool:
@@ -187,7 +191,7 @@ def _safe_pull_body(body: dict | None) -> bool:
     return isinstance(name, str) and PULL_NAME_RE.fullmatch(name) is not None
 
 
-def _short_lines(daemon: Daemon, method: str, path: str, body: dict | None) -> list[bytes]:
+def _short_lines(daemon: Daemon, method: str, path: str, body: dict | None, write: Write) -> None:
     try:
         answer = daemon(method, path, body)
     except DaemonError:
@@ -196,25 +200,26 @@ def _short_lines(daemon: Daemon, method: str, path: str, body: dict | None) -> l
         parsed = answer.json() if answer.body else None
     except ValueError:
         parsed = None
-    return [_result({"status": answer.status, "body": parsed})]
+    write(_result({"status": answer.status, "body": parsed}))
 
 
-def _pull_lines(daemon: Daemon, body: dict | None) -> list[bytes]:
-    lines: list[bytes] = []
+def _pull_lines(daemon: Daemon, body: dict | None, write: Write) -> None:
+    """Every progress line reaches `write` (the real stdout, flushed) the moment `daemon.py`'s own
+    streaming reader hands it to this callback -- nothing here waits for the pull to end before the
+    first byte leaves this process (Codex r1 finding 1)."""
 
     def follow(entry: dict) -> None:
         if "error" in entry:
-            lines.append(_progress({"error": True}))
+            write(_progress({"error": True}))
         else:
-            lines.append(_progress({k: entry[k] for k in ("total", "completed") if k in entry} | {"status": _pull_status(entry.get("status"))}))
+            counts = {k: entry[k] for k in ("total", "completed") if k in entry}
+            write(_progress({**counts, "status": _pull_status(entry.get("status"))}))
 
     try:
         answer = daemon("POST", PULL_PATH, body, progress=follow)
     except DaemonError:
         raise RemoteRequestError(ERROR_OLLAMA_UNREACHABLE) from None
-    done = _pull_done(answer.body)
-    lines.append(_result({"status": answer.status, "done": done}))
-    return lines
+    write(_result({"status": answer.status, "done": _pull_done(answer.body)}))
 
 
 def _pull_done(body: bytes) -> bool:
@@ -225,32 +230,36 @@ def _pull_done(body: bytes) -> bool:
     return isinstance(payload, dict) and payload.get("status") == "success"
 
 
-def dispatch(op: str, payload: dict, context: ServerContext) -> list[bytes]:
+def dispatch(op: str, payload: dict, context: ServerContext, write: Write) -> None:
     if op == "hello":
-        return [_result(hello_result(context))]
-    if op == "profile":
-        return [_result(profile_result(payload, context))]
-    if op == "room":
-        return [_result(room_result(payload, context))]
-    if op == "daemon":
-        return daemon_lines(payload, context)
-    raise RemoteRequestError(ERROR_BAD_REQUEST)
+        write(_result(hello_result(context)))
+    elif op == "profile":
+        write(_result(profile_result(payload, context)))
+    elif op == "room":
+        write(_result(room_result(payload, context)))
+    elif op == "daemon":
+        daemon_lines(payload, context, write)
+    else:
+        raise RemoteRequestError(ERROR_BAD_REQUEST)
 
 
-def main(op: str, stdin: bytes, context: ServerContext | None = None) -> tuple[list[bytes], int]:
-    """Every line this call writes, and its exit code (always `0`: a fault is an `error` line, not
-    a process exit code -- the SSH side (B1) reads exit codes only for the OS/protocol pre-checks
-    127/2/255, never for a call that ran and answered)."""
+def main(op: str, stdin: bytes, write: Write, context: ServerContext | None = None) -> int:
+    """Every line this call writes goes to `write`, one at a time, as it is ready. The exit code is
+    always `0`: a fault is an `error` line, not a process exit code -- the SSH side (B1) reads exit
+    codes only for the OS/protocol pre-checks 127/2/255, never for a call that ran and answered."""
     context = context if context is not None else ServerContext()
     try:
-        request = read_request(stdin)
-        if op not in OPS:
+        request = _validated_request(op, read_request(stdin)) if op in OPS else None
+        if request is None:
             raise RemoteRequestError(ERROR_BAD_REQUEST)
-        return dispatch(op, request, context), 0
+        dispatch(op, request, context, write)
+        return 0
     except RemoteRequestError as exc:
-        return [_error(exc.code)], 0
+        write(_error(exc.code))
+        return 0
     except Exception:  # noqa: BLE001 -- nothing of this machine's own text ever reaches the wire
-        return [_error(ERROR_INTERNAL)], 0
+        write(_error(ERROR_INTERNAL))
+        return 0
 
 
 __all__ = [
@@ -265,6 +274,7 @@ __all__ = [
     "REMOTE_VERSION",
     "RemoteRequestError",
     "ServerContext",
+    "Write",
     "daemon_lines",
     "dispatch",
     "hello_result",

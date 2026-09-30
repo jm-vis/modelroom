@@ -15,12 +15,11 @@ from modelroom.config import load_config
 from modelroom.daemon import FixtureDaemon
 from modelroom.dialog import AnswerMissingError, FileAsker
 from modelroom.guided import run_guided
-from modelroom.guided_remote import active_target
 from modelroom.http import Response
 from modelroom.measure import Probes
 from modelroom.remote_store import aliases as remote_aliases
 from modelroom.remote_store import read_remote, remote_path_for
-from modelroom.ssh import ProcessOutput, SshError
+from modelroom.ssh import ProcessOutcome, SshError
 
 from fixture_support import (
     LAPTOP_RAM_BYTES,
@@ -149,7 +148,7 @@ def test_another_fingerprint_asks_and_new_takes_a_fresh_id(tmp_path):
 
 
 def test_a_failed_connection_writes_nothing_and_the_run_goes_on(tmp_path):
-    ssh = FaultSsh(ProcessOutput([], 255, stderr=b"Permission denied"))
+    ssh = FaultSsh(ProcessOutcome(255, stderr=b"Permission denied"))
 
     code, lines, _asker = _run(tmp_path, {"ssh_alias": "gpu1"}, ssh=ssh)
 
@@ -159,21 +158,72 @@ def test_a_failed_connection_writes_nothing_and_the_run_goes_on(tmp_path):
     assert code == 1
 
 
-def test_an_invalid_alias_asks_nothing_more(tmp_path):
-    code, lines, _asker = _run(tmp_path, {"ssh_alias": "192.0.2.10"}, ssh=FaultSsh(ProcessOutput([], 0)))
+def test_an_invalid_alias_under_answers_is_exit_2_and_never_reaches_the_screen(tmp_path):
+    """Codex r1 finding 6: `--answers` (a `FileAsker`) gets `AnswerInvalidError` -- the fixed
+    sentence only, the invalid input itself never echoed or repeated anywhere."""
+    from modelroom.dialog import AnswerInvalidError
 
+    with pytest.raises(AnswerInvalidError) as excinfo:
+        _run(tmp_path, {"ssh_alias": "sentinel-host.example"}, ssh=FaultSsh(ProcessOutcome(0)))
+
+    assert "a host alias is a short name of your own" in str(excinfo.value)
+    assert "sentinel-host" not in str(excinfo.value)
     assert remote_aliases(remote_path_for(_pointer(tmp_path))) == {}
-    assert any("a host alias is a short name of your own" in line for line in lines)
+
+
+def test_an_invalid_alias_at_a_terminal_asks_again_without_echoing_it():
+    """Codex r1 finding 6: a terminal-shaped asker (not a `FileAsker`) is asked the alias question
+    again, and the invalid attempt never reaches the screen log in between -- `_ask_alias` tested
+    directly, with a minimal stand-in for the two fields it reads (`run.asker`, `run.screen`)."""
+    from modelroom.guided_remote import _ask_alias
+
+    answers = iter(["sentinel-host.example", "gpu1"])
+    notes: list[str] = []
+    screen_answers: list[tuple] = []
+
+    class _ReaskingAsker:
+        def text(self, key, question, default=""):
+            assert key == "ssh_alias"
+            return next(answers)
+
+    class _Screen:
+        def note(self, text):
+            notes.append(text)
+
+        def answer(self, question, value, **kw):
+            screen_answers.append((question, value))
+
+    class _Run:
+        asker = _ReaskingAsker()
+        screen = _Screen()
+
+    alias = _ask_alias(_Run())
+
+    assert alias == "gpu1"
+    assert notes == ["a host alias is a short name of your own, like gpu1 (letters, digits, dashes)"]
+    assert screen_answers == [("Host alias: your own short name for it in your SSH configuration", "gpu1")]
+    assert not any("sentinel-host" in note or "user@" in note for note in notes)
 
 
 # --- B4: the one active target -----------------------------------------------------------------
 
 
-def test_active_target_prefers_a_fresh_alias():
+def test_resolve_active_prefers_a_fresh_alias_and_never_falls_back(monkeypatch):
+    """Codex r1 finding 8: a run that entered a fresh alias this step stands or falls with it alone
+    -- `active_target` (the stored-target picker) must not even be consulted, whether the fresh
+    attempt succeeded or failed, so a failed fresh attempt can never fall back to a stored one."""
+    import modelroom.guided_remote as guided_remote
+
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("active_target must not be consulted when a fresh alias was attempted")
+
+    monkeypatch.setattr(guided_remote, "active_target", _must_not_be_called)
+
     class _Run:
         pass
 
-    assert active_target(_Run(), None, (), "gpu1") == "gpu1"
+    assert guided_remote.resolve_active(_Run(), None, None, None, (), "gpu1", True) == "gpu1"
+    assert guided_remote.resolve_active(_Run(), None, None, None, (), None, True) is None
 
 
 def test_a_stored_ssh_profile_picked_directly_is_checked_before_pull_and_measurement(tmp_path):
@@ -282,13 +332,22 @@ def test_the_free_line_names_the_disk_on_gpu1_without_a_path(tmp_path):
 
 
 def test_pull_remote_checks_the_disk_again_and_pulls_over_ssh(tmp_path):
+    # The first row this hardware fixture ranks for the default `FULL_ANSWERS` selection -- the
+    # same name `test_guided_install.py`'s `FIRST_NAME` pins for the identical Windows/NVIDIA
+    # fixture (`_measurable_context`'s own docstring).
+    first_name = "hf.co/unsloth/Qwen3.5-9B-GGUF:Q8_0"
     pull_body = b"\n".join(
         [json.dumps({"status": "pulling manifest"}).encode(), json.dumps({"status": "success"}).encode()]
     )
+    # `_pull` (reused unchanged, Codex r1 finding 9) reads `/api/tags` again after a pull to prove
+    # the daemon now lists what it just fetched (`pulled_problem`) -- so the second answer must show
+    # `first_name`, the way a real Ollama daemon's inventory would after a real pull.
+    tags_before = Response(200, {}, b'{"models": []}')
+    tags_after = Response(200, {}, json.dumps({"models": [{"name": first_name, "digest": "e" * 64}]}).encode())
     daemon = FixtureDaemon(
         {
             ("GET", "/api/version"): Response(200, {}, b"{}"),
-            ("GET", "/api/tags"): Response(200, {}, b'{"models": []}'),
+            ("GET", "/api/tags"): [tags_before, tags_after],
             ("POST", "/api/pull"): Response(200, {}, pull_body),
         }
     )
@@ -303,28 +362,42 @@ def test_pull_remote_checks_the_disk_again_and_pulls_over_ssh(tmp_path):
 
 
 def test_a_package_local_on_the_server_is_a_note_not_a_pull(tmp_path):
-    daemon = FixtureDaemon(
-        {("GET", "/api/version"): Response(200, {}, b"{}"), ("GET", "/api/tags"): Response(200, {}, b'{"models": []}')}
+    """Codex r1 finding 9: `pull_remote_step` reuses `pull_chosen` whole, including its
+    local-already branch -- proven directly on a `PullTarget` built the way `pull_remote_step`
+    builds one (`where="gpu1"`, `key="pull_remote"`, FR-B1), against a real daemon fixture
+    (`granite4.2:8b`, already local by its manifest digest -- `fixture_servers.pull_daemon`'s own
+    pinned `/api/tags` -- no monkeypatch of a private helper)."""
+    from fixture_servers import granite_ollama_package, pull_daemon
+    from modelroom.daemon import PULL_PATH
+    from modelroom.dialog import FileAsker
+    from modelroom.guided_install import FirstRow, PullTarget, pull_chosen
+    from modelroom.pull_choice import weights_bytes_of
+    from modelroom.screen import Screen
+
+    daemon = pull_daemon()
+    lines: list[str] = []
+    package = granite_ollama_package()
+    first = FirstRow(1, "granite4.2:8b", 5.0, package, weights_bytes_of(package))
+
+    def _disk_must_not_be_read():
+        raise AssertionError("a local package is a note, never checked against the disk")
+
+    def _must_not_fail(message):
+        raise AssertionError(message)
+
+    target = PullTarget(
+        daemon=daemon,
+        disk=_disk_must_not_be_read,
+        now=RUN1,
+        screen=Screen(lines.append, colored=False),
+        asker=FileAsker({}),
+        failed=_must_not_fail,
+        where="gpu1",
+        key="pull_remote",
     )
-    ssh = FakeSsh(context=_measurable_context(daemon=daemon))
-    _run(tmp_path, {"ssh_alias": "gpu1", "ssh_machine_class": "server"}, ssh=ssh)
-    config = load_config(_results(tmp_path) / "modelroom.toml")
 
-    import modelroom.guided_remote as guided_remote
-
-    original = guided_remote._held_on
-    try:
-        guided_remote._held_on = lambda daemon, name: True
-        ssh2 = FakeSsh(context=_measurable_context(daemon=daemon, now=RUN2))
-        code, lines, _asker = _run(
-            tmp_path,
-            {"machines": [f"profile:{config.machines['gpu1'].profile}"], "pull_remote": True},
-            ssh=ssh2,
-            now=RUN2,
-            machines=(f"profile:{config.machines['gpu1'].profile}",),
-        )
-    finally:
-        guided_remote._held_on = original
+    pull_chosen(target, first)
 
     assert any("is local already on gpu1" in line for line in lines)
     assert not any("onto gpu1" in line for line in lines)
+    assert not any(call[1] == PULL_PATH for call in daemon.calls)

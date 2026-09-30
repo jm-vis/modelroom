@@ -595,6 +595,7 @@ def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
         "render" if view.live is None
         else "this" if block.machine == view.install_for
         else "ssh" if block.machine == view.ssh_active
+        else "ssh_inactive" if view.origins.get(block.machine) == "ssh"
         else "other"
     )
     lines = _labeled(ROOM_LABEL, head_pieces(block, live, where), dot)

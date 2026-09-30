@@ -21,7 +21,7 @@ from modelroom.daemon import FixtureDaemon
 from modelroom.http import Response
 from modelroom.measure import Probes
 from modelroom.remote_server import ServerContext
-from modelroom.ssh import ProcessOutput, SshError
+from modelroom.ssh import ProcessOutcome, SshError
 
 from fixture_support import build_transport, guided_transport_mapping, offline_daemon, offline_servers, windows_probes
 from test_guided import FULL_ANSWERS, RUN1, _WatchingAsker, _pointer, _results
@@ -107,8 +107,8 @@ def test_a_run_over_ssh_leaves_no_sentinel_in_the_results_folder(tmp_path: Path)
 
 def test_ssh_stderr_with_a_sentinel_never_reaches_the_screen(tmp_path: Path):
     class _FaultRunner:
-        def run(self, argv, stdin, total, per_line, limits):
-            return ProcessOutput([], 255, stderr=f"unknown user {SENTINEL_USER} on {SENTINEL_HOST}".encode())
+        def run(self, argv, stdin, total, per_line, limits, on_line):
+            return ProcessOutcome(255, stderr=f"unknown user {SENTINEL_USER} on {SENTINEL_HOST}".encode())
 
     code, lines = _run(tmp_path, _FaultRunner())
 

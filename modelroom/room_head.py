@@ -23,7 +23,7 @@ from .reserve import old_default_hint
 from .room import UNCLEAR_REASON, LiveRoom, LoadedModel, disk_words, gb, graphics_words
 from .screen import JOIN_WIDTH
 
-Where = Literal["this", "other", "render", "ssh"]
+Where = Literal["this", "other", "render", "ssh", "ssh_inactive"]
 
 ROOM_LABEL = "room"
 LOADED_LABEL = "loaded"
@@ -45,7 +45,7 @@ def head_pieces(block: MachineRanking, live: LiveRoom | None, where: Where) -> l
         pieces = [_shared_piece(block)]
     else:
         pieces = [_graphics_piece(block), _memory_piece(block)]
-    return [*pieces, _disk_piece(live, where)]
+    return [*pieces, _disk_piece(live, where, block.machine)]
 
 
 def loaded_pieces(live: LiveRoom | None) -> list[str]:
@@ -119,11 +119,15 @@ def _shared_piece(block: MachineRanking) -> str:
     return f"shared memory {budget} ({ram:.1f} GB minus both reserves)"
 
 
-def _disk_piece(live: LiveRoom | None, where: Where) -> str:
-    """The free disk read for this machine, whichever it is; else the words of `where`."""
+def _disk_piece(live: LiveRoom | None, where: Where, machine: str = "") -> str:
+    """The free disk read for this machine, whichever it is; else the words of `where`. A stored
+    SSH machine that is not the active one this run (B4, Codex r1 finding 10) is never read live
+    at all -- its own line names it, not "another computer"."""
     disk = live.disk if live is not None else None
     if where == "ssh":
         return _ssh_disk_piece(disk)
+    if where == "ssh_inactive":
+        return f"disk unknown ({machine} not connected in this run)"
     if disk is not None and disk.known:
         return disk_words(disk)
     if where == "this":
