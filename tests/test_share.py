@@ -520,7 +520,7 @@ def test_import_errors_never_carry_the_path(tmp_path: Path):
     assert not any("older.json" in line or "newer.json" in line for line in lines)
 
 
-# --- the leak proofs (FR-S's own "Warum der Pfad nicht hinausgeht") -----------------------------
+# --- the leak proofs (FR-S's own "Why the path does not leave") ---------------------------------
 
 
 def test_the_stored_share_path_reaches_no_file_but_remote_json(tmp_path: Path):

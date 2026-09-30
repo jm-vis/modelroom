@@ -216,7 +216,7 @@ def share_step(run: "GuidedRun", config_file: Path, config: Configuration) -> tu
 
     Returns the configuration (changed only by an import) and the `profile_id`s this step chose --
     `_machines_step` folds them into the same "imported" bucket `_import_a_profile` fills, because
-    that is exactly what they are (Herkunft `imported`, the bau-brief's own words).
+    that is exactly what they are (origin `imported`).
     """
     store_path = remote_path_for(run.pointer_path)
     store = read_remote(store_path)

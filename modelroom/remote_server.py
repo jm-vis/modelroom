@@ -1,4 +1,4 @@
-"""The gegenstelle `modelroom remote <op>` (AP9-FR, FR-B1, B2): what runs on the other computer.
+"""The counterpart `modelroom remote <op>` (AP9-FR, FR-B1, B2): what runs on the other computer.
 
 Not interactive: reads at most `MAX_INPUT_BYTES` from stdin (never more, even off a stream that
 keeps sending -- `read_request` is handed an already-bounded read, `cli_remote.py`'s own job),

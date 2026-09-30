@@ -26,7 +26,7 @@ on the machine you want to size, and keep the files wherever you keep your notes
 
 ## Status
 
-Alpha, version 0.1.0, the first release (see `CHANGELOG.md`). The guided mode and the six
+Alpha, version 0.1.0, the first release (see `CHANGELOG.md`). The guided mode and the
 subcommands work end to end; the data shapes are versioned contracts (see `CONTRACTS.md`). Expect changes to the rendered layout and to the fit rules before a stable
 release. `CHANGELOG.md` lists what has landed. The branch `main` runs ahead of the release on
 PyPI: what `CHANGELOG.md` lists under "Unreleased" is in this repository and not yet in the
@@ -143,15 +143,16 @@ measured in this folder before, its profile is the first row (`this machine (com
 server, as measured 2026-09-28)`), so Enter alone keeps it and measures nothing; `measure again` is
 the row under it. The result covers exactly the machines you marked in this run.
 
-**Machine names.** No result file (`modelroom.toml`, `docs/`, `state/`) and no export file carries
-a host name. This computer is `computer-<random>` in `modelroom.toml` -- a key made once for your
-user account and kept in `~/.modelroom/remote.json` -- and `laptop-<id>` (by its class) in tables and
-`docs/`; another computer is `<class>-<id>`, and a machine entered by hand as well, whatever name you
-typed. The neutral key of this computer is the only value from `~/.modelroom` that appears in a
-results folder; your own state under `~/.modelroom` keeps the folders you chose, as you typed them,
-and never leaves your computer. A folder of 0.1.0 is renamed once, backups included, by the first
-command that writes to it (`machine renamed to server-3f9a0c21`); a script calling `fetch --machine
-<old name>` takes the new key. Only the start screen names this computer's host name, live.
+**Machine names** (FR-N). No result file (`modelroom.toml`, `docs/`, `state/`) and no export file
+carries a host name; the neutral key of this computer and your SSH aliases are the only values from
+`~/.modelroom` that appear there. Your own state under `~/.modelroom` keeps the folders you chose
+(results folders and the shared folder), as you typed them, and never leaves your computer. This
+computer is `computer-<random>` in `modelroom.toml` -- a key made once for your user account and kept
+in `~/.modelroom/remote.json` -- and `laptop-<id>` (by its class) in tables and `docs/`; another
+computer is `<class>-<id>`, or its alias over SSH. A machine entered by hand keeps no name you type
+either: it gets a neutral name the same way. A folder of 0.1.0 is renamed once, backups included, by
+the first command that writes to it (`machine renamed to server-3f9a0c21`); a script calling `fetch
+--machine <old name>` takes the new key. Only the start screen names this computer's host name, live.
 
 Where the results live is the first question of the step. A folder the last run used is offered
 first when you start in another one, with the pointer on it; the start screen already says `the
@@ -162,37 +163,75 @@ and offers `<home>/modelroom` instead.
 #### Another computer
 
 A folder can hold the profiles of several machines -- the laptop you sit at and a server you rent,
-say. There are five ways to get another computer into the result:
+say. A machine can be entered by hand (see above), or its profile brought over by hand: on that
+computer `modelroom hardware` and `modelroom export-profile`, then `import a profile file` here.
+Beyond that, there are three ways to reach another computer directly:
 
-1. **Run modelroom on that computer** and measure it there -- for a rented instance, over SSH.
-   This is the only way that measures a vLLM server as well.
-2. **Measure it there and bring the file here**: on that computer `modelroom hardware` and
-   `modelroom export-profile` (name the file after the neutral name the export already carries,
-   such as `server-3f9a0c21.json`, so nothing about the sending machine sits in the file name),
-   send the file over, and answer step 1 here with `import a profile file`.
-3. **Drop it in a shared folder**, for a computer without SSH: step 1 always offers `set up a
-   shared folder for profiles` (or, once one is set, `profiles from the shared folder`). A folder
-   on this computer, a network drive, or a cloud sync folder -- other computers leave their
-   `export-profile` files there (again best named after the profile's own neutral name), and this
-   run picks them up by machine, never by file name. The folder is set up once, in that step, and
-   kept per user account (`~/.modelroom/remote.json`, never in a results folder);
-   `MODELROOM_PROFILE_SHARE` overrides it for a script, without storing anything.
-4. **Enter it by hand** from its data sheet (`enter a machine by hand`).
-5. **Choose it at this computer, over SSH**, with modelroom 0.2.0 or newer and Ollama on the
-   server: step 1's row `a computer over SSH (its host alias)` asks for your own SSH alias for it
-   (`~/.ssh/config`), reads its profile, and lets step 5 check its free disk and pull the package
-   you choose for it in the list for another computer onto it -- checked, asked, one Yes --
-   without you ever running modelroom there by hand. Only
-   your alias is kept, in `~/.modelroom/remote.json`; a password prompt never appears, and a host
-   key modelroom does not already know stops the connection rather than accepting it.
+1. **Copy the command.** At the end of a run, step 5's **Which package should go onto another
+   computer?** hands you a line to paste on that machine: `modelroom pull <name>
+   --weights-bytes <n>` where modelroom is installed there too, else the plain `ollama pull <name>`.
+   Nothing is sent anywhere on its own; you paste it yourself.
+2. **A shared folder**, for a computer without SSH. Step 1's machine list always offers `set up a
+   shared folder for profiles` (once a folder is set, `profiles from the shared folder`). Choosing
+   it opens "Shared folder": `choose a folder` for a folder on this computer, a network drive such
+   as `Z:\profiles` or `\\nas\profiles`, or your cloud sync folder. modelroom checks at once that it
+   can write there, then keeps the folder for your user account in `~/.modelroom/remote.json`; a
+   later run then shows `profiles from the shared folder`, and the same step lets you change it
+   (`change the folder`) or forget it (`none, no shared folder`). The folder is only ever shown in
+   that step, never written into a results folder or an export. For a script,
+   `MODELROOM_PROFILE_SHARE` sets the folder and wins over the kept one; the step then says `set by
+   environment`. On the server, `modelroom hardware` and then `modelroom export-profile --config
+   <file> --out <share>/<file>.json` drop a profile there -- name the file after the export's own
+   neutral name, such as `server-3f9a0c21.json`, since that is what other computers pick it up by,
+   never the file name. An answer file for the guided mode is like a script: run only your own,
+   since its answers choose folders and paths.
+3. **Over SSH**, with modelroom 0.2.0 or newer and Ollama on the server. Step 1's row `a computer
+   over SSH (its host alias)` asks for your own SSH host alias for it (`~/.ssh/config`) -- a
+   neutral name of your own, such as `gpu1`, not the server's real one: modelroom keeps whatever you
+   type and cannot tell the difference. It reads the server's profile, and lets step 5 check its
+   free disk and pull the package you choose for it -- checked, asked, one Yes -- without you ever
+   running modelroom there by hand. It runs the system `ssh`, never asks for a password, and never
+   accepts a host key it does not already know.
+
+**Setting SSH up, once**, on Windows, macOS or Linux:
+
+- **Client.** Windows 10 1809 and newer, and Windows Server 2019 and newer, already carry the
+  OpenSSH client; otherwise install it from Settings, Optional features, OpenSSH Client.
+- **A key.** `ssh-keygen -t ed25519`, with a passphrase.
+- **An agent.** Windows: start the OpenSSH Authentication Agent service, then `ssh-add`. macOS:
+  `ssh-add --apple-use-keychain`. Linux: `ssh-add`.
+- **The public key on the server.** `ssh-copy-id gpu1` on macOS or Linux; on Windows, copy
+  `id_ed25519.pub`'s content into `~/.ssh/authorized_keys` on the server by hand -- on a Windows
+  server, that is the file OpenSSH keeps for the Administrators group,
+  `C:\ProgramData\ssh\administrators_authorized_keys`.
+- **The host alias**, in `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`):
+
+  ```
+  Host gpu1
+      HostName 192.0.2.10
+      User user
+      IdentityFile ~/.ssh/id_ed25519
+  # behind a jump host:
+  #   ProxyJump jump1   (with its own Host jump1 block, StrictHostKeyChecking yes)
+  ```
+
+- **The first connection, by hand.** `ssh gpu1` once, and check its host key when asked.
+- **modelroom on the server**, on the `PATH` of an SSH session: `uv tool install modelroom` and
+  `uv tool update-shell`; without that, modelroom falls back to `~/.local/bin/modelroom` once.
+
+**What is kept.** For an SSH computer: the alias, in `~/.modelroom/remote.json` and as the
+machine's name. For a shared folder: the folder you chose, in `~/.modelroom/remote.json` only.
+Nothing else about the connection, the files in the shared folder, or the other computer's name.
+Machine names throughout the result follow the same rule as this computer's own (see "Machine
+names" above).
 
 Every profile the folder already holds stands in step 1 as a row of its own and can be picked;
 the result shows only the ones you marked. A folder collects profiles through `import`, which checks
 the file's schema and its name; a file copied by hand into `state/hardware/` is taken up by the next
-run. modelroom itself never opens a network connection of its own to another computer: the shared
-folder is read and written like any local one, whatever the operating system mounted there for you
--- a network share or a cloud sync folder included -- and the only other way it reaches a second
-machine is the SSH way, through the system's own `ssh`, to the alias you named yourself.
+run. The shared folder is read and written like any local one, whatever the operating system mounted
+there for you -- a network share or a cloud sync folder included; the only way modelroom opens a
+network connection of its own to another computer is the SSH way, through the system's own `ssh`, to
+the alias you named yourself.
 
 ### Step 2, Packages
 
@@ -309,7 +348,7 @@ at the line to paste; step 4 of the next run measures it. Too little disk says s
 A row the daemon already has gets a note instead of the question. Rows that look alike name their
 repository under the table. A machine that is not this computer -- imported, entered by hand, or
 another profile of the folder -- says so on the card and in its table head, and gets its command to
-copy there: this run pulls only onto this one. Where that other machine's table has a package of its
+copy there, or, over SSH, the pull there. Where that other machine's table has a package of its
 own, step 5 also asks **Which package should go onto another computer?** afterwards -- even for a
 run that only ever imported that other machine and never measured or ranked this computer at all --
 with the rows of every other chosen machine under its own heading; choosing one hands over
@@ -342,8 +381,9 @@ from a TOML file instead (for a self-test or CI) -- `users` there is a number of
 needs `users` added (`users = 1` sizes for one person, as 0.1.0 did) -- and `modelroom --config <file>` works on that configuration rather than the
 remembered folder. See `CONTRACTS.md`, "Guided mode", for every question and its key.
 
-Six of the subcommands never ask anything; the guided mode is built on the same measurement, fetch
-and render. From a clone of this repository, after `uv sync --frozen`:
+The subcommands never ask anything, except `modelroom pull`, which asks once before it pulls unless
+`--yes` is given; the guided mode is built on the same measurement, fetch and render. From a clone
+of this repository, after `uv sync --frozen`:
 
 ```bash
 cp modelroom.example.toml modelroom.toml
@@ -382,7 +422,8 @@ cat docs/models.md
    with the reason, ones that do not fit under "No fit". Every computed number says
    `(computed)`, the measured speed says `(measured)`.
 
-`--config` is required by every subcommand above; there is no default path.
+`--config` is required by every subcommand that reads a results folder, and there is no default
+path; `pull` and `remote` read none.
 
 ### `modelroom pull`
 
@@ -419,7 +460,8 @@ stops at it instead of waiting.
 
 In your user account, outside every results folder, `~/.modelroom/guided.json` remembers the last
 folder and which profile is this computer in each, and `~/.modelroom/remote.json` holds this
-computer's neutral key. Neither is exported or copied into a results folder.
+computer's neutral key, your SSH aliases and the shared folder you set up (if any). Neither is
+exported or copied into a results folder.
 
 ## Publishers the search resolves
 
@@ -516,9 +558,9 @@ checked against the same list before it is followed. `HTTP_PROXY`, `HTTPS_PROXY`
 allowed request travels, never which targets are allowed; the local daemon is reached directly. Details: `CONTRACTS.md`, "Transport security and
 proxying".
 
-The one exception is a computer you name yourself, by its SSH host alias, in "Installing on
-another computer" below: modelroom then runs the system `ssh` to it, with your own SSH
-configuration and keys, never a password. It never connects anywhere else on its own.
+The one exception is a computer you name yourself, by its SSH host alias, in "Another computer"
+above: modelroom then runs the system `ssh` to it, with your own SSH configuration and keys, never
+a password. It never connects anywhere else on its own.
 
 ## Language choice
 

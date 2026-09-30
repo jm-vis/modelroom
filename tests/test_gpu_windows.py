@@ -108,7 +108,7 @@ def test_the_laptop_recording_counts_the_nvidia_card_and_shows_the_intel_graphic
 
 
 def test_the_laptop_without_nvidia_smi_shows_the_registry_size_and_counts_nothing():
-    """Handprobe 2 without llmfit: the NVIDIA card with 12 GB from the registry, `unconfirmed`, not counted."""
+    """Hand test 2 without llmfit: the NVIDIA card with 12 GB from the registry, `unconfirmed`, not counted."""
     reading = measure_gpu("win32", gpu_runner(**LAPTOP))
     intel, nvidia = reading.graphics
     assert (nvidia.memory_gib, nvidia.source, nvidia.usable, nvidia.counted) == (11.94, "registry", "unconfirmed", False)

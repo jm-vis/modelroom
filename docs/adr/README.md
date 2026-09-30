@@ -20,3 +20,4 @@ One line per decision; an ADR is immutable, a changed situation gets a new one t
 | [0010](0010-hybrid-architecture-age-and-pull-choice.md) | A hybrid architecture read, the age of a line, the publisher's repository a target, the package chosen, the room read live | accepted, 2026-09-28; partly superseded by 0012 |
 | [0011](0011-graphics-adapters-llmfit-fallback.md) | Graphics adapters of every vendor, llmfit as fallback, schema 4 extended without a step | accepted, 2026-09-28 |
 | [0012](0012-memory-reserve-and-table-head.md) | The memory reserve after the machine's size, the table head names the budget | accepted, 2026-09-29 |
+| [0013](0013-another-computer-three-ways-neutral-names.md) | Another computer: three ways in (copy the command, a shared folder, over SSH), a neutral name at every machine boundary | accepted, 2026-09-29 |

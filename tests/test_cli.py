@@ -845,6 +845,18 @@ def test_the_help_names_the_version_flag_next_to_answers(capsys):
     assert "--answers" in help_text
 
 
+def test_the_help_names_pull_as_the_one_subcommand_that_asks(capsys):
+    """FR-C: the subcommands never ask a question, except `pull` (README.md, "Without a
+    terminal"; CONTRACTS.md, "Guided mode") -- `--help`'s own description says so too.
+    `argparse` wraps the description to the terminal width, so the words are checked with
+    whitespace collapsed rather than as one exact line."""
+    with pytest.raises(SystemExit):
+        main(["--help"])
+
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "except pull, which asks once before it pulls unless --yes is given." in help_text
+
+
 def test_render_with_config_defaults_to_the_real_clock(tmp_path: Path):
     data = qwen35_example_config_dict(str(tmp_path / "state"), str(tmp_path / "models.md"))
     config = Configuration.from_dict(data)

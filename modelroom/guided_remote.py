@@ -139,7 +139,7 @@ def active_target(run: "GuidedRun", config: Configuration, machines: Sequence[st
 
 
 def verify_active(run: "GuidedRun", config: Configuration, config_file: Path, scan: ProfileScan, alias: str) -> bool:
-    """B4, "verbindlich vor jeder aktiven Nutzung" (binding before every active use): a stored
+    """B4, binding before every active use: a stored
     profile picked directly is checked against a live `hello` before room, pull or measurement ever
     use it. `True`: go on with `alias` (same profile, or a confirmed clone already re-imported under
     a fresh id -- the caller reads the folder again to see it). `False`: no further SSH action this run."""

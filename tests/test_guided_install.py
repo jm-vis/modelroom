@@ -422,7 +422,7 @@ def test_a_registry_package_counts_as_pulled_only_with_its_manifest_digest():
 def test_pull_target_carries_every_field_the_helpers_read(tmp_path: Path):
     """`_disk_allows`, `_is_local` and `_pull` read only `PullTarget`'s own seven fields -- a wrapper
     that raises `AttributeError` for anything else still lets a whole pull through (AP9-FR, the
-    Umbau of A4: `pull_chosen`, `_disk_allows`, `_is_local`, `_holds`, `_pull`, `_send` take it)."""
+    rebuild of A4: `pull_chosen`, `_disk_allows`, `_is_local`, `_holds`, `_pull`, `_send` take it)."""
     field_names = {field.name for field in dataclasses.fields(PullTarget)}
 
     class _OnlyDeclaredFields:

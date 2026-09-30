@@ -1,4 +1,4 @@
-"""`modelroom/remote_server.py` (FR-B1, B2): the gegenstelle, in-process -- no ssh, no real Ollama,
+"""`modelroom/remote_server.py` (FR-B1, B2): the counterpart, in-process -- no ssh, no real Ollama,
 no real machine. Every op answers the fixed envelope; nothing here writes to disk. `write` is
 called once per line, in order, as each is produced (Codex r1 finding 1) -- `_run` below collects
 them into a list purely for the test's own convenience, never inside the module under test.

@@ -698,7 +698,7 @@ def run_steps(work: Path) -> list[Step]:
     steps.append(_testset_step())
     steps += [Step(*step) for step in pull_steps(results, pointer, machine, first_lines, started)]
     steps += [Step(*step) for step in entered_steps(work, answers_toml, started + timedelta(minutes=2))]
-    steps.append(Step(*remote_step()))  # FR-B1: the gegenstelle, a real local process
+    steps.append(Step(*remote_step()))  # FR-B1: the counterpart, a real local process
     steps.append(_live_search_smoke())
     return steps
 

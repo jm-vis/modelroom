@@ -1,4 +1,4 @@
-"""The gegenstelle's own selftest step (AP9-FR, FR-B1): `modelroom remote hello`, run as a real
+"""The counterpart's own selftest step (AP9-FR, FR-B1): `modelroom remote hello`, run as a real
 local process (never in-process), stdin `{}`, stdout checked against the wire envelope.
 
 `scripts/selftest.py` stays without SSH itself (no alias, no `ssh` process): this is the one place

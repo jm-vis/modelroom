@@ -72,7 +72,7 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# --- requests (validated by the gegenstelle, `remote_server.py`) ----------------------------------
+# --- requests (validated by the counterpart, `remote_server.py`) ----------------------------------
 
 
 class HelloRequest(_Strict):

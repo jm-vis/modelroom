@@ -3028,7 +3028,7 @@ StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o Serv
 RemoteCommand=none -o RequestTTY=no -o LogLevel=ERROR -- <alias> <program> remote <op>`), the
 program tried as `modelroom` first and, on exit 127 with no protocol line, once more as
 `~/.local/bin/modelroom`. All request data travels as **one JSON object on stdin**, then stdin is
-closed (EOF); nothing about the request ever reaches argv. The gegenstelle (`modelroom/
+closed (EOF); nothing about the request ever reaches argv. The counterpart (`modelroom/
 remote_server.py`) reads at most `MAX_INPUT_BYTES`, 1 MiB, of it -- the same bound for every op this
 module answers (`hello`, `profile`, `room`, `daemon`, and `candidates`/`measure`, FR-B2, "Load test
 on the server" below; a `candidates`/`measure` request carries the run's own packages, so a very
@@ -3155,7 +3155,7 @@ this computer), and whose daemon actually answers on the server's `127.0.0.1:114
 
 ### Another computer (AP9-FR, FR-B1, "Guided mode" step 1 and step 5)
 
-**Aufnahme (step 1, row `ssh`, after `import a profile file`):** a host alias
+**Adding a machine over SSH (step 1, row `ssh`, after `import a profile file`):** a host alias
 (`ssh.ALIAS_RE`, `^[a-z0-9][a-z0-9-]{0,30}$`, no dot, no colon, no `@`, not all digits, and not in
 the shape of a neutral name so an alias and a neutral key can never collide), `hello`, the
 `profile_id` to measure under (the one `~/.modelroom/remote.json` already has for that alias when
@@ -3167,7 +3167,7 @@ expected_profile_id=profile_id)` from a temporary file, deleted after. A fault b
 nothing; a fault between (1) and (2) leaves
 `remote.json` pointing at a profile not (yet) in the folder -- read as absent until the same alias
 converges it on a later run, never a crash, never a rollback. The profile's `[machines.<name>]` key
-is the alias itself (`neutral.key_for`); Herkunft `ssh` (`selection.Origin`), ranked after `this`,
+is the alias itself (`neutral.key_for`); origin `ssh` (`selection.Origin`), ranked after `this`,
 before `imported`.
 
 **A changed fingerprint behind a known alias** (a rented machine replaced): the question `<alias>
@@ -3211,7 +3211,7 @@ on <alias> for #<rank>: needs <n> GB, <m> GB free`), the question `Pull #<rank> 
 jump host, ssh's own stderr, the server's own text (error, Ollama's), its paths and drive, its
 local model names and its `/api/ps` names, the shared folder's file names, a Rechnername out of an
 export, and this computer's own name (live in the start line only, FR-N). The alias is the one
-thing kept, as `display_name`, as the machine key, and in `remote.json`. **Grenze:** if the alias
+thing kept, as `display_name`, as the machine key, and in `remote.json`. **Limit:** if the alias
 *is* the server's real short name, that name stands in the folder -- `ALIAS_RE` blocks an address
 or a domain, not a user's own naming choice; README and the question text ask for a neutral one.
 
@@ -3276,7 +3276,7 @@ is one of three fixed sentences, none of them naming the file: `a file in the sh
 after it was listed` (either check above), `a file of <name> in the shared folder contradicts one
 imported before` (any other conflict -- a contradicting measurement, most often), `a file of <name>
 in the shared folder could not be imported` (everything else); `<name>` is the neutral name as well.
-One file's failure never stops the others of the same `profile_id`, or the next `profile_id`. Herkunft `imported`, the
+One file's failure never stops the others of the same `profile_id`, or the next `profile_id`. Origin `imported`, the
 same as `import a profile file`.
 
 ### Load test on the server (AP9-FR, FR-B2)
@@ -5335,7 +5335,7 @@ other module:
   r2); `Enter` takes what is marked, and the row under the pointer where nothing
   is marked. The pointer starts on the first row, unless a list that takes one row has a remembered
   answer: then it starts there, unmarked. `questionary` put a `select`'s default among the marked
-  options and drew it green while the pointer moved on (Befund 3); `dialog._bind_single_select` empties
+  options and drew it green while the pointer moved on (finding 3); `dialog._bind_single_select` empties
   the marks after the build, marks the pointer row alone on the space bar and takes the mark or the
   pointer row on `Enter`. `dialog._bind_space_marks_row` (a `checkbox` only) swaps the gray title of a
   `dim` row for its plain text while it is marked, and back when it is unmarked. With something
@@ -6060,7 +6060,7 @@ both go through `screen.install_name`, the one choke point that checks the patte
 is ever returned. A row this pattern rejects is indistinguishable from one with no name at all: `no
 safe pull name`, locked, no install line, no `POST`.
 
-**`PullTarget`** (AP9-FR, the Umbau of A4) carries what the choice, the disk check and the pull
+**`PullTarget`** (AP9-FR, the rebuild of A4) carries what the choice, the disk check and the pull
 itself need -- `daemon`, `disk` (a callable), `now`, `screen`, `asker`, `failed`, `where` -- so
 `modelroom pull` (below) reuses the same disk check and the same pull, error and success handling
 with no results folder and no configuration of its own. Behavior here is unchanged; see

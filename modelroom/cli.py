@@ -1,7 +1,8 @@
 """The `modelroom` command line: the guided mode, `fetch`, `hardware`, `render` and the rest.
 
 `modelroom` with no subcommand is the guided mode (`modelroom/guided.py`); the subcommands never
-ask a question. `main(argv)` is the real entry point (`[project.scripts]` in `pyproject.toml`); it takes
+ask a question, except `pull`, which asks once before it pulls unless `--yes` is given.
+`main(argv)` is the real entry point (`[project.scripts]` in `pyproject.toml`); it takes
 optional `transport`/`probes`/`pointer_path`/`now` keyword arguments purely for dependency
 injection in tests -- the real CLI never passes them, so it always uses `UrllibTransport()`,
 the real `Probes()` (this machine), the user's own pointer file and the real clock. Exit codes
@@ -99,7 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="modelroom",
         description=(
             "Without a subcommand: the guided mode, which asks, writes modelroom.toml and runs "
-            "hardware, fetch and render. The subcommands never ask a question."
+            "hardware, fetch and render. The subcommands never ask a question, except pull, "
+            "which asks once before it pulls unless --yes is given."
         ),
     )
     parser.add_argument(
@@ -170,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     remote_parser = subparsers.add_parser(
         "remote",
-        help="The gegenstelle of another computer's SSH way in (FR-B1): reads one JSON request from "
+        help="The counterpart of another computer's SSH way in (FR-B1): reads one JSON request from "
         "stdin, writes JSON answer lines to stdout. Not interactive; run by modelroom itself, over SSH.",
     )
     remote_parser.add_argument("op", choices=REMOTE_OPS, help="hello, profile, room, daemon, candidates, or measure")
@@ -218,7 +220,7 @@ def main(
         # No results folder and no configuration (A4): nothing here is swept, nothing bound.
         return run_pull(args.name, args.weights_bytes, args.yes, daemon=daemon, room=room, now=now, out=out)
     if args.command == "remote":
-        # The gegenstelle (B2): stdin/stdout only, no results folder, nothing swept, nothing bound.
+        # The counterpart (B2): stdin/stdout only, no results folder, nothing swept, nothing bound.
         return run_remote(args.op)
     parser.error(f"unknown command: {args.command}")
     return 2  # pragma: no cover - argparse.error already exits

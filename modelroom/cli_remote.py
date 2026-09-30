@@ -1,4 +1,4 @@
-"""`modelroom remote <op>`: the CLI entry point of the gegenstelle (AP9-FR, FR-B1, B2).
+"""`modelroom remote <op>`: the CLI entry point of the counterpart (AP9-FR, FR-B1, B2).
 
 Reads at most `remote_server.MAX_INPUT_BYTES + 1` bytes from stdin (never the whole of an
 unbounded stream before the size is judged, Codex r1 finding 2), hands them to

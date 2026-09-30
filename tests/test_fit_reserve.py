@@ -155,13 +155,13 @@ def test_a_shared_memory_size_fit_with_unknown_memory_is_no_fit():
 
 
 def test_an_explicit_reserve_of_8_computes_as_before():
-    """Bestand: 127.70 - 8.0 = 119.70, the pool of every folder 0.1.0 wrote."""
+    """Existing folders: 127.70 - 8.0 = 119.70, the pool of every folder 0.1.0 wrote."""
     fit = fit_from_parameters(_parameters_for(112.7), GpuPool((12.0,)), LAPTOP_RAM, _machine(8.0), CONTEXT)
     assert fit.pool_gib == pytest.approx(119.70)
     assert fit.fit_class == "tight"
 
 
 def test_a_profile_without_memory_stays_unknown_behind_the_gate():
-    """Bestand: the gate of the profile comes first; the reserve is never reached."""
+    """Existing folders: the gate of the profile comes first; the reserve is never reached."""
     fit = compute_fit_v2(_profile(None), _package(10.0, "Q4_K_M"), _unknown_base(), _scenario(), _machine(8.0))
     assert (fit.fit_class, fit.reason) == ("unknown", "physical RAM unknown")

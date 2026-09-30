@@ -2,7 +2,7 @@
 
 Runs after the local servers' own round (`local_servers.load_tests`), and only for `run.ssh_active`
 -- no other stored SSH profile is ever measured, and a run with no active target asks nothing at
-all (B4, GF question 6). Two calls to the gegenstelle (`remote_client.candidates`/`measure`) do the
+all (B4, GF question 6). Two calls to the counterpart (`remote_client.candidates`/`measure`) do the
 work; this module is the guided-mode glue: the packages of this run, the two questions
 (`load_test_remote`, `load_test_remote_packages`), the progress line, and the double sink pass on
 the answer before it is stored (FR-N, Codex r2-3).

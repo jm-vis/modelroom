@@ -504,7 +504,7 @@ def example_without_eurollm() -> dict:
     No recording of EuroLLM is in the repo, and a `FixtureTransport` raises at any URL it does not
     bind; everything else stays: two families, five packagers, the machines `workstation` (the
     writer) and `inference-server` (no profile). A test writes it as `modelroom.toml` with
-    `write_example_without_eurollm` (AP9-UX, "Paket-Repo und Fixtures").
+    `write_example_without_eurollm` (AP9-UX, "package repo and fixtures").
     """
     import tomllib
 

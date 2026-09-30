@@ -65,7 +65,7 @@ NOW = datetime(2026, 9, 30, tzinfo=timezone.utc)
 PROFILE_ID = "3f9a0c21d4e6b870"
 
 
-# --- server-level: candidates/measure at the gegenstelle (mirrors tests/test_remote_server.py) -----
+# --- server-level: candidates/measure at the counterpart (mirrors tests/test_remote_server.py) -----
 
 
 def _probes() -> Probes:
@@ -451,7 +451,7 @@ def test_no_candidate_asks_nothing(monkeypatch):
 
 
 def test_no_active_ssh_target_asks_nothing(monkeypatch):
-    """B4: "kein aktiver SSH-Rechner: keine Frage" -- `ssh_active` is `None`, so `candidates` is
+    """B4: no active SSH target means no question -- `ssh_active` is `None`, so `candidates` is
     never even called."""
     monkeypatch.setattr(grm, "ssh_candidates", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no active target")))
     run = _FakeRun(asker=_TrapAsker(), ssh_active=None)

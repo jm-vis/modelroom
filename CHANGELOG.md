@@ -102,6 +102,14 @@ All notable changes to this project are documented in this file. The format foll
   no active target, no question. Measured under the `profile_id` the alias is bound to (B3/B4); a
   purely local measurement is unchanged, through the same sink, no special case for the remote path.
 
+- **README and CLI text for another computer** (AP9-FR, FR-C; ADR 0013). The README's "Another
+  computer" section is rewritten around the three ways in (copy the command, a shared folder, over
+  SSH), the one-time SSH set-up, what is kept and where, and the machine-naming rule; the promise
+  "modelroom itself never connects to another computer" is gone, replaced with the one true
+  exception (the SSH way, to the alias the user named). Every other README and `cli.py` sentence
+  that counted the subcommands, or said all of them never ask a question or never install anywhere
+  but this computer, now names `pull` and `remote` as the exceptions they are.
+
 - **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
   `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).
   `hardware` reads each vendor's own source -- NVIDIA from `nvidia-smi` with the compute

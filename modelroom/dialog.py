@@ -373,7 +373,7 @@ def _wrap_list_lines(question) -> None:
 def _mark_pointer_line(question) -> None:
     """Draw the row under the pointer across the whole width (`cursor-line`), a gray row included.
 
-    It was bold only, and a `legacy` row not even that (Befund 2, 2026-09-28): the library puts the
+    It was bold only, and a `legacy` row not even that (finding 2, 2026-09-28): the library puts the
     terminal cursor on the pointer row, and a cursor line colors that row to the edge of the window.
     """
     from prompt_toolkit.filters import to_filter
@@ -411,7 +411,7 @@ def _bind_single_select(question) -> None:
     """A `select` only: nothing marked, the space bar marks the pointer row alone, `Enter` takes it.
 
     `questionary` puts its `default` into the marked options and draws it green, so the green stayed
-    on the remembered answer while the pointer moved (Befund 3, 2026-09-28). The marks are emptied
+    on the remembered answer while the pointer moved (finding 3, 2026-09-28). The marks are emptied
     after the question is built; the pointer stays on the remembered answer. The space bar marks the
     row under the pointer and drops every other mark, and on the marked row it unmarks it, as in a list
     that marks; `Enter` takes the marked row, else the pointer
