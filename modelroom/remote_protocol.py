@@ -99,14 +99,18 @@ class DaemonRequest(_Strict):
 class CandidatesRequest(_Strict):
     # The run's own packages (`pull_choice.run_packages`, B2): the server matches them against its
     # own `/api/tags` by digest, exactly as `loadtest.installed_candidates` does for this machine.
-    packages: list[Package] = Field(default_factory=list)
+    # Mandatory (Codex r1 minor 1): an empty run still sends `"packages": []`, never omits the key --
+    # every regular caller (`remote_client.candidates`) already does, so a missing key is a form
+    # fault, not a silently assumed empty list.
+    packages: list[Package]
 
 
 class MeasureRequest(_Strict):
     # The candidate this call measures, by identity (B2, Codex r2-3): never an installed name of
     # either side -- the server re-derives its own local name from `packages` and this identity.
     package_identity: tuple[StrictStr, StrictStr, StrictStr]
-    packages: list[Package] = Field(default_factory=list)
+    # Mandatory for the same reason as `CandidatesRequest.packages` above (Codex r1 minor 1).
+    packages: list[Package]
     scenario: Scenario
     profile_id: StrictStr = Field(pattern=PROFILE_ID_RE.pattern)
 
@@ -179,7 +183,10 @@ class PackageIdentity(_Strict):
 
 class CandidatesResult(_Strict):
     # Identity only (B2, Codex r2-3): never the installed name the server holds a candidate under.
-    candidates: list[PackageIdentity] = Field(default_factory=list)
+    # Mandatory (Codex r1 minor 1): the server always sends `"candidates": []` for none found
+    # (`remote_server.candidates_result`), so a missing key is a form fault at the laptop, never a
+    # silently assumed empty list.
+    candidates: list[PackageIdentity]
     # Cloud and unmatched entries as one number each op call, never their names (B2).
     set_aside: StrictInt = Field(ge=0)
 

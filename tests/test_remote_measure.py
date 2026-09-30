@@ -10,6 +10,7 @@ whole round trip never reads a laptop-side hardware probe, because nothing here 
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -21,31 +22,44 @@ import pytest
 
 import modelroom.ssh_process as ssh_process
 from fixture_room import fixed_room
+from fixture_ssh import FaultSsh, FakeSsh
 from fixture_support import (
     DAEMON_OBSERVED_AT,
     GRANITE_MANIFEST_DIGEST,
+    LAPTOP_RAM_BYTES,
+    build_transport,
     deepseek_package,
     default_generates,
     granite_ollama_package,
+    guided_transport_mapping,
     json_response,
     loadtest_daemon,
+    offline_daemon,
+    offline_servers,
     ps_answer,
     windows_probes,
+    windows_runner,
 )
 
 import modelroom.guided_remote_measure as grm
+from modelroom.config import load_config
 from modelroom.contracts import Package
 from modelroom.daemon import GENERATE_PATH, PS_PATH, TAGS_PATH, VERSION_PATH, FixtureDaemon
 from modelroom.dialog import AnswerMissingError
+from modelroom.guided import run_guided
 from modelroom.http import Response
-from modelroom.loadtest import installed_candidates, installed_models, run_load_test, weight_digest
-from modelroom.measure import Probes
+from modelroom.loadtest import GPU_UTILIZATION_ARGS, installed_candidates, installed_models, run_load_test, weight_digest
+from modelroom.measure import Probes, WINDOWS_MACHINE_GUID_ARGS
 from modelroom.measurements import default_scenario, measurement_path, read_measurements
 from modelroom.quantization import package_identity_key
 from modelroom.remote_client import FORM_ERROR
 from modelroom.remote_protocol import OP_BUDGETS, OpBudget
 from modelroom.remote_server import ServerContext, main as server_main
-from modelroom.ssh import SshError, SubprocessSsh, call
+from modelroom.ssh import ProcessOutcome, SshError, SubprocessSsh, call
+
+from test_guided import DEEPSEEK, DEEPSEEK_OLLAMA_NAME, FULL_ANSWERS, QWEN_GGUF, UNSLOTH, _WatchingAsker, _pointer, _results
+from test_guided import RUN1 as GUIDED_RUN1
+from test_guided import RUN2 as GUIDED_RUN2
 
 NOW = datetime(2026, 9, 30, tzinfo=timezone.utc)
 PROFILE_ID = "3f9a0c21d4e6b870"
@@ -156,6 +170,34 @@ def test_a_candidates_request_with_an_extra_field_is_bad_request():
     context = _context()
     error = _one(_call("candidates", {"packages": [], "extra": True}, context)[0])
     assert error["error"] == "bad_request"
+
+
+def test_a_candidates_request_without_packages_is_bad_request():
+    """Codex r1 minor 1: `packages` is mandatory (`remote_protocol.CandidatesRequest`), an empty run
+    sends `"packages": []`, it never omits the key -- a request without it at all is a form fault,
+    not a silently assumed empty list."""
+    context = _context()
+    error = _one(_call("candidates", {}, context)[0])
+    assert error["error"] == "bad_request"
+
+
+def test_a_measure_request_without_packages_is_bad_request():
+    """Codex r1 minor 1, `MeasureRequest.packages`."""
+    package = deepseek_package()
+    payload = _measure_payload(package_identity_key(package), package)
+    del payload["packages"]
+    context = _context()
+    error = _one(_call("measure", payload, context)[0])
+    assert error["error"] == "bad_request"
+
+
+def test_a_candidates_result_missing_candidates_is_a_form_fault():
+    """Codex r1 minor 1: `CandidatesResult.candidates` is mandatory on the laptop's own reading of
+    the answer too -- a line with only `set_aside` is a form fault, mirroring
+    `tests/test_ssh.py::test_a_result_that_fails_the_strict_op_model_is_a_form_fault`."""
+    line = b'{"protocol":1,"result":{"set_aside":0}}'
+    with pytest.raises(SshError, match="form this modelroom does not read"):
+        call("gpu1", "candidates", {"packages": []}, FaultSsh(ProcessOutcome(0), lines=(line,)))
 
 
 # --- sentinels: no name of the server's own machine survives the sink (Codex r2-3) -----------------
@@ -457,6 +499,96 @@ def test_two_ssh_machines_measure_only_the_active_one(monkeypatch):
     grm.remote_load_test(run, config=None, scenario=default_scenario())
 
     assert calls == ["gpu2"]
+
+
+# --- end to end: a real answer run over FakeSsh, a real measurement, not a canned record -----------
+
+
+def _measurable_server_context(daemon, gpu_percent: float, guid: str, now=GUIDED_RUN1) -> ServerContext:
+    """A server whose hardware measures fully (Windows/NVIDIA) and whose own GPU utilization for the
+    load test's own reading (`loadtest.gpu_utilization`) is fixed and distinctive -- proves that
+    value, not another server's or the laptop's, ends up in the stored record."""
+    guid_line = f"\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\n    MachineGuid    REG_SZ    {guid}\n"
+    overrides = {
+        WINDOWS_MACHINE_GUID_ARGS: subprocess.CompletedProcess(list(WINDOWS_MACHINE_GUID_ARGS), 0, guid_line, ""),
+        GPU_UTILIZATION_ARGS: subprocess.CompletedProcess(list(GPU_UTILIZATION_ARGS), 0, f"{gpu_percent}\n", ""),
+    }
+    probes = Probes(platform="win32", runner=windows_runner(overrides), read_text=lambda p: (_ for _ in ()).throw(OSError()), memory_bytes=lambda: LAPTOP_RAM_BYTES)
+    return ServerContext(probes=probes, room=fixed_room(), daemon=daemon, now=lambda: now, environ={})
+
+
+def _guarded_laptop_probes() -> Probes:
+    """This computer's own `Probes`: ordinary hardware reading (step 1 still shows this machine), but
+    the load test's own GPU command fails the test outright -- proves this run's own hardware probe
+    is never asked for a remote candidate's load, for either server."""
+    base = windows_probes()
+
+    def guarded_runner(args):
+        if list(args) == list(GPU_UTILIZATION_ARGS):
+            raise AssertionError("the laptop's own runner must never be asked for a remote server's load")
+        return base.runner(args)
+
+    return base.__class__(**{**base.__dict__, "runner": guarded_runner})
+
+
+_SELECT = [UNSLOTH, QWEN_GGUF, DEEPSEEK]
+GUID_GPU1 = "11111111-2222-3333-4444-555555555555"
+GUID_GPU2 = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+
+
+def _guided_run(tmp_path: Path, answers: dict, ssh, now=GUIDED_RUN1, machines=("ssh",), probes=None):
+    (tmp_path / "results").mkdir(exist_ok=True)
+    (tmp_path / "home").mkdir(exist_ok=True)
+    full = {**FULL_ANSWERS, "select": _SELECT, "machines": list(machines), **answers}
+    lines: list[str] = []
+    asker = _WatchingAsker(full, lines)
+    code = run_guided(
+        asker, here=_results(tmp_path), pointer_path=_pointer(tmp_path),
+        transport=build_transport(guided_transport_mapping()), probes=probes or windows_probes(),
+        daemon=offline_daemon(), servers=offline_servers(), now=now, out=lines.append, ssh=ssh,
+    )
+    return code, lines, asker
+
+
+def test_two_ssh_machines_measure_only_the_active_one_with_a_real_measurement(tmp_path):
+    """Codex r1 minor 2: not a canned record -- a real answer run over `FakeSsh`, with the real
+    `measure` op running the protocol at the active target's own server process. gpu1 and gpu2 give
+    different GPU utilization; the laptop's own runner raises if it is ever asked for a load reading
+    at all; gpu1 stays without a connection during the active round (B4).
+
+    `cpu_load` has no injection seam of its own (`loadtest.read_cpu_load` reads `os.getloadavg`
+    directly, and this machine's own Windows has none -- `getattr` returns `None` before any call):
+    the same limitation the local load test has, no special case for the remote path (Codex r3-2).
+    """
+    ssh_a = FakeSsh(context=_measurable_server_context(loadtest_daemon(), gpu_percent=11.0, guid=GUID_GPU1))
+    _guided_run(tmp_path, {"ssh_alias": "gpu1", "ssh_machine_class": "server"}, ssh_a)
+    ssh_b = FakeSsh(context=_measurable_server_context(loadtest_daemon(), gpu_percent=88.0, guid=GUID_GPU2))
+    _guided_run(tmp_path, {"ssh_alias": "gpu2", "ssh_machine_class": "server"}, ssh_b, now=GUIDED_RUN2)
+    config = load_config(_results(tmp_path) / "modelroom.toml")
+    gpu1_id, gpu2_id = config.machines["gpu1"].profile, config.machines["gpu2"].profile
+
+    ssh_active = FakeSsh(context=_measurable_server_context(loadtest_daemon(), gpu_percent=88.0, guid=GUID_GPU2))
+    _code, lines, _asker = _guided_run(
+        tmp_path,
+        {
+            "machines": [f"profile:{gpu1_id}", f"profile:{gpu2_id}"], "ssh_active": "gpu2",
+            "load_test_remote": True, "load_test_remote_packages": [DEEPSEEK_OLLAMA_NAME],
+        },
+        ssh_active, now=GUIDED_RUN2, machines=(f"profile:{gpu1_id}", f"profile:{gpu2_id}"),
+        probes=_guarded_laptop_probes(),
+    )
+
+    assert not any(call[0] == "gpu1" for call in ssh_active.calls), "gpu1 (not active) must stay without a connection"
+    assert any(call[0] == "gpu2" and call[1] == "measure" for call in ssh_active.calls)
+
+    gpu1_dir = _results(tmp_path) / "state" / "measurements" / gpu1_id
+    gpu2_dir = _results(tmp_path) / "state" / "measurements" / gpu2_id
+    assert not (gpu1_dir.is_dir() and list(gpu1_dir.glob("*.json")))
+    gpu2_files = list(gpu2_dir.glob("*.json"))
+    assert len(gpu2_files) == 1
+    record = json.loads(gpu2_files[0].read_text(encoding="utf-8"))
+    assert record["profile_id"] == gpu2_id
+    assert record["load_state"]["gpu_utilization_percent"] == 88.0
 
 
 def test_the_record_is_stored_under_the_alias_profile(tmp_path):
