@@ -151,7 +151,7 @@ def test_load_config_reads_a_schema_2_file_as_schema_3_without_changing_it(tmp_p
     assert config.schema_version == 3
     assert config.guided.context == 4096
     assert (config.guided.users, config.guided.requests, config.guided.requests_origin) == (None, 1, "default")
-    assert config.machines["laptop"].profile == "c0ffee0000000001"
+    assert config.machines["laptop-c0ffee00"].profile == "c0ffee0000000001"  # the fixture's key is neutral (FR-N)
 
 
 def test_from_dict_reads_a_schema_2_dict_as_schema_3(tmp_path):

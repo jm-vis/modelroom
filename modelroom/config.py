@@ -577,7 +577,8 @@ def _resolve_relative_paths(data: dict, base_dir: Path) -> None:
 
     This is the only place this package resolves a path against anything -- the config
     file's own directory, never the process' working directory -- and it runs only for
-    `load_config`; `Configuration.from_dict` requires paths to already be absolute.
+    `load_config`; `Configuration.from_dict` requires paths to already be absolute. A path that
+    begins with `~` is the user's home folder (FR-N writes a path there so, "Neutral names").
     """
     for section, keys in (("paths", ("state", "markdown")), ("guided", ("results",))):
         table = data.get(section)
@@ -585,7 +586,9 @@ def _resolve_relative_paths(data: dict, base_dir: Path) -> None:
             continue
         for key in keys:
             value = table.get(key)
-            if isinstance(value, str) and not Path(value).is_absolute():
+            if isinstance(value, str) and value.startswith("~"):
+                table[key] = str(Path(value).expanduser())
+            elif isinstance(value, str) and not Path(value).is_absolute():
                 table[key] = str(base_dir / value)
 
 

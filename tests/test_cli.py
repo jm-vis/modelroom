@@ -447,8 +447,8 @@ def test_render_names_every_hardware_file_that_does_not_read(tmp_path: Path, cap
 
     code = main(["render", "--config", str(config_path)], now=RUN2)
 
-    assert code == 0
-    assert f"skipped {hardware_path.name}" in capsys.readouterr().out
+    assert code == 1  # FR-N (Codex r1-3): such a file may hold a name the sweep cannot clean
+    assert "could not be cleaned of machine names" in capsys.readouterr().err and not (tmp_path / "models.md").exists()
 
 
 def test_render_end_to_end_exit_0_writes_a_markdown_document(tmp_path: Path):
@@ -843,6 +843,18 @@ def test_the_help_names_the_version_flag_next_to_answers(capsys):
     help_text = capsys.readouterr().out
     assert "-V, --version" in help_text
     assert "--answers" in help_text
+
+
+def test_the_help_names_pull_as_the_one_subcommand_that_asks(capsys):
+    """FR-C: the subcommands never ask a question, except `pull` (README.md, "Without a
+    terminal"; CONTRACTS.md, "Guided mode") -- `--help`'s own description says so too.
+    `argparse` wraps the description to the terminal width, so the words are checked with
+    whitespace collapsed rather than as one exact line."""
+    with pytest.raises(SystemExit):
+        main(["--help"])
+
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "except pull, which asks once before it pulls unless --yes is given." in help_text
 
 
 def test_render_with_config_defaults_to_the_real_clock(tmp_path: Path):

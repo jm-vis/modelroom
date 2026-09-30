@@ -39,6 +39,7 @@ from .measurements import (
     shipped_protocol,
     write_measurement,
 )
+from .neutral import neutral_record, package_name, record_name
 from .ollama_local import fetch_installed_models
 from .state import acquire_lock, release_lock
 
@@ -86,7 +87,14 @@ class Candidate:
 
     @property
     def ollama_name(self) -> str:
+        """The name the daemon holds it under: for the calls to the daemon only, never shown or stored."""
         return self.installed.name
+
+    @property
+    def shown_name(self) -> str:
+        """The name every line and every record uses: built from the package itself (FR-N), so a name the
+        daemon's owner gave it never reaches the screen or a file; the base model where there is none."""
+        return package_name(self.package) or record_name(self.installed.name, self.package.repo) or self.package.base_model_hf_repo
 
     @property
     def weights_bytes(self) -> int:
@@ -301,12 +309,12 @@ def run_load_test(
     )
     observations: list[Observation] = []
     for _ in range(protocol.warmup_runs):
-        progress(f"{candidate.ollama_name}: warm-up run")
+        progress(f"{candidate.shown_name}: warm-up run")
         _generate(daemon, candidate, scenario, protocol)
         observations.append(_observe(daemon, candidate.ollama_name))
     runs: list[RunCounters] = []
     for number in range(1, protocol.measured_runs + 1):
-        progress(f"{candidate.ollama_name}: run {number} of {protocol.measured_runs}")
+        progress(f"{candidate.shown_name}: run {number} of {protocol.measured_runs}")
         runs.append(_generate(daemon, candidate, scenario, protocol))
         observations.append(_observe(daemon, candidate.ollama_name))
     return _record(candidate, scenario, profile_id, version, load_state, runs, observations, measured_at, protocol)
@@ -348,7 +356,7 @@ def _generate(daemon: Daemon, candidate: Candidate, scenario: Scenario, protocol
     }
     answer = _ask(daemon, "POST", GENERATE_PATH, body)
     if answer.status != 200:
-        raise LoadTestError(f"unexpected status {answer.status} from {GENERATE_PATH} for {candidate.ollama_name}")
+        raise LoadTestError(f"unexpected status {answer.status} from {GENERATE_PATH} for {candidate.shown_name}")
     try:
         data = answer.json()
     except (ValueError, RecursionError) as exc:
@@ -541,14 +549,17 @@ def read_cpu_load() -> float | None:
 # --- the file ----------------------------------------------------------------------------------
 
 
-def store_measurement(state_dir: Path, record: MeasurementRecord, now: datetime) -> Path:
+def store_measurement(state_dir: Path, record: MeasurementRecord, now: datetime, package: Package | None = None) -> Path:
     """Publish `record` as its own file under `modelroom.lock`, the way every writer here does.
 
-    `LockHeldError` reaches the caller unchanged -- another process holding the lock is exit `1`
-    for every command in this package, and the load test is no exception.
+    The record goes through the sink first (`neutral.neutral_record`, FR-N), with the package where the
+    caller knows it: its name is then the one built from the package, never the name the daemon
+    holds it under. `LockHeldError` reaches the caller unchanged -- another process holding the lock
+    is exit `1` for every command in this package, and the load test is no exception.
     """
+    clean = neutral_record(record, package)
     handle = acquire_lock(state_dir / "modelroom.lock", LOCK_COMMAND, now)
     try:
-        return write_measurement(state_dir, record, handle)
+        return write_measurement(state_dir, clean, handle)
     finally:
         release_lock(handle)

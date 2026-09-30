@@ -21,7 +21,7 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Iterable, Sequence
 
 from .binding import KnownProfile, PointerFileError, default_pointer_path, read_pointer, resolve_profile_target, write_pointer
 from .catalog import Catalog, load_catalog
@@ -33,14 +33,14 @@ from .config import (
     load_config,
     read_config_schema_version,
 )
-from .contracts import SchemaVersionError, validate_machine_name
+from .contracts import SchemaVersionError
 from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import USERS_KEY, USERS_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
-from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES, enter_step
+from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES
 from . import room as room_module
 # The folder question moved to `guided_folder.py` (AP9-UX2 U1/U7); the names stay readable here.
 from .guided_folder import CONFIG_NAME, MARKDOWN_PATH, STATE_FOLDER  # noqa: F401
@@ -51,6 +51,8 @@ from .guided_folder import last_elsewhere
 from .guided_folder import looks_like_results_folder as _looks_like_results_folder
 from .guided_folder import remember_folder as _remember_folder
 from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, pull_step
+from .pull_other import KEY as PULL_OTHER_KEY, QUESTION as PULL_OTHER_QUESTION
+from .pull_other import eligible_other_machines, pull_other_step
 from .pull_choice import ambiguous_names, run_packages
 from .room import RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
@@ -58,6 +60,8 @@ from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices
 from .guided_machines import chosen_machines, machine_answer_words
 from .guided_loadtest import NOTHING_MEASURED
 from .guided_loadtest import QUESTIONS as LOAD_TEST_QUESTIONS
+from .guided_remote_measure import QUESTIONS as REMOTE_MEASURE_QUESTIONS
+from .guided_remote_measure import combine_measured
 from .local_servers import QUESTIONS as SERVER_QUESTIONS, ServerRun, card_facts, default_transports, load_tests
 from .guided_models import (
     ModelChoice,
@@ -77,7 +81,7 @@ from .guided_search import (
     search_step,
 )
 from .http import RequestBudget, Transport, UrllibTransport
-from .guided_write import Change, Said, create_config, update_config, with_found_profiles, with_profile, with_writer
+from .guided_write import Change, Said, create_config, neutral_change, update_config, with_found_profiles, with_profile, with_writer
 from .importer import (
     ImportConflictError,
     PrerequisiteError,
@@ -86,10 +90,17 @@ from .importer import (
     import_profile,
     scan_profiles,
 )
+from .guided_share import QUESTIONS as SHARE_QUESTIONS
+from .guided_share import machine_list_row
+from .guided_remote import QUESTIONS as SSH_QUESTIONS
+from .guided_remote import active_room, gather_arrivals, resolve_active
+from . import ssh as ssh_module
 from .intro import STEP_COUNT, collect_intro, print_intro
 from .measure import Probes, read_machine_class, read_os_identity
 from .measurements import Scenario
 from .migrate import MigrationError, backup_suffix, migrate
+from .neutral_sweep import load_names, sweep
+from .remote_store import aliases as ssh_aliases_of, read_remote, remote_path_for, this_machine
 from .profile import MACHINE_CLASSES, HardwareProfile, os_fingerprint
 from .screen import (
     CLONE_QUESTION,
@@ -133,6 +144,8 @@ QUESTIONS: dict[str, str] = {
     "clone": "Is this the same machine or a clone?",
     "machine_class": "What kind of machine is this?",  # on every measurement (decided 2026-09-27)
     **ENTERED_QUESTIONS,  # step 1's machine entered by hand (`modelroom/guided_entered.py`)
+    **SHARE_QUESTIONS,  # step 1's shared folder (`modelroom/guided_share.py`, FR-S)
+    **SSH_QUESTIONS,  # step 1's ssh row and step 5's pull over SSH (`modelroom/guided_remote.py`, FR-B1)
     # Step 2's two search questions live with the search (`modelroom/guided_search.py`).
     "search": SEARCH_QUESTION,
     "filter_owners": FILTER_QUESTION,
@@ -143,8 +156,10 @@ QUESTIONS: dict[str, str] = {
     "context": CONTEXT_QUESTION,
     # Step 3 asks it before the scale: `N` people, or `N requests` named outright.
     USERS_KEY: USERS_QUESTION,
-    # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`).
-    **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS, **SERVER_QUESTIONS,
+    # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`),
+    # then a package for another chosen machine (`pull_other.py`, A3).
+    **LOAD_TEST_QUESTIONS, **PULL_QUESTIONS, **SERVER_QUESTIONS, **REMOTE_MEASURE_QUESTIONS,
+    PULL_OTHER_KEY: PULL_OTHER_QUESTION,
 }
 
 
@@ -179,6 +194,10 @@ class GuidedRun:
     selection: RunSelection = field(default_factory=lambda: RunSelection((), ()))
     # The free graphics memory and disk of this machine, read live in step 5 (`room.py`, AP9-UX2 U8).
     room: RoomProbes = field(default_factory=lambda: room_module.default_room_probes())
+    # The SSH transport (FR-B1, B1), and this run's one active target set in step 1 (B4); `None`
+    # without one -- every other chosen SSH profile is ranked without a connection (`pull_other.py`).
+    ssh: "ssh_module.SshRunner" = field(default_factory=lambda: ssh_module.default_ssh())
+    ssh_active: str | None = None
 
     def failed(self, message: str) -> None:
         """Say it once and remember it: the run continues, its exit code does not stay `0`."""
@@ -200,12 +219,16 @@ def _configuration_step(run: GuidedRun, config_arg: Path | None) -> tuple[Path, 
     return config_file, config
 
 
-def _machine_key(hostname: str) -> str:
-    """This machine's key in `[machines.<name>]`: its host name in the shape a key has to have."""
-    slug = "".join(letter if letter.isalnum() else "-" for letter in hostname.lower()).strip("-")
-    if not slug:
-        raise GuidedError(f"this machine's host name ({hostname!r}) cannot be a machine name; write one by hand")
-    return validate_machine_name(slug)
+def _machine_key(run: GuidedRun) -> str:
+    """This machine's key in `[machines.<name>]`: its neutral key in `remote.json`, never its host name (FR-N)."""
+    return this_machine(remote_path_for(run.pointer_path))
+
+
+def _sweep(run: GuidedRun, config_file: Path) -> None:
+    """The run's first write to the folder: no file of it keeps a machine name (`neutral_sweep`, FR-N)."""
+    swept = sweep(config_file, run.now, "guided", pointer_path=run.pointer_path, hostname=run.probes.hostname())
+    for note in swept.notes:
+        run.screen.note(note)
 
 
 def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
@@ -218,7 +241,7 @@ def _new_configuration(run: GuidedRun, config_file: Path) -> Configuration:
     A file another run created meanwhile is taken over as it is (`guided_write.create_config`).
     """
     folder = config_file.parent
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     config = Configuration.from_dict(
         {
             "schema_version": 2,
@@ -246,12 +269,14 @@ def _write_config(run: GuidedRun, config_file: Path, change: Change | Configurat
 
     A change goes through `guided_write.update_config` -- read, change, write, and once more on a
     conflict -- and a second conflict in a row is a dialog error (exit `2`). A held lock keeps its
-    own exit code (`1`), it is not a dialog error.
+    own exit code (`1`), it is not a dialog error. Every configuration written goes through the sink
+    first, the one read last included: a key another run added meanwhile is neutral too (FR-N).
     """
+    names = load_names(config_file.parent, run.pointer_path, run.probes.hostname())
     try:
         if isinstance(change, Configuration):
             return create_config(config_file, change, now=run.now)
-        return update_config(config_file, change, now=run.now)
+        return update_config(config_file, neutral_change(change, names), now=run.now)
     except (ConfigError, OSError) as exc:
         raise GuidedError(f"{config_file}: the configuration could not be written ({exc})") from exc
 
@@ -270,7 +295,7 @@ def _configuration(run: GuidedRun, config_file: Path) -> Configuration:
     stored = _stored_schema_version(config_file)
     if stored < CONFIG_SCHEMA_VERSION:
         try:
-            lines = migrate(config_file, run.now)
+            lines = migrate(config_file, run.now, pointer_path=run.pointer_path, hostname=run.probes.hostname())
         except (ConfigError, MigrationError) as exc:
             raise GuidedError(f"{exc}; nothing was changed -- move that file away and run again") from exc
         run.screen.note(
@@ -315,6 +340,7 @@ def _configure_found_profiles(run: GuidedRun, config_file: Path) -> Configuratio
     is false. The matching is worked out on the file as it is at the write, and again after a
     conflict (`guided_write.with_found_profiles`).
     """
+    _sweep(run, config_file)
     said = Said()
     config = _write_config(run, config_file, with_found_profiles(said))
     for problem in said.problems:
@@ -383,7 +409,7 @@ def _measure_this_machine(
     from .cli import hardware_with_config  # imported here: the CLI imports this module in turn
 
     results_dir = config_file.parent
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     config = _ensure_this_machine(run, config_file, name)
     mode = _clone_mode(run, config, name, scan, results_dir)
     code = hardware_with_config(
@@ -467,7 +493,7 @@ def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) 
     run.screen.answer(QUESTIONS["import_file"], str(path), path=True)
     before = set(scan_profiles(config.paths.hardware_dir).profiles)
     try:
-        report = import_profile(config_file, path, run.now)
+        report = import_profile(config_file, path, run.now, pointer_path=run.pointer_path, hostname=run.probes.hostname())
     except (
         SchemaVersionError,
         StoredFileError,
@@ -506,38 +532,43 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     an existing profile of the folder taken as it is; the run's result covers exactly these (B)."""
     scan = scan_profiles(config.paths.hardware_dir)
     bound = _bound_profile(run, scan, config_file.parent)
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     configured = [machine.profile for machine in config.machines.values() if machine.profile is not None]
     run.screen.note(ANOTHER_COMPUTER)
-    picked = run.asker.checkbox("machines", QUESTIONS["machines"], _machine_choices(scan, bound, name, configured))
-    run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound, name)))
+    # Row 5's own label (FR-S): a `Choice`, like `import`/`enter` next to it -- the checkbox itself
+    # is the one place it is shown, never a note of its own beside it (Codex r1-5: that was a
+    # product-visible double display, not the "always in the list" the row asks for).
+    share_label = machine_list_row(run.room.environ, read_remote(remote_path_for(run.pointer_path)))
+    aliases = ssh_aliases_of(remote_path_for(run.pointer_path))
+    choices = _machine_choices(scan, bound, name, configured, share_label, aliases)
+    picked = run.asker.checkbox("machines", QUESTIONS["machines"], choices)
+    run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound)))
     if "this-machine" in picked:
         config = _measure_this_machine(run, config_file, config, scan, _measured_here(bound))
-    imported: set[str] = set()
-    entered: set[str] = set()
-    if "import" in picked:
-        config, imported = _import_a_profile(run, config_file, config)
-    if "enter" in picked:
-        before = set(scan_profiles(config.paths.hardware_dir).profiles)
-        config = enter_step(run, config_file, config)
-        entered = set(scan_profiles(config.paths.hardware_dir).profiles) - before
+    config, imported, ssh_ids, shared, entered, ssh_alias = gather_arrivals(run, config_file, config, picked)
     # An empty choice stays empty -- nothing marked in a file, or an import that failed: no machine the
     # run did not choose is added, the bound one included (Codex r2, finding 1). At a terminal `Enter`
     # takes the pointer row, so a terminal run always chooses one.
-    machines = chosen_machines(config, picked, name, imported | entered)
-    run.selection = replace(run.selection, machines=machines, origins=_origins(run, config, config_file, machines, picked, imported, entered))
+    machines = chosen_machines(config, picked, name, imported | ssh_ids | shared | entered)
+    run.ssh_active = resolve_active(
+        run, config, config_file, scan_profiles(config.paths.hardware_dir), machines, ssh_alias, "ssh" in picked
+    )
+    # Every machine with a stored SSH alias, active or not this run (Codex r1 finding 10) -- not
+    # only the ones that arrived just now (`ssh_ids`), which a re-chosen stored profile never is.
+    all_ssh_ids = set(ssh_aliases_of(remote_path_for(run.pointer_path)))
+    origins = _origins(run, config, config_file, machines, picked, imported | shared, entered, all_ssh_ids)
+    run.selection = replace(run.selection, machines=machines, origins=origins)
     return config
 
 
-def _origins(run: GuidedRun, config: Configuration, config_file: Path, machines, picked, imported, entered) -> dict:
-    """Where each chosen machine came from (U2): this machine by its measurement or its bound profile
-    measured here, then imported, then entered, then the folder (`selection.machine_origins`)."""
+def _origins(run: GuidedRun, config: Configuration, config_file: Path, machines, picked, imported, entered, ssh: Iterable[str] = ()) -> dict:
+    """Where each chosen machine came from (U2, FR-B1 B3): this, ssh, imported, entered, folder."""
     bound = _bound_profile(run, scan_profiles(config.paths.hardware_dir), config_file.parent)
     own = bound.profile_id if _measured_here(bound) else None
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     this = {name} if "this-machine" in picked else set()
     this |= {machine for machine in machines if own is not None and config.machines[machine].profile == own}
-    return machine_origins(config, machines, this=this, imported=imported, entered=entered)
+    return machine_origins(config, machines, this=this, ssh=ssh, imported=imported, entered=entered)
 
 
 def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> HardwareProfile | None:
@@ -632,7 +663,7 @@ def _fetch_step(run: GuidedRun, config: Configuration) -> None:
     if not config.families:
         run.screen.note("no base model is configured yet, so there is nothing to fetch")
         return
-    name = _machine_key(run.probes.hostname())
+    name = _machine_key(run)
     code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget)
     if code != 0:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
@@ -652,7 +683,7 @@ def _render_step(
     run.screen.blank()
     run.screen.head(STEP_COUNT)
     written: list = []
-    here = _machine_key(run.probes.hostname())
+    here = _machine_key(run)
     chosen = run.selection
     if not chosen.machines:
         run.screen.note(NO_MACHINE_CHOSEN)
@@ -679,7 +710,11 @@ def _render_step(
     document, facts, context = written[0]
     own = next((block.profile for block in document.machines if block.machine == here), None)
     live = {here: live_room(run.room, own, run.daemon if daemon_reachable else None, disk)}  # U10: this machine only
-    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins)
+    live.update(active_room(run, document))  # B5: the active SSH machine's own room, if it has a table here
+    # A3 (AP9-FR): the other machines `pull_other_step` will list a row for, after this table --
+    # computed once, here, so the note under a table and the list that may follow never disagree.
+    other_machines = eligible_other_machines(document, here, context.ambiguous)
+    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines, ssh_active=run.ssh_active)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 
@@ -699,6 +734,7 @@ def run_guided(
     colored: bool | None = None,
     servers: dict | None = None,
     room: RoomProbes | None = None,
+    ssh: "ssh_module.SshRunner | None" = None,
 ) -> int:
     """Run the whole guided mode; returns the exit code (`0` when a document was written).
 
@@ -723,6 +759,7 @@ def run_guided(
         out=out,
         screen=Screen(out, colored=colored),
         room=room if room is not None else room_module.default_room_probes(),
+        ssh=ssh if ssh is not None else ssh_module.default_ssh(),
     )
     known = _known_config(run, config_arg)
     elsewhere = last_elsewhere(run, config_arg, known)
@@ -735,9 +772,11 @@ def run_guided(
     # `views.context_short` names a context the way the scale of step 3 does: `L 32k`, or the number.
     run.screen.done(3, context_short(scenario.context_requested))
     measured = load_tests(run, config, scenario, config_file.parent)
+    measured = combine_measured(run, config, scenario, measured)  # B2: the active SSH target, if any
     run.screen.summary(4, measured, measured != NOTHING_MEASURED)
     code, first = _render_step(run, config_file, config, scenario, intro.daemon_reachable)
     pull_step(run, first, intro.daemon_reachable)
+    pull_other_step(run, first)  # a row of the active SSH target is pulled there (B5)
     if code == 0 and run.problems:
         # The document was written, but a step did not do what it was asked -- the pull included.
         # Exit `1` is the documented "a step reported it": an automated caller must not read this

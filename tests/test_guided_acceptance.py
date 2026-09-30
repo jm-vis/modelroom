@@ -2,7 +2,7 @@
 
 Every run starts in a folder that holds nothing but the example configuration without EuroLLM
 (`fixture_support.example_without_eurollm`): two families, five packagers, the machines
-`workstation` (the writer, this machine) and `inference-server` (no profile). The run writes the
+`workstation` (the writer) and `inference-server` (no profile), both neutral keys once swept (FR-N). The run writes the
 configuration and the snapshot itself; the fixture transport answers the search, the fetch and --
 through `packager_probes` -- every packager repository the fetch asks about. Blocks are found by
 `profile_id`, never by the label: all three server profiles are called `server`.
@@ -141,7 +141,7 @@ def _preconditions(code: int, here: Path, ages: str) -> None:
         assert found[model]["release_basis"] != "computed", model
     config = load_config(here / "modelroom.toml")
     assert "deepseek-r1" in [family.name for family in config.families]
-    assert "inference-server" in config.machines
+    assert any(entry.profile is None for entry in config.machines.values())  # `inference-server`, now neutral
     snapshot = read_snapshot(config)
     assert any(package.base_model_hf_repo == DEEPSEEK for package in snapshot.packages)
 

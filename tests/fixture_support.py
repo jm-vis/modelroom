@@ -23,6 +23,7 @@ from modelroom.state import atomic_write_json
 
 # Moved to their own modules (AP9-UX2, size guard) and exported back, so every test's import stays.
 from fixture_http import FIXTURES, build_transport, envelope_response, html_response, json_response  # noqa: F401
+from fixture_neutral import THIS_MACHINE  # noqa: F401  (this computer's key in every test, FR-N)
 from fixture_servers import (  # noqa: F401
     DAEMON_OBSERVED_AT,
     DEEPSEEK_BASE,
@@ -503,7 +504,7 @@ def example_without_eurollm() -> dict:
     No recording of EuroLLM is in the repo, and a `FixtureTransport` raises at any URL it does not
     bind; everything else stays: two families, five packagers, the machines `workstation` (the
     writer) and `inference-server` (no profile). A test writes it as `modelroom.toml` with
-    `write_example_without_eurollm` (AP9-UX, "Paket-Repo und Fixtures").
+    `write_example_without_eurollm` (AP9-UX, "package repo and fixtures").
     """
     import tomllib
 

@@ -452,7 +452,12 @@ def _block_head(block: MachineRanking, scenario: Scenario, dot: str, origin: str
     confirmed or absent check leaves the line as it is. A machine that is not the one of this run
     says so after its label (U2): `imported`, or `another computer`.
     """
-    where = {"imported": f" {dot} imported", "entered": f" {dot} another computer", "folder": f" {dot} another computer"}
+    where = {
+        "imported": f" {dot} imported",
+        "entered": f" {dot} another computer",
+        "folder": f" {dot} another computer",
+        "ssh": f" {dot} over SSH",  # FR-B1, B3
+    }
     label = f"{block.label}{where.get(origin or 'this', '')}"
     if block.status == "ranked":
         return f"{label} {dot} context {context_short(scenario.context_requested)}{_deviation(block)}"
@@ -534,12 +539,15 @@ def _labeled(label: str, pieces: list[str], dot: str) -> list[Line]:
 class RunView:
     """What the guided run adds to the terminal view (AP9-UX2): the pull names no row may claim (U4),
     what was read live per machine name (AP9-RM U10; `None` outside a guided run, which reads no
-    machine live) and where each machine came from (U2)."""
+    machine live), where each machine came from (U2), and the other machines `pull_other_step` will
+    list a row for (A3, AP9-FR) -- so a table's note never promises a list that will not follow."""
 
     install_for: str | None = None
     ambiguous: frozenset[str] = frozenset()
     live: Mapping[str, LiveRoom] | None = None
     origins: Mapping[str, str] = field(default_factory=dict)
+    pull_other_machines: frozenset[str] = frozenset()
+    ssh_active: str | None = None  # FR-B1, B5: the `room` line names this one by its alias
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -559,7 +567,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
         lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
-    return lines + install_lines(block, view.install_for, view.ambiguous, _disk(block, view), dash)
+    return lines + install_lines(block, view.install_for, view.ambiguous, _disk(block, view), dash, view.pull_other_machines)
 
 
 def _disk(block: MachineRanking, view: RunView) -> Disk | None:
@@ -583,7 +591,13 @@ def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
     """Under the head of a block (U10): the budgets and the disk (`room`), and what Ollama holds
     (`loaded`) where it holds something -- for the machine the live values were read on."""
     live = None if view.live is None else view.live.get(block.machine)
-    where = "render" if view.live is None else "this" if block.machine == view.install_for else "other"
+    where = (
+        "render" if view.live is None
+        else "this" if block.machine == view.install_for
+        else "ssh" if block.machine == view.ssh_active
+        else "ssh_inactive" if view.origins.get(block.machine) == "ssh"
+        else "other"
+    )
     lines = _labeled(ROOM_LABEL, head_pieces(block, live, where), dot)
     loaded = loaded_pieces(live)
     return lines + (_labeled(LOADED_LABEL, loaded, dot) if loaded else [])

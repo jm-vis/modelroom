@@ -26,6 +26,7 @@ from modelroom.reserve import ram_reserve
 from modelroom.search_apply import write_configuration
 from modelroom.state import atomic_write_json
 
+from fixture_neutral import THIS_MACHINE
 from fixture_support import qwen35_example_config_dict, v2_profile
 
 NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
@@ -77,7 +78,7 @@ def test_a_0_1_0_configuration_reads_with_its_number_entered(tmp_path, schema):
     """Every file 0.1.0 wrote carries the number: it reads as it did, origin `entered`."""
     shutil.copytree(FIXTURES / schema, tmp_path / schema)
     config = load_config(tmp_path / schema / "config.toml")
-    laptop = config.machines["laptop"]
+    laptop = config.machines["laptop" if schema == "config_v1" else "laptop-c0ffee00"]  # FR-N: neutral fixture keys
     assert laptop.reserve_ram_gib == 8.0
     assert ram_reserve(laptop, LAPTOP_RAM, unified=False) == (8.0, "entered")
 
@@ -109,8 +110,8 @@ def test_a_new_folder_writes_no_memory_reserve(tmp_path):
     config_file = tmp_path / "results" / "modelroom.toml"
     config_file.parent.mkdir()
     config = _new_configuration(run, config_file)
-    assert config.machines["laptop"].reserve_ram_gib is None
-    assert _stored_machines(config_file)["laptop"] == {"reserve_vram_gib": 1.0, "writer": True}
+    assert config.machines[THIS_MACHINE].reserve_ram_gib is None  # FR-N: its neutral key, not the host name
+    assert _stored_machines(config_file)[THIS_MACHINE] == {"reserve_vram_gib": 1.0, "writer": True}
     assert "reserve_ram_gib" not in config_file.read_text(encoding="utf-8")
 
 
@@ -120,7 +121,7 @@ def test_a_found_profile_takes_a_numeric_default_and_leaves_a_missing_one_out(tm
     path = _config_file(tmp_path, defaults=defaults)
     profile_id = _place_profile(tmp_path)
     update_config(path, with_found_profiles(Said()), now=NOW)
-    entry = _stored_machines(path)["server"]
+    entry = _stored_machines(path)["computer-3f9a0c21"]  # FR-N: the neutral key
     assert entry["profile"] == profile_id and entry["reserve_vram_gib"] == 0.5
     assert entry.get("reserve_ram_gib") == expected
 
@@ -140,11 +141,11 @@ def test_an_imported_machine_takes_a_numeric_default_and_leaves_a_missing_one_ou
 
     out = capsys.readouterr().out
     assert code == 0
-    entry = _stored_machines(config_path)["workstation"]
+    entry = _stored_machines(config_path)["workstation-3f9a0c21"]
     assert entry.get("reserve_ram_gib") == expected
-    assert _stored_machines(config_path)["laptop"]["reserve_ram_gib"] == 8.0
+    assert _stored_machines(config_path)["laptop-c0ffee00"]["reserve_ram_gib"] == 8.0
     said = "the reserves from [defaults]" if expected is not None else "the memory reserve is computed from its memory"
-    assert f'machine "workstation" added with {said} and writer = false' in out
+    assert f'machine "workstation-3f9a0c21" added with {said} and writer = false' in out
 
 
 def test_an_entered_reserve_survives_a_guided_write(tmp_path):
@@ -183,5 +184,5 @@ def test_a_new_writer_entry_takes_the_numeric_default(tmp_path):
 
 
 def test_the_export_fixture_names_the_imported_machine_workstation():
-    """The import tests above rest on this name."""
-    assert json.loads((FIXTURES / "export_v1.json").read_text(encoding="utf-8"))["profile"]["display_name"] == "workstation"
+    """The import tests above rest on this name, a neutral one since FR-N."""
+    assert json.loads((FIXTURES / "export_v1.json").read_text(encoding="utf-8"))["profile"]["display_name"] == "workstation-3f9a0c21"

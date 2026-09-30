@@ -284,6 +284,27 @@ def test_criterion_one_names_a_machine_that_is_not_a_writer():
     assert any("writer" in problem for problem in st.first_start_problems(text, _pointer(), RESULTS, "workstation"))
 
 
+@pytest.mark.parametrize(("written", "ok"), [(".", True), (str(RESULTS), True), ("elsewhere", False), ("", False)])
+def test_criterion_one_reads_a_relative_results_folder_against_the_configuration(written, ok):
+    """FR-N writes the folder's own path relative; the configuration lies in the results folder."""
+    problems = st.first_start_problems(_config_text(guided={"results": written}), _pointer(), RESULTS, "workstation")
+    assert (problems == []) is ok, problems
+
+
+def test_criterion_one_accepts_the_results_folder_a_real_first_start_writes(se, tmp_path: Path):
+    """The configuration as the guided mode really writes it -- the self-test found what the suite missed."""
+    from datetime import datetime, timezone
+
+    code, lines, results, _pointer_file = se._run(
+        tmp_path, st.answers_toml, datetime(2026, 9, 26, 12, 0, 0, tzinfo=timezone.utc)
+    )
+    assert code == 0, lines[-3:]
+    text = (results / "modelroom.toml").read_text(encoding="utf-8")
+    assert tomllib.loads(text)["guided"]["results"] == "."
+    problems = st.first_start_problems(text, _pointer(), results, "workstation")
+    assert not [problem for problem in problems if "[guided].results" in problem], problems
+
+
 def test_criterion_one_names_a_pointer_that_remembers_nothing():
     problems = st.first_start_problems(_config_text(), _pointer(current="", bindings={}), RESULTS, "workstation")
     assert len(problems) == 2

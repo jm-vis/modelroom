@@ -7,6 +7,109 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **No file carries a machine name** (AP9-FR, FR-N; `modelroom/neutral.py`, `modelroom/neutral_sweep.py`,
+  `modelroom/remote_store.py`; CONTRACTS.md, "Neutral names", "Remote machines"). One sink decides
+  what of a name and of foreign text reaches a file: machine keys and `display_name` are neutral
+  (`<class>-<first 8 hex of the profile id>`, this computer `computer-<random>` from the new per-user
+  file `~/.modelroom/remote.json`), a measurement record keeps the package name built from the
+  package, fixed sentences as reasons, and a daemon version only as `X.Y.Z`. Every writing command
+  first sweeps its folder with the same rules -- profiles, configuration (keys renamed where they
+  stand, in comments too, the comments otherwise kept; paths inside the folder made relative, paths
+  below the home folder written as `~/...`), records, modelroom's own backups (a schema-1 profile's
+  under the name of the profile it became; a second copy merged, never written over) and the result
+  documents (either of them naming an old name removes both; the next render writes them)
+  -- and writes nothing when that cannot be done (exit `1`). Exports carry the neutral name and hold
+  `modelroom.lock`; an import neutralizes before it plans. The first key of this computer is made
+  under a lock of the user account (`remote.lock`). The load test shows and stores a package by
+  the name built from the package, never by the name the daemon holds it under. The host name of this
+  computer stands only in the start line, read live.
+
+- **A shared folder of profile exports, for a computer without SSH** (AP9-FR, FR-S, GF question
+  7 (c); `modelroom/guided_share.py`, `modelroom/remote_store.py`; CONTRACTS.md, "Remote machines",
+  "Shared folder"). Step 1's machine list always offers a row for it -- `set up a shared folder for
+  profiles`, or `profiles from the shared folder` once one is set -- next to `import a profile
+  file`. Picking it opens "Shared folder": where it is (`none set yet`, the stored path, or `set by
+  environment (MODELROOM_PROFILE_SHARE)`), then `take profiles from it`, `choose a folder`/`change
+  the folder`, or `none, no shared folder` -- clears a stored folder, or, while the environment is
+  set, skips it for this run alone and leaves it stored. A chosen folder is checked once, by
+  writing and removing a probe file, and kept per user account in the new `profile_share` field of
+  `~/.modelroom/remote.json` -- exactly as typed, a UNC path (`\\nas\share\profiles`) included, only
+  the Windows device prefixes `\\.\`/`\\?\` refused. `MODELROOM_PROFILE_SHARE` overrides it for a
+  script, without storing anything; an empty variable counts as unset. Reading the folder lists one
+  row per profile still there, described from its newest export under its neutral name, whatever
+  the export itself carries; choosing one imports every export of that machine, oldest first,
+  through the unchanged `import-profile` -- a file that changed since it was listed (a different
+  profile now, or grown past 16 MiB) changes nothing, and one file's problem never stops the
+  others. The path itself never reaches a results folder, an export, a render or a failure
+  sentence: `remote.json` and this step's own screen (its `Choice` in the machine list included,
+  never a second note beside it) are the only places it is ever written or shown.
+
+- **A package for another computer, and the command that installs it there** (AP9-FR, FR-A;
+  `modelroom/pull_other.py`, `modelroom/cli_pull.py`; CONTRACTS.md, "Guided mode", "`modelroom
+  pull`"). Step 5's own pull now checks every name it would ever print or send against
+  `pull_choice.PULL_NAME_RE` first -- a Hub or registry answer outside `hf.co/<owner>/<repo>:<quant>`
+  or `[<ns>/]<name>:<tag>` is no name at all, never a table row, a command or a `POST`. After the
+  local pull, the run also asks **Which package should go onto another computer?** for every other
+  chosen machine with a package of its own -- even a run that only ever imported that machine and
+  never measured or ranked this computer at all; choosing one hands over
+  `modelroom pull <name> --weights-bytes <n>` to paste there -- a new
+  subcommand, with no results folder and no configuration, that checks Ollama and the free disk on
+  that computer and asks before it pulls (`--yes` for a terminal-less run). A row of the machine
+  this run reads over SSH is pulled there over SSH instead (FR-B1, below).
+
+- **A computer read over SSH, chosen at the laptop, installed on the server** (AP9-FR, FR-B1;
+  `modelroom/ssh.py`, `ssh_process.py`, `process_tree.py`, `remote_protocol.py`, `remote_server.py`, `remote_client.py`,
+  `guided_remote.py`, `guided_remote_bind.py`, `remote_store.py`;
+  CONTRACTS.md, "The remote protocol v1", "Another computer"). Step 1's machine list gains a row, `a
+  computer over SSH (its host alias)`, next to `import a profile file`: a host alias (never an
+  address or a domain), then the same system `ssh` this computer's own configuration already knows
+  -- a fixed argument vector, never a shell string, `StrictHostKeyChecking=yes` and `BatchMode=yes`
+  always on regardless of the user's own config, agent forwarding switched off and checked. The
+  other end is `modelroom remote <op>` on the server (0.2.0 or newer): it measures that machine
+  (`hello`, `profile`), reads its free disk (`room`, named by the alias, never a path or a drive)
+  and, for `POST /api/pull`, runs the same digest-proof pull the guided run already has, through the
+  unchanged `guided_install.py`/`PullTarget` machinery -- nothing there was written twice. Only the
+  alias is ever stored, per user account in `~/.modelroom/remote.json`, never a host name, address,
+  user name, port, key path, jump host, ssh's own stderr or the server's own text (Ollama's error
+  text included) -- every failure is one fixed local sentence naming the alias, an `error` line of
+  the server one of five codes with a sentence each. The answer is read to its end and checked line
+  by line (exactly one final line, nothing after it); every way a call ends -- an answer, a fault, a
+  limit, a timeout, Ctrl-C -- ends the `ssh` process and every process it started (on Windows a job
+  object `ssh` belongs to before it runs, else the call ends before anything is sent, a setup
+  interrupted by Ctrl-C included; on POSIX a process group, signaled once and always before its leader
+  is reaped, with or without `os.waitid`), its reader threads and its pipes. Outside this: a helper
+  that explicitly leaves that job or group, and the helpers of a child reaped behind modelroom's
+  back (CONTRACTS.md, "The remote protocol v1"). A rented server that answers
+  as another machine behind the same alias asks once, `same` or `new`; `new` keeps the old machine
+  under its neutral key and imports the new one exactly under the alias, in one import. One SSH
+  target connects per run (several stored ones ask `ssh_active`, optional), so the question is
+  always about exactly one machine. Its rows stand in `pull_other`'s list; the row chosen there, of
+  any rank, is pulled onto it over SSH.
+
+- **The load test runs on the server, one active SSH machine per run** (AP9-FR, FR-B2;
+  `modelroom/remote_server.py`, `remote_client.py`, `remote_protocol.py`, `guided_remote_measure.py`;
+  CONTRACTS.md, "The remote protocol v1", "Load test on the server"). Two new ops of the wire,
+  `candidates` and `measure`: the server runs stage 1's own digest rule (`loadtest.installed_candidates`)
+  against its own `/api/tags`, and answers with package identities only -- never a name the server's
+  own Ollama holds a package under, cloud and unmatched entries counted, not named. `measure` runs
+  the shipped protocol at the server (its own GPU and CPU load, read there, not on the laptop) and
+  sends the record through the neutral sink (FR-N) with the package it just matched, so `ollama_name`
+  is the name built from the package, never the server's own. The laptop runs every record through
+  the same sink again before it stores it, and discards it with `<alias> answered in a form this
+  modelroom does not read` where the two disagree, or the `profile_id` is not the alias's own. Step
+  4 asks a second round, only for the run's one active SSH target and only after the local servers'
+  own: `Measure the speed on <alias> now?`, then `Which of these should be measured on <alias>?` --
+  no active target, no question. Measured under the `profile_id` the alias is bound to (B3/B4); a
+  purely local measurement is unchanged, through the same sink, no special case for the remote path.
+
+- **README and CLI text for another computer** (AP9-FR, FR-C; ADR 0013). The README's "Another
+  computer" section is rewritten around the three ways in (copy the command, a shared folder, over
+  SSH), the one-time SSH set-up, what is kept and where, and the machine-naming rule; the promise
+  "modelroom itself never connects to another computer" is gone, replaced with the one true
+  exception (the SSH way, to the alias the user named). Every other README and `cli.py` sentence
+  that counted the subcommands, or said all of them never ask a question or never install anywhere
+  but this computer, now names `pull` and `remote` as the exceptions they are.
+
 - **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
   `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).
   `hardware` reads each vendor's own source -- NVIDIA from `nvidia-smi` with the compute
@@ -178,6 +281,18 @@ All notable changes to this project are documented in this file. The format foll
 - **`docs/adr/`**, the first three decision records, with its index.
 
 ### Changed
+
+- **Machine keys and names of a folder of 0.1.0 change once** (FR-N): the first command that writes
+  to it renames `[machines.<host name>]` and every other hand-written key to a neutral one, and a
+  profile's `display_name` to its neutral name (`machine renamed to server-3f9a0c21 (no host names in
+  files)`). A script calling `fetch --machine <old key>` is led to the new key in that call and meets
+  the unknown-machine message afterwards: take the new key from `modelroom.toml`. The name typed for a
+  machine entered by hand no longer reaches a file. A migration that stopped halfway finds its
+  profile by content, not by name, and names a schema-1 profile backup by the profile it became
+  (`<profile_id>.json.v1.bak`). A profile or record file that does not read as a JSON object now ends
+  every writing command with exit `1` (before: listed as broken and skipped), since it cannot be
+  cleaned of names -- a deliberate change, decided 2026-09-29: move the file away or repair it. `hardware` no longer stores the host name; every command reads it
+  live only to recognize this computer's key of 0.1.0, and writes it nowhere.
 
 - **The memory reserve follows the machine's size** (`modelroom/reserve.py`, `fit.py`, `config.py`;
   CONTRACTS.md, "MachineConfig", "Pool and mode"; ADR 0012; AP9-RM, decided 2026-09-29). Where

@@ -3,7 +3,7 @@
   "profile": {
     "schema_version": 2,
     "profile_id": "3f9a0c21d4e6b870",
-    "display_name": "workstation",
+    "display_name": "workstation-3f9a0c21",
     "os_fingerprint": "9d2f4b6a8c0e1357",
     "os_fingerprint_source": "windows_machineguid",
     "origin": "measured",
@@ -44,7 +44,7 @@
         "hf_revision": null,
         "hf_file_digest": null
       },
-      "ollama_name": "nova:7b",
+      "ollama_name": null,
       "daemon_version": "0.12.3",
       "scenario": {
         "context_requested": 8192,
@@ -105,7 +105,7 @@
         "hf_file_digest": null
       },
       "ollama_name": null,
-      "daemon_version": "ollama 0.12.3",
+      "daemon_version": null,
       "scenario": {
         "context_requested": 4096,
         "context_origin": "legacy",

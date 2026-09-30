@@ -325,7 +325,7 @@ def test_a_recorded_gpu_server_lists_its_display_class_adapters_by_vendor(name, 
 
 @pytest.mark.parametrize(("name", "vendors"), RECORDED_GPU_SERVERS, ids=["two-a100", "two-l4"])
 def test_a_recorded_gpu_server_without_nvidia_smi_is_no_counted_card(name, vendors):
-    """AP9-GPU G7 (Handprobe 5, never `present_unmeasured`): the cards are named, none counted."""
+    """AP9-GPU G7 (hand test 5, never `present_unmeasured`): the cards are named, none counted."""
     runner = _runner(nvidia_smi=_missing("nvidia-smi"), lspci=_done(LSPCI_ARGS, stdout=_fixture(name)))
     gpu = measure_gpu("linux", runner)
     assert (gpu.gpu_state, gpu.vram_gib, gpu.vram_source) == ("none", 0.0, "none")

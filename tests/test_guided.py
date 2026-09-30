@@ -39,7 +39,7 @@ from modelroom.toml_writer import dump_toml
 
 from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
-    FOUR_L4_ID,
+    FOUR_L4_ID, THIS_MACHINE,
     TWO_A100_ID,
     TWO_L4_ID,
     area_problems,
@@ -213,7 +213,7 @@ def test_every_answer_is_written_back_in_words(tmp_path: Path):
     answers = [line.strip() for line in lines if line.strip().startswith("? ")]
     assert "? Where should results live?  this folder" in answers
     # The machine is named (AP9-UX F); its class follows in the next answer on a first run.
-    assert "? Which machines should the result cover?  this machine (workstation)" in answers
+    assert "? Which machines should the result cover?  this machine" in answers  # FR-N: its key is in the list only
     assert "? What are you looking for?  qwen" in answers
     assert "? Show only repositories of a publisher or a listed packager?  Yes" in answers
     # This answer file names repositories, as a file always could: an answer of the user appears
@@ -257,7 +257,7 @@ def test_the_install_line_follows_the_machine_this_run_is_on(tmp_path: Path):
 
     install = next(line for line in lines if line.strip().startswith("install   #1"))
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    ranked = next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"]
+    ranked = next(block for block in payload["machines"] if block["machine"] == THIS_MACHINE)["ranked"]
     assert ranked[0]["quantization"] in install
 
 
@@ -383,8 +383,8 @@ def test_the_first_start_writes_a_configuration_with_this_device_as_the_writer(t
     assert code == 0
     raw = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))
     assert raw["schema_version"] == 3
-    assert raw["machines"]["workstation"]["writer"] is True
-    assert Path(raw["guided"]["results"]) == _results(tmp_path)
+    assert raw["machines"][THIS_MACHINE]["writer"] is True
+    assert raw["guided"]["results"] == "."  # FR-N (Codex r1-2): the folder's own path goes in relative
     # The line that named the writer is gone from the screen: the configuration says it, and the
     # balance of step 1 says the folder and how many machines the result covers.
     assert not any("as the writer of this results folder" in line for line in lines)
@@ -530,7 +530,7 @@ def test_the_measured_machine_is_written_into_the_configuration(tmp_path: Path):
     assert profile.gpu_state == "measured"
     assert profile.llmfit_crosscheck.ram_physical.status == "confirmed"
     raw = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))
-    assert raw["machines"]["workstation"]["profile"] == profile.profile_id
+    assert raw["machines"][THIS_MACHINE]["profile"] == profile.profile_id
     # One note instead of the readings and the profile id: what was measured, and who confirmed it.
     assert not any(profile.profile_id in line for line in lines)
     note = next(line.strip() for line in lines if line.strip().startswith("measured"))
@@ -573,7 +573,7 @@ def test_a_first_run_offers_to_measure_this_machine_first_and_marks_nothing(tmp_
     """Nothing is marked in advance (AP9-UX C): `Enter` alone takes the first row, which measures."""
     rows = _recorded_machines(tmp_path, RUN1, FULL_ANSWERS)
 
-    assert (rows[0].value, rows[0].label) == ("this-machine", "this machine (workstation, measure now)")
+    assert (rows[0].value, rows[0].label) == ("this-machine", f"this machine ({THIS_MACHINE}, measure now)")
     assert not any(choice.checked for choice in rows)
 
 
@@ -586,13 +586,13 @@ def _bound_run(tmp_path: Path) -> str:
 def test_the_machine_list_keeps_its_order(tmp_path: Path):
     """Rows 1-6 of AP9-UX C in three cases: a profile measured here, none, one entered by hand."""
     first = [choice.value for choice in _recorded_machines(tmp_path / "none", RUN1, FULL_ANSWERS)]
-    assert first == ["this-machine", "import", "enter"]
+    assert first == ["this-machine", "import", "ssh", "share", "enter"]  # FR-B1, B3: the ssh row
 
     bound = _bound_run(tmp_path)
     for index, name in enumerate(("alpha", "beta")):
         profile = v2_profile(profile_id=f"{index + 3}" * 16, display_name=name)
         atomic_write_json(_results(tmp_path) / "state" / "hardware" / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
-    (_results(tmp_path) / "state" / "hardware" / "broken.json").write_text("{", encoding="utf-8")
+    (_results(tmp_path) / "state" / "hardware" / "broken.json").write_text("{}", encoding="utf-8")  # FR-N: "{" stops every command
     rows = _recorded_machines(tmp_path, RUN2, _answers_without_folder(FULL_ANSWERS))
     assert [choice.value for choice in rows] == [
         f"profile:{bound}",
@@ -600,11 +600,13 @@ def test_the_machine_list_keeps_its_order(tmp_path: Path):
         f"profile:{'3' * 16}",
         f"profile:{'4' * 16}",
         "import",
+        "ssh",  # FR-B1, B3: the ssh row
+        "share",
         "enter",
         "broken:broken.json",
     ]
-    assert rows[0].label == "this machine (workstation, laptop, as measured 2026-09-23)"
-    assert rows[1].label == "this machine (workstation, measure again)"
+    assert rows[0].label == f"this machine ({THIS_MACHINE}, laptop, as measured 2026-09-23)"
+    assert rows[1].label == f"this machine ({THIS_MACHINE}, measure again)"
     assert not any(choice.checked for choice in rows)
 
     for folder in ("results", "home"):
@@ -646,20 +648,20 @@ def test_enter_alone_keeps_the_profile_of_a_machine_measured_here(tmp_path: Path
     assert [path.stem for path in _profiles(tmp_path)] == [bound]
     assert (_results(tmp_path) / "state" / "hardware" / f"{bound}.json").read_bytes() == stored
     assert not any(line.strip().startswith("measured") for line in lines)
-    assert "? Which machines should the result cover?  this machine (workstation, laptop)" in [line.strip() for line in lines]
+    assert "? Which machines should the result cover?  this machine (laptop)" in [line.strip() for line in lines]
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    assert [(block["machine"], block["status"]) for block in payload["machines"]] == [("workstation", "ranked")]
+    assert [(block["machine"], block["status"]) for block in payload["machines"]] == [(THIS_MACHINE, "ranked")]
 
 
 def test_this_machine_is_named_with_its_class(tmp_path: Path):
-    """AP9-UX F: the host name as the configuration names it, and the class of its profile where known."""
+    """AP9-UX F: its key as the configuration names it (neutral, FR-N), and the class of its profile where known."""
     code, lines = _run(tmp_path, probes=windows_probes(host="GPU Server"))
     assert code == 0
-    assert "? Which machines should the result cover?  this machine (gpu-server)" in [line.strip() for line in lines]
+    assert "? Which machines should the result cover?  this machine" in [line.strip() for line in lines]
 
     code, lines = _run(tmp_path, {**_answers_without_folder(FULL_ANSWERS), "machines": ["this-machine"]}, now=RUN2, probes=windows_probes(host="GPU Server"))
     assert code == 0
-    assert "? Which machines should the result cover?  this machine (gpu-server, laptop)" in [line.strip() for line in lines]
+    assert "? Which machines should the result cover?  this machine (laptop)" in [line.strip() for line in lines]
 
 
 def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_path: Path):
@@ -675,7 +677,7 @@ def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_
     hardware.mkdir(parents=True, exist_ok=True)
     legacy = dict(EXAMPLES["HardwareSnapshot"], machine="old")
     (hardware / "old.json").write_text(json.dumps(legacy), encoding="utf-8")
-    (hardware / "broken.json").write_text("{", encoding="utf-8")
+    (hardware / "broken.json").write_text("{}", encoding="utf-8")  # FR-N: "{" stops every command
 
     run_guided(
         _Recording({key: value for key, value in FULL_ANSWERS.items() if key != "results"} | {"machines": []}),
@@ -769,7 +771,7 @@ def test_an_import_adds_the_machine_and_never_changes_the_binding(tmp_path: Path
     assert code == 0
     assert (_results(tmp_path) / "state" / "hardware" / f"{'4' * 16}.json").is_file()
     assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) == bound
-    assert any(line.strip().startswith("imported server: ") for line in lines)
+    assert any(line.strip().startswith("imported computer-44444444: ") for line in lines)  # FR-N: its neutral name
 
 
 def test_a_profile_already_in_the_folder_gets_a_machine_entry(tmp_path: Path):
@@ -793,7 +795,7 @@ def test_a_profile_already_in_the_folder_gets_a_machine_entry(tmp_path: Path):
     )
     assert any("added for the profile" in line for line in lines)
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    assert "server-01" in {block["machine"] for block in payload["machines"]}
+    assert "computer-55555555" in {block["machine"] for block in payload["machines"]}  # FR-N: its neutral name
 
 
 def test_a_change_made_during_the_dialog_is_not_written_over(tmp_path: Path):
@@ -806,7 +808,7 @@ def test_a_change_made_during_the_dialog_is_not_written_over(tmp_path: Path):
         def text(self, key, question, default=""):
             if key == "search":
                 text = _config_file(tmp_path).read_text(encoding="utf-8")
-                addition = '\n[machines.other]\nreserve_ram_gib = 8.0\nreserve_vram_gib = 1.0\nwriter = false\n'
+                addition = '\n[machines.computer-0b0b0b0b]\nreserve_ram_gib = 8.0\nreserve_vram_gib = 1.0\nwriter = false\n'
                 _config_file(tmp_path).write_text(text + addition, encoding="utf-8")
             return super().text(key, question, default)
 
@@ -824,10 +826,10 @@ def test_a_change_made_during_the_dialog_is_not_written_over(tmp_path: Path):
     )
 
     assert code == 0
-    assert "other" in load_config(_config_file(tmp_path)).machines
+    assert "computer-0b0b0b0b" in load_config(_config_file(tmp_path)).machines  # a neutral key another run wrote
 
 
-def _adding_a_machine(tmp_path: Path, when_key: str, name: str = "other"):
+def _adding_a_machine(tmp_path: Path, when_key: str, name: str = "computer-0b0b0b0b"):
     """A `FileAsker` that adds `[machines.<name>]` to the file while one question is on screen."""
 
     def add() -> None:
@@ -873,7 +875,7 @@ def test_a_change_made_during_any_question_is_not_written_over(tmp_path: Path, w
     )
 
     assert code == 0
-    assert "other" in load_config(_config_file(tmp_path)).machines
+    assert "computer-0b0b0b0b" in load_config(_config_file(tmp_path)).machines  # a neutral key another run wrote
 
 
 def _guided_run_for(tmp_path: Path, out: list[str]):
@@ -932,10 +934,10 @@ FOREIGN_CONFIGURATION = (
 )
 
 
-def test_two_runs_that_create_the_configuration_at_once_keep_the_first_ones_file(tmp_path: Path):
+def test_two_runs_that_create_the_configuration_at_once_keep_the_first_ones_file(tmp_path: Path, monkeypatch):
     """The second run found no file, and one is there when it writes: it takes it over as it is.
 
-    The other run writes its file while this one asks this machine's host name -- after the
+    The other run writes its file while this one reads this machine's key (FR-N) -- after the
     folder was chosen and found empty, before the first write. The initial values of a new file
     replace nothing; this machine's own entry comes from the writer step, as in any folder.
     """
@@ -947,12 +949,13 @@ def test_two_runs_that_create_the_configuration_at_once_keep_the_first_ones_file
             chosen.append(key)
             return super().select(key, question, choices, instruction)
 
-    def hostname() -> str:
+    import modelroom.guided as guided_module
+    def this_machine(path) -> str:
         if "results" in chosen and not config_file.exists():
             config_file.write_text(FOREIGN_CONFIGURATION, encoding="utf-8")
-        return "workstation"
-
-    probes = dataclasses.replace(windows_probes(), hostname=hostname)
+        return real(path)
+    real, probes = guided_module.this_machine, windows_probes()
+    monkeypatch.setattr(guided_module, "this_machine", this_machine)
     lines: list[str] = []
     code = run_guided(
         _Asker(FULL_ANSWERS),
@@ -968,10 +971,10 @@ def test_two_runs_that_create_the_configuration_at_once_keep_the_first_ones_file
 
     assert code == 0, lines
     stored = load_config(config_file)
-    assert "other" in stored.machines
+    assert any(not entry.writer and entry.profile is None for entry in stored.machines.values())  # `other`, neutral
     assert (stored.defaults.reserve_ram_gib, stored.updates.check) == (12.0, False)
     assert "acme" in stored.publishers
-    assert stored.machines["workstation"].writer is True
+    assert stored.machines[THIS_MACHINE].writer is True
 
 
 def test_a_second_conflict_in_a_row_is_a_dialog_error(tmp_path: Path):
@@ -1029,10 +1032,9 @@ def test_an_ollama_pair_of_the_configuration_stands_in_the_list(tmp_path: Path):
 
 
 def test_a_machine_name_that_cannot_be_freed_leaves_one_profile_unconfigured(tmp_path: Path):
-    """`machine_name_for` raises when base, short-id and full-id names are all taken.
-
-    Found by the second-model review: that has to be one profile without an entry and a reported
-    problem, not a traceback out of the folder step.
+    """Once `machine_name_for` raised when every name was taken (second-model review). Since FR-N the
+    sweep makes every row neutral, and a taken neutral name is a random neutral key: the profile gets
+    its entry, and there is no problem to report.
     """
     assert _run(tmp_path, {**FULL_ANSWERS, "machines": []})[0] == 0
     profile = v2_profile(profile_id="7" * 16, display_name="taken")
@@ -1049,9 +1051,9 @@ def test_a_machine_name_that_cannot_be_freed_leaves_one_profile_unconfigured(tmp
     answers = {key: value for key, value in FULL_ANSWERS.items() if key != "results"}
     code, lines = _run(tmp_path, answers | {"machines": []}, now=RUN2)
 
-    assert code == 1
-    assert any("stays without a machine entry" in line for line in lines)
-    assert profile.profile_id not in {
+    assert code == 0
+    assert not any("stays without a machine entry" in line for line in lines)
+    assert profile.profile_id in {
         machine.profile for machine in load_config(path).machines.values()
     }
 
@@ -2009,7 +2011,7 @@ def test_the_run_ends_with_both_views_and_a_word_on_the_load_test(tmp_path: Path
     printed = "\n".join(lines)
     # The rule and the snapshot time are in the Markdown file; the screen shows the table.
     assert "Ranking rule: graphics memory before system memory" in (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
-    assert "workstation · context" in printed
+    assert "laptop-00000000 · context" in printed  # FR-N: the profile's neutral name
     assert "Model" in printed and "Package" in printed
 
 
@@ -2474,7 +2476,9 @@ def _watched(tmp_path: Path, answers: dict, probes=None) -> _WatchingAsker:
 def test_the_machine_list_offers_entering_a_machine_by_hand_after_measuring_and_importing(tmp_path: Path):
     machines = _watched(tmp_path, {**FULL_ANSWERS, "machines": []}).choices["machines"]
 
-    assert [choice.value for choice in machines if choice.disabled is None] == ["this-machine", "import", "enter"]
+    assert [choice.value for choice in machines if choice.disabled is None] == [
+        "this-machine", "import", "ssh", "share", "enter",  # FR-B1, B3: the ssh row
+    ]
     assert next(choice.label for choice in machines if choice.value == "enter") == "enter a machine by hand"
 
 
@@ -2499,7 +2503,7 @@ def test_every_answer_of_the_machine_entered_by_hand_is_written_back_in_words(tm
     assert code == 0
     answers = [line.strip() for line in lines if line.strip().startswith("? ")]
     assert "? Which machines should the result cover?  a machine entered by hand" in answers
-    assert "? What is the machine called?  tower" in answers
+    assert "? What is the machine called?  not kept: the machine gets a neutral name" in answers  # FR-N (Codex r1-9)
     assert "? How much memory does it have, in GiB?  64 GiB" in answers
     assert "? What runs the model?  a graphics card with its own memory" in answers
     assert "? How much graphics memory, in GiB?  24 GiB" in answers
@@ -2616,16 +2620,16 @@ def test_a_machine_entered_by_hand_is_a_profile_file_and_an_entry_of_its_own_and
     assert code == 0
     path = _results(tmp_path) / "state" / "hardware" / f"{'c' * 16}.json"
     stored = read_profile_document(json.loads(path.read_text(encoding="utf-8")))
-    assert (stored.display_name, stored.gpu_state, stored.vram_gib) == ("tower", "entered", 24.0)
+    assert (stored.display_name, stored.gpu_state, stored.vram_gib) == ("workstation-cccccccc", "entered", 24.0)
     assert read_pointer(_pointer(tmp_path)).bindings == {}
     config = load_config(_config_file(tmp_path))
-    entry = config.machines["tower"]
+    entry = config.machines["workstation-cccccccc"]  # FR-N: never the name typed in
     assert (entry.writer, entry.profile) == (False, "c" * 16)
     assert (entry.reserve_ram_gib, entry.reserve_vram_gib) == (
         config.defaults.reserve_ram_gib,
         config.defaults.reserve_vram_gib,
     )
-    assert "entered tower: workstation, 64 GiB memory, graphics card 24 GiB" in [line.strip() for line in lines]
+    assert "entered workstation-cccccccc: workstation, 64 GiB memory, graphics card 24 GiB" in [line.strip() for line in lines]
     # Step 1's balance counts it: this machine's own entry and the one entered by hand.
     assert any(line.endswith(", 2 machines") for line in _summaries(lines))
 
@@ -2633,8 +2637,8 @@ def test_a_machine_entered_by_hand_is_a_profile_file_and_an_entry_of_its_own_and
 @pytest.mark.parametrize(
     ("answers", "note"),
     [
-        (ENTERED_NONE, "entered box: workstation, 64 GiB memory, no graphics card"),
-        (ENTERED_UNIFIED, "entered studio: workstation, 32 GiB memory, shared memory"),
+        (ENTERED_NONE, "entered workstation-00000000: workstation, 64 GiB memory, no graphics card"),
+        (ENTERED_UNIFIED, "entered workstation-00000000: workstation, 32 GiB memory, shared memory"),
     ],
 )
 def test_the_note_of_a_machine_entered_by_hand_says_what_it_is(tmp_path: Path, answers, note):
@@ -2644,13 +2648,13 @@ def test_the_note_of_a_machine_entered_by_hand_says_what_it_is(tmp_path: Path, a
 
 
 def test_a_name_another_machine_has_gets_the_short_id(tmp_path: Path):
-    """`workstation` is this machine's own entry; the one entered by hand steps aside."""
+    """A name typed in is no key since FR-N: the entry is the profile's neutral name, this machine keeps its own."""
     answers = {**ENTERED_UNIFIED, "entered_name": "workstation"}
     code, _lines = _run(tmp_path, answers, probes=windows_probes(ids=["d" * 16]))
 
     assert code == 0
     config = load_config(_config_file(tmp_path))
-    assert config.machines["workstation"].writer is True
+    assert config.machines[THIS_MACHINE].writer is True
     assert config.machines[f"workstation-{'d' * 8}"].profile == "d" * 16
 
 
@@ -2661,7 +2665,7 @@ def test_the_new_profile_id_never_lands_on_a_file_of_the_folder_that_does_not_re
     legacy = hardware / f"{'a' * 16}.json"
     legacy.write_text(json.dumps(dict(EXAMPLES["HardwareSnapshot"], machine="old")), encoding="utf-8")
     broken = hardware / f"{'b' * 16}.json"
-    broken.write_text("{", encoding="utf-8")
+    broken.write_text("{}", encoding="utf-8")  # FR-N: "{" stops every command; `{}` reads as no profile
     before = {path: path.read_bytes() for path in (legacy, broken)}
 
     answers = {**ENTERED_UNIFIED, "write_config": True}
@@ -2670,7 +2674,7 @@ def test_the_new_profile_id_never_lands_on_a_file_of_the_folder_that_does_not_re
     assert code == 0
     assert {path: path.read_bytes() for path in (legacy, broken)} == before
     assert [path.stem for path in _profiles(tmp_path)] == ["a" * 16, "b" * 16, "e" * 16]
-    assert load_config(_config_file(tmp_path)).machines["studio"].profile == "e" * 16
+    assert load_config(_config_file(tmp_path)).machines["workstation-eeeeeeee"].profile == "e" * 16
 
 
 def test_a_file_name_in_another_letter_case_counts_as_taken(tmp_path: Path):
@@ -2678,14 +2682,14 @@ def test_a_file_name_in_another_letter_case_counts_as_taken(tmp_path: Path):
     hardware = _results(tmp_path) / "state" / "hardware"
     hardware.mkdir(parents=True)
     upper = hardware / f"{'A' * 16}.json"
-    upper.write_text("{", encoding="utf-8")
+    upper.write_text("{}", encoding="utf-8")
 
     answers = {**ENTERED_UNIFIED, "write_config": True}
     code, _lines = _run(tmp_path, answers, probes=windows_probes(ids=["a" * 16, "e" * 16]))
 
     assert code == 0
-    assert upper.read_text(encoding="utf-8") == "{"
-    assert load_config(_config_file(tmp_path)).machines["studio"].profile == "e" * 16
+    assert upper.read_text(encoding="utf-8") == "{}"
+    assert load_config(_config_file(tmp_path)).machines["workstation-eeeeeeee"].profile == "e" * 16
 
 
 def test_the_new_profile_id_never_takes_the_profile_id_a_file_of_another_name_carries(tmp_path: Path):
@@ -2696,7 +2700,7 @@ def test_the_new_profile_id_never_takes_the_profile_id_a_file_of_another_name_ca
     hardware = _results(tmp_path) / "state" / "hardware"
     hardware.mkdir(parents=True)
     renamed = hardware / f"{'a' * 16}.json"
-    renamed.write_text(entered_profile("old", 16.0, "unified", 0.0, "b" * 16, RUN1).model_dump_json(), encoding="utf-8")
+    renamed.write_text(entered_profile("computer-bbbbbbbb", 16.0, "unified", 0.0, "b" * 16, RUN1).model_dump_json(), encoding="utf-8")
     before = renamed.read_bytes()
 
     answers = {**ENTERED_UNIFIED, "write_config": True}
@@ -2705,7 +2709,7 @@ def test_the_new_profile_id_never_takes_the_profile_id_a_file_of_another_name_ca
     assert code == 0
     assert renamed.read_bytes() == before
     assert [path.stem for path in _profiles(tmp_path)] == ["a" * 16, "e" * 16]
-    assert load_config(_config_file(tmp_path)).machines["studio"].profile == "e" * 16
+    assert load_config(_config_file(tmp_path)).machines["workstation-eeeeeeee"].profile == "e" * 16
 
 
 def test_the_empty_card_of_a_folder_whose_only_machine_was_entered_by_hand_says_it_is_never_measured(tmp_path: Path):
@@ -2771,9 +2775,9 @@ def test_the_machine_list_shows_each_shape_entered_by_hand_as_what_it_is(tmp_pat
     # One row per profile since AP9-UX C1, each a choice: its label, then its hardware.
     rows = {choice.label: choice.disabled for choice in asker.choices["machines"] if choice.value.startswith("profile:")}
     assert rows == {
-        "tower  graphics card 24.00 GiB (entered) / 64.00 GiB RAM": None,
-        "box  no graphics card (entered) / 64.00 GiB RAM": None,
-        "studio  shared memory 32.00 GiB (entered)": None,
+        "computer-11111111  graphics card 24.00 GiB (entered) / 64.00 GiB RAM": None,  # FR-N: neutral names
+        "computer-22222222  no graphics card (entered) / 64.00 GiB RAM": None,
+        "computer-33333333  shared memory 32.00 GiB (entered)": None,
     }
 
 
@@ -2783,22 +2787,22 @@ def test_a_machine_entered_by_hand_is_named_so_and_computed_on_shared_memory_in_
 
     assert code == 0
     stripped = [line.strip() for line in lines]
-    assert any(line.startswith("studio (entered) · another computer · context") for line in stripped)  # U2, U8
+    assert any(line.startswith("workstation-00000000 (entered) · another computer · context") for line in stripped)  # U2, U8
     assert any("fit into shared memory, budget 23.0 GB" in line for line in stripped)
-    card = next(line for line in stripped if line.startswith("machine") and "studio" in line)
+    card = next(line for line in stripped if line.startswith("machine") and "workstation-00000000" in line)
     assert card.endswith("shared memory 32 GB, entered")
     assert "measured" not in card
     markdown = (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
-    assert "studio (entered) -- ranked" in markdown
+    assert "workstation-00000000 (entered) -- ranked" in markdown
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    block = next(block for block in payload["machines"] if block["machine"] == "studio")
+    block = next(block for block in payload["machines"] if block["machine"] == "workstation-00000000")
     gpu = [entry for entry in block["ranked"] if entry["fit"]["mode"] == "gpu"]
     assert gpu, "unified memory computes in mode gpu"
     assert {entry["fit"]["pool_gib"] for entry in gpu} == {23.0}
     assert {entry["note"]["origin"] for entry in block["ranked"] + block["no_fit"]} == {"computed"}
-    # This run chose the machine entered by hand alone: `workstation` is in the configuration, not in the result (B).
-    assert "workstation" in load_config(_config_file(tmp_path)).machines
-    assert [block["machine"] for block in payload["machines"]] == ["studio"]
+    # This run chose the machine entered by hand alone: this machine is in the configuration, not in the result (B).
+    assert THIS_MACHINE in load_config(_config_file(tmp_path)).machines
+    assert [block["machine"] for block in payload["machines"]] == ["workstation-00000000"]
 
 
 def test_a_machine_entered_by_hand_leaves_a_card_without_an_install_line_and_no_load_test(tmp_path: Path):
@@ -2807,8 +2811,8 @@ def test_a_machine_entered_by_hand_leaves_a_card_without_an_install_line_and_no_
     assert code == 0
     stripped = [line.strip() for line in lines]
     assert any(line.startswith("no load test: ") for line in stripped)
-    assert all(" on tower " in line for line in stripped if line.startswith(("install ", "? Pull")))  # U3
-    card = next(line for line in stripped if line.startswith("machine") and "tower" in line)
+    assert all(" on workstation-00000000 " in line for line in stripped if line.startswith(("install ", "? Pull")))  # U3
+    card = next(line for line in stripped if line.startswith("machine") and "workstation-00000000" in line)
     assert card.endswith("graphics card 24 GB, 64 GB memory, entered")
 
 
@@ -2826,10 +2830,10 @@ def test_a_home_binding_on_a_machine_entered_by_hand_measures_this_machine_into_
     measured = _measured_stem(tmp_path)
     assert read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path)) == measured
     config = load_config(_config_file(tmp_path))
-    assert (config.machines["studio"].profile, config.machines["workstation"].profile) == ("c" * 16, measured)
+    assert (config.machines["workstation-cccccccc"].profile, config.machines[THIS_MACHINE].profile) == ("c" * 16, measured)
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     # This run measured this machine only, so the result is that machine's (AP9-UX B).
-    assert [(block["machine"], block["status"]) for block in payload["machines"]] == [("workstation", "ranked")]
+    assert [(block["machine"], block["status"]) for block in payload["machines"]] == [(THIS_MACHINE, "ranked")]
 
 
 def _bound_by_hand_to_an_entered_profile(tmp_path: Path) -> tuple[_WatchingAsker, list[str]]:
@@ -2858,7 +2862,7 @@ def test_a_home_binding_on_a_machine_entered_by_hand_offers_to_measure_now_first
     asker, _lines = _bound_by_hand_to_an_entered_profile(tmp_path)
 
     rows = asker.choices["machines"]
-    assert (rows[0].value, rows[0].label) == ("this-machine", "this machine (workstation, measure now)")
+    assert (rows[0].value, rows[0].label) == ("this-machine", f"this machine ({THIS_MACHINE}, measure now)")
     assert not any(choice.checked for choice in rows)
     assert f"profile:{'c' * 16}" in [choice.value for choice in rows[1:]]
 
@@ -2880,8 +2884,8 @@ def test_a_local_entry_on_a_machine_entered_by_hand_is_bound_to_the_new_measurem
 
     def only_the_local_entry(current):
         data = current.model_dump(mode="json")
-        del data["machines"]["studio"]
-        data["machines"]["workstation"]["profile"] = "c" * 16
+        del data["machines"]["workstation-cccccccc"]
+        data["machines"][THIS_MACHINE]["profile"] = "c" * 16
         return type(current).from_dict(data)
 
     update_config(_config_file(tmp_path), only_the_local_entry, now=RUN1)
@@ -2891,9 +2895,9 @@ def test_a_local_entry_on_a_machine_entered_by_hand_is_bound_to_the_new_measurem
 
     assert code == 0
     assert hand.read_bytes() == before
-    assert load_config(_config_file(tmp_path)).machines["workstation"].profile == _measured_stem(tmp_path)
+    assert load_config(_config_file(tmp_path)).machines[THIS_MACHINE].profile == _measured_stem(tmp_path)
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    assert [block["machine"] for block in payload["machines"]] == ["workstation"]
+    assert [block["machine"] for block in payload["machines"]] == [THIS_MACHINE]
 
     # The entered profile got its entry back in the run before; picking it puts it in the result again.
     studio = f"profile:{'c' * 16}"
@@ -2902,7 +2906,7 @@ def test_a_local_entry_on_a_machine_entered_by_hand_is_bound_to_the_new_measurem
     assert code == 0
     assert hand.read_bytes() == before
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
-    assert sorted(block["machine"] for block in payload["machines"]) == ["studio", "workstation"]
+    assert sorted(block["machine"] for block in payload["machines"]) == sorted([THIS_MACHINE, "workstation-cccccccc"])
 
 
 # --- AP9-UX D: every asker takes the head of a list -------------------------------------------------
@@ -2953,10 +2957,13 @@ def test_every_profile_of_the_folder_is_a_choice(tmp_path: Path):
     rows = asker.choices["machines"]
     values = [choice.value for choice in rows]
     bound = read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path))
-    assert values == [f"profile:{bound}", "this-machine", *(f"profile:{key}" for key in servers), "import", "enter"]
+    assert values == [
+        f"profile:{bound}", "this-machine", *(f"profile:{key}" for key in servers),
+        "import", "ssh", "share", "enter",  # FR-B1, B3: the ssh row
+    ]
     for key, cards in servers.items():
         row = next(choice for choice in rows if choice.value == f"profile:{key}")
-        assert row.label.startswith(f"server ({key[:SHORT_ID_LEN]})  {cards}"), row.label
+        assert row.label.startswith(f"computer-{key[:SHORT_ID_LEN]}  {cards}"), row.label  # FR-N: neutral, unique
         assert row.disabled is None and not row.checked
     stripped = [line.strip() for line in lines]
     assert stripped.index("another computer: pick its profile below, or import the file made there") < next(
@@ -3007,7 +3014,7 @@ def test_a_profile_no_machine_names_stays_grayed_with_its_reason(tmp_path: Path)
     scan = scan_profiles(_results(tmp_path) / "state" / "hardware")
     named = [key for key in scan.profiles if key != TWO_L4_ID]
 
-    rows = _machine_choices(scan, None, "workstation", named)
+    rows = _machine_choices(scan, None, "workstation", named, "set up a shared folder for profiles")
 
     grayed = next(choice for choice in rows if choice.value == f"profile:{TWO_L4_ID}")
     assert grayed.disabled == NO_MACHINE_NAMES
@@ -3034,7 +3041,7 @@ def test_the_result_names_only_this_runs_machines_and_models(tmp_path: Path):
     assert code == 0
     config = load_config(_config_file(tmp_path))
     assert "deepseek-r1" in [family.name for family in config.families]
-    assert "inference-server" in config.machines
+    [other] = [name for name, entry in config.machines.items() if entry.profile is None]  # `inference-server`, neutral
     snapshot = json.loads((_results(tmp_path) / "state" / "modelroom.json").read_text(encoding="utf-8"))
     assert any(package["base_model_hf_repo"] == DEEPSEEK_BASE for package in snapshot["packages"])
 
@@ -3043,7 +3050,7 @@ def test_the_result_names_only_this_runs_machines_and_models(tmp_path: Path):
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     for text in (card, markdown):
         assert "DeepSeek" not in text
-        assert "inference-server" not in text
+        assert other not in text
     assert [block["status"] for block in payload["machines"]] == ["ranked"]
 
 
@@ -3149,12 +3156,12 @@ def test_an_empty_card_names_only_this_runs_machines(tmp_path: Path):
 
     code, lines = _run(tmp_path, {**FULL_ANSWERS, "select": []})
 
-    assert "inference-server" in load_config(_config_file(tmp_path)).machines  # it is there to be left out
+    [other] = [key for key, entry in load_config(_config_file(tmp_path)).machines.items() if entry.profile is None]  # to leave out
     card = _card(lines)
     assert "nothing to rank: no package in this folder yet" in [line.strip() for line in lines]
     assert card["result"].endswith("–") or card["result"].split()[-1] in ("–", "-")
-    assert not any("inference-server" in row for row in card.values())
-    assert any(row.startswith("machine") and "workstation" in row for row in card.values())
+    assert not any(other in row for row in card.values())
+    assert any(row.startswith("machine") and "laptop-00000000" in row for row in card.values())
     assert code == 1  # nothing to render, the render's own exit code as before
 
 
@@ -3192,7 +3199,7 @@ def test_no_selection_key_is_written(tmp_path: Path):
     assert json.dumps(str(tmp_path), ensure_ascii=False)[1:-1] not in masked
     assert not any(FORBIDDEN["absolute user path"].search(line) for line in masked.splitlines())
     golden = (Path(__file__).parent / "golden" / "guided-config-db0dff9.toml").read_bytes().decode("utf-8")  # fixed (Codex r1-16)
-    assert masked == golden.replace('-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]', '-9B-GGUF", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-9B-GGUF"]').replace("reserve_ram_gib = 8.0\n", "")  # + own repo (P3); AP9-RM: no memory reserve in the machine nor in [defaults]
+    assert masked == golden.replace('-9B-GGUF", "Qwen/Qwen3.5-9B-GGUF"]', '-9B-GGUF", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-9B-GGUF"]').replace("reserve_ram_gib = 8.0\n", "").replace("[machines.workstation]", f"[machines.{THIS_MACHINE}]").replace('"<results>/state"', '"state"').replace('"<results>/docs/models.md"', '"docs/models.md"').replace('results = "<results>"', 'results = "."')  # + own repo (P3); AP9-RM: no memory reserve; FR-N: neutral key, paths relative
 
 
 # --- AP9-UX G: every note of a measurement stands where the notes stand -----------------------------

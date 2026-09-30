@@ -14,7 +14,7 @@ name = "nova"
   ollama_base = "nova"
   ollama_tag = "7b"
 
-[machines.laptop]
+[machines.laptop-c0ffee00]
 reserve_ram_gib = 8.0
 reserve_vram_gib = 1.0
 writer = true

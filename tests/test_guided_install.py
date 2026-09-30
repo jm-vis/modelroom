@@ -9,6 +9,7 @@ the search and the fetch, fixture probes, a fixed clock, a pointer file inside `
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 from datetime import datetime, timezone
@@ -26,19 +27,27 @@ from modelroom.guided_install import (
     CANCELED_LINE,
     FirstRow,
     LiveLine,
+    PullTarget,
+    _disk_allows,
+    _is_local,
+    _pull,
     first_row,
+    live_line,
     pull_chosen,
+    pull_target_from_run,
     pulled_problem,
 )
 from modelroom.guided_context import snapshot_packages
 from modelroom.config import load_config
 from modelroom.http import Response
 from modelroom.loadtest import installed_models
+from modelroom.pull_choice import weights_bytes_of
 
 from fixture_servers import DEEPSEEK_WEIGHTS_BYTES
 from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
     PULL_STREAM_LINES,
+    THIS_MACHINE,
     build_transport,
     deepseek_package,
     granite_ollama_package,
@@ -107,12 +116,12 @@ def _run(tmp_path: Path, answers: dict, daemon, room=None) -> tuple[int, list[st
 
 def _first_weights(tmp_path: Path) -> float:
     payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
-    return next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"][0]["weights_gib"]
+    return next(block for block in payload["machines"] if block["machine"] == THIS_MACHINE)["ranked"][0]["weights_gib"]
 
 
 def _ranked_count(tmp_path: Path) -> int:
     payload = json.loads((tmp_path / "results" / "docs" / "models.json").read_text(encoding="utf-8"))
-    return len(next(block for block in payload["machines"] if block["machine"] == "workstation")["ranked"])
+    return len(next(block for block in payload["machines"] if block["machine"] == THIS_MACHINE)["ranked"])
 
 
 def _pull_calls(daemon) -> list:
@@ -326,7 +335,7 @@ def _document(tmp_path: Path) -> RenderDocument:
 def _first_row_of(tmp_path: Path) -> FirstRow:
     config = load_config(tmp_path / "results" / "modelroom.toml")
     packages, _base = snapshot_packages(config)
-    first = first_row(_document(tmp_path), "workstation", packages)
+    first = first_row(_document(tmp_path), THIS_MACHINE, packages)
     assert first is not None
     return first
 
@@ -373,9 +382,9 @@ def test_a_first_row_without_an_ollama_name_or_of_another_machine_is_none(tmp_pa
         update={"machines": [block.model_copy(update={"ranked": [unnamed, *block.ranked[1:]]})]}
     )
 
-    assert first_row(without_name, "workstation", packages) is None
+    assert first_row(without_name, THIS_MACHINE, packages) is None
     assert first_row(document, "inference-server", packages) is None
-    assert first_row(document, "workstation", []) is None
+    assert first_row(document, THIS_MACHINE, []) is None
 
 
 def test_enter_alone_at_the_terminal_declines_the_pull(tmp_path: Path):
@@ -408,6 +417,65 @@ def test_a_registry_package_counts_as_pulled_only_with_its_manifest_digest():
     assert "does not list it" in pulled_problem([], registry)
     # `hf.co/…`: the manifest digest `/api/tags` shows is not the GGUF's, so the name decides.
     assert pulled_problem(installed, hugging_face) is None
+
+
+def test_pull_target_carries_every_field_the_helpers_read(tmp_path: Path):
+    """`_disk_allows`, `_is_local` and `_pull` read only `PullTarget`'s own seven fields -- a wrapper
+    that raises `AttributeError` for anything else still lets a whole pull through (AP9-FR, the
+    rebuild of A4: `pull_chosen`, `_disk_allows`, `_is_local`, `_holds`, `_pull`, `_send` take it)."""
+    field_names = {field.name for field in dataclasses.fields(PullTarget)}
+
+    class _OnlyDeclaredFields:
+        def __init__(self, target: PullTarget) -> None:
+            object.__setattr__(self, "_target", target)
+
+        def __getattr__(self, name: str):
+            if name not in field_names:
+                raise AttributeError(name)
+            return getattr(self._target, name)
+
+    daemon = pull_daemon(after_pull=tags_with(FIRST_NAME))
+    lines: list[str] = []
+    run = _bare_run(tmp_path, daemon, {}, lines)
+    package = granite_ollama_package()
+    first = FirstRow(1, "granite4.2:8b", 5.0, package, weights_bytes_of(package))
+    target = _OnlyDeclaredFields(pull_target_from_run(run))
+
+    _is_local(target, first)  # reads only `.daemon` and `.now`, both declared: no `AttributeError`
+    assert _disk_allows(target, first) is True
+    _pull(target, first, live_line(target))
+
+    assert lines and lines[-1].strip().startswith("✓ Pulled")
+
+
+def test_a_first_row_without_weights_bytes_computes_them_from_the_package(tmp_path: Path):
+    """An older `FirstRow(rank, name, weights_gib, package)` call, with no fifth argument, still
+    gets a real disk check -- not one against `0` bytes (Codex r1-4). The free disk here is chosen
+    above the margin alone but below the package's real need plus the margin (Codex r2-2): a check
+    that used `0` bytes instead of `needed_bytes` would pass on the margin alone and never notice
+    the difference, so a smaller free disk would not have told the two apart."""
+    from fixture_room import fixed_room
+    from modelroom.room import PULL_DISK_MARGIN_BYTES, free_disk
+
+    package = granite_ollama_package()
+    old_style = FirstRow(1, "granite4.2:8b", 5.0, package)  # no weights_bytes: the pre-A4 call shape
+    package_bytes = weights_bytes_of(package)
+
+    assert old_style.weights_bytes is None
+    assert old_style.needed_bytes == package_bytes > 0
+
+    daemon = pull_daemon()
+    lines: list[str] = []
+    run = _bare_run(tmp_path, daemon, {}, lines)
+    # Above the margin alone (so a check that ignored the package would pass), below the package's
+    # own need plus the margin (so the real check must fail).
+    assert PULL_DISK_MARGIN_BYTES < package_bytes  # the fixture's own precondition
+    just_over_the_margin = PULL_DISK_MARGIN_BYTES + 1024
+    room = fixed_room(free_disk_bytes=just_over_the_margin)
+    target = dataclasses.replace(pull_target_from_run(run), disk=lambda: free_disk(room))
+
+    assert _disk_allows(target, old_style) is False  # not silently allowed as a 0-byte download
+    assert any("not enough disk" in line for line in lines)
 
 
 class _Daemon:
@@ -591,7 +659,7 @@ def test_the_table_head_names_the_budgets_and_the_disk(tmp_path: Path):
     """AP9-RM U10: the head says what the fit computes with, the budget, and the free disk of now."""
     _code, lines, _asker = _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())
 
-    head = lines.index(next(line for line in lines if line.startswith("workstation · context")))
+    head = lines.index(next(line for line in lines if line.startswith("laptop-00000000 · context")))
     assert lines[head + 1 : head + 4] == [
         "room      graphics 11.0 GB for models (12.0 GB card minus reserve)",
         "memory 111.7 GB for models (127.7 GB minus reserve)",
@@ -625,7 +693,7 @@ def test_the_self_test_pull_criterion_goes_through_the_pull_list(tmp_path: Path)
     assert _run(tmp_path, {**ANSWERS, "pull": False}, offline_daemon())[0] == 0
 
     problems, detail = selftest_pull._fixture_pull(
-        tmp_path / "results", tmp_path / "home" / ".modelroom" / "guided.json", "workstation", RUN1
+        tmp_path / "results", tmp_path / "home" / ".modelroom" / "guided.json", THIS_MACHINE, RUN1
     )
 
     assert problems == [], problems

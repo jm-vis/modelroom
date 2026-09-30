@@ -73,6 +73,7 @@ documented decision (`docs/adr/`), never a side effect.
 | Render document (`docs/models.json`) | 3 | not read back by this package | -- | ADR 0003, 2026-09-25; ADR 0005, 2026-09-26; ADR 0006, 2026-09-27 (the fit words) |
 | Export file | 1 | `[1, 2)` | its profile is read like a profile file | -- |
 | Measurement file | 2 | 2 | -- | -- |
+| Remote machines (`~/.modelroom/remote.json`) | 1 | `[1, 2)` | -- (new with AP9-FR) | AP9-FR, 2026-09-29 |
 
 AP9-SV1 changes no persisted form (ADR 0008): a vLLM server's reading and its load test live in
 memory for one guided run and are written nowhere. AP9-UX changes no persisted form (ADR 0009): the
@@ -94,6 +95,11 @@ against the published 0.1.0 on 2026-09-29). Only a file that says schema 1 or 2 
 removed by hand makes 0.1.0 stop with a field error (exit `2`), since the schema number does not
 change; the rule below needs a later schema number and does not cover that case. The render document
 is not read back by this package; the new field concerns other readers only.
+AP9-FR changes no shared persisted form: configuration 3, profile 4, document 3, export 1 and
+measurement 2 stay. What changes is which values they may hold ("Neutral names"): from 0.2.0 on an
+export, a profile and a configuration carry a neutral `display_name` and neutral machine keys, and a
+record the forms of its fields the sink allows. The file of the user account `remote.json` is new
+("Remote machines").
 
 A reader of an earlier version meets a file of a later schema with a clean refusal and exit
 `3`. **A results folder shared between machines therefore needs the same or a later version on
@@ -135,6 +141,18 @@ it is the tag part of `ollama_name` after the colon.
 | `1` | at least one fetch area ended `incomplete` (complete areas were still published); or `fetch`/`render` stopped at another process's lock; or `fetch`'s `run_at` is not newer than the stored snapshot's; or `render` has no snapshot to read; or `render`'s existing document was rendered from a newer snapshot than the one being rendered -- every case but the first leaves the snapshot, the hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated, because the lock is taken before the staleness checks (`cli.py`) |
 | `2` | the configuration is missing or invalid; the named `--machine` is not a `writer` in this configuration (`fetch`) or not configured at all (`hardware`); `hardware`'s bound profile belongs to another machine (see "Hardware measurement") and neither `--same-machine` nor `--new-identity` says which it is; `hardware --same-machine` and `hardware --new-identity` were passed together; or an external tool a command *requires* is missing or below the minimum version -- since the measurement work package `hardware` no longer requires `llmfit`, which is a cross-check there |
 | `3` | an input file (configuration, snapshot, or a hardware profile `render` reads) has an unsupported `schema_version`, is not valid JSON, or does not match its model (fix-round 5, P2-3: `cli.py`'s own `_read_snapshot`/`_read_hardware_snapshot` catch `json.JSONDecodeError`/pydantic `ValidationError` at every load site and name the file in the message, the same exit code as an unsupported `schema_version`) |
+
+Since AP9-FR every writing command sweeps its folder of machine names first ("Neutral names"): a
+sweep that cannot finish is exit `1` with nothing else written, and a broken
+`~/.modelroom/remote.json` is exit `3`.
+
+`modelroom pull <name>` (AP9-FR A4, no results folder and no configuration, so none of the codes
+above apply to it) has its own table under "`modelroom pull`", below "Guided mode".
+
+`modelroom remote <op>` (AP9-FR, FR-B1, "The remote protocol v1") is not interactive and not read
+by a human directly: it always exits `0` once it managed to write a line at all -- a fault of the
+call itself is an `error` line on stdout, never this command's own exit code. The one exception is
+a crash before any line could be written, which is not expected in ordinary operation.
 
 ## Models
 
@@ -1377,6 +1395,14 @@ allow-list. An operator who wants the local Ollama daemon reached directly even 
 configured for everything else sets `NO_PROXY=127.0.0.1` in the environment; that is a deployment
 decision, never something this package decides on its own.
 
+**Another computer's own daemon is never reached over HTTP (AP9-FR, FR-B1).** `SshDaemon`
+(`modelroom/remote_client.py`) is a separate transport again, `daemon.py`'s protocol but not its
+implementation: it never opens a socket itself, it hands a fixed request shape to the system `ssh`
+process (`modelroom/ssh.py`, "The remote protocol v1", above) with a fixed argument vector, never a
+shell string, and the alias checked against `ssh.ALIAS_RE` first. `UrllibTransport`'s allow-list is
+unchanged by this: the HTTP origin it reaches stays `127.0.0.1:11434` only, on whichever machine
+the ssh session's own `remote_server.py` runs.
+
 ### Merge rule (building this run's `Snapshot`)
 
 `modelroom/state.py::merge_snapshot(old, run_at, area_outcomes, base_models)` builds the
@@ -2314,8 +2340,10 @@ note, instead of as three failures.
 a Windows machine with one NVIDIA adapter produces exactly its fields: `origin` `measured`,
 `ram_physical_source` `os`, `vram_source` `nvidia-smi`, `gpu_state` `measured`, both cross-checks
 `confirmed`. The raw machine identifier never reaches the file -- only `os_fingerprint`'s digest.
-`display_name` is this machine's host name for a new profile and is kept as it is when the
-profile already exists (the user may rename it). `--cpu-only` writes an `entered` profile, which
+`display_name` of a new profile is its neutral name, `<class>-<first 8 hex of the profile_id>`
+(`computer` where the class is unknown), never the host name; an existing profile keeps its own
+through the sink ("Neutral names": a neutral name or the SSH alias stays, anything else becomes the
+neutral name). `--cpu-only` writes an `entered` profile, which
 by contract carries no fingerprint (`os_fingerprint_source` `none`).
 
 **Which profile is written** follows the takeover rule (`resolve_profile_target`, "Profile
@@ -2671,6 +2699,10 @@ A measurement is its own file, `<state>/measurements/<profile_id>/<measurement_i
 `write_measurement(state_dir, record, lock)` requires the held `modelroom.lock` of that state
 folder, checks under the lock that no file with this id exists (`MeasurementExistsError`
 otherwise) and writes with `atomic_write_json`; a measurement is never overwritten.
+Every record reaches its file through the sink ("Neutral names"): `ollama_name`,
+`comparable_reason`, `validity_reason`, `daemon_version` and the `done_reason` of its runs only in
+the forms it allows. The one change to a written file is the sweep's: a measurement file whose
+fields the sink changes is written anew, whole and atomically, under the same `measurement_id`.
 `read_measurements` returns every readable record of one profile, oldest id first, and lists a
 file that is not valid JSON, fails validation, or whose name or folder disagree with its own
 `measurement_id`/`profile_id` as unreadable instead of loading it; the other files are still
@@ -2827,7 +2859,7 @@ would ask, it answers `rewrite` with the **id the binding already names** and th
 reached (`... is missing in the results folder; measured again under the same id`, or `... has
 another os_fingerprint; measured again under the same id, the answer was that it is the same
 machine`). `hardware` then writes the profile under that `profile_id` -- `display_name` the
-existing profile's, else this machine's host name -- binds it (the binding does not change, it
+existing profile's through the sink, else its neutral name -- binds it (the binding does not change, it
 is the same id) and the guided mode writes `[machines.<name>].profile` as it does after `new`.
 The measurements under `measurements/<profile_id>/` stay what they are: a measurement belongs to
 an id, and whether it still counts for a ranking is decided, as ever, by the comparison of
@@ -2860,6 +2892,451 @@ Keys of `bindings` and `current` are absolute folder paths; values are `profile_
 }
 ```
 
+### Remote machines (`~/.modelroom/remote.json`)
+
+A file of the user account next to the pointer file (`remote_store.remote_path_for`), new with
+AP9-FR, schema 1, read range `[1, 2)`. It never lies in a results folder and no command exports,
+renders or copies it. `this_machine` is this computer's key in `[machines.<name>]`:
+`computer-<8 random hex>` (`secrets.token_hex`), made on first need and kept, the same in every
+results folder this user runs on this computer, and not derivable from the host name. `ssh` maps
+a `profile_id` to the host alias it was read over SSH under (written by the SSH way, FR-B1); an
+alias belongs to one `profile_id` at most. `profile_share` is the shared folder of "Shared folder"
+below (FR-S, GF question 7 (c)): stored exactly as it was typed, after `expanduser`, never
+`resolve`d -- a UNC path stays a UNC path, so a Windows drive letter (which only exists for the
+signed-in session) is never substituted for it. Every write reads the file, changes one field and
+writes it back atomically. The first `this_machine` is made under a lock of the user account
+(`remote.lock` next to the file, the kernel lock of "Lock file"), the file read again under it: of
+two processes that start at once the second waits (10 s at most) and takes the first one's key. A
+missing file reads as empty; a broken one (not JSON, a field of its own, a `this_machine` of another
+shape, an alias outside the alias rule, a `profile_share` outside its own form, schema 2) and one
+that cannot be written are `RemoteStoreError`, exit `3` for every command, said in a fixed sentence
+that names neither a path of the user account nor a value of the file.
+
+```json
+{
+  "schema_version": 1,
+  "this_machine": "computer-5c1e9a07",
+  "ssh": {"3f9a0c21d4e6b870": "gpu1"},
+  "profile_share": "Z:\\profiles"
+}
+```
+
+### Neutral names
+
+**No file of modelroom carries a machine name** (AP9-FR, FR-N: nothing about the machines of whoever
+runs it in what is passed on). The invariant covers everything that can be passed on:
+the results folder (`modelroom.toml` and its backups, `docs/`, `state/` with profiles, records,
+snapshot, search log, run status), the export file and the shared folder. `~/.modelroom` is the
+user's own state and never leaves the computer: `guided.json` keeps the folders the user chose, as
+they are, and nothing of it reaches a file of a results folder, an export or a render; from
+`remote.json` only `this_machine` and the aliases reach a results folder, as keys and names.
+
+**One sink.** `modelroom/neutral.py` alone decides what of a name and of foreign text may reach a
+file; every place that writes or exports hands its object through it first. The rules, complete --
+everything else is dropped:
+
+| Field | Allowed | Otherwise |
+|---|---|---|
+| machine key `[machines.<k>]` | `NEUTRAL_RE` (`^(laptop\|workstation\|server\|computer)-[0-9a-f]{8}$`), or a host alias at the row of the profile `remote.json` gives it to | this computer's row (the one of the profile this folder binds it to, else its 0.1.0 key formed from the live host name): `this_machine`, and `this_machine` at another row yields to it; with a profile: `neutral_name(profile)`; without one, or where that name is taken: `computer-<8 random hex>` |
+| `display_name` (profile, export, the document's `label`) | `NEUTRAL_RE`, or the host alias of that profile | `neutral_name(profile)` = `<class>-<first 8 hex of the profile_id>`, `computer` for the class `unknown` |
+| `MeasurementRecord.ollama_name` | the name built from the known package (the load test's; else the one of the folder's own snapshot the record's digest names); without one only `hf.co/<hf_repo>:<tag>` of the record's own repository | `null` |
+| `comparable_reason` | `another model was loaded during the measurement`, `no observation of the measured model`, `no observation of /api/ps was made`, `the digest of the measured model changed during the measurement`, `the daemon loaded context <n>, not the ranking's <m>`, or the legacy reason | mapped by the beginning of the local text; else `the measurement is not comparable (reason not kept)` |
+| `validity_reason` | the sentences `measurement_invalid_reason` forms (numbers, and Ollama's own done reasons), or the legacy reason | `the measurement is not valid (reason not kept)` |
+| `daemon_version` | exactly `X.Y.Z` | `null`: any addition (`-rc1`, `+<address>`) drops the whole value |
+| `runs[].done_reason` | `stop`, `length`, `load`, `unload`, `unknown` | `unknown` |
+
+The writers: `hardware` and the guided measurement (the profile), a machine entered by hand, the
+import (profile, records, configuration entry), `migrate` (profile and records of schema 1),
+`store_measurement` (the load test, with its package), `export-profile` (profile and records), and
+every write of the configuration. A load test shows its candidates, its progress and its result by
+the name built from the package as well; the name the daemon holds it under is used for the calls
+to the daemon alone. `render` builds its document from the files the sweep has left neutral.
+
+**The whole configuration** (`modelroom/neutral_config.py`). Besides its keys, a configuration may
+name its folder: `paths.state`, `paths.markdown` and `[guided].results` are written relative to the
+configuration's own folder where they lie inside it (`state`, `docs/models.md`, `.`), since a
+folder's path can carry a user's or a machine's name; a path outside the folder but below the user's
+home folder is written as `~/<the rest>` (`load_config` expands `~`). **Limits, by decision
+(2026-09-29):** a path outside both is the user's own choice and stays as written; the rest of a path
+below the home folder stays as well; the pointer file `~/.modelroom/guided.json` keeps the full path
+of each results folder -- it lives in the user's own account and is no file of the folder (FR-N scope,
+the GF decides). The guided mode puts every configuration it writes -- the one read last, with what
+another run wrote meanwhile -- through the key rule immediately before the write.
+
+**The sweep.** `neutral_sweep.sweep` runs the same rules over the files a folder already holds:
+the profiles (only `display_name` changes, in the schema they are stored in); the configuration --
+each renamed key replaced where it is the key of a machine row (a table head, a dotted key, an inline
+table; bare, quoted or escaped, also a key spelled like a field of the file) and where it stands in a
+comment (the same word, in any case, the comment otherwise kept), and each path in its neutral form,
+so every other byte stays; which place is which, TOML decides: the place is replaced by a probe word
+and the file read again. Only a file that cannot be brought to the expected table that way is written
+anew by the TOML writer. A host name that was no key of the file, or a comment that spells a key
+otherwise (split, in other characters), is not found; every measurement record, field by field and whether or
+not the rest of it validates (written anew under its own `measurement_id`); modelroom's own backups
+(`modelroom.toml.bak`, `modelroom.toml.vN.bak`, `<profile_id>.json.vN.bak`: their keys, the key of a
+row the configuration is renamed from taking the same new name, and `display_name`); a schema-1
+profile backup `<old key>.json.v1.bak` of an earlier migration takes the name of the profile it became
+(`<profile_id>.json.v1.bak`, found by content), else a name of its content (`legacy-<8 hex>.json.v1.bak`;
+only that form counts as neutral), and a neutral key, its runtime text and the names of installed
+models dropped. Every target is reserved in the plan before anything is written: a target that holds
+(or will hold) the same cleaned content already -- a second copy, or a run that stopped between
+writing the target and removing the source -- takes the source's place, which is removed; one of
+other content sends the source on to its content name, and where that is taken too, the source
+stays with a note. And the result documents `docs/models.md` and its JSON view: made from the files
+as they were, both are removed where the sweep changes anything else, or where either of them names a
+machine by anything but a neutral name or an alias of this user -- the JSON view by its machine
+blocks, the Markdown view by its machine headings (`## <what>: <machine>`) and the first two columns
+of its Machines table (`the result documents were made from names this sweep changed;
+they were removed, the next render writes them`). The sweep makes no backup of its own. A backup
+that cannot be read is a note naming the file (`a backup of modelroom could not be cleaned of machine
+names: <file>; delete it by hand`). Each renamed machine is a note with its new name alone (`machine
+renamed to server-3f9a0c21 (no host names in files)`). A schema-1 configuration and schema-1 profiles
+are `migrate`'s: their keys name the profile files, and `migrate` plans the new configuration, the
+profiles, the records, both backups and the removal of the result documents through the sink before
+it writes any of them ("Migration to schema 2"). Key, profile name and records are checked independently, so a run that stopped halfway
+converges, and a second sweep changes nothing.
+
+**The first step of every writing command:** the guided mode (once the configuration is found or
+made), `hardware`, `fetch`, `render`, `migrate`, `import-profile` (under its own lock) and
+`export-profile` (the last two under their own lock, for the whole command). Otherwise the folder is
+read without the lock first; only when something is to change is `modelroom.lock` taken, the folder
+read again, checked to be the folder of that lock (a `[paths]` that moved meanwhile is refused), and
+the files written. A `--machine <old>` of the same call is led to the new key (`note: --machine now
+names <new>`); a later call with the old name meets the unknown-machine message of that command. A
+profile or a record that does not read as a JSON object of UTF-8 (it may hold a name as well as any
+other file), a record whose package reference is of another shape (it cannot be judged), a profile
+that carries a name but no id to form its neutral one, a write that fails and
+a lock another process holds end the command with exit `1` and `the files of this folder could not
+be cleaned of machine names; nothing else was written`, before it writes anything else. For a
+broken profile or record this is a deliberate change of 0.1.0, which listed it as broken and went on
+(decided 2026-09-29): such a file may hold a name, and a command that went on would leave it there.
+Only a backup that cannot be cleaned is a note instead. This computer's key of 0.1.0 is formed from the live
+host name exactly as 0.1.0 formed it (every character that is not alphanumeric one `-`, `node  01`
+is `node--01`); a host name that gave 0.1.0 no key gives none here.
+
+**The screen.** This computer's host name stands only in the start line (`machine <host name>`,
+read live). Every other line names keys and names as the files do; the answer line of the name typed
+for a machine entered by hand says `not kept: the machine gets a neutral name`, and the answer line of
+the machine list names this machine by its class alone (`this machine (laptop)`).
+
+### The remote protocol v1 (AP9-FR, FR-B1)
+
+The wire between a laptop and `modelroom remote <op>` on another computer, carried over the system
+`ssh` (`modelroom/ssh.py`), never a shell string: a fixed argument vector (`-T -o BatchMode=yes -o
+StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
+-o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o PermitLocalCommand=no -o
+RemoteCommand=none -o RequestTTY=no -o LogLevel=ERROR -- <alias> <program> remote <op>`), the
+program tried as `modelroom` first and, on exit 127 with no protocol line, once more as
+`~/.local/bin/modelroom`. All request data travels as **one JSON object on stdin**, then stdin is
+closed (EOF); nothing about the request ever reaches argv. The counterpart (`modelroom/
+remote_server.py`) reads at most `MAX_INPUT_BYTES`, 1 MiB, of it -- the same bound for every op this
+module answers (`hello`, `profile`, `room`, `daemon`, and `candidates`/`measure`, FR-B2, "Load test
+on the server" below; a `candidates`/`measure` request carries the run's own packages, so a very
+large snapshot can reach this bound before it reaches Ollama's own limits) -- writes JSON lines to
+stdout and nothing to the disk of the machine it runs on (Ollama's own pull writes and the load
+test's own generate calls excepted), and exits `0` whether or not the call itself succeeded -- a
+fault is an `error` line, never a process exit code; exit codes 127/2/255 are read by the caller
+only for the pre-checks (program missing, too old, connection/host-key/login) before any line is
+trusted.
+
+**The envelope.** Every line is one JSON object, `{"protocol": 1, <exactly one of "progress",
+"result", "error">}` -- exactly these two keys, `protocol` the JSON integer `1` (not `true`, not
+`1.0`, not `"1"`), no key twice. `progress`: zero or more, before the end. `result`: the last line
+of a successful call. `error`: the last line of a failed one. Exactly one of `result`/`error` ends
+the answer. The laptop reads stdout **to EOF** within the time limits below and checks every line
+the moment it arrives (`ssh._CallState`): a line of another shape, a second terminal line, or any
+line after the terminal one (a `progress`, a `result`, an `error`, or text) is a form fault
+(`ssh.SshError`, `<alias> answered in a form this modelroom does not read`); a `progress` line is
+handed on at once, never collected. On `hello` alone, an envelope whose `protocol` is an integer
+other than `1` gets its own sentence naming the number (`modelroom on <alias> speaks protocol <n>;
+this one speaks 1; update the older one`).
+
+**Error codes.** An `error` line carries one of five codes, never free text of the server; any
+other value is a form fault. Each has one fixed sentence at the laptop (`ssh.ERROR_SENTENCES`):
+
+| code | the server sends it when | sentence at the laptop |
+|---|---|---|
+| `bad_request` | the request is no JSON object, or fails the op's strict request model (`remote_protocol.REQUEST_MODELS`), or the op is unknown | `modelroom on <alias> could not read the request of this one; update the older one` |
+| `call_refused` | a `daemon` call outside `daemon.ALLOWED_CALLS`, or a pull name outside `pull_choice.PULL_NAME_RE` | `modelroom on <alias> refused the call to its Ollama` |
+| `ollama_unreachable` | the server's own Ollama does not answer a `daemon`, `candidates` or `measure` call | `Ollama does not answer on <alias>` |
+| `too_large` | the request is over `MAX_INPUT_BYTES` (1 MiB) | `the request to <alias> was larger than modelroom there reads` |
+| `internal` | any other fault while the server answers (its text is dropped) | `modelroom on <alias> failed on its own side before it could answer` |
+
+**How a call ends without a terminal line.** Once stdout has ended, the laptop waits for the
+process to exit within what is left of the time limit and reads stderr to its end, so the exit
+code and stderr are the real ones: `127` with no protocol line tries `~/.local/bin/modelroom` once,
+and then `modelroom is not installed on <alias>, or not on the PATH of an SSH command (see
+README)`; `2` with no protocol line `modelroom on <alias> is older than 0.2.0; update it there`;
+`255` whose stderr names an unknown or changed host key or a refused login, its own sentence
+(stderr classified by pattern, then dropped). These clear start faults keep their sentence for a
+pull too. Every other end of a pull without its final line -- with or without a `progress` line
+before it, since Ollama may have taken the pull on before its first line -- is `the pull on <alias>
+did not finish: the connection ended; Ollama keeps what arrived, the same pull resumes`. Outside a
+pull, any other `255` is `<alias> could not be reached over SSH; try ssh <alias> yourself to see
+why`, anything else `the connection to <alias> ended before the answer`.
+
+**Ops (FR-B1: `hello`, `profile`, `room`, `daemon`; FR-B2: `candidates`, `measure`, "Load test on the
+server" below):**
+
+| op | request | `result` |
+|---|---|---|
+| `hello` | `{}` | `{"version": "X.Y.Z"\|null, "system": "linux"\|"win32"\|"darwin", "ollama": "reachable"\|"unreachable", "agent_forwarded": bool, "os_fingerprint": "<salted>"\|"none"}` |
+| `profile` | `{"profile_id": "<16 hex>", "machine_class": null\|"laptop"\|"workstation"\|"server"}` | `{"export": <ExportObject v1>}`, `display_name` the placeholder `"remote"`, `measurements` empty, `Probes.hostname` never called |
+| `room` | `{"cards": [[index, name], ...]}` | `{"disk": {"known": bool, "free_bytes": int\|null, "unclear": bool}, "graphics_free_mib": [..]\|null}` -- no drive, no path |
+| `daemon` | `{"method", "path", "body"}` | short calls: `{"status": int, "body": <JSON>\|null}`; `POST /api/pull` also emits `progress` lines and ends with `{"status": int, "done": bool}` |
+| `candidates` | `{"packages": [<Package>, ...]}` | `{"candidates": [{"package_identity": [source, repo\|name, stem\|tag]}, ...], "set_aside": int}` |
+| `measure` | `{"package_identity": [...], "packages": [<Package>, ...], "scenario": <Scenario>, "profile_id": "<16 hex>"}` | `progress` `{"stage": "warmup"\|"run", "number": int, "of": int}`, `result` `{"record": <MeasurementRecord>}` |
+
+`daemon` is checked against `daemon.ALLOWED_CALLS` on the server, a pull name additionally against
+`pull_choice.PULL_NAME_RE` (`call_refused` for either); a pull's Ollama status line is kept only where it is one of
+Ollama's own stages (`pulling manifest`, `pulling <64 hex>`, `verifying sha256 digest`, `writing
+manifest`, `success`), else `working`, and an Ollama `error` line becomes `{"error": true}` --
+Ollama's own text never crosses the wire. `hello.agent_forwarded` (`SSH_AUTH_SOCK` set in the
+server's own session) stops the run at the laptop before any other op runs for that alias.
+
+**`SshDaemon`** (`modelroom/remote_client.py`) makes a computer read over SSH answer `daemon.py`'s
+`Daemon` protocol unchanged: a short call's `result` becomes a `Response`; a pull's `progress`
+lines become the same shape `guided_install._check_line` already reads (`{"error": true}` becomes
+the fixed string `"Ollama on <alias> reported an error"`); `done: true` becomes a `{"status":
+"success"}` body, otherwise an empty one (`_end_reason` then reads "before success", as it does
+for `LocalDaemon`). A pull whose `result` status is not `200` ends with `Ollama on <alias> answered
+with status <n>`, a pull that carried an error line and did not finish with `Ollama on <alias>
+reported an error; run ollama pull <name> there to see it` (`<name>` the laptop's own checked
+name) -- both raised as `DaemonError`, the reason the unchanged `_pull` names. Nothing here filters `/api/tags`: the unchanged digest rule of `loadtest.py`
+decides what is shown, exactly as it does against `LocalDaemon`.
+
+**The process** (`modelroom/ssh_process.py`): one reader thread per output pipe, one writer thread
+for stdin, the caller's thread the only consumer; the stdout reader hands bounded lines over through
+a small bounded queue whose hand-over gives up at the stop signal. The `ssh` process and every
+process it starts form one tree (`modelroom/process_tree.py`). On Windows `ssh` is created suspended,
+put into a job object of its own and only then resumed, so it belongs to the job before it runs its
+first instruction and every helper it starts belongs to it too; where the job cannot be created or
+assigned, or the resume fails, the suspended process is ended before it ran and the call ends fail
+closed: `modelroom could not start ssh for <alias> under its own control on this computer; nothing
+was sent to <alias>`; an exception or Ctrl-C during that setup likewise ends and reaps the
+suspended process, closes its pipes and releases the job before it propagates. The pipes are
+closed whatever the kill or the reap raise, and a fault of that cleanup (a second Ctrl-C included)
+never takes the place of the original exception; where the reap does not confirm the end within
+5 s, the call ends all the same, the process's end unconfirmed (recorded as a note on the exception,
+within the limit below). On POSIX `ssh` starts
+a session and process group of its own, and its leader is **never reaped before the group was
+signaled** (an unreaped leader keeps its PID, and so the group id, from passing to another
+process). Its exit is seen without reaping: `os.waitid(..., WNOWAIT)`; where Python has no
+`os.waitid` (macOS with Python 3.11 or 3.12), a kqueue `NOTE_EXIT` watch; where neither exists, the
+end of stdout plus a grace of 0.5 s stands for it (an `ssh` still running then is ended with its
+group, and its exit code is the signal's). Every way a call ends -- an answer, a form fault, a limit,
+a timeout, Ctrl-C, any exception -- sets the stop signal and ends the whole tree once: the job
+terminated, or on POSIX one `SIGKILL` to the group, sent while the leader is still unreaped and
+never a second time -- after an answer too, so a helper such as a `ProxyJump` hop cannot hold stderr
+open. Then it reaps `ssh`, joins the reader threads and closes each pipe whose thread has ended,
+before `SshError` or the interrupt reaches the caller. **Limit:** a descendant that explicitly
+breaks away from the job (Windows) or starts a session of its own (POSIX) is outside the tree, and
+so are the helpers of a child whose PID was reaped behind modelroom's back (`ChildProcessError`: no
+group signal is sent to a PID no longer known to be its own). A read such a descendant still blocks
+is canceled on Windows (`CancelSynchronousIo`); on POSIX it cannot be, and its thread (a daemon
+thread) and pipe are then left behind rather than closed under a blocked read.
+
+**Time limits** (seconds, from the ssh process's own start; a limit reached kills the process):
+`hello`/`room` 30, `profile` 180, `daemon` short calls 30, `POST /api/generate` 660, `POST
+/api/pull` no total limit but 60 s **per line**, `candidates` 60 (one list plus one `/api/show` per
+candidate), `measure` no total limit but 660 s **per line** (between two progress lines lies a whole
+`generate`, B1's own table; a pull or a measurement that keeps sending lines is not caught by this, a
+truly silent connection is). **Answer limits:** every line at most 1 MiB (pull lines 64 KiB); the
+whole answer at most 64 KiB (`hello`/`room`), 4 MiB (`profile`), 16 MiB (`daemon` short calls and
+`/api/generate`), 4 MiB (`candidates`) -- `measure` has no total limit, only its 1 MiB per-line one
+(a `MeasurementRecord` fits well inside it), like a pull's own per-line rule. Either limit reached:
+`<alias> answered with more than modelroom reads`, the process killed.
+
+**What is not checked**: whether the alias truly names the intended computer (only the identity
+check of "Another computer" below judges that), whether the alias itself is a neutral name (a
+user's own choice, README), the host-key and password rules of a `ProxyJump` hop (the user's own
+`ssh_config`: `BatchMode` and `StrictHostKeyChecking` given for the target do not reach the hop),
+where Ollama keeps its models on the server (the same approximation "The pull" already states for
+this computer), and whose daemon actually answers on the server's `127.0.0.1:11434`.
+
+### Another computer (AP9-FR, FR-B1, "Guided mode" step 1 and step 5)
+
+**Adding a machine over SSH (step 1, row `ssh`, after `import a profile file`):** a host alias
+(`ssh.ALIAS_RE`, `^[a-z0-9][a-z0-9-]{0,30}$`, no dot, no colon, no `@`, not all digits, and not in
+the shape of a neutral name so an alias and a neutral key can never collide), `hello`, the
+`profile_id` to measure under (the one `~/.modelroom/remote.json` already has for that alias when
+its profile is still in the folder and its fingerprint has not changed, else a fresh one), the
+class question, `profile`. **Write order:** (0) the answer is validated in full -- its
+`profile_id` exactly the one asked for, no measurements -- before anything is written; (1)
+`remote_store.set_alias(profile_id, alias)`, atomic; (2) `import_profile(..., name=alias,
+expected_profile_id=profile_id)` from a temporary file, deleted after. A fault before (1) writes
+nothing; a fault between (1) and (2) leaves
+`remote.json` pointing at a profile not (yet) in the folder -- read as absent until the same alias
+converges it on a later run, never a crash, never a rollback. The profile's `[machines.<name>]` key
+is the alias itself (`neutral.key_for`); origin `ssh` (`selection.Origin`), ranked after `this`,
+before `imported`.
+
+**A changed fingerprint behind a known alias** (a rented machine replaced): the question `<alias>
+now answers with another machine than before. Is it the same machine or a new one?` (default `new`,
+GF decision). `same` keeps the id. `new`: a fresh id is measured; once its answer is validated,
+(1) moves the alias to the fresh id, and (2) renames and imports under one and the same import
+lock: the import's own sweep, its first step under the lock, finds the row `[machines.<alias>]`
+still naming the *old* profile -- no longer the alias of its own profile -- and renames it to the
+old profile's neutral name (or a free `computer-<8 hex>` where that name is taken; its reserves and
+`writer` kept), then the plan reads the rows as renamed and the new profile gets exactly
+`[machines.<alias>]`. A rename that cannot be written aborts this import: nothing of the new profile
+is written, and `remote.json` names the fresh id, which the same alias converges on a later run.
+When a stored profile picked directly turns out to be another machine, the table of *this* run
+still counts the old profile (a note says so): no pull and no measurement for `alias` in this run.
+
+**Every already-stored SSH profile is checked once before it is used actively** (room, pull,
+measurement) even when it was picked directly from the machine list, not just a freshly typed
+alias: the same `hello`/fingerprint comparison and the same question. Under `--answers` with no
+answer for it, `AnswerMissingError` (exit `2`) -- and, once the change was detected, nothing more
+of this alias is touched: no further `hello`/`profile`/`room`/pull/measurement, no further write.
+
+**One active SSH target per run** (GF decision): a freshly typed alias is it outright; with exactly
+one stored SSH profile chosen it is that one; with several, `Which computer over SSH should this
+run connect to?` (`ssh_active`, optional -- unanswered or skipped means none). Every other chosen
+SSH profile is ranked from its stored profile alone, with no connection at all (`free`-line `disk
+unknown (<alias> not connected in this run)`); in `pull_other`'s list its rows are handed over like
+those of a computer without SSH (the command to paste there).
+
+**Step 5, the active target:** its table's `room`/`free` line is its own live reading (`room` op),
+named by the alias, never a path. Its rows stand in `pull_other`'s list like every other chosen
+machine's; the row chosen there -- whichever rank (`pull_other = "<alias> <name>"`) -- is pulled
+over SSH (`guided_remote.pull_remote_row`) through the unchanged `PullTarget`/`pull_chosen` chain:
+the install line `#<rank> on <alias>  ollama pull <name>`, the digest proof (over `SshDaemon`,
+`#<rank> is local already on <alias>`), a fresh `room` reading for the disk check (`not enough disk
+on <alias> for #<rank>: needs <n> GB, <m> GB free`), the question `Pull #<rank> onto <alias> now?
+(<size>)` (`pull_remote`, default No, optional) and the success line (`✓ Pulled <name> · <size> · on
+<alias>`). No row chosen, no pull over SSH -- the first row is never taken on its own.
+`where=<alias>`, bare; the "on"/"onto" wording is the screen's own, not part of the field.
+
+**What `remote.json`/a file never carries** (B6): `HostName`, address, user name, port, key path,
+jump host, ssh's own stderr, the server's own text (error, Ollama's), its paths and drive, its
+local model names and its `/api/ps` names, the shared folder's file names, a host name out of an
+export, and this computer's own name (live in the start line only, FR-N). The alias is the one
+thing kept, as `display_name`, as the machine key, and in `remote.json`. **Limit:** if the alias
+*is* the server's real short name, that name stands in the folder -- `ALIAS_RE` blocks an address
+or a domain, not a user's own naming choice; README and the question text ask for a neutral one.
+
+#### Shared folder (FR-S, `modelroom/guided_share.py`, GF question 7 (c))
+
+The other way of reading another computer, for a laptop and a server too far apart for a direct
+`ssh` connection: a folder of export files a computer without SSH drops profiles into and reads
+them back from. Where it is, read only by `guided_share.share_folder(environ, store)`, in this
+order: the environment variable `MODELROOM_PROFILE_SHARE` when it is set and not empty (an empty
+variable counts as unset everywhere), else `profile_share` of `remote.json`, else none. Nothing
+this module writes carries the path further than `remote.json` and this step's own screen ("Remote
+machines").
+
+**Row 5 of the machine list** ("Guided mode", step 1) is always there, whatever the folder holds:
+`set up a shared folder for profiles` with no folder, `profiles from the shared folder` with one
+(stored or from the environment). It never reads the folder -- an unreachable network drive must
+not hold up a run that never opens this step.
+
+**The step, "Shared folder"** (value `share`, a `Choice` of the machine list's own checkbox --
+shown once, there, never repeated as an interactive note beside it). Its head names the stand --
+`none set yet`, the stored path, or `set by environment (MODELROOM_PROFILE_SHARE)` without a path
+-- then one choice (`share_setup`): `use` (only where a folder is there, stored or from the
+environment) takes profiles from it; `choose`/`change the folder` asks a path (grayed out, with the
+reason, while the environment wins) and, once typed (`share_folder`): checked for form (after
+`expanduser`, absolute, not empty, no NUL, at most 1024 characters, no Windows device or pipe
+prefix `\\.\`/`\\?\` -- a write there could open a pipe instead of a file), then for writing (a
+probe file, created exclusively; a write or close that fails after the create still removes it, a
+create that fails outright never deletes anything that was already there; a leftover probe file
+that could not be removed is a note, the folder counts all the same), stored as typed (never
+`resolve`d) on success; `none` **while the environment is set skips this run only, and leaves a
+stored folder exactly as it was** -- the environment always wins, so clearing storage under it
+would be a promise the run cannot keep; without the environment it clears a stored folder. A form
+or write problem asks the question again at a terminal, ends the step on an empty answer, and is
+`AnswerInvalidError` (exit `2`) from an answer file, the same shape as `_allowed_folder` above.
+`store.profile_share` itself is read in exactly one place, `share_folder`; everything else that
+needs to know the stored value alone calls `share_folder({}, store)` (no variable can win against
+an empty environment), never the field.
+
+**Reading the folder**, on `use` or a successful `choose`: every `*.json` directly in it (never a
+subfolder), at most 200 files -- a file beyond that count is left alone, not even opened. Each is
+read as an export of at most `max_bytes + 1` bytes (16 MiB the limit; never the whole file, however
+large), and one over it counts as broken, exactly like a file that does not parse or does not
+validate (`ExportTooLargeError`, a `StoredFileError`). An unreadable folder is `the shared folder
+cannot be read now; nothing was imported from it`, the run goes on; files that do not read as an
+export are one note with their count; one row per `profile_id` (`share_files`, a checkbox),
+described from the file with the newest `recorded_at`, never from a file name, and never from a
+`display_name` that is not itself neutral (`neutral.display_name_for`, the FR-N sink's own fallback
+-- a foreign export whose source forgot to neutralize is shown, answered and named in a failure
+sentence under its neutral name, never the one the file actually carries).
+
+**Importing a chosen `profile_id`**: every readable export of it, oldest `recorded_at` first (ties
+by file name), each through the unchanged `import_profile` with `expected_profile_id` and
+`max_bytes` (16 MiB). Both are checked on the object it actually reads, before it is planned, so a
+file that changed after it was listed -- a different profile now, or grown past the limit -- is
+`StaleExportError` (an `ImportConflictError`) either way. The two checks do not depend on each
+other: `read_export_file(..., max_bytes=...)` alone (no `expected_profile_id`, the plain listing's
+own use) still raises `ExportTooLargeError` for an oversized file, a `StoredFileError`; it is
+`import_profile(..., max_bytes=...)` that turns that `ExportTooLargeError` into `StaleExportError`,
+on `max_bytes` alone -- `expected_profile_id` plays no part in that particular translation, it only
+adds its own, separate `StaleExportError` for a `profile_id` that no longer matches. Every exception
+is one of three fixed sentences, none of them naming the file: `a file in the shared folder changed
+after it was listed` (either check above), `a file of <name> in the shared folder contradicts one
+imported before` (any other conflict -- a contradicting measurement, most often), `a file of <name>
+in the shared folder could not be imported` (everything else); `<name>` is the neutral name as well.
+One file's failure never stops the others of the same `profile_id`, or the next `profile_id`. Origin `imported`, the
+same as `import a profile file`.
+
+### Load test on the server (AP9-FR, FR-B2)
+
+Step 4's second question round, only for the run's one active SSH target (B4) and only after the
+local servers' own round (`local_servers.load_tests`) -- no active target, no question at all.
+
+**Fremde Namen (foreign names, Codex r2-3).** A registry package can be installed at the server
+under any local name (proven only by the digest, `loadtest.installed_candidates`), and `/api/ps` can
+name other models loaded there. Neither ever reaches the laptop: **every** package name the laptop
+shows or stores it builds itself, from the package identity the request already carries
+(`screen.install_name`, "Neutral names" above); what is stored is whatever the sink (FR-N) allows.
+
+**`candidates`** (`modelroom/remote_client.py:candidates`, `remote_server.candidates_result`):
+request `{"packages": [<Package>, ...]}` -- the run's own packages (`pull_choice.run_packages`).
+The server runs stage 1's own rule against its own `/api/tags` (no download, installed only) and
+answers `{"candidates": [{"package_identity": [source, repo\|name, stem\|tag]}, ...], "set_aside":
+int}`: identity only, never an installed name; cloud and unmatched entries counted together as one
+number, never named or broken out by reason. The laptop builds the row of each candidate (name,
+base model, quantization, weight size) from its own copy of the package the identity names --
+`guided_remote_measure._remote_rows`, the same four columns and widths as the local list.
+
+**`measure`** (`remote_client.measure`, `remote_server.measure_result`): request
+`{"package_identity": [...], "packages": [<Package>, ...], "scenario": <Scenario>, "profile_id":
+"<16 hex>"}`. The server looks its candidate up again itself (the same digest rule, since its own
+state could have changed between the two calls -- no match is `internal`, this server's own fault)
+and uses its local name only internally, for the calls to its own Ollama; `loadtest.run_load_test`
+runs **at the server**: its own GPU utilization (`nvidia-smi`) and its own one-minute load average
+are read there, not on the laptop, because the process that reads them is the server's own.
+Progress carries only `{"stage": "warmup"\|"run", "number": int, "of": int}` (B1's own protocol
+counts: 1 warm-up run, 3 measured), never a package name. Before the `result` line, the record goes
+through the neutral sink (`neutral.neutral_record`, FR-N) with the package the server just matched,
+so `ollama_name` is the name built from that package, never the name the server's own Ollama holds
+it under, and every other field (`daemon_version`, `comparable_reason`, `validity_reason`,
+`runs[].done_reason`) is in its sink-allowed form already at the server.
+
+**The double sink.** The laptop validates the answer against the wire's own strict shape
+(`remote_protocol.MeasureResult`), then runs the record through the very same sink **again**, with
+its own copy of the matched package, before it is ever offered to `store_measurement`. Where the
+result differs from what the server sent -- the server did not hold the rules, or its
+`MeasurementRecord.profile_id` is not the alias's own -- the whole record is discarded, never
+stored, with the one fixed sentence `<alias> answered in a form this modelroom does not read`
+(`remote_client.FORM_ERROR`, the same sentence a malformed envelope gets). A local measurement goes
+through the identical single sink pass it always has (`loadtest.store_measurement`); there is no
+special case for the remote path (Codex r3-2).
+
+**Stored under the alias's own `profile_id`** (B3/B4): the id the laptop already resolved for this
+alias (`remote_store.aliases`), sent in the `measure` request and never chosen by the server. Time
+limit as B1's own table: no total, 660 s between two lines of one call (a whole `generate` between
+two progress lines).
+
+**Step 4's question, gated on the active target alone (B4, Codex r1-6, r4-2, GF question 6):**
+`Measure the speed on <alias> now?` (`load_test_remote`, yes/no, default no, optional; missing under
+`--answers` is no), then, only on yes, `Which of these should be measured on <alias>?`
+(`load_test_remote_packages`, the candidate list, the local list's own row form). No candidate at
+all: neither question is asked. Several stored SSH targets: only the one active target's own
+candidates are ever fetched or measured (`guided_remote.resolve_active`, unchanged) -- the other
+stored profiles are ranked without a connection, as B4 already has it.
+
 ### Migration to schema 2
 
 `modelroom migrate --config <file>` turns a schema-1 deployment into schema 2, in one run under
@@ -2869,7 +3346,9 @@ Keys of `bindings` and `current` are absolute folder paths; values are `profile_
   random `profile_id` (`normalize_profile_v1`); its embedded measurements become measurement
   files with `protocol: none` (`legacy_measurement_record`, whose 8 hex characters come from the
   SHA-256 of the old measurement, so the same input always gives the same id); the old file is
-  moved to `<name>.json.v1.bak`;
+  kept as `<profile_id>.json.v1.bak`, through the sink (a neutral key, no runtime text, no names of
+  installed models; AP9-FR), and removed last, once the configuration that names its new profile is
+  written: a run that stopped before finds the new profile by it again, whatever ids it draws;
 - a schema-1 `modelroom.toml` becomes schema 2 (`normalize_config_v1`) with
   `[machines.<name>].profile` set for every migrated profile of that name; the rewritten text is
   validated like `load_config` would before it is written, the original bytes are kept as
@@ -2914,7 +3393,9 @@ read (a folder at a backup path, for instance), or two schema-1 files for the sa
 machine is exit 3 as well; in every case nothing is written and no lock file is created. A run
 that finds everything at the current schema prints `nothing to do` and exits 0. A run that
 stopped halfway converges on the next run: a converted profile with fingerprint source `legacy`
-and the same `display_name` keeps its `profile_id`, and files that are already there are left as
+whose content is the same but for its `profile_id` and `display_name` keeps its `profile_id` (since
+AP9-FR: the sweep before the run has given it a neutral name, so the name no longer finds it; a
+profile of other content is another machine's, and the run takes a new id), and files that are already there are left as
 they are or rewritten in place: a measurement file with the same JSON content, a profile the same
 after reading -- whatever schema an earlier version left it in, compared through
 `read_profile_document` (decided 2026-09-26). A configuration that is already schema 2 or 3 never gets
@@ -2940,17 +3421,27 @@ Without `--profile` the exported profile is this machine's binding for that fold
 file, "Profile binding" above); `--profile` names any profile in the folder and wins over the
 binding, so a profile can also be handed on from a shared folder by a machine that has no
 binding of its own. The file is written with `atomic_write_json`, so a reader never sees half of
-it. No lock is taken: the export writes nothing inside the state folder, and a measurement file
-is published whole and never changed afterwards, so the only effect of a concurrent write is
-that a measurement published during the export may not be in it. An unreadable measurement file
-is reported and left out; it does not stop the export. `--profile` has to be a `profile_id` (16
+it. The whole export holds `modelroom.lock` (a lock another process holds is exit `1`): the sweep of
+machine names comes first under it ("Neutral names"), then its profile and every record go through
+the sink before the file is written, so it carries a neutral `display_name` (or the SSH alias of that
+profile) and no foreign text. Two kinds of broken measurement differ. One the sweep cannot clean --
+a profile or measurement file that does not read as a JSON object, or a record whose package
+reference is of another shape (not an object, or `content_source`, `hf_repo`, `hf_file_digest`,
+`ollama_manifest_digest` that is no text, such as `hf_file_digest: []`) -- stops the export with exit
+`1` before it writes (decided 2026-09-29, "Neutral names"). One the sweep has cleaned but that is
+still no valid record (a value out of range) is reported and left out; it does not stop the export. `--profile` has to be a `profile_id` (16
 lowercase hex characters), and `--out` must be none of the files this package writes itself:
 nothing inside `paths.state` (the same rule `PathsConfig` holds for `paths.markdown`), not the
 configuration file, not the pointer file -- otherwise an export object would replace a profile,
 the snapshot, the lock file, the configuration or the binding, outside the lock.
 
 `modelroom import-profile <file> --config <file>` reads such a file into another results folder,
-under `modelroom.lock`. The whole run is planned under the lock and only then written, so the
+under `modelroom.lock`. Under the lock the folder is swept first ("Neutral names"), and the export
+goes through the sink before the plan, so the freshness and the conflict rule compare neutral with
+neutral: the same record from an export of 0.1.0 and one of 0.2.0 is `unchanged`, not a conflict.
+`import_profile(..., name=<alias>)` is the SSH way's alone (AP9-FR, FR-B1): the machine is then
+`[machines.<alias>]` and its profile carries the alias as its `display_name`. A refused import
+leaves what the sweep cleaned cleaned. The whole run is planned under the lock and only then written, so the
 plan *is* the freshness check -- every writer of a profile, a measurement or the configuration
 holds the same lock. A conflict anywhere in the plan leaves the run without a single write. The
 configuration is read once before the lock (a missing, invalid or schema-1 file is refused
@@ -2993,9 +3484,9 @@ Two machines are never merged and never renamed:
   name that more than one profile carries is shown with the short id (the first 8 hex of the
   `profile_id`).
 
-The imported machine gets a `[machines.<name>]` entry: `<name>` is its `display_name`
-normalized (everything outside `a-z0-9` becomes a single `-`, the ends are trimmed), made
-unique with the short id and, as a last resort, with the whole `profile_id`; the reserves come
+The imported machine gets a `[machines.<name>]` entry: `<name>` is the key the sink gives a new
+row (`neutral.key_for`): the SSH alias where one is passed, else the profile's neutral name, else,
+where that name is taken, a random neutral key `computer-<8 hex>`; the reserves come
 from `[defaults]`, `writer` is `false` and `profile` is the imported `profile_id`. A machine
 that already carries this `profile` keeps its entry, and the file is not rewritten at all; a
 machine whose profile is in the folder but in no `[machines.<name>]` entry gets one even when the
@@ -3009,10 +3500,12 @@ only when no backup is there yet -- an existing `.bak` holds an older state and 
 overwritten. Either way the report names the backup path, and a run that rewrites nothing writes
 no backup.
 
-An import never changes the local binding -- it does not even read the pointer file. Broken
+An import never changes the local binding; it reads the pointer file for the sweep only. Broken
 files in the target folder (a profile that does not read or validate, one of an unsupported
 `schema_version`, a schema-1 profile, an unreadable measurement file) are listed in the report
-and left alone; they never stop the import of another profile. The report carries one line per
+and left alone; they never stop the import of another profile -- except a profile or a record that
+does not read as a JSON object at all, which the sweep before the import cannot clean and which ends
+the command with exit `1` ("Neutral names"). The report carries one line per
 profile and per measurement, and a run that changed nothing ends with `nothing to do`.
 
 | Exit | `export-profile` | `import-profile` |
@@ -3023,14 +3516,14 @@ profile and per measurement, and a run that changed nothing ends with `nothing t
 | `3` | a stored profile, or the pointer file, does not read | the export file does not read, or its `schema_version` is outside the accepted range (`EXPORT_SCHEMA_RANGE`: schema 1 today) |
 
 ```console
-$ modelroom export-profile --config /srv/models/modelroom.toml --out /srv/exchange/workstation.json
-exported workstation (3f9a0c21d4e6b870) with 2 measurement(s) to /srv/exchange/workstation.json
+$ modelroom export-profile --config /srv/models/modelroom.toml --out /srv/exchange/workstation-3f9a0c21.json
+exported workstation-3f9a0c21 (3f9a0c21d4e6b870) with 2 measurement(s) to /srv/exchange/workstation-3f9a0c21.json
 
-$ modelroom import-profile /srv/exchange/workstation.json --config /srv/laptop/modelroom.toml
-profile workstation: new
+$ modelroom import-profile /srv/exchange/workstation-3f9a0c21.json --config /srv/laptop/modelroom.toml
+profile workstation-3f9a0c21: new
 measurement 20260922T202000Z-4da3b585: new
 measurement 20260923T083000Z-5c1e9a07: new
-note: machine "workstation" added with the reserves from [defaults] and writer = false
+note: machine "workstation-3f9a0c21" added with the reserves from [defaults] and writer = false
 ```
 
 ### Catalog rules
@@ -4084,16 +4577,35 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    AP9-RM U11 the first row that also fits the free disk of that machine, see "A download larger
    than the free disk" --
    `hf.co/<repo>:<quant>` for a Hugging Face build, `<name>:<tag>` for one of the Ollama registry,
-   the two shapes the load test matches an installed model by. Nothing is called and nothing is
-   looked up; a package with no such name has no line. `modelroom render` draws no such line at all:
+   the two shapes the load test matches an installed model by, and (AP9-FR A2, "Neutral names")
+   `pull_choice.PULL_NAME_RE`: `screen.install_name` builds the name and checks it before it is ever
+   returned, so a Hub or registry answer outside the pattern never reaches a table row, an install
+   or handover line, an answer file's value, or a `POST` -- it is no name at all, the same as a
+   package with none of its own (below). `modelroom render` draws no such line at all:
    a configuration may name several writers, and which of them the command runs on it cannot know
    (second-model round, 2026-09-24). It is a command to copy, so it is never cut, and it is the one
    line of this view that may pass 100 characters. Installing is a work package of its own. Since
    AP9-UX2 (U3) every other machine of a guided run with an Ollama name in `#1` gets `install   #1 on
-   server (a1b2c3d4)  ollama pull <name>` and under it `run it on that computer; this run pulls only
-   onto this one` -- no pull, no question; a pull name that is not unique has the note `#1 has no
-   command: its pull name is not unique` instead (U4). Rows that look alike carry a `repo` line each
-   directly under the table (U4, "The pull").
+   server (a1b2c3d4)  ollama pull <name>` and under it, since AP9-FR A3, `run it on that computer, or
+   choose a package for it below` where that machine's table has at least one row with a pull name
+   (`pull_other.eligible_other_machines`, the one place both this note and the `pull_other` list
+   below read from, so the two never disagree) -- whether or not this machine has a row of its own
+   here (an import-only run asks `pull_other` too, Codex r1-1); else the note stays `run it on that
+   computer; this run pulls only onto this one` -- no pull, no question, no list. A pull name that
+   is not unique has the note `#1 has no command: its pull name is not unique` instead (U4). Rows
+   that look alike carry a `repo` line each directly under the table (U4, "The pull").
+7. `pull_other` -- AP9-FR A3, `modelroom/pull_other.py`. Where the note above promises a list, one
+   follows step 5's own pull question (`guided_install.pull_step`): one heading per other chosen
+   machine that has a shown row at all, its rows under it exactly as locked as in its own table (a
+   package too large for **this** machine's disk is never checked -- no disk of the other machine is
+   read here, FR reads no foreign disk without SSH), then `none, do not pull`, the pointer on it. A
+   machine this user already read over SSH (a stored alias in `~/.modelroom/remote.json`) is left out
+   entirely: FR-B1 offers it its own way. Choosing a row prints its **handover**, behind a blank
+   line: `install   #<rank> on <machine>  modelroom pull <name> --weights-bytes <n>`, then
+   `paste it there: it checks Ollama and the disk and asks before it pulls`, then
+   `without modelroom there: ollama pull <name>` -- no path, no machine name beyond the neutral one
+   (or SSH alias) the document already carries; nothing is called, nothing is sent anywhere. The
+   command is what `modelroom pull` (below) reads.
 
 Ten rows carried ten notes of the same two sentences and 41 lines of `not covered` said the same
 thing 41 times in the test rounds of 2026-09-24; a reader needs each statement once, with the ranks
@@ -4824,7 +5336,7 @@ other module:
   r2); `Enter` takes what is marked, and the row under the pointer where nothing
   is marked. The pointer starts on the first row, unless a list that takes one row has a remembered
   answer: then it starts there, unmarked. `questionary` put a `select`'s default among the marked
-  options and drew it green while the pointer moved on (Befund 3); `dialog._bind_single_select` empties
+  options and drew it green while the pointer moved on (finding 3); `dialog._bind_single_select` empties
   the marks after the build, marks the pointer row alone on the space bar and takes the mark or the
   pointer row on `Enter`. `dialog._bind_space_marks_row` (a `checkbox` only) swaps the gray title of a
   `dim` row for its plain text while it is marked, and back when it is unmarked. With something
@@ -5003,8 +5515,11 @@ matter, so the move is invisible to it.
 | 1 | `results_path` | Path to the results folder | text (only after `path`, or after `write_home` false: then `<home>/modelroom` is offered) |
 | 1 | `write_home` | Write the results into this folder anyway? | true/false, default false (only when the chosen folder is the home folder or the top of a drive, AP9-UX2 U7; an answer file whose `results_path` names one again ends with exit 2) |
 | 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
-| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `enter` and `profile:<profile_id>` for a profile of the folder a machine names (AP9-UX C1) |
+| 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `share`, `enter` and `profile:<profile_id>` for a profile of the folder a machine names (AP9-UX C1; `share` FR-S) |
 | 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
+| 1 | `share_setup` | What should modelroom do with the shared folder? | `use`, `choose`, `none` (only after `share`, FR-S) |
+| 1 | `share_folder` | Folder for the profile exports: | text, the form "Shared folder" checks (only after `choose`) |
+| 1 | `share_files` | Which profiles should be imported? | a list of `profile_id`s the shared folder holds (only once that list is shown) |
 | 1 | `entered_name` | What is the machine called? | text, 1 to 128 characters after trimming (only after `enter`) |
 | 1 | `entered_class` | What kind of machine is it? | `laptop`, `workstation`, `server` or `unknown` ("not sure") (only after `enter`, always; since 2026-09-26) |
 | 1 | `entered_ram` | How much memory does it have, in GiB? | a number above 0: `16` … `256` from the list, or any other, decimals allowed as text (`"31.5"`); a TOML float is no answer (only after `enter`) |
@@ -5023,6 +5538,7 @@ matter, so the move is invisible to it.
 | 4 | `load_test_packages` | Which of these should be measured? | a list of local Ollama names and `vllm` for a vLLM server that states a model (only after `load_test` true, where a server offers a row) |
 | 5 | `pull_package` | Which package should be pulled into Ollama? | the Ollama name of a row of the list, or `none` (AP9-UX2 U6); optional: without it `#1` is taken where it has a pull name of its own, else nothing; a name the list does not offer, or a locked row, is exit 2 |
 | 5 | `pull` | Pull #1 into Ollama now? (the screen names the row chosen and adds its weight: `Pull #3 into Ollama now? (5.0 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a chosen row that has an Ollama name of its own and is not local already, enough disk or disk unknown, and a daemon the start screen reached) |
+| 5 | `pull_other` | Which package should go onto another computer? (AP9-FR A3, `pull_other.py`) | `<machine> <pull name>` (a value flat like every other, `answers.py:26-33`) out of the shown rows of every other **chosen** machine, or `none` -- optional: without it nothing is chosen, silently (one target machine at most, GF question 6); a value the list does not offer, or a locked row's, is exit 2; asked whenever at least one other chosen machine has a shown row with a pull name (A2), whether or not this machine has a row of its own -- an import-only run is asked too (Codex r1-1); the chosen row's command (`modelroom pull <name> --weights-bytes <n>`) is printed, never sent anywhere -- `modelroom pull` (A4, below) is what runs it, pasted on the machine it names |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the
 configuration is read again immediately before it is changed and written -- an entry another
@@ -5066,9 +5582,11 @@ from `[defaults]`, `writer = false`).
 **Step 1, the results folder.** A new `modelroom.toml` is written with `schema_version = 2`,
 families empty, `packagers` empty (the search writes every resolved repository as an
 owner-bound `repos` target, so a speculative `<packager>/<name>-GGUF` probe under five accounts
-per base model would only spend the shared request budget), this device as `[machines.<host>]`
-with `writer = true`, `paths.state = <folder>/state`, `paths.markdown = <folder>/docs/models.md`
-and `[guided].results = <folder>`. The folder is remembered in the pointer file. A
+per base model would only spend the shared request budget), this device as
+`[machines.<this_machine>]` (its neutral key from `~/.modelroom/remote.json`, "Neutral names") with `writer = true`, `paths.state = "state"`, `paths.markdown = "docs/models.md"` and
+`[guided].results = "."` -- relative to the file's own folder, which is the results folder, so they
+read as `<folder>/state`, `<folder>/docs/models.md` and `<folder>` ("Neutral names"). The folder is
+remembered in the pointer file with its full path. A
 `modelroom.toml` of schema 1 in the folder is migrated first (`modelroom migrate`, under the
 lock, backup kept, idempotent), before anything is written, and the notes it leaves have one
 sentence in front of them that says what happened in plain words: `this folder holds a
@@ -5093,23 +5611,26 @@ notes, indented like their neighbors and without `note: ` in front (`hardware_wi
 note=run.screen.note)`, AP9-UX G); `modelroom hardware` still prints them as `note: <text>`. An import leaves `imported <display_name>: <the hardware in plain
 words>`; an import that does not go through stays a `run.failed` sentence. A machine entered by
 hand leaves `entered <name>: 64 GiB memory, graphics card 24 GiB` (or `…, no graphics card`, `…,
-shared memory`), the sizes as they were entered.
+shared memory`), the sizes as they were entered; `<name>` is the profile's neutral name, and the
+answer line of the name typed in says `not kept: the machine gets a neutral name` ("Neutral names").
 
 **Step 1, the machines** (AP9-UX C and C1, `modelroom/guided_machines.py`). A note stands in front
 of the list: `another computer: pick its profile below, or import the file made there`. The list,
 from the top, nothing marked:
 
 1. the profile this folder binds this machine to, where it was measured here (value
-   `profile:<profile_id>`, `this machine (gpu-server, server, as measured 2026-09-28)`);
-2. `this machine (gpu-server, measure again)` with row 1, else `this machine (gpu-server, measure
-   now)` (value `this-machine`); the name is `[machines.<name>]` of this host, the class that of
-   the profile where it is known;
+   `profile:<profile_id>`, `this machine (computer-5c1e9a07, server, as measured 2026-09-28)`);
+2. `this machine (computer-5c1e9a07, measure again)` with row 1, else `this machine
+   (computer-5c1e9a07, measure now)` (value `this-machine`); the name is this computer's key
+   `this_machine` (never its host name, "Neutral names"), the class that of the profile where it is known;
 3. every other profile of the folder a `[machines.<name>]` names, one row each (value
    `profile:<profile_id>`, `<label>  <hardware>`: the label as the import forms it, with the short
    id where two carry one name; the hardware as `2 x NVIDIA L4 44.98 GiB VRAM / 94.29 GiB RAM`, a
    machine entered by hand as `shared memory 32.00 GiB (entered)`), by hardware, then label;
-4. `import a profile file`; 5. `enter a machine by hand`;
-6. grayed out: a profile no machine of the configuration names (`no machine of the configuration
+4. `import a profile file`; 5. the shared folder (value `share`, FR-S: `set up a shared folder for
+   profiles` with none set, else `profiles from the shared folder` -- always there, and never a
+   look at the folder itself, "Shared folder" below); 6. `enter a machine by hand`;
+7. grayed out: a profile no machine of the configuration names (`no machine of the configuration
    names this profile` -- each run gives every profile of the folder an entry at its start, so this
    happens only when one was removed by hand afterwards), then the schema-1 files (`run modelroom
    migrate`), then the files that do not read (with their reason).
@@ -5121,10 +5642,10 @@ stands in row 3, and row 2 says `measure now` (decided 2026-09-26). A marked pro
 machine(s) naming it into the selection of this run (`RunSelection.machines`); nothing is measured
 or written for it. The marked entries run in this order: measure, import, enter. The key and the
 answers `this-machine`, `import`, `enter` stay the same, so an answer file is unaffected; the answer
-line names this machine (`this machine (gpu-server, server)`, without a known class `this machine
-(gpu-server)`) and a marked profile by its label.
+line names this machine by its class (`this machine (server)`, without a known class `this machine`;
+its key stands in the list only) and a marked profile by its label.
 
-`this machine (<name>, measure now)` makes sure `[machines.<host>]` exists and is a writer -- this
+`this machine (<name>, measure now)` makes sure `[machines.<this_machine>]` exists and is a writer -- this
 machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the
 results folder as the binding key. The takeover rule decides which profile is written
 (`resolve_profile_target`, "Profile binding"); its `ask_clone` case is the `clone` question, and
@@ -5145,7 +5666,8 @@ leaves `unknown`, with the chassis note. So an answer file that measures this ma
 `machine_class`; an earlier answer is never taken over, the class is read again on every
 measurement.
 `import a profile file` runs `import-profile`, which never changes the
-binding; a file that does not import is reported and the run goes on.
+binding; a file that does not import is reported and the run goes on. **The shared folder**
+(FR-S) is "Shared folder" below.
 
 **`enter a machine by hand`** (decided 2026-09-26, `modelroom/guided_entered.py`) sizes a machine
 from its data sheet -- one that is not in the house yet, or one no measurement here covers (the
@@ -5188,7 +5710,7 @@ the profile's own reason, never a traceback. Then, in this order:
   written by hand -- the takeover rule answers `new` before the fingerprint ("Profile binding", "A
   machine entered by hand is never adopted"): no clone question, a fresh profile for this machine,
   the entered file unchanged byte for byte. Through the home binding, the entered machine keeps its
-  own entry and the result has both blocks. Through `[machines.<host>].profile`, the measurement
+  own entry and the result has both blocks. Through `[machines.<this_machine>].profile`, the measurement
   binds that entry to the new profile (the profile record of step 1), so the entered profile is
   without an entry for the rest of this run -- one block -- and the next run enters it again (two
   blocks).
@@ -5518,8 +6040,9 @@ its rule stay unchanged). Where a shown row of this machine has an Ollama name, 
 `Which package should be pulled into Ollama?` (key `pull_package`): one row per row of the table,
 regular and appended measured ones, in table order -- `#1  unsloth · Q4_K_S  5.0 GB
 hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S`, the name last and whole, `local already` behind a row the
-daemon provably holds -- then `none, do not pull`. A row without an Ollama name is locked (`no pull
-name`), so is every row whose name is not unique (below). Since AP9-RM U11 a row whose download is
+daemon provably holds -- then `none, do not pull`. A row without an Ollama name is locked (`no safe
+pull name`, AP9-FR A2 -- the same lock a name `PULL_NAME_RE` rejects gets, below), so is every row
+whose name is not unique (below). Since AP9-RM U11 a row whose download is
 larger than the free disk of this machine, as step 5 read it, stands in light red with what it needs
 in place of its name -- `#1  unsloth · Q6_K  94.1 GB  needs 94.1 GB plus 1 GB room, 26.4 GB free` -- and is locked
 too (an answer file that names it is exit 2; one without `pull_package` then pulls nothing). A
@@ -5531,6 +6054,18 @@ is marked. After the choice the pull part names it, `install   #3  ollama
 pull <name>`, then checks the disk, then asks `Pull #3 into Ollama now? (5.0 GB)`; a local row is
 the note instead and no question; `none` is nothing. An answer file without `pull_package` takes
 `#1` where it has a name of its own, else nothing -- the behavior before.
+
+**Every name here already passed `PULL_NAME_RE`** (AP9-FR A2, "Guided mode", `install`, above): a
+row's name is `pull_choice.entry_pull_name`, and `pull_other`'s (below) is the same function --
+both go through `screen.install_name`, the one choke point that checks the pattern before any name
+is ever returned. A row this pattern rejects is indistinguishable from one with no name at all: `no
+safe pull name`, locked, no install line, no `POST`.
+
+**`PullTarget`** (AP9-FR, the rebuild of A4) carries what the choice, the disk check and the pull
+itself need -- `daemon`, `disk` (a callable), `now`, `screen`, `asker`, `failed`, `where` -- so
+`modelroom pull` (below) reuses the same disk check and the same pull, error and success handling
+with no results folder and no configuration of its own. Behavior here is unchanged; see
+"`modelroom pull`" for what it adds.
 
 **The disk, checked again before the pull** (U8, GF F6). Measured fresh after the choice, never the
 number of the table head: the place Ollama keeps its models is approximated (`room.py`:
@@ -5689,10 +6224,12 @@ question; an answer may be text, a whole number, `true`/`false` or a list of tex
 with no answer ends the run with exit `2` and names the question -- an answer file written for 0.1.0
 has no `users` and stops at step 3 until the key is added (`users = 1` keeps its old ranking); an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
-exit `3`. **The two exceptions are `load_test` and `pull`:** a file that does not mention
-`load_test` measures nothing -- on no server -- and one that does not mention `pull` does not pull,
-because whether either question is reached at all depends on the machine the file is run on -- its
-daemon, its servers, and what they already hold -- not on the file. The key `load_test_vllm` of
+exit `3`. **The three exceptions are `load_test`, `pull` and `pull_other`:** a file that does not
+mention `load_test` measures nothing -- on no server -- one that does not mention `pull` does not
+pull, and one that does not mention `pull_other` chooses nothing for another computer (AP9-FR A3),
+because whether any of the three questions is reached at all depends on the machine the file is run
+on -- its daemon, its servers, what they already hold, and (for `pull_other`) whether another
+chosen machine has a package of its own -- not on the file. The key `load_test_vllm` of
 AP9-SV1 is gone (AP9-UX E): the vLLM server is the row `vllm` of `load_test_packages`. An answer of the wrong shape (`pull = "yes"`) is still
 an error. A `load_test = true` without `load_test_packages` is a missing answer like any other.
 Since 2026-09-27 `machine_class` is asked on every measurement of this machine, so a file that
@@ -5729,3 +6266,51 @@ says which), `3` a stored file's `schema_version` is unsupported or a stored fil
 `130` Ctrl-C. A failure of a stored file keeps the exit code the command that owns it would give:
 the guided mode does not flatten `SchemaVersionError`, `MigrationError`, `PointerFileError` or a
 held lock into its own `2`.
+
+## `modelroom pull`
+
+`modelroom pull <name> [--weights-bytes N] [--yes]` (AP9-FR A4, `modelroom/cli_pull.py`) pulls one
+package straight into this computer's Ollama daemon -- no results folder, no configuration, no
+`--machine`. It is the command a guided run's `pull_other` handover line names (above), run *on*
+the machine that should get the package, whether or not modelroom ever measured that machine.
+
+**Steps, in order, each ending the command at the first one that fails:**
+
+1. `<name>` against `pull_choice.PULL_NAME_RE` (A2, "Guided mode", `install` above); outside it,
+   the command never looks at Ollama or the disk at all: exit `2`.
+2. `GET /api/version` against the local daemon (`daemon.LocalDaemon`, `127.0.0.1:11434` only, the
+   same origin every other command is held to); not reachable: `Ollama does not answer on this
+   computer at 127.0.0.1:11434`, exit `1`.
+3. `GET /api/tags`: the name already listed there gets a note, `Ollama lists <name> already;
+   pulling it again updates it`, and the run goes on -- without a package there is no digest to
+   prove it holds the *same* build, unlike the guided run's own check ("The pull", below), so this
+   is deliberately weaker and never skips the question.
+4. The free disk (`room.free_disk`, the same reading "A download larger than the free disk" uses)
+   against `--weights-bytes` plus the disk margin: too little says `not enough disk: needs <need>,
+   <free> free on <drive>` and pulls nothing, exit `1` (no `#<rank>` in the message: there is no
+   table row here, just this one name). Disk unknown, or `--weights-bytes` not given at all: a
+   note, and the run goes on regardless.
+5. `Pull <name> into Ollama now? (<size>)` (the size left out where `--weights-bytes` was not
+   given), default No: a terminal asks it, `--yes` skips it outright and answers Yes, and without
+   either: `no terminal to ask; add --yes`, exit `2`. **No** pulls nothing, exit `0`.
+6. **Yes** pulls it, with the same progress, success and error handling as the guided run's own
+   pull (`_send`, `_end_reason`, `pulled_problem`, `screen.pulled_line` -- without a package known
+   here, `pulled_problem` checks only that the daemon lists the name afterwards, never a manifest
+   digest: "ohne Digestteil"). A fault is one line and exit `1`; success prints the same line the
+   guided run's own pull does, size included where one was known: `✓ Pulled    <name> · <size> ·
+   say Yes in step 4 of the next run to measure it` -- the sentence names the guided run because
+   this command reuses its success line unchanged (`cli_pull.py` passes no `hint` of its own).
+
+**`PullTarget`** (`guided_install.py`) is what steps 4 and 6 draw on either way: seven fields --
+`daemon`, `disk` (a callable, read fresh at the check, not a value), `now`, `screen`, `asker`,
+`failed`, `where` (empty here and for the guided run's own row; `" on <alias>"` is FR-B1's). The
+guided run builds one from itself; `modelroom pull` builds one from the local daemon and this
+machine's room alone. `pull_chosen` (the guided run's own last question) takes either a
+`PullTarget` or a `GuidedRun` and converts the latter; every helper under it (`_disk_allows`,
+`_is_local`, `_holds`, `_pull`, `_send`) takes only a `PullTarget`.
+
+**Exit codes**: `0` pulled, or the user (or the answer given) said No, `1` the daemon did not
+answer, the disk does not hold the download, or the pull itself faulted, `2` `<name>` is not a
+name `PULL_NAME_RE` allows, or there was no terminal and no `--yes`, `130` Ctrl-C (nothing left
+half pulled: the daemon's own pull is not resumed by this command, only Ollama's own retry of the
+same name does that).

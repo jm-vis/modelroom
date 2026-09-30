@@ -20,6 +20,7 @@ import pytest
 
 from fixture_support import windows_gpu_responses
 from modelroom.binding import GuidedPointer, read_pointer, write_pointer
+from modelroom import cli
 from modelroom.cli import hardware_with_config, main
 from modelroom.config import Configuration
 from modelroom.examples import EXAMPLES
@@ -147,7 +148,7 @@ def test_a_measured_run_writes_one_profile_v2_with_every_source(tmp_path: Path, 
     assert profile.llmfit_crosscheck.ram_physical.status == "confirmed"
     assert profile.llmfit_crosscheck.vram.status == "confirmed"
     assert profile.llmfit_version == "1.1.16"
-    assert profile.display_name == "workstation"
+    assert profile.display_name == f"laptop-{ID_ONE[:8]}"  # FR-N: its class and id, never the host name
     assert fit_block_reason(profile) is None
     assert not list(config.paths.hardware_dir.glob("*.tmp"))
     assert "11.99" in capsys.readouterr().out
@@ -207,12 +208,12 @@ def test_a_display_name_the_user_changed_survives_the_next_measurement(tmp_path:
     pointer_path = tmp_path / "home" / "guided.json"
     _run(config, tmp_path, pointer_path=pointer_path)
     path = _profiles(config)[0]
-    renamed = json.loads(path.read_text(encoding="utf-8")) | {"display_name": "the build server"}
+    renamed = json.loads(path.read_text(encoding="utf-8")) | {"display_name": "server-0a1b2c3d"}
     atomic_write_json(path, renamed)
 
     _run(config, tmp_path, pointer_path=pointer_path, now=RUN2, probes=_probes(host="something-else", ids=[ID_TWO]))
 
-    assert _written(config).display_name == "the build server"
+    assert _written(config).display_name == "server-0a1b2c3d"
 
 
 def test_the_configured_profile_is_adopted_when_the_home_pointer_is_empty(tmp_path: Path):
@@ -303,20 +304,20 @@ def test_same_machine_writes_the_bound_profile_again_and_keeps_the_binding(tmp_p
     assert _run(config, tmp_path, pointer_path=pointer_path, same_machine=True) == 0
 
     assert [path.name for path in _profiles(config)] == [f"{ID_TWO}.json"]
-    assert _written(config).display_name == "workstation"
+    assert _written(config).display_name == f"laptop-{ID_TWO[:8]}"
     assert read_pointer(pointer_path).binding_for(config.paths.state) == ID_TWO
 
 
 def test_same_machine_keeps_the_display_name_of_a_profile_of_another_fingerprint(tmp_path: Path):
     config = _config(tmp_path)
     pointer_path = tmp_path / "home" / "guided.json"
-    _place_profile(config, ID_TWO, fingerprint="abcdefabcdefabcd", display_name="the-same-box")
+    _place_profile(config, ID_TWO, fingerprint="abcdefabcdefabcd", display_name="server-0a1b2c3d")
     write_pointer(pointer_path, GuidedPointer(schema_version=1).with_binding(config.paths.state, ID_TWO))
 
     assert _run(config, tmp_path, pointer_path=pointer_path, same_machine=True) == 0
 
     profile = _written(config)
-    assert (profile.profile_id, profile.display_name) == (ID_TWO, "the-same-box")
+    assert (profile.profile_id, profile.display_name) == (ID_TWO, "server-0a1b2c3d")
     assert profile.os_fingerprint == LAPTOP_FINGERPRINT
 
 
@@ -554,26 +555,25 @@ def test_a_binding_written_while_this_run_started_is_adopted_instead_of_duplicat
     assert not (config.paths.hardware_dir / f"{ID_ONE}.json").exists()
 
 
-def test_a_binding_for_another_results_folder_survives_this_runs_write(tmp_path: Path):
+def test_a_binding_for_another_results_folder_survives_this_runs_write(tmp_path: Path, monkeypatch):
     """The pointer file is one file for every results folder, and each folder has its own lock.
 
     The write is therefore a merge onto the newest content, not a write-back of the copy this run
-    read. The competing entry is injected through `hostname`, which runs after this run resolved
-    its own profile and before the pointer is written.
+    read. The competing entry is injected where the profile is built, after this run resolved its
+    own profile and before the pointer is written (the host name it used to ride on is no longer
+    read by this command, FR-N).
     """
     config = _config(tmp_path)
     pointer_path = tmp_path / "home" / "guided.json"
     other_folder = tmp_path / "other-results"
 
-    def _competing_write() -> str:
+    real_build = cli.build_profile
+    def _competing_write(*args):
         write_pointer(pointer_path, read_pointer(pointer_path).with_binding(other_folder, ID_TWO))
-        return "workstation"
+        return real_build(*args)
 
-    probes = _probes()
-    probes = Probes(platform=probes.platform, runner=probes.runner, read_text=probes.read_text,
-                    memory_bytes=probes.memory_bytes, hostname=_competing_write, new_id=probes.new_id)
-
-    assert _run(config, tmp_path, probes=probes, pointer_path=pointer_path) == 0
+    monkeypatch.setattr(cli, "build_profile", _competing_write)
+    assert _run(config, tmp_path, probes=_probes(), pointer_path=pointer_path) == 0
 
     pointer = read_pointer(pointer_path)
     assert pointer.binding_for(other_folder) == ID_TWO

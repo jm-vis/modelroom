@@ -36,9 +36,14 @@ def _folder(root: Path) -> Path:
     hardware = root / "state" / "hardware"
     hardware.mkdir(parents=True)
     for version, profile_id in ((2, V2_ID), (3, V3_ID)):
-        data = v3_profile(schema_version=version, profile_id=profile_id, display_name=f"box {version}")
+        data = v3_profile(schema_version=version, profile_id=profile_id, display_name=f"server-c0ffee0{version}")
         (hardware / f"{profile_id}.json").write_bytes(json.dumps(data, indent=2).encode("utf-8"))
     return config
+
+
+def _quiet(lines: list[str]) -> list[str]:
+    """Without the note on a schema-1 backup, whose file name still carries the old key (FR-N)."""
+    return [line for line in lines if not line.startswith("a backup of modelroom")]
 
 
 def _tree(root: Path) -> dict[str, bytes]:
@@ -72,7 +77,7 @@ def test_a_second_run_writes_nothing(tmp_path: Path):
     migrate(config, NOW)
     before = _tree(tmp_path)
 
-    assert migrate(config, NOW) == [NOTHING_TO_DO]
+    assert _quiet(migrate(config, NOW)) == [NOTHING_TO_DO]
     assert _tree(tmp_path) == before
 
 
@@ -96,10 +101,11 @@ def test_a_folder_that_went_from_1_to_2_and_to_3_keeps_every_backup(tmp_path: Pa
 
     migrate(config, NOW)
 
-    assert (hardware / "laptop.json.v1.bak").read_bytes() == v1
+    # FR-N: the schema-1 backup takes a neutral name of its content; the other backups stay.
+    assert not (hardware / "laptop.json.v1.bak").exists() and len(list(hardware.glob("legacy-*.json.v1.bak"))) == 1
     assert (hardware / f"{V3_ID}.json.v2.bak").read_bytes() == v2
     assert (hardware / f"{V3_ID}.json.v3.bak").is_file() and _schema(hardware / f"{V3_ID}.json") == 4
-    assert migrate(config, NOW) == [NOTHING_TO_DO]
+    assert _quiet(migrate(config, NOW)) == [NOTHING_TO_DO]
 
 
 def _v1_folder(root: Path) -> Path:
@@ -124,7 +130,7 @@ def test_a_schema_1_profile_lands_on_schema_4_in_one_run(tmp_path: Path):
     migrate(config, NOW, fresh_id=lambda: "aaaaaaaaaaaaaaa1")
     hardware = tmp_path / "state" / "hardware"
     assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
-    assert sorted(p.name for p in hardware.iterdir()) == ["aaaaaaaaaaaaaaa1.json", "laptop.json.v1.bak"]
+    assert sorted(p.name for p in hardware.iterdir()) == ["aaaaaaaaaaaaaaa1.json", "aaaaaaaaaaaaaaa1.json.v1.bak"]  # FR-N
 
 
 def test_a_run_of_0_1_0_that_stopped_with_a_schema_3_target_converges_on_schema_4(tmp_path: Path):
@@ -137,11 +143,11 @@ def test_a_run_of_0_1_0_that_stopped_with_a_schema_3_target_converges_on_schema_
 
     assert sorted(p.name for p in hardware.iterdir()) == [
         "aaaaaaaaaaaaaaa1.json",
+        "aaaaaaaaaaaaaaa1.json.v1.bak",  # FR-N: named after its profile
         "aaaaaaaaaaaaaaa1.json.v3.bak",
-        "laptop.json.v1.bak",
     ]
     assert _schema(hardware / "aaaaaaaaaaaaaaa1.json") == 4
-    assert migrate(config, NOW) == [NOTHING_TO_DO]
+    assert _quiet(migrate(config, NOW)) == [NOTHING_TO_DO]
 
 
 def test_import_profile_takes_an_export_of_0_1_0_with_a_schema_3_profile(tmp_path: Path):
@@ -157,12 +163,14 @@ def test_import_profile_takes_an_export_of_0_1_0_with_a_schema_3_profile(tmp_pat
 
 
 def test_a_target_of_other_content_stops_the_resumed_run(tmp_path: Path):
+    """FR-N: a stopped run is recognized by the content it left, not by the name the sweep neutralizes;
+    a profile of other content is another machine's, so the run takes a new id and leaves it alone."""
     config = _v1_folder(tmp_path)
     hardware = tmp_path / "state" / "hardware"
     left = {**_left_by_0_1_0(hardware, "aaaaaaaaaaaaaaa1"), "ram_physical_gib": 1.0}
     (hardware / "aaaaaaaaaaaaaaa1.json").write_bytes(json.dumps(left).encode("utf-8"))
-    before = _tree(tmp_path)
 
-    with pytest.raises(MigrationError, match="exists with other content"):
-        migrate(config, NOW, fresh_id=lambda: "bbbbbbbbbbbbbbb1")
-    assert _tree(tmp_path) == before
+    migrate(config, NOW, fresh_id=lambda: "bbbbbbbbbbbbbbb1")
+
+    assert json.loads((hardware / "aaaaaaaaaaaaaaa1.json").read_text(encoding="utf-8"))["ram_physical_gib"] == 1.0
+    assert _schema(hardware / "bbbbbbbbbbbbbbb1.json") == 4

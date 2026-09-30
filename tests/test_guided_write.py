@@ -29,6 +29,7 @@ from modelroom.guided_write import (
     with_requests,
     with_writer,
 )
+from modelroom.neutral import is_neutral
 from modelroom.search_apply import ConfigChangedError, apply_hits, write_configuration
 from modelroom.state import atomic_write_json
 
@@ -303,13 +304,13 @@ def test_the_found_profiles_are_worked_out_again_on_the_new_file(tmp_path: Path)
     path = _config_file(tmp_path)
     _place(tmp_path, "5" * 16, "server")
     said = Said()
-    change, _ = _meanwhile(path, with_found_profiles(said), _add_machine("server"))
+    change, _ = _meanwhile(path, with_found_profiles(said), _add_machine(f"computer-{'5' * 8}"))
 
     written = update_config(path, change, now=NOW)
 
-    assert written.machines["server"].profile is None, "the other run's machine was written over"
-    assert written.machines[f"server-{'5' * 8}"].profile == "5" * 16
-    assert said.notes == [f"machine 'server-{'5' * 8}' added for the profile {'5' * 16} found in this folder"]
+    assert written.machines[f"computer-{'5' * 8}"].profile is None, "the other run's machine was written over"
+    [name] = [name for name, machine in written.machines.items() if machine.profile == "5" * 16]
+    assert is_neutral(name) and said.notes == [f"machine '{name}' added for the profile {'5' * 16} found in this folder"]
 
 
 def test_the_second_attempt_scans_again_and_takes_the_reserves_the_file_holds_then(tmp_path: Path):
@@ -356,28 +357,28 @@ def test_a_profile_the_other_run_already_entered_is_not_entered_twice(tmp_path: 
 
 
 def _every_name_of(tmp_path: Path, display_name: str, profile_id: str) -> dict:
-    """Machine entries that take every name `machine_name_for` would try for that profile."""
-    taken = (display_name, f"{display_name}-{profile_id[:8]}", f"{display_name}-{profile_id}")
+    """Machine entries that take the name, and the neutral name, a new row of that profile would get."""
+    taken = (display_name, f"computer-{profile_id[:8]}", f"{display_name}-{profile_id}")
     return {name: {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False} for name in taken}
 
 
 def test_a_problem_the_other_run_resolved_meanwhile_is_not_reported_after_the_retry(tmp_path: Path):
-    """What the first attempt had to say is cleared: only the attempt that counted reports."""
+    """What the first attempt had to say is cleared; since FR-N a taken name is no problem at all."""
     path = _config_file(tmp_path, machines=_every_name_of(tmp_path, "server", "5" * 16))
     _place(tmp_path, "5" * 16, "server")
     _place(tmp_path, "6" * 16, "laptop")
     said = Said()
 
     def free_the_name(data: dict) -> None:
-        del data["machines"][f"server-{'5' * 16}"]
+        del data["machines"][f"computer-{'5' * 8}"]
 
     change, calls = _meanwhile(path, with_found_profiles(said), free_the_name)
     written = update_config(path, change, now=NOW)
 
     assert calls["count"] == 2
     assert said.problems == [], "the first attempt's problem was reported although the retry had none"
-    assert written.machines[f"server-{'5' * 16}"].profile == "5" * 16
-    assert [note.split("'")[1] for note in said.notes] == [f"server-{'5' * 16}", "laptop"]
+    assert written.machines[f"computer-{'5' * 8}"].profile == "5" * 16
+    assert [note.split("'")[1] for note in said.notes] == [f"computer-{'5' * 8}", f"computer-{'6' * 8}"]
 
 
 def test_a_problem_that_stays_is_reported_once_after_the_retry(tmp_path: Path):
@@ -390,10 +391,9 @@ def test_a_problem_that_stays_is_reported_once_after_the_retry(tmp_path: Path):
     written = update_config(path, change, now=NOW)
 
     assert calls["count"] == 2
-    assert len(said.problems) == 1, "the same problem was reported once per attempt"
-    assert said.problems[0].startswith(f"the profile {'5' * 16} stays without a machine entry: ")
-    assert written.machines["laptop"].profile == "6" * 16
-    assert [note.split("'")[1] for note in said.notes] == ["laptop"]
+    assert said.problems == [], "a taken name is a random neutral key, no problem (FR-N)"
+    assert written.machines[f"computer-{'6' * 8}"].profile == "6" * 16
+    assert len(said.notes) == 2 and all(is_neutral(note.split("'")[1]) for note in said.notes)
 
 
 def test_hits_without_an_ollama_name_leave_the_configured_pair_after_the_reload(tmp_path: Path):
@@ -451,22 +451,22 @@ def test_the_machine_entered_by_hand_gets_its_entry_on_top_of_the_other_runs_cha
 
     assert calls["count"] == 2
     assert "other" in written.machines, "the other run's machine was written over"
-    entry = written.machines["studio"]
+    entry = written.machines[f"computer-{'7' * 8}"]  # FR-N: the neutral key, never the name typed in
     assert (entry.writer, entry.profile, entry.reserve_ram_gib, entry.reserve_vram_gib) == (False, "7" * 16, 6.0, 2.0)
     assert said.problems == []
-    assert load_config(path).machines["studio"].profile == "7" * 16
+    assert load_config(path).machines[f"computer-{'7' * 8}"].profile == "7" * 16
 
 
 def test_a_name_another_run_took_meanwhile_is_not_written_over_by_the_entry(tmp_path: Path):
     path = _config_file(tmp_path)
     _place(tmp_path, "7" * 16, "studio")
     said = Said()
-    change, _ = _meanwhile(path, _with_entered_machine("7" * 16, "studio", said), _add_machine("studio"))
+    change, _ = _meanwhile(path, _with_entered_machine("7" * 16, "studio", said), _add_machine(f"computer-{'7' * 8}"))
 
     written = update_config(path, change, now=NOW)
 
-    assert written.machines["studio"].profile is None
-    assert written.machines[f"studio-{'7' * 8}"].profile == "7" * 16
+    assert written.machines[f"computer-{'7' * 8}"].profile is None
+    assert [is_neutral(name) for name, machine in written.machines.items() if machine.profile == "7" * 16] == [True]
 
 
 def test_an_entry_another_run_made_for_the_same_profile_is_not_made_twice(tmp_path: Path):
@@ -490,11 +490,11 @@ def test_a_machine_entered_by_hand_without_a_free_name_stays_without_an_entry_an
     _mark_untouched(path)
     said = Said()
 
-    update_config(path, _with_entered_machine("7" * 16, "studio", said), now=NOW)
+    written = update_config(path, _with_entered_machine("7" * 16, "studio", said), now=NOW)
 
-    assert path.read_text(encoding="utf-8").endswith(UNTOUCHED)
-    assert len(said.problems) == 1
-    assert said.problems[0].startswith(f"the profile {'7' * 16} stays without a machine entry: ")
+    # FR-N: every name taken, the entry takes a random neutral key; no problem to report any more.
+    assert said.problems == []
+    assert [is_neutral(name) for name, machine in written.machines.items() if machine.profile == "7" * 16] == [True]
 
 
 def test_a_state_folder_that_changed_meanwhile_leaves_the_entry_unwritten_and_says_so(tmp_path: Path):

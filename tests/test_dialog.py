@@ -316,7 +316,7 @@ def test_the_column_head_is_no_row_of_the_scrolling_list():
 
 
 def test_the_pointer_row_is_a_cursor_line():
-    """The row under the pointer is marked across the whole width, not only in bold (Befund 2)."""
+    """The row under the pointer is marked across the whole width, not only in bold (finding 2)."""
     import questionary
 
     from modelroom.dialog import QUESTION_RULES, _list_window, _mark_pointer_line
@@ -334,7 +334,7 @@ REMEMBERED = [Choice("here", "this folder"), Choice("path", "another path", chec
 
 
 def test_a_select_starts_with_nothing_marked():
-    """The remembered answer is where the pointer starts, not a mark: green stayed on it (Befund 3)."""
+    """The remembered answer is where the pointer starts, not a mark: green stayed on it (finding 3)."""
     from modelroom.dialog import _bind_single_select, _list_window, _questionary_choices
 
     import questionary

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "profile_id": "3f9a0c21d4e6b870",
-  "display_name": "workstation",
+  "display_name": "workstation-3f9a0c21",
   "os_fingerprint": "9d2f4b6a8c0e1357",
   "os_fingerprint_source": "windows_machineguid",
   "origin": "measured",

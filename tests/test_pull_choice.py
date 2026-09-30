@@ -19,14 +19,17 @@ from modelroom.guided_install import PullContext, pull_step
 from modelroom.pull_choice import (
     NO_PULL_NAME,
     NOT_UNIQUE,
+    PULL_NAME_RE,
     ambiguous_names,
     default_row,
+    package_pull_name,
     pull_collisions,
     pull_rows,
     repo_lines,
 )
+from modelroom.screen import install_name
 
-from fixture_rows import GIB, document, fillers, package
+from fixture_rows import GIB, document, document_multi, fillers, package
 from fixture_support import json_response
 
 NOW = datetime(2026, 9, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -226,3 +229,125 @@ def test_an_approved_row_with_a_hidden_unresolved_counterpart_is_not_installable
     with pytest.raises(AnswerInvalidError):  # the locked row is no answer an answer file can give
         pull_step(run, context, True)
     assert not any(call[1] == PULL_PATH for call in daemon.calls)
+
+
+# --- A2: a name outside PULL_NAME_RE is no name at all (Codex r1-1) ---------------------------------
+
+BAD_OLLAMA_NAMES = [
+    "a;b",
+    "$(x)",
+    "a`x`b",
+    "a b:Q4",
+    "a\nb:Q4",
+    "-x:Q4",
+    "café:Q4",  # a Unicode look-alike (outside ASCII) never passes, whatever it looks like
+    "a­b:Q4",  # a soft hyphen, invisible in most terminals
+]
+
+
+def test_a_name_outside_the_pattern_has_no_command():
+    for name in BAD_OLLAMA_NAMES:
+        assert install_name(("ollama", name, ""), "Q4", "gguf") is None
+        assert PULL_NAME_RE.fullmatch(name) is None
+    # `hf.co/../x:Q4` -- a path segment as the owner
+    assert install_name(("huggingface", "../x", ""), "Q4", "gguf") is None
+    # `hf.co/a/b:Q4|x` -- a pipe smuggled into the quantization
+    assert install_name(("huggingface", "a/b", ""), "Q4|x", "gguf") is None
+    # a trailing newline must not slip past `$` (Python's `$` matches before a final "\n" too)
+    assert PULL_NAME_RE.fullmatch(f"{NAME}:Q4_K_M\n") is None
+
+
+# A Cyrillic "о" stands in for the Latin "o": `contracts._HF_REPO_RE` allows it (`\w` is
+# Unicode-aware), so this is a real `Package.repo` a Hub answer could carry -- `PULL_NAME_RE`
+# (ASCII only) is what has to catch it (A2).
+BAD_REPO = "unslоth/Nova-7B-GGUF"
+
+
+def test_the_lock_text_is_no_safe_pull_name():
+    """A2 names the lock text outright: `no safe pull name`, not the older `no pull name`
+    (Codex r1-5)."""
+    assert NO_PULL_NAME == "no safe pull name"
+
+
+def test_such_a_row_is_locked_in_every_list():
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+    rows = pull_rows(document([bad, Q4]), "workstation")
+
+    assert [row.locked for row in rows] == [NO_PULL_NAME, None]
+    assert package_pull_name(bad) is None
+
+
+def test_no_install_or_handover_line_carries_it():
+    from modelroom.pull_other import other_rows, pull_other_choices
+    from modelroom.views import terminal_lines
+
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+    own = terminal_lines(document([bad]), "workstation")
+    assert not any("ollama pull" in line for line in own)
+
+    # A locked row still names its packager (a display label, not a command) -- what must never
+    # happen is the raw name becoming an answerable value or reaching a command line.
+    other_doc = document_multi({"workstation": [Q4], "server": [bad]})
+    choices = pull_other_choices(other_rows(other_doc, "workstation"))
+    locked = next(choice for choice in choices if choice.disabled == NO_PULL_NAME)
+    assert "о" not in locked.value
+    assert not any("modelroom pull" in choice.label or "modelroom pull" in choice.value for choice in choices)
+
+
+def test_the_markdown_view_carries_no_command_for_an_unsafe_name():
+    """`docs/models.md` never carries an install command at all -- checked here so A2 does not rest
+    on that being true only by the accident of what `document_markdown` happens to draw (Codex r1-2)."""
+    from modelroom.views import document_markdown
+
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+
+    markdown = document_markdown(document([bad, Q4], "workstation"))
+
+    assert "ollama pull" not in markdown
+
+
+def test_a_forced_unsafe_answer_to_pull_is_refused_and_never_posted(tmp_path: Path):
+    """`pull_step`: a hand-edited answer file naming the row's would-be pull name is not an answer
+    this list can take -- the row's own value is `#1 locked`, never the name (Codex r1-2)."""
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+    context = _context([bad, Q4])
+    daemon = _daemon()
+    forced = f"hf.co/{BAD_REPO}:Q4_K_M"
+    asker = _Recording({"pull_package": forced, "pull": True})
+    run, _lines = _run(tmp_path, asker, daemon)
+
+    with pytest.raises(AnswerInvalidError):
+        pull_step(run, context, True)
+    assert not any(call[1] == PULL_PATH for call in daemon.calls)
+
+
+def test_a_forced_unsafe_answer_to_pull_other_is_refused_and_hands_over_nothing(tmp_path: Path):
+    """`pull_other_step`: the same forced value on the other-machine question is refused too, and no
+    handover line is ever written (Codex r1-2). `server-a` also carries `Q8` -- a real named row --
+    so the question is eligible and asked at all; the bad row alone would make the list offer
+    nothing but `none` and never reach an answer to refuse."""
+    from modelroom.pull_other import pull_other_step
+
+    bad = package(BAD_REPO, "Nova-7B-bad.gguf", "Q4_K_M")
+    doc = document_multi({"workstation": [Q4], "server-a": [bad, Q8]})
+    context = PullContext(doc, "workstation", [Q4, bad, Q8], ambiguous_names([Q4, bad, Q8]))
+    forced = f"server-a hf.co/{BAD_REPO}:Q4_K_M"
+    asker = _Recording({"pull_other": forced})
+    run, lines = _run(tmp_path, asker)
+
+    with pytest.raises(AnswerInvalidError):
+        pull_other_step(run, context)
+    assert not any("modelroom pull" in line for line in lines)
+
+
+def test_every_name_of_the_fixture_chain_passes():
+    real_names = [
+        f"{NAME}:Q4_K_M",
+        f"{NAME}:Q8_0",
+        f"{NAME}:BF16",
+        "granite4.2:8b",
+        "hf.co/unsloth/Qwen3.5-9B-GGUF:UD-Q6_K_XL",
+        "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M",
+    ]
+    for name in real_names:
+        assert PULL_NAME_RE.fullmatch(name) is not None

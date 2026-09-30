@@ -12,7 +12,7 @@
  ── Step 1 of 5  Configuration ──────────────────────────────────────────
  ? Where should results live?  this folder
    another computer: pick its profile below, or import the file made there
- ? Which machines should the result cover?  this machine (workstation)
+ ? Which machines should the result cover?  this machine
  ? What kind of machine is this?  laptop
    graphics  NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU · 12.0 GB · nvidia-smi · usable (CUDA)
    graphics  Intel(R) Graphics · shared memory · windows · not counted: integrated graphics shares the system memory
@@ -47,13 +47,13 @@
  ── Step 5 of 5  Results ────────────────────────────────────────────────
 
  folder    <results>
- machine   workstation             laptop, 12 GB graphics, 128 GB memory, measured today
+ machine   laptop-00000000         laptop, 12 GB graphics, 128 GB memory, measured today
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
  context   8k (entered), KV cache f16 (assumed), 1 request (from 1 user)
  speed     1 measured              fastest DeepSeek-R1-0528-Qwen3-8B at <speed>
  result    docs\models.md          24 packages ranked, 0 no fit
 
- workstation · context S 8k
+ laptop-00000000 · context S 8k
  room      graphics 11.0 GB for models (12.0 GB card minus reserve)
            memory 111.7 GB for models (127.7 GB minus reserve)
            disk 41.2 GB free on C: (Ollama models)

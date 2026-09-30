@@ -17,6 +17,7 @@ only reads what the render wrote.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -28,17 +29,37 @@ from .room import Disk
 from .screen import install_name
 
 NONE_VALUE = "none"
-NO_PULL_NAME = "no pull name"
+# A2 (AP9-FR, Codex r1-5): "no safe pull name", not "no pull name" -- the one lock text a row
+# without a name gets, whether it genuinely has none or `install_name` rejected the one it built.
+NO_PULL_NAME = "no safe pull name"
 NOT_UNIQUE = "pull name not unique"
 LOCAL_ALREADY = "local already"
 QUESTION = "Which package should be pulled into Ollama?"
 KEY = "pull_package"
+
+# A2 (AP9-FR, Codex r1-1): the two shapes `screen.install_name` may build, and no other -- checked
+# **before** any of the two is ever printed, put in an answer, or sent as `ollama pull`'s argument.
+# Each part starts with a letter or digit, then any run of letters, digits, `_`/`-` and single dots
+# (`\.(?!\.)`: a dot never right before another one, so `..` -- a path segment, `hf.co/../x` -- never
+# passes); nothing outside `[A-Za-z0-9._-]` at all, so a semicolon, a `$(...)`, a backtick, a space,
+# a newline, a leading `-` (an option to whatever reads the pasted line) and every Unicode
+# look-alike character (the parts are ASCII only) fail on the first character that is not one of
+# these. Compiled without `^`/`$` and matched with `fullmatch` on purpose: `$` alone would still let
+# a name with a trailing `\n` through (Python's `$` matches before a final newline too).
+_PART = r"[A-Za-z0-9](?:[A-Za-z0-9_-]|\.(?!\.))*"
+PULL_NAME_RE = re.compile(rf"(?:hf\.co/{_PART}/{_PART}:{_PART}|(?:{_PART}/)?{_PART}:{_PART})")
 
 
 def package_pull_name(package: Package) -> str | None:
     """The name Ollama would pull this package by, as the install line spells it (`screen.install_name`)."""
     identity = package_identity_key(package)
     return install_name(identity, package.quantization or "unknown", package.format)
+
+
+def weights_bytes_of(package: Package) -> float:
+    """The bytes a pull of `package`'s weight files needs (U8): the sum `--weights-bytes` (A3, A4)
+    and the disk check before a pull both start from."""
+    return float(sum(file.size_bytes for file in package.files if file.role in ("weights", "weights_shard")))
 
 
 def pull_collisions(packages: Sequence[Package]) -> dict[str, list[tuple[str, str, str]]]:
@@ -94,6 +115,12 @@ def run_packages(config, selection=None) -> list[Package]:
 def entry_pull_name(entry: RankedEntry) -> str | None:
     """The pull name of a shown row, or `None` where it has none."""
     return install_name(entry.package_identity, entry.quantization, entry.format)
+
+
+def has_named_row(block: MachineRanking) -> bool:
+    """Whether any shown row of `block` has a pull name (A3): the condition `pull_other_step` gates
+    on, and the one `views_install.install_lines` reads to know its list follows below a table."""
+    return any(entry_pull_name(entry) is not None for entry in block.ranked)
 
 
 def unique_pull_name(entry: RankedEntry, ambiguous: frozenset[str]) -> str | None:
@@ -200,12 +227,14 @@ __all__ = [
     "NONE_VALUE",
     "NOT_UNIQUE",
     "NO_PULL_NAME",
+    "PULL_NAME_RE",
     "QUESTION",
     "PullRow",
     "ambiguous_names",
     "collision_pieces",
     "default_row",
     "entry_pull_name",
+    "has_named_row",
     "package_of",
     "package_pull_name",
     "pull_collisions",
@@ -213,4 +242,5 @@ __all__ = [
     "repo_lines",
     "run_packages",
     "unique_pull_name",
+    "weights_bytes_of",
 ]

@@ -141,15 +141,28 @@ def test_a_pull_is_a_post_and_nothing_else(loopback):
     check_call("POST", PULL_PATH)
 
 
+_PULL_PATH_MODULES = (
+    "daemon.py",
+    "guided_install.py",
+    # FR-B1: the pull over SSH is the same `PULL_PATH`, translated at the SSH boundary
+    # (`remote_client.SshDaemon`), dispatched on the server (`remote_server.py`) and asked for
+    # for the row of the active SSH machine chosen in step 5 (`guided_remote.pull_remote_row`).
+    "remote_client.py",
+    "remote_server.py",
+    "guided_remote.py",
+)
+
+
 def test_the_source_never_names_delete_and_names_pull_in_the_transport_only():
-    """`/api/delete` stays out of the package; `/api/pull` is one constant, used by one step."""
+    """`/api/delete` stays out of the package; `/api/pull` is one constant, used by the pull step
+    and its SSH counterpart (FR-B1)."""
     source = Path(__file__).resolve().parent.parent / "modelroom"
     for module in sorted(source.glob("*.py")):
         text = module.read_text(encoding="utf-8")
         assert "/api/delete" not in text, f"{module.name} names /api/delete"
-        if module.name != "daemon.py":
+        if module.name not in ("daemon.py", *_PULL_PATH_MODULES):
             assert "/api/pull" not in text, f"{module.name} names /api/pull"
-        if module.name not in ("daemon.py", "guided_install.py"):
+        if module.name not in _PULL_PATH_MODULES:
             assert "PULL_PATH" not in text, f"{module.name} uses PULL_PATH"
 
 

@@ -150,8 +150,11 @@ def first_start_problems(config_text: str, pointer: dict, results: Path, machine
         problems.append(f"the configuration has no [machines.{machine}]")
     elif entry.get("writer") is not True:
         problems.append(f"[machines.{machine}].writer is {entry.get('writer')!r}, expected true")
-    if Path(raw.get("guided", {}).get("results", "")) != results:
-        problems.append(f"[guided].results is {raw.get('guided', {}).get('results')!r}, expected {results}")
+    # The configuration lies in `results`; a relative path is read against its folder, as
+    # `load_config` reads it (FR-N writes the folder's own path as ".").
+    written = raw.get("guided", {}).get("results", "")
+    if not written or Path(os.path.normpath(results / written)) != Path(os.path.normpath(results)):
+        problems.append(f"[guided].results is {written!r}, expected {results} or a path relative to it")
     if Path(pointer.get("current", "")) != results:
         problems.append(f"the pointer file's current is {pointer.get('current')!r}, expected {results}")
     if pointer.get("bindings", {}).get(str(results)) is None:
@@ -678,6 +681,7 @@ def run_steps(work: Path) -> list[Step]:
     from selftest_entered import entered_steps
     from selftest_head import head_count_step
     from selftest_pull import pull_steps
+    from selftest_remote import remote_step
     pointer = _redirect_home(work / "home")
     results = work / "results"
     results.mkdir(parents=True)
@@ -694,6 +698,7 @@ def run_steps(work: Path) -> list[Step]:
     steps.append(_testset_step())
     steps += [Step(*step) for step in pull_steps(results, pointer, machine, first_lines, started)]
     steps += [Step(*step) for step in entered_steps(work, answers_toml, started + timedelta(minutes=2))]
+    steps.append(Step(*remote_step()))  # FR-B1: the counterpart, a real local process
     steps.append(_live_search_smoke())
     return steps
 
