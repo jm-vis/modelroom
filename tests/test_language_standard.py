@@ -81,7 +81,7 @@ GERMAN_WORDS = (
     "und der das nicht oder aber auch noch sind wird werden kein keine eine einen einem ein "
     "ist von beim kann muss wurde wurden gefunden Fehler Datei Ordner Rechner Pfad Bereich "
     "Sitzung Abnahme Zeile Wert Anzahl Eingabe Ausgabe Speicher "
-    "gegenstelle aufnahme herkunft grenze befund umbau bestand handprobe"
+    "gegenstelle aufnahme herkunft grenze befund umbau bestand handprobe rechnername"
 ).split()
 GERMAN = r"(?i)[äöüß]|\b(?:" + "|".join(GERMAN_WORDS) + r")\b"
 

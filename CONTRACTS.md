@@ -3149,7 +3149,8 @@ whole answer at most 64 KiB (`hello`/`room`), 4 MiB (`profile`), 16 MiB (`daemon
 
 **What is not checked**: whether the alias truly names the intended computer (only the identity
 check of "Another computer" below judges that), whether the alias itself is a neutral name (a
-user's own choice, README), the host-key rules of a `ProxyJump` hop (the user's own `ssh_config`),
+user's own choice, README), the host-key and password rules of a `ProxyJump` hop (the user's own
+`ssh_config`: `BatchMode` and `StrictHostKeyChecking` given for the target do not reach the hop),
 where Ollama keeps its models on the server (the same approximation "The pull" already states for
 this computer), and whose daemon actually answers on the server's `127.0.0.1:11434`.
 
@@ -3209,7 +3210,7 @@ on <alias> for #<rank>: needs <n> GB, <m> GB free`), the question `Pull #<rank> 
 
 **What `remote.json`/a file never carries** (B6): `HostName`, address, user name, port, key path,
 jump host, ssh's own stderr, the server's own text (error, Ollama's), its paths and drive, its
-local model names and its `/api/ps` names, the shared folder's file names, a Rechnername out of an
+local model names and its `/api/ps` names, the shared folder's file names, a host name out of an
 export, and this computer's own name (live in the start line only, FR-N). The alias is the one
 thing kept, as `display_name`, as the machine key, and in `remote.json`. **Limit:** if the alias
 *is* the server's real short name, that name stands in the folder -- `ALIAS_RE` blocks an address

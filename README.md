@@ -164,8 +164,9 @@ and offers `<home>/modelroom` instead.
 
 A folder can hold the profiles of several machines -- the laptop you sit at and a server you rent,
 say. A machine can be entered by hand (see above), or its profile brought over by hand: on that
-computer `modelroom hardware` and `modelroom export-profile`, then `import a profile file` here.
-Beyond that, there are three ways to reach another computer directly:
+computer, with a `modelroom.toml` of its own, `modelroom hardware --config modelroom.toml` and
+`modelroom export-profile --config modelroom.toml --out <name>.json`, then `import a profile file`
+here. Beyond that, there are three ways to reach another computer directly:
 
 1. **Copy the command.** At the end of a run, step 5's **Which package should go onto another
    computer?** hands you a line to paste on that machine: `modelroom pull <name>
@@ -180,8 +181,9 @@ Beyond that, there are three ways to reach another computer directly:
    (`change the folder`) or forget it (`none, no shared folder`). The folder is only ever shown in
    that step, never written into a results folder or an export. For a script,
    `MODELROOM_PROFILE_SHARE` sets the folder and wins over the kept one; the step then says `set by
-   environment`. On the server, `modelroom hardware` and then `modelroom export-profile --config
-   <file> --out <share>/<file>.json` drop a profile there -- name the file after the export's own
+   environment`. On the server, with a `modelroom.toml` of its own there, `modelroom hardware
+   --config modelroom.toml` and then `modelroom export-profile --config modelroom.toml --out
+   <share>/<name>.json` drop a profile there -- name the file after the export's own
    neutral name, such as `server-3f9a0c21.json`, since that is what other computers pick it up by,
    never the file name. An answer file for the guided mode is like a script: run only your own,
    since its answers choose folders and paths.
@@ -190,8 +192,11 @@ Beyond that, there are three ways to reach another computer directly:
    neutral name of your own, such as `gpu1`, not the server's real one: modelroom keeps whatever you
    type and cannot tell the difference. It reads the server's profile, and lets step 5 check its
    free disk and pull the package you choose for it -- checked, asked, one Yes -- without you ever
-   running modelroom there by hand. It runs the system `ssh`, never asks for a password, and never
-   accepts a host key it does not already know.
+   running modelroom there by hand. It runs the system `ssh` straight to that alias with a fixed,
+   safe set of options: never asks for a password, never accepts a host key it does not already
+   know. Behind a jump host these two hold only for the target itself; the jump host answers with
+   its own connection, under its own `Host` block (below), and needs `BatchMode yes` and
+   `StrictHostKeyChecking yes` there too for the same guarantee.
 
 **Setting SSH up, once**, on Windows, macOS or Linux:
 
@@ -201,9 +206,14 @@ Beyond that, there are three ways to reach another computer directly:
 - **An agent.** Windows: start the OpenSSH Authentication Agent service, then `ssh-add`. macOS:
   `ssh-add --apple-use-keychain`. Linux: `ssh-add`.
 - **The public key on the server.** `ssh-copy-id gpu1` on macOS or Linux; on Windows, copy
-  `id_ed25519.pub`'s content into `~/.ssh/authorized_keys` on the server by hand -- on a Windows
-  server, that is the file OpenSSH keeps for the Administrators group,
-  `C:\ProgramData\ssh\administrators_authorized_keys`.
+  `id_ed25519.pub`'s content into the server's own authorized-keys file by hand. A normal account
+  keeps that at `%USERPROFILE%\.ssh\authorized_keys` (the same file as `~/.ssh/authorized_keys`
+  elsewhere); an account in the Administrators group keeps it instead at
+  `C:\ProgramData\ssh\administrators_authorized_keys`, and only once that file's permissions are
+  restricted to `SYSTEM` and `Administrators` alone -- sshd refuses a looser one. Microsoft's
+  OpenSSH-for-Windows documentation gives the command for that:
+  `icacls.exe "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant
+  "Administrators:F" /grant "SYSTEM:F"`.
 - **The host alias**, in `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`):
 
   ```
@@ -212,7 +222,7 @@ Beyond that, there are three ways to reach another computer directly:
       User user
       IdentityFile ~/.ssh/id_ed25519
   # behind a jump host:
-  #   ProxyJump jump1   (with its own Host jump1 block, StrictHostKeyChecking yes)
+  #   ProxyJump jump1   (with its own Host jump1 block, StrictHostKeyChecking yes and BatchMode yes)
   ```
 
 - **The first connection, by hand.** `ssh gpu1` once, and check its host key when asked.
@@ -560,7 +570,9 @@ proxying".
 
 The one exception is a computer you name yourself, by its SSH host alias, in "Another computer"
 above: modelroom then runs the system `ssh` to it, with your own SSH configuration and keys, never
-a password. It never connects anywhere else on its own.
+a password for that target itself -- a jump host in between answers under its own configuration
+and needs `BatchMode yes` of its own to hold the same promise (see "Another computer"). It never
+connects anywhere else on its own.
 
 ## Language choice
 

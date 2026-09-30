@@ -586,7 +586,7 @@ def test_the_environment_path_never_appears(tmp_path: Path):
 
 
 def test_a_non_neutral_display_name_never_reaches_the_list_the_answer_or_the_import(tmp_path: Path):
-    """Codex r1-6, the "Rechnernamen" gap: a valid export whose source forgot to neutralize its
+    """Codex r1-6, the host-name gap: a valid export whose source forgot to neutralize its
     `display_name` -- the listing, the picked-answer line and the written profile all carry the
     sink's own fallback name (`neutral.display_name_for`), never the raw one. Codex r2-2: checked
     against the whole results folder, not one profile field, and after a subsequent export."""
