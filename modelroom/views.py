@@ -11,9 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
-from .contracts import Area, Fit, Rating
+from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
@@ -548,6 +548,7 @@ class RunView:
     origins: Mapping[str, str] = field(default_factory=dict)
     pull_other_machines: frozenset[str] = frozenset()
     ssh_active: str | None = None  # FR-B1, B5: the `room` line names this one by its alias
+    packages: Sequence[Package] = ()  # the run's packages: the install line's runtime (`views_install`)
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -567,7 +568,8 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
         lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
-    return lines + install_lines(block, view.install_for, view.ambiguous, _disk(block, view), dash, view.pull_other_machines)
+    disk = _disk(block, view)
+    return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages)
 
 
 def _disk(block: MachineRanking, view: RunView) -> Disk | None:

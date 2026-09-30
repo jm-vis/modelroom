@@ -264,7 +264,7 @@ def test_a_package_held_already_stays_a_choice_of_the_pull_list_with_its_note():
 
     rows = pull_rows(_document(), MACHINE, frozenset(), "·", _held_disk(6.5))
     assert (rows[0].locked, rows[0].over_disk) == (None, False)
-    choices = pull_choices(rows, {1})
+    choices = pull_choices(rows, {(rows[0].runtime, rows[0].identity)})  # the row its own runtime holds
     assert choices[0].label == "#1  packager · Q8_0  6.0 GB  hf.co/packager/Nova-8B-GGUF:Q8_0  local already"
     assert choices[0].disabled is None and not choices[0].warn
     with _enter() as asker:

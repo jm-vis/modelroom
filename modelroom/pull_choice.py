@@ -5,19 +5,19 @@ only reads what the render wrote.
 
 - `pull_collisions` finds the pull names (`hf.co/<repo>:<quant>`, or an Ollama name) that more than
   one package answers to -- over every active, complete package a runtime of `runtimes.RUNTIMES`
-  accepts, **before** the eligibility filter and whatever the provenance (Codex r2-3, r3-1): an
+  accepts, **before** the eligibility filter and whatever the provenance: an
   approved row can have a hidden counterpart of another file form with the same name, and the pull
   name does not tell file forms apart. Such a name belongs to no row: every row with it is locked,
   has no install line and no disk check.
 - `pull_rows` is one row per shown table row of this machine, in table order, each with its pull
-  name (`runtime.command`, AP9-SV2-L: read off the table, not built here) or the reason it cannot
-  be pulled -- one row per runtime the machine has (`HardwareProfile.runtimes`, AP9-SV2-0; Ollama
-  where it names none, today's default) that also accepts a shown row's package, where the caller
-  passes the run's `packages` (the Paar-Regel: two runtimes accepting the same GGUF package on the
-  same machine give it two rows, each with a list value no answer file can confuse with the
-  other's -- `<runtime.key> <name>`, unprefixed for Ollama, so today's single-runtime shape and its
-  values stay exactly what they are, Codex r1 fixes 2/3). Without `packages` (every caller before
-  AP9-SV2-L, and `pull_other.py` still) each shown row stays the one row it always was.
+  name (`runtime.install_name`, read off the table) or the reason it cannot be pulled -- where the
+  caller passes the run's `packages`, one row per runtime the machine has (`HardwareProfile.runtimes`;
+  Ollama where it names none) that also accepts the row's package: two runtimes accepting the same
+  GGUF package on the same machine give it two rows, each with a list value no answer file can
+  confuse with the other's (`<runtime.key> <name>`, unprefixed for Ollama, so a machine with Ollama
+  alone keeps exactly its values), and a package no runtime of the machine accepts gets no row.
+  Without `packages` (`pull_other.py`), or for a row whose package is not among them, each shown
+  row stays the one Ollama row it always was.
 - `repo_lines` names the repository of every shown row whose `packager · quant` another shown row
   of the same block has too (F7), with the file form where one repository has both.
 """
@@ -25,13 +25,14 @@ only reads what the render wrote.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Sequence
+from dataclasses import dataclass, replace
+from typing import Mapping, Sequence
 
 from . import runtimes
 from .contracts import Package
 from .disk_fit import entry_over_disk, too_big_words
 from .document import MachineRanking, RankedEntry, RenderDocument
+from .profile import HardwareProfile
 from .quantization import package_identity_key
 from .room import Disk
 from .screen import install_name
@@ -42,9 +43,7 @@ NONE_VALUE = "none"
 NO_PULL_NAME = "no safe pull name"
 NOT_UNIQUE = "pull name not unique"
 LOCAL_ALREADY = "local already"
-# AP9-SV2-L: Ollama's own question, read off the table now -- `runtimes.OLLAMA.words.question`,
-# unchanged (today's literal moved there, "Laufzeit als Eintrag"; `words.question` becomes a real
-# choice again once a vLLM row exists, AP9-SV2-F/I).
+# Ollama's own question, read off the table (`runtimes.OLLAMA.words.question`, unchanged).
 QUESTION = runtimes.OLLAMA.words.question
 KEY = "pull_package"
 
@@ -73,14 +72,14 @@ def weights_bytes_of(package: Package) -> float:
     return float(sum(file.size_bytes for file in package.files if file.role in ("weights", "weights_shard")))
 
 
-def runtime_value(name: str | None, runtime: "runtimes.Runtime") -> str | None:
-    """The one value a pull-list row or a collision key takes for `runtime`'s `name`: unchanged for
-    Ollama, `<runtime.key> <name>` for any other (Codex r1, fix 2) -- the runtime's own stable key,
-    never a display word two runtimes could happen to share. Shared by `pull_collisions` and
-    `pull_rows` so the two can never disagree on what one runtime's value looks like."""
+def runtime_value(name: str | None, runtime: str) -> str | None:
+    """The one value a pull-list row or a collision key takes for the install `name` of the runtime
+    with key `runtime`: unchanged for Ollama, `<runtime> <name>` for any other -- the runtime's own
+    stable key, never a display word two runtimes could happen to share. Shared by
+    `pull_collisions`, `PullRow.value` and the install line, so they never disagree."""
     if name is None:
         return None
-    return name if runtime.key == "ollama" else f"{runtime.key} {name}"
+    return name if runtime == runtimes.OLLAMA.key else f"{runtime} {name}"
 
 
 def pull_collisions(packages: Sequence[Package]) -> dict[str, list[tuple[str, str, str]]]:
@@ -90,16 +89,16 @@ def pull_collisions(packages: Sequence[Package]) -> dict[str, list[tuple[str, st
     accepts -- independent of its provenance, so an `unresolved` counterpart the render hides
     counts too, and independent of which machine will pull it (a collision is a property of the
     name, not of one machine's runtimes). A name two different runtimes would give the very same
-    package never collides with itself (`runtime_value`'s own key tells them apart, Codex r1 fix
-    2); today only Ollama ever accepts a package, so this is `package.format == "gguf" or
-    package.source == "ollama"`, unchanged, and `runtime.command` is `package_pull_name`, unchanged.
+    package never collides with itself (`runtime_value`'s own key tells them apart); today only
+    Ollama ever accepts a package, so this is `package.format == "gguf" or package.source ==
+    "ollama"`, unchanged, and `runtime.install_name` is `package_pull_name`, unchanged.
     """
     by_name: dict[str, set[tuple[str, str, str]]] = {}
     for package in packages:
         if not (package.active and package.complete):
             continue
         for runtime in runtimes.accepting_runtimes(package):
-            name = runtime_value(runtime.command(package), runtime)
+            name = runtime_value(runtime.install_name(package), runtime.key)
             if name is not None:
                 by_name.setdefault(name, set()).add(package_identity_key(package))
     return {name: sorted(identities) for name, identities in by_name.items() if len(identities) > 1}
@@ -172,10 +171,10 @@ def collision_pieces(block: MachineRanking, ambiguous: frozenset[str]) -> list[s
 class PullRow:
     """One row of the pull list: the table row it stands for, its name, and why it is locked.
 
-    `runtime` is the key of the entry this row's name came from (AP9-SV2-L, Codex r1 fix 4):
-    `"ollama"` for every row before this sub-package and for every row without `packages` still --
-    the runtime association a row is chosen with (`_choose`) and pulled with (`pull_chosen`) is
-    read from here, not guessed again.
+    `name` is the install name of the runtime the row belongs to (`Runtime.install_name`), what
+    its command is built from; `runtime` is that runtime's key -- `"ollama"` for every row without
+    `packages` -- the runtime a row is chosen with (`value`), marked "local already" by (its own
+    `on_disk`) and shown the command of (`Runtime.command`) is read from here, not guessed again.
     """
 
     rank: int
@@ -190,8 +189,18 @@ class PullRow:
 
     @property
     def value(self) -> str:
-        """What an answer file names: the pull name; a locked row a value no answer can take."""
-        return self.name if self.locked is None and self.name is not None else f"#{self.rank} locked"
+        """What an answer file names: `runtime_value` of the name; a locked row a value no answer can take."""
+        value = runtime_value(self.name, self.runtime)
+        return value if self.locked is None and value is not None else f"#{self.rank} locked"
+
+
+def row_names(entry: RankedEntry, package: Package | None, profile: HardwareProfile | None) -> list[tuple[str, str | None]]:
+    """`(runtime key, install name)` for every runtime of this machine that accepts `entry`'s
+    package, in table order; none where the package is known and no runtime of the machine accepts
+    it; Ollama's name of the row itself where the package is not known (`package` `None`)."""
+    if package is None:
+        return [(runtimes.OLLAMA.key, entry_pull_name(entry))]
+    return [(runtime.key, runtime.install_name(package)) for runtime in runtimes.accepting_on_machine(package, profile)]
 
 
 def pull_rows(
@@ -201,17 +210,17 @@ def pull_rows(
     dot: str = "·",
     disk: Disk | None = None,
     packages: Sequence[Package] = (),
+    held: Mapping[str, frozenset] | None = None,
 ) -> list[PullRow]:
-    """One row per shown table row of `machine`, in table order (regular and appended measured rows);
-    one row per runtime this machine has (`runtimes.accepting_on_machine`, AP9-SV2-0's
-    `HardwareProfile.runtimes`) that also accepts a shown row's package, where `packages` names it
-    (AP9-SV2-L, the Paar-Regel, Codex r1 fixes 2-4) -- without `packages` (every caller before
-    AP9-SV2-L, and `pull_other.py` still) each row stays the one row it always was, its name
-    computed exactly as before (`entry_pull_name`) and its `runtime` `"ollama"`.
+    """One row per shown table row of `machine`, in table order (regular and appended measured rows),
+    and, where `packages` names its package, one per runtime of this machine that accepts it
+    (`row_names`) -- a known package no runtime of the machine accepts gets no row. Without
+    `packages` (`pull_other.py`) each row stays the one Ollama row it always was.
 
     With the free disk of this machine a row whose download does not fit it is locked with how much
-    it needs (AP9-RM U11); a lock of its name comes first. A package in `disk.held` needs no disk
-    and is never locked for it (U11c).
+    it needs (AP9-RM U11); a lock of its name comes first. A package the row's runtime holds needs
+    no disk and is never locked for it (U11c): `held` names, by runtime key, what each runtime
+    holds, and replaces `disk.held` for that runtime's rows; without it `disk.held` counts for all.
     """
     block = next((block for block in document.machines if block.machine == machine), None)
     if block is None:
@@ -220,20 +229,13 @@ def pull_rows(
     rows = []
     for entry in block.ranked:
         package = by_identity.get(tuple(entry.package_identity))
-        accepting = runtimes.accepting_on_machine(package, block.profile) if package is not None else ()
-        names = (
-            [(runtime.key, runtime_value(runtime.command(package), runtime)) for runtime in accepting]
-            if accepting
-            else [("ollama", entry_pull_name(entry))]
-        )
         cell = f"{entry.packager} {dot} {entry.quantization}"
-        for runtime_key, name in names:
-            locked = NO_PULL_NAME if name is None else NOT_UNIQUE if name in ambiguous else None
-            over = locked is None and entry_over_disk(entry, disk)  # a package held already is never over (U11c)
-            locked = too_big_words(entry.weights_gib, disk) if over else locked
-            rows.append(
-                PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over, runtime_key)
-            )
+        for key, name in row_names(entry, package, block.profile):
+            own = disk if held is None or disk is None else replace(disk, held=held.get(key, frozenset()))
+            locked = NO_PULL_NAME if name is None else NOT_UNIQUE if runtime_value(name, key) in ambiguous else None
+            over = locked is None and entry_over_disk(entry, own)  # a package held already is never over (U11c)
+            locked = too_big_words(entry.weights_gib, own) if over else locked
+            rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over, key))
     return rows
 
 
@@ -294,6 +296,7 @@ __all__ = [
     "pull_collisions",
     "pull_rows",
     "repo_lines",
+    "row_names",
     "run_packages",
     "runtime_value",
     "unique_pull_name",

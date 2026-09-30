@@ -381,8 +381,11 @@ def test_a_folder_with_nothing_to_rank_shows_the_row_without_a_speed(tmp_path: P
 
 
 def test_a_third_server_in_the_list_reaches_the_start_screen_step_4_and_both_cards(tmp_path: Path, monkeypatch):
-    """No line of the guided mode changes: the entry is added to `LOCAL_SERVERS` and read everywhere."""
-    from modelroom import local_servers
+    """No line of the guided mode changes: the server comes with one more row of `runtimes.RUNTIMES`
+    and is read everywhere."""
+    import dataclasses
+
+    from modelroom import local_servers, runtimes
     from modelroom.intro import Fact
 
     third = local_servers.LocalServer(
@@ -395,7 +398,8 @@ def test_a_third_server_in_the_list_reaches_the_start_screen_step_4_and_both_car
         measure=lambda run, config, scenario, results_dir, offer, picked: "Third measured",
         card_facts=lambda run: (Fact("server", "Third", "on the card"),),
     )
-    monkeypatch.setattr(local_servers, "LOCAL_SERVERS", (*local_servers.LOCAL_SERVERS, third))
+    row = dataclasses.replace(runtimes.VLLM, key="third", name="Third", server=third)  # accepts no package
+    monkeypatch.setattr(runtimes, "RUNTIMES", (*runtimes.RUNTIMES, row))
 
     _code, lines = _run(tmp_path, servers=offline_servers())
 
@@ -407,11 +411,13 @@ def test_a_third_server_in_the_list_reaches_the_start_screen_step_4_and_both_car
 
 
 def test_the_balance_puts_the_daemons_own_first_and_joins_with_a_dot(tmp_path: Path, monkeypatch):
-    from modelroom import local_servers
+    import dataclasses
 
-    first = local_servers.LOCAL_SERVERS[0]
-    measured = local_servers.LocalServer(**{**first.__dict__, "measure": lambda run, *args: "1 of 1 measured"})
-    monkeypatch.setattr(local_servers, "LOCAL_SERVERS", (measured, *local_servers.LOCAL_SERVERS[1:]))
+    from modelroom import runtimes
+
+    measured = dataclasses.replace(runtimes.OLLAMA.server, measure=lambda run, *args: "1 of 1 measured")
+    ollama = dataclasses.replace(runtimes.OLLAMA, server=measured)
+    monkeypatch.setattr(runtimes, "RUNTIMES", (ollama, *runtimes.RUNTIMES[1:]))
 
     _code, lines = _run(tmp_path)
 

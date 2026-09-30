@@ -6,13 +6,12 @@ where its transport comes from, the row it adds to the start screen, what it doe
 the rows it adds to the card of step 5. The start screen, step 4 and both card paths loop over
 this list; a server added to it reaches all three without a change anywhere else.
 
-`LOCAL_SERVERS` and the types it holds (`LocalServer`, `Offer`, `ServerRun`, `Origins`) moved into
-`runtimes.py` with AP9-SV2-L (Codex r1, fix 1): `runtimes.RUNTIMES` is now the one place a server
-or a runtime is registered, and `LOCAL_SERVERS = tuple(runtime.server for runtime in RUNTIMES)`
-there -- this module re-exports them (`alle heutigen Importe bleiben gültig`, the sub-package's
-brief) and keeps only what has nothing runtime-specific in it: reading the whole list for the
-start screen (`start_rows`), running step 4 over it (`load_tests`) and reading its card rows
-(`card_facts`).
+`LOCAL_SERVERS` and the types it holds (`LocalServer`, `Offer`, `ServerRun`, `Origins`) live in
+`runtimes.py`: `runtimes.RUNTIMES` is the one place a server or a runtime is registered. This
+module re-exports them, so every import of them from here stays valid, and keeps only what has
+nothing runtime-specific in it: reading the whole list for the start screen (`start_rows`), running
+step 4 over it (`load_tests`) and reading its card rows (`card_facts`) -- each one reads the table
+as it is at the call (`runtimes.local_servers()`).
 
 Nothing a server states or measures here is persisted (CONTRACTS.md, "Local servers and the vLLM
 load test", ADR 0008): what the start screen read and what step 4 found live in the run's
@@ -30,6 +29,7 @@ from .dialog import Choice
 from .guided_loadtest import NOTHING_MEASURED, QUESTIONS as LOAD_TEST_QUESTIONS, STEP, wants_load_test
 from .intro import Fact
 from .measurements import Scenario
+from . import runtimes
 from .runtimes import LOCAL_SERVERS, QUESTIONS, LocalServer, Offer, Origins, ServerRun
 from .screen import names_words, yes_no
 from .vllm_server import LocalVllmServer
@@ -46,7 +46,7 @@ def default_transports() -> dict[str, Any]:
 def start_rows(daemon, servers: ServerRun) -> tuple[tuple[Fact, ...], bool]:
     """One row per registered server that answered, the daemon's first; and whether the daemon answered."""
     origins = Origins(daemon, servers)
-    rows = tuple(fact for server in LOCAL_SERVERS if (fact := server.start_fact(origins)) is not None)
+    rows = tuple(fact for server in runtimes.local_servers() if (fact := server.start_fact(origins)) is not None)
     return rows, bool(servers.found.get("ollama"))
 
 
@@ -61,7 +61,7 @@ def load_tests(run: "GuidedRun", config: Configuration, scenario: Scenario, resu
     """
     run.screen.blank()
     run.screen.head(STEP)
-    offers = [(server, server.offer(run, config, scenario, results_dir)) for server in LOCAL_SERVERS]
+    offers = [(server, server.offer(run, config, scenario, results_dir)) for server in runtimes.local_servers()]
     rows = [row for _server, offer in offers for row in offer.rows]
     for server, offer in offers:
         if offer.nothing is not None:
@@ -101,7 +101,7 @@ ROW_WORDS = {guided_vllm.ROW: "vLLM server"}
 
 def card_facts(run: "GuidedRun") -> tuple[Fact, ...]:
     """The rows every registered server adds to the card of step 5, in the order of the list."""
-    return tuple(fact for server in LOCAL_SERVERS for fact in server.card_facts(run))
+    return tuple(fact for server in runtimes.local_servers() for fact in server.card_facts(run))
 
 
 __all__ = [

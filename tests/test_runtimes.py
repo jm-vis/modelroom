@@ -1,11 +1,11 @@
-"""Tests for modelroom.runtimes: the table "Laufzeit als Eintrag" (AP9-SV2-L).
+"""Tests for modelroom.runtimes: the one table of local-server runtimes.
 
-AP9-SV2-L moves Ollama onto `RUNTIMES` without a behavior change -- these tests hold the table's
-own shape (every field set, `accepts`/`fit` reachable and equal to today's direct calls) and the
-dispatch a later sub-package (AP9-LS) will use for a real second row. The full byte-identical
-render/pull/install path stays proven by `tests/test_guided_screen.py`'s golden files and the
-rest of `tests/test_pull_choice.py`, `tests/test_guided_install.py`, `tests/test_render.py` --
-none of them touched here on purpose (Kernkriterium: a pure refactor).
+Ollama sits on `RUNTIMES` without a behavior change -- these tests hold the table's own shape
+(every field set, `accepts`/`fit` reachable and equal to the direct calls), the pairing of a
+package with every runtime of a machine that accepts it, and a third runtime that exists only as
+one more row of the table reaching every place a runtime is read. The byte-identical
+render/pull/install path of Ollama stays proven by the golden files of
+`tests/test_guided_screen.py` and the rest of the suite.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _scenario(context: int = 8192) -> Scenario:
 
 def test_every_runtime_has_every_field():
     """Every row of `RUNTIMES` sets every field of `Runtime`, structurally -- not that a vLLM one
-    runs (AP9-SV2-L point 2: `VLLM` carries only `server` and a real `accepts` here)."""
+    runs (`VLLM` carries only `server` and a real `accepts` so far)."""
     for runtime in runtimes.RUNTIMES:
         for field in fields(runtimes.Runtime):
             assert getattr(runtime, field.name) is not None, f"{runtime.key}.{field.name} is unset"
@@ -79,10 +79,10 @@ def test_each_runtimes_server_is_local_servers_own_entry():
     assert runtimes.VLLM.server is by_key["vllm"]
 
 
-@pytest.mark.parametrize("field", ["detect", "fit", "command", "model_place", "on_disk"])
+@pytest.mark.parametrize("field", ["detect", "fit", "install_name", "command", "model_place", "on_disk"])
 def test_every_vllm_field_not_built_yet_fails_loudly_if_called(field):
-    """`VLLM.accepts` refuses every package (below), so none of these run in AP9-SV2-L; a call
-    still fails loudly, naming the sub-package that builds it, rather than guessing quietly."""
+    """`VLLM.accepts` refuses every package (below), so none of these runs; a call still fails
+    loudly, naming the package that builds it, rather than guessing quietly."""
     with pytest.raises(NotImplementedError, match="AP9-SV2-"):
         getattr(runtimes.VLLM, field)()
 
@@ -103,9 +103,8 @@ def test_ollama_refuses_a_tensor_package_from_hugging_face():
 
 
 def test_vllm_accepts_nothing_yet():
-    """AP9-SV2-L point 2: no Tensor package claims a row before AP9-SV2-P builds the Tensor
-    package class and AP9-SV2-F builds vLLM's fit -- `accepts` is `lambda package: False`, on
-    purpose, whatever the package."""
+    """No Tensor package claims a row before the Tensor package class and vLLM's fit exist --
+    `accepts` is `lambda package: False`, on purpose, whatever the package."""
     assert runtimes.VLLM.accepts(_package(format="tensor")) is False
     assert runtimes.VLLM.accepts(_package(format="gguf")) is False
 
@@ -119,8 +118,7 @@ def test_accepting_runtimes_is_empty_for_a_tensor_package():
 
 
 def test_accepting_runtimes_grows_with_a_second_runtime_monkeypatched_in(monkeypatch):
-    """The probe AP9-LS needs before it gives a second real runtime a `gguf`-accepting `accepts`
-    (AP9-SV2-L, "Laufzeit als Eintrag", the Paar-Regel): two runtimes both claiming one package."""
+    """A second runtime with a `gguf`-accepting `accepts`: two runtimes both claiming one package."""
     third = runtimes.OLLAMA.__class__(**{**runtimes.OLLAMA.__dict__, "key": "third", "name": "Third"})
     monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
 
@@ -139,7 +137,7 @@ def test_fit_for_a_gguf_package_matches_compute_fit_v2_directly():
 
 
 def test_fit_for_a_package_no_runtime_accepts_falls_back_to_compute_fit_v2():
-    """Render judged every package before AP9-SV2-L too -- `compute_fit_v2`'s own `unknown` result
+    """Render judged every package before the table too -- `compute_fit_v2`'s own `unknown` result
     for a non-gguf package (`fit._package_reason`) -- so the fallback here must say the very same,
     byte for byte, not a new `not_covered` reason of its own."""
     package, profile, base_model, scenario = _package(format="tensor"), _profile(), _base_model(), _scenario()
@@ -149,7 +147,7 @@ def test_fit_for_a_package_no_runtime_accepts_falls_back_to_compute_fit_v2():
     )
 
 
-# --- machine scoping: a runtime pairs only where the machine has it (Codex r1, fix 3) -------------
+# --- machine scoping: a runtime pairs only where the machine has it --------------------------------
 
 
 def test_machine_runtime_keys_defaults_to_ollama_alone_when_the_profile_names_none():
@@ -182,91 +180,150 @@ def test_accepting_on_machine_narrows_to_the_machines_own_runtimes(monkeypatch):
     assert [runtime.key for runtime in runtimes.accepting_on_machine(package, without_it)] == ["ollama"]
 
 
-# --- reaches every place a registered runtime should (AP9-SV2-L brief, Codex r1 fix 1) -------------
+# --- a third runtime, only one more row of `RUNTIMES`, reaches every place ------------------------
 
 
-def test_a_third_in_memory_runtime_reaches_start_step4_card_render_and_install(monkeypatch):
-    """A runtime that exists only as one more row of `RUNTIMES` reaches the start screen, step 4,
-    the card (`local_servers.py`, derived from the table -- Codex r1, fix 1), the render's fit
-    dispatch, and the install/pull list (Codex r1, fixes 2-4) -- without a second place to add it
-    to. No golden file changes: `RUNTIMES` itself is monkeypatched back after the test, and every
-    other test of the suite (the golden-screen ones included) never sees a third entry.
-    """
-    from modelroom.dialog import Choice
+def _third(**changes) -> runtimes.Runtime:
+    """A runtime that exists only as one more row of the table: its own server, name and command."""
     from modelroom.intro import Fact
-    from modelroom.pull_choice import pull_rows
-    from modelroom.views_install import install_target
 
-    from fixture_rows import document as fixture_document
-
-    third = runtimes.Runtime(
+    server = local_servers.LocalServer(
         key="third",
         name="Third",
-        server=local_servers.LocalServer(
-            key="third",
-            name="Third",
-            origin="http://127.0.0.1:9999",
-            transport=lambda run: None,
-            start_fact=lambda origins: Fact("server", "Third", "stated by nobody"),
-            offer=lambda run, config, scenario, results_dir: local_servers.Offer(
-                rows=(Choice("third", "the third server was asked"),)
-            ),
-            measure=lambda run, config, scenario, results_dir, offer, picked: "Third measured",
-            card_facts=lambda run: (Fact("server", "Third", "on the card"),),
-        ),
+        origin="http://127.0.0.1:9999",
+        transport=lambda run: None,
+        start_fact=lambda origins: Fact("server", "Third", "stated by nobody"),
+        offer=lambda run, config, scenario, results_dir: run.screen.note("the third server was asked") or local_servers.Offer(),
+        measure=lambda run, config, scenario, results_dir, offer, picked: "Third measured",
+        card_facts=lambda run: (Fact("server", "Third", "on the card"),),
+    )
+    fields_ = dict(
+        key="third",
+        name="Third",
+        server=server,
         detect=lambda *args, **kwargs: None,
         hello_field="third",
         accepts=lambda package: package.format == "gguf",
         fit=runtimes.OLLAMA.fit,
-        command=lambda package: "third-pull-name",
+        install_name=lambda package: f"acme/nova:{package.quantization}",
+        command=lambda name: f"third get {name}",
         model_place=lambda *args, **kwargs: [],
-        on_disk=lambda *args, **kwargs: False,
+        on_disk=lambda target, packages: frozenset(),
         words=runtimes.RuntimeWords(package_prefix="third · ", key_text=None, question="Which package should be installed?"),
     )
-    monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
-    monkeypatch.setattr(local_servers, "LOCAL_SERVERS", tuple(entry.server for entry in runtimes.RUNTIMES))
+    fields_.update(changes)
+    return runtimes.Runtime(**fields_)
 
-    # 1) start screen: `local_servers.start_rows` loops `LOCAL_SERVERS`, derived from `RUNTIMES`.
-    from modelroom.daemon import FixtureDaemon
 
-    offline = FixtureDaemon({}, unreachable="no daemon here")
-    start, _reachable = local_servers.start_rows(offline, local_servers.ServerRun({}))
-    assert any(fact.value == "Third" and fact.note == "stated by nobody" for fact in start)
+def _on_machine(doc, keys: list[str]):
+    """`doc` with its one machine's profile naming exactly `keys` as its runtimes."""
+    blocks = [block.model_copy(update={"profile": block.profile.model_copy(update={"runtimes": keys})}) for block in doc.machines]
+    return doc.model_copy(update={"machines": blocks})
 
-    # 2) step 4: every registered server's `offer` is read (`load_tests` asks the one question and
-    # builds the one list over exactly this loop; the row itself is what reaches it here).
-    assert third.server.offer(None, None, None, None).rows == (Choice("third", "the third server was asked"),)
 
-    # 3) the card: `local_servers.card_facts` loops the same derived list.
-    assert local_servers.card_facts(run=None) == (Fact("server", "Third", "on the card"),)
+def _pull_step(tmp_path, doc, packages, answers: dict) -> tuple[list[str], dict]:
+    """The pull of step 5 over `doc`, as the guided run calls it: its lines, and the lists asked."""
+    from modelroom.guided_install import PullContext, pull_step
+    from modelroom.pull_choice import ambiguous_names
 
-    # 4) render: the fit dispatch reads the table in order; Ollama (still first) wins for a
-    # package both accept, exactly as `fit_for`'s own tests hold (no behavior change there).
-    package = _package(format="gguf", default_context=4096)
-    assert runtimes.accepting_runtimes(package)[0].key == "ollama"
+    from test_pull_choice import _Recording, _run
 
-    # 5) install: the pull list gives the package a row for each runtime the machine has
-    # (`<runtime.key> <name>`, unprefixed for Ollama -- Codex r1, fixes 2-4), and the install line
-    # dispatches through the first one that accepts it there; reordering the table changes which
-    # one wins, proving the choice comes from `RUNTIMES`, not a name hardcoded anywhere here.
-    doc = fixture_document([package])
-    doc = doc.model_copy(
-        update={
-            "machines": [
-                block.model_copy(update={"profile": block.profile.model_copy(update={"runtimes": ["ollama", "third"]})})
-                for block in doc.machines
-            ]
-        }
-    )
-    rows = pull_rows(doc, "workstation", packages=[package])
-    by_runtime = {row.runtime: row.name for row in rows}
-    assert set(by_runtime) == {"ollama", "third"}
-    assert by_runtime["third"] == "third third-pull-name"
-    assert by_runtime["ollama"] is not None and by_runtime["ollama"] != by_runtime["third"]
+    asker = _Recording(answers)
+    run, lines = _run(tmp_path, asker)
+    pull_step(run, PullContext(doc, "workstation", packages, ambiguous_names(packages)), True)
+    return [line.strip() for line in lines], asker.lists
 
-    ollama_wins = install_target(doc.machines[0], "workstation", packages=[package])
-    assert ollama_wins is not None and ollama_wins[1] == by_runtime["ollama"]
 
-    monkeypatch.setattr(runtimes, "RUNTIMES", (third, runtimes.OLLAMA))  # reorder: Third now first
-    third_wins = install_target(doc.machines[0], "workstation", packages=[package])
-    assert third_wins is not None and third_wins[1] == "third-pull-name"  # Third's own command, unprefixed
+def test_a_third_in_memory_runtime_reaches_start_step4_card_render_and_install(tmp_path, monkeypatch):
+    """Only `RUNTIMES` is patched. A whole guided run shows the third server on the start screen,
+    asks it in step 4 and puts its row on the card, and -- first in the table -- the render judges
+    every GGUF package with its `fit`, while the machine's pull and install stay Ollama's, since
+    the machine's profile does not name it. On a machine whose profile names it, the install line
+    under the table, the pull list, the answer taken from it and the collisions all read its entry:
+    its install name, its command, its key in the list value."""
+    from modelroom.fit import compute_fit_v2
+    from modelroom.pull_choice import NOT_UNIQUE, pull_collisions, pull_rows
+    from modelroom.screen import plain
+    from modelroom.views import RunView, terminal_blocks
+    from modelroom.views_install import NOT_UNIQUE_INSTALL
+
+    from fixture_rows import document, package
+    from fixture_support import offline_daemon
+    from test_guided_install import ANSWERS, FIRST_NAME, _run
+    from test_guided_vllm import _card, _step
+
+    judged = []
+
+    def fit(profile, package_, *args):
+        judged.append(package_.format)
+        return compute_fit_v2(profile, package_, *args)
+
+    first = _third(fit=fit)
+    monkeypatch.setattr(runtimes, "RUNTIMES", (first, *runtimes.RUNTIMES))
+    (tmp_path / "run" / "results").mkdir(parents=True)
+    (tmp_path / "run" / "home").mkdir()
+
+    code, lines, _asker = _run(tmp_path / "run", {**ANSWERS, "pull": False}, offline_daemon())
+
+    assert code == 0
+    assert "server    Third                   stated by nobody" in lines  # start screen
+    assert "the third server was asked" in _step(lines, 4)  # step 4: its offer
+    assert _step(lines, 4)[-1] == "✓ Measurement     Third measured"  # step 4: its measurement
+    assert "server    Third                   on the card" in [line.strip() for line in _card(lines)]  # the card
+    assert judged and set(judged) == {"gguf"}  # the render: the fit of the first runtime accepting it
+    assert f"install   #1  ollama pull {FIRST_NAME}" in lines  # this machine has Ollama alone
+
+    third = _third()
+    monkeypatch.setattr(runtimes, "RUNTIMES", (*runtimes.RUNTIMES[1:], third))
+    q4 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+    doc = _on_machine(document([q4]), ["third"])
+
+    view = RunView(install_for="workstation", packages=[q4])
+    shown = [plain(line).strip() for line in terminal_blocks(doc, "workstation", view=view)]
+    assert "install   #1  third get acme/nova:Q4_K_M" in shown  # the install line: its command
+    assert not any("ollama pull" in line for line in shown)
+
+    said, lists = _pull_step(tmp_path / "pull", doc, [q4], {"pull_package": "third acme/nova:Q4_K_M", "pull": False})
+    assert [choice.value for choice in lists["pull_package"]] == ["third acme/nova:Q4_K_M", "none"]
+    assert "install   #1  third get acme/nova:Q4_K_M" in said  # the answer taken, and its command
+
+    twin = package("unsloth/Nova-7B-GGUF", "sub/Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+    collisions = pull_collisions([q4, twin])
+    assert len(collisions["third acme/nova:Q4_K_M"]) == 2  # its key in the collision
+    ambiguous = frozenset(collisions)
+    assert [row.locked for row in pull_rows(doc, "workstation", ambiguous, packages=[q4, twin])] == [NOT_UNIQUE]
+    view = RunView(install_for="workstation", ambiguous=ambiguous, packages=[q4, twin])
+    shown = [plain(line).strip() for line in terminal_blocks(doc, "workstation", view=view)]
+    assert f"install   #1 {NOT_UNIQUE_INSTALL}" in shown
+
+
+def test_a_third_in_memory_runtime_accepting_gguf_gives_a_second_row_per_package(tmp_path, monkeypatch):
+    """A second GGUF runtime on the same machine: every package gets two rows, in the order of the
+    table rows (the same ranking rule, the same ranks), each list value its own -- Ollama's exactly
+    as before, the other `<key> <name>` -- and the same package under two runtimes is no collision.
+    The answer picks the row of the runtime it names, and the command shown is that runtime's."""
+    from modelroom.pull_choice import pull_collisions, pull_rows
+
+    from fixture_rows import document, package
+
+    third = _third(install_name=runtimes.OLLAMA.install_name)
+    monkeypatch.setattr(runtimes, "RUNTIMES", (*runtimes.RUNTIMES, third))
+    name = "hf.co/unsloth/Nova-7B-GGUF"
+    q8 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q8_0.gguf", "Q8_0")
+    q4 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+    doc = _on_machine(document([q8, q4]), ["ollama", "third"])
+
+    rows = pull_rows(doc, "workstation", packages=[q8, q4])
+
+    assert [(row.rank, row.runtime, row.value) for row in rows] == [
+        (1, "ollama", f"{name}:Q8_0"),
+        (1, "third", f"third {name}:Q8_0"),
+        (2, "ollama", f"{name}:Q4_K_M"),
+        (2, "third", f"third {name}:Q4_K_M"),
+    ]
+    assert pull_collisions([q8, q4]) == {}
+
+    said, lists = _pull_step(tmp_path, doc, [q8, q4], {"pull_package": f"third {name}:Q4_K_M", "pull": False})
+    assert [choice.value for choice in lists["pull_package"]][:4] == [row.value for row in rows]
+    assert f"install   #2  third get {name}:Q4_K_M" in said
+    assert not any(line.startswith("install") and "ollama pull" in line for line in said)

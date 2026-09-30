@@ -169,7 +169,7 @@ def test_a_missing_answer_takes_row_one_only_when_it_has_a_pull_name():
     assert default_row(pull_rows(document([unnamed, Q4]), "workstation")) is None
 
 
-# --- the Paar-Regel: a second runtime doubles a row (AP9-SV2-L, "Laufzeit als Eintrag") --------------
+# --- a package pairs with every runtime of the machine that accepts it ------------------------------
 
 
 def _with_machine_runtimes(doc, machine: str, keys: list[str]):
@@ -208,24 +208,24 @@ def test_passing_packages_changes_nothing_while_ollama_is_the_only_accepting_run
 def test_a_second_runtime_this_machine_has_gives_the_same_gguf_package_a_second_row(monkeypatch):
     """Two runtimes this machine has (`HardwareProfile.runtimes`) both accepting the same GGUF
     package double its row, each with a list value no answer file can confuse with the other's --
-    `<runtime.key> <name>` (Codex r1, fixes 2 and 4), unprefixed for Ollama.
-    `test_ollama_list_values_and_answers_are_unchanged` right below is the control proving
+    `<runtime.key> <name>`, unprefixed for Ollama; the name itself stays the runtime's install
+    name. `test_ollama_list_values_and_answers_are_unchanged` right below is the control proving
     Ollama's own value never moves."""
     third = _third_runtime(monkeypatch)
     doc = _with_machine_runtimes(document([Q4]), "workstation", ["ollama", third.key])
 
     rows = pull_rows(doc, "workstation", packages=[Q4])
 
-    assert [(row.rank, row.runtime, row.name) for row in rows] == [
-        (1, "ollama", f"{NAME}:Q4_K_M"),
-        (1, "third", f"third {NAME}:Q4_K_M"),
+    assert [(row.rank, row.runtime, row.name, row.value) for row in rows] == [
+        (1, "ollama", f"{NAME}:Q4_K_M", f"{NAME}:Q4_K_M"),
+        (1, "third", f"{NAME}:Q4_K_M", f"third {NAME}:Q4_K_M"),
     ]
-    assert len({row.name for row in rows}) == 2  # eindeutig: an answer file can tell the two apart
+    assert len({row.value for row in rows}) == 2  # an answer file can tell the two apart
 
 
 def test_a_second_runtime_this_machine_does_not_have_gives_no_second_row(monkeypatch):
     """The same package, the same second runtime accepting it in general -- but this machine's
-    profile never named it (Codex r1, fix 3): the pull list shows the one row it always did."""
+    profile never named it: the pull list shows the one row it always did."""
     _third_runtime(monkeypatch)
     doc = document([Q4])  # profile.runtimes is [], read as Ollama alone
 
@@ -235,7 +235,7 @@ def test_a_second_runtime_this_machine_does_not_have_gives_no_second_row(monkeyp
 
 
 def test_ollama_list_values_and_answers_are_unchanged(monkeypatch):
-    """Control (green on the base already, AP9-SV2-L's Kernkriterium): with the real table, whether
+    """Control (green before the table already): with the real table, whether
     or not `packages` is passed, Ollama's own rows, names and lock reasons are exactly today's."""
     from modelroom import runtimes
 
@@ -253,6 +253,58 @@ def test_ollama_list_values_and_answers_are_unchanged(monkeypatch):
         ("ollama", f"{NAME}:Q4_K_M", None),
         ("ollama", f"{NAME}:BF16", NOT_UNIQUE),
     ]
+
+
+def test_a_known_package_no_runtime_of_the_machine_accepts_gets_no_row_and_no_install_line(tmp_path: Path):
+    """A GGUF package on a machine whose profile names vLLM alone: vLLM takes no GGUF package, so
+    the package pairs with no runtime there -- no row of the pull list, no install line, nothing
+    asked. Only where the package is not known at all does the row keep the Ollama row it had."""
+    from modelroom.views_install import install_lines, install_target
+
+    doc = _with_machine_runtimes(document([Q4]), "workstation", ["vllm"])
+    block = doc.machines[0]
+
+    assert pull_rows(doc, "workstation", packages=[Q4]) == []
+    assert install_target(block, "workstation", packages=[Q4]) is None
+    assert install_lines(block, "workstation", frozenset(), None, "-", packages=[Q4]) == []
+    asker = _Recording({})
+    run, lines = _run(tmp_path, asker)
+    pull_step(run, PullContext(doc, "workstation", [Q4], ambiguous_names([Q4])), True)
+    assert "pull_package" not in asker.lists and lines == []
+    # Control: the package not known (no `packages`), the row is Ollama's, as it always was.
+    assert [(row.runtime, row.name) for row in pull_rows(doc, "workstation")] == [("ollama", f"{NAME}:Q4_K_M")]
+
+
+def _held_list(tmp_path: Path, monkeypatch, third_holds: bool, ollama_held_before: bool) -> list:
+    """The pull list of step 5 for `Q4` on a machine with Ollama and a second GGUF runtime, a free
+    disk too small for its download, and what each runtime holds."""
+    import dataclasses
+
+    from modelroom import runtimes
+    from modelroom.quantization import package_identity_key
+    from modelroom.room import Disk
+
+    held = frozenset({package_identity_key(Q4)})
+    own = held if third_holds else frozenset()
+    third = dataclasses.replace(_third_runtime(monkeypatch), on_disk=lambda target, packages: own)
+    monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
+    doc = _with_machine_runtimes(document([Q4]), "workstation", ["ollama", third.key])
+    disk = Disk(1 * GIB, "C:", held=held if ollama_held_before else frozenset())
+    asker = _Recording({"pull_package": "none"})
+    run, _lines = _run(tmp_path, asker)
+    pull_step(run, PullContext(doc, "workstation", [Q4], ambiguous_names([Q4]), disk), True)
+    return [(choice.value, choice.disabled is not None, choice.label.endswith("local already")) for choice in asker.lists["pull_package"]]
+
+
+def test_each_runtime_counts_only_what_it_holds_itself(tmp_path: Path, monkeypatch):
+    """One package, two runtimes, a disk too small for its download. What the second runtime holds
+    marks its own row "local already" and frees it from the disk -- never Ollama's row; what the
+    Ollama daemon held when the render read the disk frees Ollama's row -- never the other one."""
+    third_holds = _held_list(tmp_path / "a", monkeypatch, third_holds=True, ollama_held_before=False)
+    ollama_holds = _held_list(tmp_path / "b", monkeypatch, third_holds=False, ollama_held_before=True)
+
+    assert third_holds[:2] == [("#1 locked", True, False), (f"third {NAME}:Q4_K_M", False, True)]
+    assert ollama_holds[:2] == [(f"{NAME}:Q4_K_M", False, False), ("#1 locked", True, False)]
 
 
 def test_a_missing_answer_with_an_ambiguous_row_one_pulls_nothing(tmp_path: Path):

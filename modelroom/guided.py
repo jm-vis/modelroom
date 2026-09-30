@@ -714,7 +714,8 @@ def _render_step(
     # A3 (AP9-FR): the other machines `pull_other_step` will list a row for, after this table --
     # computed once, here, so the note under a table and the list that may follow never disagree.
     other_machines = eligible_other_machines(document, here, context.ambiguous)
-    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines, ssh_active=run.ssh_active)
+    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines,
+                   ssh_active=run.ssh_active, packages=context.packages)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 
