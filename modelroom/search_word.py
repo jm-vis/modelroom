@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from .catalog import Catalog, CatalogFamily, CatalogModel
+from .catalog import DISPLAYED_KINDS, Catalog, CatalogFamily, CatalogModel
 
 SearchForm = Literal["id", "words", "empty"]
 
@@ -178,7 +178,7 @@ def latest_model_names(catalog: Catalog) -> list[str]:
     names: list[str] = []
     for family in catalog.families:
         for model in family.models:
-            if not model.latest:
+            if not model.latest or model.kind not in DISPLAYED_KINDS:
                 continue
             name = model.hf_repo.partition("/")[2]
             if name not in names:

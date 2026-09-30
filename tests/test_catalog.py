@@ -3,16 +3,32 @@
 from __future__ import annotations
 
 import copy
+import json
 from datetime import date
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from modelroom.catalog import CATALOG_FILE, Catalog, CatalogError, CatalogFamily, CatalogModel, load_catalog
+from modelroom.catalog import (
+    CATALOG_ATTRIBUTION,
+    CATALOG_DATA_LICENSE,
+    CATALOG_FILE,
+    CATALOG_MAX_BYTES,
+    CATALOG_MAX_LINES,
+    DISPLAYED_KINDS,
+    PIPELINE_TAG_TO_KIND,
+    Catalog,
+    CatalogDocumentV2,
+    CatalogError,
+    CatalogFamily,
+    CatalogModel,
+    load_catalog,
+)
 from modelroom.contracts import SchemaVersionError
 from modelroom.examples import EXAMPLES
 from modelroom.search_pages import publisher_accounts
+from modelroom.search_word import latest_model_names
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -45,6 +61,16 @@ REQUIRED_PUBLISHERS = (
 )
 # The day every `latest` row of the shipped catalog was confirmed against its publisher page.
 LATEST_CHECKED = date(2026, 9, 25)
+# The two embedding rows the shipped catalog names, unchanged since the AP9-KA conversion
+# (bau-brief, "Reichweite der Tabelle ...", "Bestandsschutz").
+EMBEDDING_REPOS = ("Qwen/Qwen3-Embedding-8B", "Qwen/Qwen3-Embedding-0.6B")
+# Rows well above the sizes the rest of the catalog lists, kept through the conversion on purpose
+# (bau-brief: "die als groß markierten Zeilen (catalog.toml:10-11)").
+LARGE_REPOS = (
+    "deepseek-ai/DeepSeek-V3.2",
+    "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "zai-org/GLM-5.3-Flash",
+)
 
 
 def test_shipped_catalog_loads_and_covers_the_example_configurations_families():
@@ -71,8 +97,9 @@ def test_shipped_catalog_claims_no_latest_without_evidence_and_one_successor():
     assert catalog.age_of("mistralai/Ministral-3-14B-Instruct-2512") == ("latest", None)
 
 
-# The rows that were given a successor on 2026-09-25, each with the publisher evidence named in a
-# comment above it in `catalog.toml`: the successor's card names this very model as replaced.
+# The rows that were given a successor on 2026-09-25, each with a `successor_source` naming the
+# publisher evidence (schema 2, migrated by `scripts/catalog_convert_v1.py` from the comment that
+# used to sit above the row).
 SUCCESSORS_2026_09_25 = {
     "mistralai/Magistral-Small-2509": "mistralai/Mistral-Small-4-119B-2603",
 }
@@ -128,21 +155,16 @@ def test_a_line_the_publisher_carries_as_current_is_no_successor_of_each_model_b
 
 
 def test_every_successor_row_names_its_evidence_and_the_day_it_was_checked():
-    """The comment above a row with a successor names a Hub page and the check date."""
-    blocks = CATALOG_FILE.read_text(encoding="utf-8").split("[[families.models]]")
-    for index, block in enumerate(blocks[1:], start=1):
-        if "\n  successor = " not in block:
-            continue
-        above = [line.strip() for line in blocks[index - 1].splitlines() if line.strip()]
-        trailing: list[str] = []
-        for line in reversed(above):
-            if not line.startswith("#"):
-                break
-            trailing.insert(0, line)
-        comment = " ".join(trailing)
-        repo = block.split('hf_repo = "', 1)[1].split('"', 1)[0]
-        assert "https://huggingface.co/" in comment, repo
-        assert "2026-09-25" in comment, repo
+    """Schema 2 (AP9-KA): `successor_source`/`successor_checked` are fields, not a comment."""
+    catalog = load_catalog()
+    for repo, successor in SUCCESSORS_2026_09_25.items():
+        model = catalog.model_for(repo)
+        assert model.successor == successor
+        assert model.successor_source is not None and model.successor_checked == LATEST_CHECKED, repo
+    # The successor with no current collection (`SUCCESSORS_NOT_LATEST`) still names its evidence.
+    euro = catalog.model_for("utter-project/EuroLLM-9B-Instruct")
+    assert euro.successor_source == "https://huggingface.co/utter-project/EuroLLM-9B-Instruct-2512"
+    assert euro.successor_checked == LATEST_CHECKED
 
 
 def test_every_shipped_row_carries_a_hub_source_a_full_ollama_pair_and_a_unique_id():
@@ -175,16 +197,21 @@ def test_the_word_qwen_still_asks_exactly_the_two_accounts_the_fixtures_bind():
 def test_shipped_catalog_is_inside_the_package():
     import modelroom
 
-    assert (Path(modelroom.__file__).parent / "catalog.toml").is_file()
+    assert (Path(modelroom.__file__).parent / "catalog.json").is_file()
+    assert (Path(modelroom.__file__).parent / "catalog-rejected.json").is_file()
 
 
 def test_catalog_excerpt_gives_latest_legacy_and_unknown():
+    """The v1 (`.toml`) reader is unchanged: schema 1 still loads over the same entry point."""
     catalog = load_catalog(FIXTURES / "catalog_excerpt.toml")
+    assert catalog.schema_version == 1
     assert catalog.age_of("acme/Nova-7B-2512") == ("latest", None)
     assert catalog.age_of("acme/Nova-7B") == ("legacy", "acme/Nova-7B-2512")
     assert catalog.age_of("acme/Nova-1B") == ("unknown", None)
     assert catalog.age_of("acme/Not-Listed") == ("unknown", None)
     assert catalog.model_for("acme/Nova-7B").ollama_base == "nova"
+    # v1 carries no `kind`; every row reads as `text` in memory (bau-brief, "Leser im Paket").
+    assert catalog.model_for("acme/Nova-7B-2512").kind == "text"
 
 
 def test_a_model_with_a_successor_is_not_latest():
@@ -317,3 +344,228 @@ def test_load_catalog_errors(tmp_path):
         load_catalog(path)
     with pytest.raises(CatalogError):
         load_catalog(tmp_path / "missing.toml")
+
+
+# --- Schema 2 (AP9-KA): a document with every field, grouped into the same shape schema 1 builds ---
+
+
+def _document(models: list[dict] | None = None, **overrides) -> dict:
+    base = json.loads((FIXTURES / "catalog_v2_valid.json").read_text(encoding="utf-8"))
+    if models is not None:
+        base["models"] = models
+    base.update(overrides)
+    return base
+
+
+def _row(index: int = 0, **overrides) -> dict:
+    row = copy.deepcopy(json.loads((FIXTURES / "catalog_v2_valid.json").read_text(encoding="utf-8"))["models"][index])
+    row.update(overrides)
+    return row
+
+
+def test_shipped_catalog_is_schema_2_with_the_fixed_license_and_attribution():
+    raw = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["data_license"] == CATALOG_DATA_LICENSE == "CC-BY-4.0"
+    assert raw["attribution"] == CATALOG_ATTRIBUTION
+    catalog = load_catalog()
+    assert catalog.data_license == CATALOG_DATA_LICENSE
+    assert catalog.attribution == CATALOG_ATTRIBUTION
+
+
+def test_the_shipped_catalog_keeps_every_one_of_the_sixty_two_v1_rows():
+    """Bestandsschutz (bau-brief, "Reichweite der Tabelle ..."): every row of the pre-AP9-KA
+    catalog survives the conversion, including the embedding rows and the large-model rows."""
+    catalog = load_catalog()
+    repos = [model.hf_repo for family in catalog.families for model in family.models]
+    assert len(repos) == 62
+    for repo in EMBEDDING_REPOS:
+        model = catalog.model_for(repo)
+        assert model is not None and model.kind == "embedding", repo
+    for repo in LARGE_REPOS:
+        assert catalog.model_for(repo) is not None, repo
+
+
+def test_catalog_v2_fixture_loads_with_a_latest_a_legacy_and_an_embedding_row():
+    catalog = load_catalog(FIXTURES / "catalog_v2_valid.json")
+    assert catalog.schema_version == 2
+    assert catalog.age_of("acme/Nova-7B-2512") == ("latest", None)
+    assert catalog.age_of("acme/Nova-7B") == ("legacy", "acme/Nova-7B-2512")
+    embed = catalog.model_for("acme/Nova-Embed")
+    assert embed.kind == "embedding" and embed.latest
+    assert catalog.publisher_info[0].account == "acme"
+    assert catalog.packagers == ["packager"]
+
+
+def test_display_selection_shows_only_latest_text_and_vision_kinds():
+    """Anzeige-Auswahl (Frage 3 a): `latest` alone is not enough, `kind` must be `text`/`vision`."""
+    catalog = load_catalog(FIXTURES / "catalog_v2_kinds.json")
+    names = latest_model_names(catalog)
+    assert names == ["Line-Text", "Line-Vision"]
+    for kind in ("embedding", "speech-recognition", "speech-synthesis", "audio", "image-generation"):
+        assert kind not in DISPLAYED_KINDS
+
+
+def test_todays_shipped_display_list_is_unchanged_by_the_kind_filter():
+    """Every `latest` row of the shipped catalog is already `text` or `vision`, so the filter
+    added by AP9-KA changes nothing it used to show (bau-brief, "Reichweite der Tabelle ...")."""
+    catalog = load_catalog()
+    names = latest_model_names(catalog)
+    assert len(names) == 22
+    assert "GLM-5.3-Flash" in names
+
+
+def test_pipeline_tag_to_kind_names_all_eleven_values():
+    """Frage 2 b: the mapping is a constant of the schema and is repeated here verbatim."""
+    expected = {
+        "text-generation": "text",
+        "image-text-to-text": "vision",
+        "feature-extraction": "embedding",
+        "sentence-similarity": "embedding",
+        "automatic-speech-recognition": "speech-recognition",
+        "text-to-speech": "speech-synthesis",
+        "text-to-audio": "audio",
+        "audio-to-audio": "audio",
+        "audio-text-to-text": "audio",
+        "text-to-image": "image-generation",
+        "image-to-image": "image-generation",
+    }
+    assert PIPELINE_TAG_TO_KIND == expected
+    assert len(expected) == 11
+
+
+def test_every_kind_of_the_schema_loads_a_valid_row():
+    catalog = load_catalog(FIXTURES / "catalog_v2_kinds.json")
+    kinds = {model.kind for family in catalog.families for model in family.models}
+    assert kinds == set(PIPELINE_TAG_TO_KIND.values())
+    assert len(kinds) == 7
+
+
+def test_successor_source_migration_of_the_shipped_catalog_passes_the_ownership_rule():
+    """Migration der Nachfolger: both bestand successors carry `successor_source` after the v1 to
+    v2 conversion, and loading the shipped file already proves the ownership rule holds."""
+    catalog = load_catalog()
+    magistral = catalog.model_for("mistralai/Magistral-Small-2509")
+    assert magistral.successor_source == "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603"
+    assert magistral.successor_checked == LATEST_CHECKED
+    euro = catalog.model_for("utter-project/EuroLLM-9B-Instruct")
+    assert euro.successor_source == "https://huggingface.co/utter-project/EuroLLM-9B-Instruct-2512"
+    assert euro.successor_checked == LATEST_CHECKED
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "https://huggingface.co/packager/Nova-7B-2512",  # a foreign account's card
+        "https://huggingface.co/acme/Some-Third-Model",  # a third model of the same publisher
+    ],
+)
+def test_successor_source_rejects_a_card_that_is_neither_the_model_nor_its_successor(source):
+    row = _row(1, successor_source=source)
+    with pytest.raises(ValidationError, match="successor_source"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(0), row]))
+
+
+def test_successor_source_rejects_http():
+    row = _row(1, successor_source="http://huggingface.co/acme/Nova-7B-2512")
+    with pytest.raises(ValidationError, match="https"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(0), row]))
+
+
+def test_successor_source_set_without_a_successor_is_rejected():
+    row = _row(successor_source="https://huggingface.co/acme/Nova-7B-2512", successor_checked="2026-09-23")
+    with pytest.raises(ValidationError, match="successor"):
+        CatalogDocumentV2.model_validate(_document(models=[row]))
+
+
+def test_unknown_field_is_rejected():
+    document = _document()
+    document["unexpected"] = "nope"
+    with pytest.raises(ValidationError):
+        CatalogDocumentV2.model_validate(document)
+
+
+def test_schema_version_3_is_rejected():
+    with pytest.raises((ValidationError, SchemaVersionError)):
+        CatalogDocumentV2.model_validate(_document(schema_version=3))
+    path = FIXTURES / "catalog_v2_valid.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        broken = Path(tmp) / "catalog.json"
+        broken.write_text(json.dumps(document), encoding="utf-8")
+        with pytest.raises(SchemaVersionError):
+            load_catalog(broken)
+
+
+def test_kind_outside_the_list_is_rejected():
+    with pytest.raises(ValidationError, match="kind"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(kind="text-to-video")]))
+
+
+@pytest.mark.parametrize("value", ["acme/nova", "nova model", "Nova"])
+def test_ollama_base_with_a_slash_space_or_uppercase_is_rejected(value):
+    with pytest.raises(ValidationError, match="ollama_base"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(ollama_base=value, ollama_tag="7b")]))
+
+
+def test_control_characters_in_note_are_rejected():
+    with pytest.raises(ValidationError, match="note"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(note="line one\nline two")]))
+
+
+def test_a_file_over_one_mebibyte_is_rejected(tmp_path):
+    document = _document()
+    document["models"][0]["note"] = "x" * (CATALOG_MAX_BYTES + 1)
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(CatalogError, match="bytes"):
+        load_catalog(path)
+
+
+def test_a_file_over_five_thousand_lines_is_rejected(tmp_path):
+    path = tmp_path / "catalog.json"
+    padding = "\n" * (CATALOG_MAX_LINES + 10)
+    text = json.dumps(_document()) + padding
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(CatalogError, match="lines"):
+        load_catalog(path)
+
+
+def test_publisher_not_in_publishers_is_rejected():
+    with pytest.raises(ValidationError, match="publishers"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(publisher="ghost", hf_repo="ghost/Nova-7B-2512")]))
+
+
+def test_gguf_repos_with_an_invalid_id_is_rejected():
+    with pytest.raises(ValidationError):
+        CatalogDocumentV2.model_validate(_document(models=[_row(gguf_repos=["not a repo id"])]))
+
+
+def test_latest_source_without_https_is_rejected():
+    with pytest.raises(ValidationError, match="https"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(latest_source="ftp://huggingface.co/acme")]))
+
+
+@pytest.mark.parametrize("license_value", ["CC0-1.0", "MIT"])
+def test_data_license_other_than_cc_by_4_0_is_rejected(license_value):
+    with pytest.raises(ValidationError, match="data_license"):
+        CatalogDocumentV2.model_validate(_document(data_license=license_value))
+
+
+def test_data_license_missing_is_rejected():
+    document = _document()
+    del document["data_license"]
+    with pytest.raises(ValidationError):
+        CatalogDocumentV2.model_validate(document)
+
+
+def test_attribution_missing_or_different_is_rejected():
+    document = _document()
+    del document["attribution"]
+    with pytest.raises(ValidationError):
+        CatalogDocumentV2.model_validate(document)
+    with pytest.raises(ValidationError, match="attribution"):
+        CatalogDocumentV2.model_validate(_document(attribution="modelroom catalog, someone else"))
