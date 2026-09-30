@@ -210,10 +210,21 @@ here. Beyond that, there are three ways to reach another computer directly:
   keeps that at `%USERPROFILE%\.ssh\authorized_keys` (the same file as `~/.ssh/authorized_keys`
   elsewhere); an account in the Administrators group keeps it instead at
   `C:\ProgramData\ssh\administrators_authorized_keys`, and only once that file's permissions are
-  restricted to `SYSTEM` and `Administrators` alone -- sshd refuses a looser one. Microsoft's
-  OpenSSH-for-Windows documentation gives the command for that:
-  `icacls.exe "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant
-  "Administrators:F" /grant "SYSTEM:F"`.
+  restricted to `SYSTEM` and `Administrators` alone -- sshd refuses a looser one. Two commands do
+  that. The first drops every entry set on the file itself; the second drops the inherited ones
+  and grants full access to these two alone. Both name them by their SIDs (`S-1-5-32-544` for
+  `Administrators`, `S-1-5-18` for `SYSTEM`) with a leading `*`, the form Microsoft's
+  OpenSSH-for-Windows documentation gives for a Windows in another display language, where the
+  names differ:
+
+  ```
+  icacls.exe "C:\ProgramData\ssh\administrators_authorized_keys" /reset
+  icacls.exe "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant:r "*S-1-5-32-544:F" "*S-1-5-18:F"
+  ```
+
+  `icacls.exe "C:\ProgramData\ssh\administrators_authorized_keys"` then lists exactly two entries,
+  both ending in `:(F)`: `SYSTEM` and the built-in `Administrators` group, each under the name the
+  system's display language gives it.
 - **The host alias**, in `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`):
 
   ```
