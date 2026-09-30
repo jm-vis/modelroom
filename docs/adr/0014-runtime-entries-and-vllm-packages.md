@@ -175,8 +175,9 @@ lost between sub-packages:
   each read from `'{}' | ssh gpu1 modelroom remote hello`: **H1a** before vLLM is installed, the
   answer carries `"vllm": "absent"`; **H1b** after `uv tool install vllm` (binary under
   `~/.local/bin`, which a non-interactive SSH shell does not put on its `PATH`), it carries
-  `"vllm": "installed"`; **H1c** with a link to that binary in a directory on the non-interactive
-  `PATH` (for example `/usr/local/bin`) and the `~/.local/bin` copy renamed, it still carries
+  `"vllm": "installed"`; **H1c** with an executable copy (or a hard link, never a symbolic link) of
+  that binary in a directory on the non-interactive `PATH` (for example `/usr/local/bin`) and the
+  `~/.local/bin` file renamed, it still carries
   `"vllm": "installed"`. Any other answer in one of the three steps refutes A3.
 
 None of A1-A3 is confirmed by this sub-package; it only carries the assumption and its named
