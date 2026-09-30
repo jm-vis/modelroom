@@ -207,3 +207,68 @@ def test_ctrl_c_during_the_setup_leaves_no_suspended_child_and_no_job(tmp_path, 
 
     assert watch.created and watch.created[0] in watch.closed, "the job handle was not released"
     _assert_all_ended(children)
+
+
+# --- the cleanup after a failed setup is itself fault-proof (Codex FR-B1 r6 minor) -----------------
+
+
+def _faulty_popen(started: list, fault: str):
+    """A `Popen` whose instance `kill` or `wait` fails the way `fault` names."""
+    import subprocess
+
+    def popen(*args, **kwargs):
+        process = subprocess.Popen(*args, **kwargs)
+        started.append(process)
+        real_kill, real_wait = process.kill, process.wait
+
+        def wait(timeout=None):
+            if fault == "wait-interrupt":
+                raise KeyboardInterrupt
+            if fault == "wait-timeout":
+                raise subprocess.TimeoutExpired("ssh", timeout)
+            return real_wait(timeout)
+
+        def kill():
+            real_kill()
+            if fault == "kill-error":
+                raise ValueError("the kill went wrong")
+
+        process.wait, process.kill = wait, kill
+        return process
+
+    return popen
+
+
+@pytest.mark.parametrize("fault", ["wait-interrupt", "wait-timeout", "kill-error"])
+def test_a_fault_while_cleaning_up_a_failed_setup_keeps_the_original_and_closes_the_pipes(tmp_path, monkeypatch, fault):
+    """The setup fails (here: the resume raises); cleaning up then fails too -- a second Ctrl-C in
+    `wait()`, a `wait()` that times out, an error of `kill()`. The caller still gets the original
+    exception, every pipe is closed, and a timed-out wait is recorded as an unconfirmed end."""
+    import subprocess
+
+    from modelroom.ssh_process import SubprocessSsh
+    from test_ssh_process import PYTHON
+
+    def broken_resume(process):
+        raise RuntimeError("the setup broke")
+
+    monkeypatch.setattr(process_tree, "_resume", broken_resume)
+    started: list = []
+    script = _script(tmp_path, _ANSWER)
+    raised = None
+    try:
+        SubprocessSsh(popen=_faulty_popen(started, fault)).run(
+            [PYTHON, str(script), "gpu1"], b"{}", 10.0, None, OP_BUDGETS["hello"].limits, lambda raw: None
+        )
+    except BaseException as exc:  # noqa: BLE001 - a KeyboardInterrupt here is what the test looks for
+        raised = exc
+    finally:
+        for process in started:
+            subprocess.Popen.kill(process)
+            subprocess.Popen.wait(process, 5)
+
+    assert isinstance(raised, RuntimeError) and str(raised) == "the setup broke", repr(raised)
+    for name in ("stdin", "stdout", "stderr"):
+        assert getattr(started[0], name).closed, f"the {name} pipe was left open"
+    if fault == "wait-timeout":
+        assert "the ssh process was killed, but its end was not confirmed within 5 s" in getattr(raised, "__notes__", [])

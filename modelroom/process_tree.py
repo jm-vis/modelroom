@@ -131,22 +131,32 @@ class ProcessTree:
             self._kqueue = None
 
 
-def abandon(process: subprocess.Popen) -> None:
-    """A child whose tree could not be set up: ended, reaped, its three pipes closed."""
+UNCONFIRMED_END = "the ssh process was killed, but its end was not confirmed within 5 s"
+
+
+def abandon(process: subprocess.Popen) -> bool:
+    """A child whose tree could not be set up: killed, reaped, its three pipes closed -- the pipes in
+    a `finally`, whatever `kill()` or `wait()` raise. Returns `True` once the end is confirmed,
+    `False` where `wait()` timed out (the reap is then unconfirmed; the caller records that). Any
+    other fault of `kill()`/`wait()` propagates after the pipes are closed; the caller keeps its own
+    exception over it (`ssh_process.SubprocessSsh.run`)."""
     try:
-        process.kill()
-    except OSError:
-        pass
-    try:
-        process.wait(timeout=5.0)
-    except subprocess.TimeoutExpired:
-        pass
-    for stream in (process.stdin, process.stdout, process.stderr):
         try:
-            if stream is not None:
-                stream.close()
-        except (OSError, ValueError):
-            pass
+            process.kill()
+        except OSError:
+            pass  # ended already
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
+    finally:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            try:
+                if stream is not None:
+                    stream.close()
+            except (OSError, ValueError):
+                pass
 
 
 def cancel_blocking_read(thread) -> None:
@@ -231,4 +241,4 @@ def _job_for(process: subprocess.Popen):
     return None
 
 
-__all__ = ["ProcessTree", "ProcessTreeError", "abandon", "cancel_blocking_read", "popen_options"]
+__all__ = ["UNCONFIRMED_END", "ProcessTree", "ProcessTreeError", "abandon", "cancel_blocking_read", "popen_options"]

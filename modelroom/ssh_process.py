@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
 from typing import Callable, Sequence
 
-from .process_tree import ProcessTree, abandon, cancel_blocking_read, popen_options
+from .process_tree import UNCONFIRMED_END, ProcessTree, abandon, cancel_blocking_read, popen_options
 
 THREAD_PREFIX = "modelroom-ssh-"
 _QUEUE_MAXSIZE = 8
@@ -219,8 +219,8 @@ class SubprocessSsh:
         process = popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_options())
         try:
             tree = ProcessTree(process)  # Windows: into its job, then resumed -- or ended (fail closed)
-        except BaseException:  # ProcessTreeError, any exception, Ctrl-C: nothing of it is left behind
-            abandon(process)
+        except BaseException as original:  # ProcessTreeError, any exception, Ctrl-C: nothing of it is left behind
+            _abandon_keeping(process, original)
             raise
         clock = _Clock(total, per_line)
         pipes = _Pipes(process, limits.line_bytes, tree)
@@ -232,6 +232,17 @@ class SubprocessSsh:
             stop_process(process, tree)
             pipes.close()
             tree.close()
+
+
+def _abandon_keeping(process: subprocess.Popen, original: BaseException) -> None:
+    """`abandon` the child after a failed setup without letting a fault of the cleanup -- a second
+    Ctrl-C, an error of `kill()`/`wait()` -- take the place of `original`; an unconfirmed end is
+    recorded on `original` as a note."""
+    try:
+        if not abandon(process):
+            original.add_note(UNCONFIRMED_END)
+    except BaseException as cleanup:  # noqa: BLE001 - the original stays the one raised
+        original.add_note(f"cleaning up after it failed too: {type(cleanup).__name__}")
 
 
 def _consume(pipes: _Pipes, clock: _Clock, limits: Limits, on_line: OnLine) -> ProcessOutcome:

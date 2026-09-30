@@ -3109,7 +3109,11 @@ first instruction and every helper it starts belongs to it too; where the job ca
 assigned, or the resume fails, the suspended process is ended before it ran and the call ends fail
 closed: `modelroom could not start ssh for <alias> under its own control on this computer; nothing
 was sent to <alias>`; an exception or Ctrl-C during that setup likewise ends and reaps the
-suspended process, closes its pipes and releases the job before it propagates. On POSIX `ssh` starts
+suspended process, closes its pipes and releases the job before it propagates. The pipes are
+closed whatever the kill or the reap raise, and a fault of that cleanup (a second Ctrl-C included)
+never takes the place of the original exception; where the reap does not confirm the end within
+5 s, the call ends all the same, the process's end unconfirmed (recorded as a note on the exception,
+within the limit below). On POSIX `ssh` starts
 a session and process group of its own, and its leader is **never reaped before the group was
 signaled** (an unreaped leader keeps its PID, and so the group id, from passing to another
 process). Its exit is seen without reaping: `os.waitid(..., WNOWAIT)`; where Python has no
