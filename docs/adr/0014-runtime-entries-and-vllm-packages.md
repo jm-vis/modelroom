@@ -134,8 +134,8 @@ divides the model's head count. Four cards usually give `t = 4`; three cards giv
 third stays free); a model with 14 heads on four cards gives `t = 2`. Consequence (the GF's own
 framing): the highest number of concurrent requests, one simple rule, and unused cards stay free
 while the command names the ones actually used. Two further cases the build brief's table of
-edge cases states for this rule: the card count is unknown -> `t = 1`, with the reason named;
-unequal cards -> the group of the largest equal-sized cards is used, noted at the head of the
+edge cases states for this rule: the model's attention-head count is unknown -> `t = 1`, with
+the reason named (divisibility cannot be checked, so no split is proposed); unequal cards -> the group of the largest equal-sized cards is used, noted at the head of the
 table. `Architecture.num_attention_heads`, the field this rule needs to read, is not part of
 this sub-package (see "Alternatives and why not").
 
@@ -171,7 +171,13 @@ lost between sub-packages:
   `(assumed)`.
 - **A3**: a non-interactive SSH command finds `vllm` only on the `PATH` or under `~/.local/bin`
   (where `uv tool install vllm` places it) -- the same assumption AP9-FR's build brief (FR B1)
-  already makes for finding `modelroom` itself over SSH.
+  already makes for finding `modelroom` itself over SSH. The rented-GPU check has three steps,
+  each read from `'{}' | ssh gpu1 modelroom remote hello`: **H1a** before vLLM is installed, the
+  answer carries `"vllm": "absent"`; **H1b** after `uv tool install vllm` (binary under
+  `~/.local/bin`, which a non-interactive SSH shell does not put on its `PATH`), it carries
+  `"vllm": "installed"`; **H1c** with a link to that binary in a directory on the non-interactive
+  `PATH` (for example `/usr/local/bin`) and the `~/.local/bin` copy renamed, it still carries
+  `"vllm": "installed"`. Any other answer in one of the three steps refutes A3.
 
 None of A1-A3 is confirmed by this sub-package; it only carries the assumption and its named
 rented-GPU check forward so the sub-package that computes with it (SV2-F for A1/A2, SV2-R for
