@@ -37,6 +37,7 @@ from .pull_choice import LOCAL_ALREADY, NONE_VALUE, QUESTION as CHOICE_QUESTION
 from .pull_choice import PullRow, default_row, package_of, pull_rows, weights_bytes_of
 from .quantization import package_identity_key
 from .room import Disk, free_disk, gb, pull_need_bytes
+from .runtimes import OLLAMA
 from .screen import PULL_CANCELED as CANCELED_LINE
 from .screen import Screen
 from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
@@ -163,7 +164,10 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     held = held_identities(run, [package for package in (package_of(row, context.packages) for row in rows) if package])
     disk = None if context.disk is None else replace(context.disk, held=context.disk.held | held)
     rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk, context.packages)
-    locals_ = {row.rank for row in rows if row.locked is None and row.identity in held}
+    # `held` is what the Ollama daemon's own inventory provably holds (`held_identities`, below): a
+    # row of another runtime is never "local already" through it, whatever its identity (Codex r1,
+    # fix 4) -- every row is Ollama's own before AP9-SV2-L and stays so for every real package here.
+    locals_ = {row.rank for row in rows if row.locked is None and row.runtime == "ollama" and row.identity in held}
     row = _choose(run, rows, locals_)
     if row is None:
         return
@@ -251,7 +255,10 @@ def _holds(target: "PullTarget", installed: Sequence[InstalledModel] | None, pac
 
     `held_identities` always passes its own `show`, so this never reads `target.daemon` there --
     a plain `GuidedRun` (its only caller) satisfies it all the same, since the attribute is named
-    the same on both.
+    the same on both. This is `runtimes.OLLAMA.on_disk`'s own implementation (Codex r1, fix 4): the
+    table holds a reference to this very function, imported back at call time (`runtimes.py`
+    module docstring); `held_identities` and `_is_local` below call it through the table, not by
+    this name, so the entry's `on_disk` field is what a reader and a debugger both see used.
     """
     if installed is None or package is None:
         return False
@@ -260,8 +267,10 @@ def _holds(target: "PullTarget", installed: Sequence[InstalledModel] | None, pac
 
 
 def held_identities(run: "GuidedRun", packages: Sequence[Package]) -> frozenset[tuple[str, str, str]]:
-    """The identities of those `packages` the daemon provably holds (`_holds`, one look at `/api/tags`
-    and at most one `/api/show` per name); empty where the inventory cannot be read (U11c)."""
+    """The identities of those `packages` the daemon provably holds (`runtimes.OLLAMA.on_disk`, one
+    look at `/api/tags` and at most one `/api/show` per name); empty where the inventory cannot be
+    read (U11c). Ollama's own check, over every package handed in -- a caller with rows of more
+    than one runtime narrows `packages` to the Ollama ones first (`pull_step`, `PullRow.runtime`)."""
     installed, _reason = installed_models(run.daemon, run.now)
     if installed is None:
         return frozenset()
@@ -272,7 +281,7 @@ def held_identities(run: "GuidedRun", packages: Sequence[Package]) -> frozenset[
             seen[name] = weight_digest(run.daemon, name)
         return seen[name]
 
-    return frozenset(package_identity_key(package) for package in packages if _holds(run, installed, package, show))
+    return frozenset(package_identity_key(package) for package in packages if OLLAMA.on_disk(run, installed, package, show))
 
 
 def _is_local(target: "PullTarget", first: FirstRow) -> bool:
@@ -283,7 +292,7 @@ def _is_local(target: "PullTarget", first: FirstRow) -> bool:
     missing one: the pull brings the registry's build of that name, which for Ollama is an update.
     """
     installed, _reason = installed_models(target.daemon, target.now)
-    return _holds(target, installed, first.package)
+    return OLLAMA.on_disk(target, installed, first.package)
 
 
 def _wants_pull(target: "PullTarget", question: str) -> bool:

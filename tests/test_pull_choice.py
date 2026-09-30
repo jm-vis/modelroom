@@ -172,6 +172,30 @@ def test_a_missing_answer_takes_row_one_only_when_it_has_a_pull_name():
 # --- the Paar-Regel: a second runtime doubles a row (AP9-SV2-L, "Laufzeit als Eintrag") --------------
 
 
+def _with_machine_runtimes(doc, machine: str, keys: list[str]):
+    """`doc`, with `machine`'s profile saying it has exactly `keys` (`HardwareProfile.runtimes`,
+    AP9-SV2-0) -- every fixture document otherwise carries the field's default, `[]` (read as
+    Ollama alone, `runtimes.machine_runtime_keys`)."""
+    blocks = []
+    for block in doc.machines:
+        if block.machine == machine and block.profile is not None:
+            block = block.model_copy(update={"profile": block.profile.model_copy(update={"runtimes": keys})})
+        blocks.append(block)
+    return doc.model_copy(update={"machines": blocks})
+
+
+def _third_runtime(monkeypatch, key: str = "third"):
+    """A second, in-memory runtime that accepts the same GGUF packages Ollama does -- the probe
+    AP9-LS needs before it gives a real second runtime that `accepts`."""
+    from modelroom import runtimes
+
+    third = runtimes.OLLAMA.__class__(
+        **{**runtimes.OLLAMA.__dict__, "key": key, "name": "Third", "accepts": lambda package: package.format == "gguf"}
+    )
+    monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
+    return third
+
+
 def test_passing_packages_changes_nothing_while_ollama_is_the_only_accepting_runtime():
     """AP9-SV2-L is a pure refactor: `packages` only ever matters once a second runtime accepts the
     very same package (below) -- today it never does, so every row stays the one row and the one
@@ -181,22 +205,33 @@ def test_passing_packages_changes_nothing_while_ollama_is_the_only_accepting_run
     )
 
 
-def test_a_second_runtime_accepting_the_same_gguf_package_gives_it_a_second_row(monkeypatch):
-    """The probe AP9-LS needs before it gives a real second runtime a `gguf`-accepting `accepts`:
-    two runtimes claiming the same package double its row, each with a list value no answer file
-    can confuse with the other's (`runtime.words.package_prefix`) -- `test_ollama_list_values_...`
-    right below is the control proving Ollama's own value never moves."""
-    from modelroom import runtimes
+def test_a_second_runtime_this_machine_has_gives_the_same_gguf_package_a_second_row(monkeypatch):
+    """Two runtimes this machine has (`HardwareProfile.runtimes`) both accepting the same GGUF
+    package double its row, each with a list value no answer file can confuse with the other's --
+    `<runtime.key> <name>` (Codex r1, fixes 2 and 4), unprefixed for Ollama.
+    `test_ollama_list_values_and_answers_are_unchanged` right below is the control proving
+    Ollama's own value never moves."""
+    third = _third_runtime(monkeypatch)
+    doc = _with_machine_runtimes(document([Q4]), "workstation", ["ollama", third.key])
 
-    third = runtimes.OLLAMA.__class__(
-        **{**runtimes.OLLAMA.__dict__, "key": "third", "words": runtimes.RuntimeWords("Third · ", None, "q")}
-    )
-    monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
+    rows = pull_rows(doc, "workstation", packages=[Q4])
 
-    rows = pull_rows(document([Q4]), "workstation", packages=[Q4])
-
-    assert [(row.rank, row.name) for row in rows] == [(1, f"{NAME}:Q4_K_M"), (1, f"Third · {NAME}:Q4_K_M")]
+    assert [(row.rank, row.runtime, row.name) for row in rows] == [
+        (1, "ollama", f"{NAME}:Q4_K_M"),
+        (1, "third", f"third {NAME}:Q4_K_M"),
+    ]
     assert len({row.name for row in rows}) == 2  # eindeutig: an answer file can tell the two apart
+
+
+def test_a_second_runtime_this_machine_does_not_have_gives_no_second_row(monkeypatch):
+    """The same package, the same second runtime accepting it in general -- but this machine's
+    profile never named it (Codex r1, fix 3): the pull list shows the one row it always did."""
+    _third_runtime(monkeypatch)
+    doc = document([Q4])  # profile.runtimes is [], read as Ollama alone
+
+    rows = pull_rows(doc, "workstation", packages=[Q4])
+
+    assert [(row.rank, row.runtime, row.name) for row in rows] == [(1, "ollama", f"{NAME}:Q4_K_M")]
 
 
 def test_ollama_list_values_and_answers_are_unchanged(monkeypatch):
@@ -213,10 +248,10 @@ def test_ollama_list_values_and_answers_are_unchanged(monkeypatch):
         packages=[BF16_FILE, Q4, BF16_FOLDER],
     )
     assert rows == with_packages
-    assert [(row.name, row.locked) for row in rows] == [
-        (f"{NAME}:BF16", NOT_UNIQUE),
-        (f"{NAME}:Q4_K_M", None),
-        (f"{NAME}:BF16", NOT_UNIQUE),
+    assert [(row.runtime, row.name, row.locked) for row in rows] == [
+        ("ollama", f"{NAME}:BF16", NOT_UNIQUE),
+        ("ollama", f"{NAME}:Q4_K_M", None),
+        ("ollama", f"{NAME}:BF16", NOT_UNIQUE),
     ]
 
 

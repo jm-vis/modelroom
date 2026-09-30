@@ -147,3 +147,126 @@ def test_fit_for_a_package_no_runtime_accepts_falls_back_to_compute_fit_v2():
     assert runtimes.fit_for(profile, package, base_model, scenario, MACHINE) == compute_fit_v2(
         profile, package, base_model, scenario, MACHINE
     )
+
+
+# --- machine scoping: a runtime pairs only where the machine has it (Codex r1, fix 3) -------------
+
+
+def test_machine_runtime_keys_defaults_to_ollama_alone_when_the_profile_names_none():
+    """Every profile before AP9-SV2-0, and every machine whose last measurement recorded nothing in
+    `runtimes`, reads as Ollama's own default -- today's only shape, and the one every existing
+    fixture and golden file already assumes."""
+    assert runtimes.machine_runtime_keys(_profile(runtimes=[])) == frozenset({"ollama"})
+    assert runtimes.machine_runtime_keys(None) == frozenset({"ollama"})
+
+
+def test_machine_runtime_keys_reads_the_profiles_own_list_where_it_names_any():
+    assert runtimes.machine_runtime_keys(_profile(runtimes=["vllm"])) == frozenset({"vllm"})
+
+
+def test_accepting_on_machine_narrows_to_the_machines_own_runtimes(monkeypatch):
+    import types
+
+    third = runtimes.OLLAMA.__class__(
+        **{**runtimes.OLLAMA.__dict__, "key": "third", "name": "Third", "accepts": lambda package: package.format == "gguf"}
+    )
+    monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
+    package = _package(format="gguf")
+    # A duck-typed stand-in, not a real `HardwareProfile`: its `runtimes` field is locked to the
+    # schema's own two keys (`RuntimeKey`), so a fixture third key could never validate there --
+    # `accepting_on_machine` itself only ever reads `.runtimes` off whatever it is handed.
+    with_it = types.SimpleNamespace(runtimes=["ollama", "third"])
+    without_it = types.SimpleNamespace(runtimes=[])
+
+    assert [runtime.key for runtime in runtimes.accepting_on_machine(package, with_it)] == ["ollama", "third"]
+    assert [runtime.key for runtime in runtimes.accepting_on_machine(package, without_it)] == ["ollama"]
+
+
+# --- reaches every place a registered runtime should (AP9-SV2-L brief, Codex r1 fix 1) -------------
+
+
+def test_a_third_in_memory_runtime_reaches_start_step4_card_render_and_install(monkeypatch):
+    """A runtime that exists only as one more row of `RUNTIMES` reaches the start screen, step 4,
+    the card (`local_servers.py`, derived from the table -- Codex r1, fix 1), the render's fit
+    dispatch, and the install/pull list (Codex r1, fixes 2-4) -- without a second place to add it
+    to. No golden file changes: `RUNTIMES` itself is monkeypatched back after the test, and every
+    other test of the suite (the golden-screen ones included) never sees a third entry.
+    """
+    from modelroom.dialog import Choice
+    from modelroom.intro import Fact
+    from modelroom.pull_choice import pull_rows
+    from modelroom.views_install import install_target
+
+    from fixture_rows import document as fixture_document
+
+    third = runtimes.Runtime(
+        key="third",
+        name="Third",
+        server=local_servers.LocalServer(
+            key="third",
+            name="Third",
+            origin="http://127.0.0.1:9999",
+            transport=lambda run: None,
+            start_fact=lambda origins: Fact("server", "Third", "stated by nobody"),
+            offer=lambda run, config, scenario, results_dir: local_servers.Offer(
+                rows=(Choice("third", "the third server was asked"),)
+            ),
+            measure=lambda run, config, scenario, results_dir, offer, picked: "Third measured",
+            card_facts=lambda run: (Fact("server", "Third", "on the card"),),
+        ),
+        detect=lambda *args, **kwargs: None,
+        hello_field="third",
+        accepts=lambda package: package.format == "gguf",
+        fit=runtimes.OLLAMA.fit,
+        command=lambda package: "third-pull-name",
+        model_place=lambda *args, **kwargs: [],
+        on_disk=lambda *args, **kwargs: False,
+        words=runtimes.RuntimeWords(package_prefix="third · ", key_text=None, question="Which package should be installed?"),
+    )
+    monkeypatch.setattr(runtimes, "RUNTIMES", (runtimes.OLLAMA, third))
+    monkeypatch.setattr(local_servers, "LOCAL_SERVERS", tuple(entry.server for entry in runtimes.RUNTIMES))
+
+    # 1) start screen: `local_servers.start_rows` loops `LOCAL_SERVERS`, derived from `RUNTIMES`.
+    from modelroom.daemon import FixtureDaemon
+
+    offline = FixtureDaemon({}, unreachable="no daemon here")
+    start, _reachable = local_servers.start_rows(offline, local_servers.ServerRun({}))
+    assert any(fact.value == "Third" and fact.note == "stated by nobody" for fact in start)
+
+    # 2) step 4: every registered server's `offer` is read (`load_tests` asks the one question and
+    # builds the one list over exactly this loop; the row itself is what reaches it here).
+    assert third.server.offer(None, None, None, None).rows == (Choice("third", "the third server was asked"),)
+
+    # 3) the card: `local_servers.card_facts` loops the same derived list.
+    assert local_servers.card_facts(run=None) == (Fact("server", "Third", "on the card"),)
+
+    # 4) render: the fit dispatch reads the table in order; Ollama (still first) wins for a
+    # package both accept, exactly as `fit_for`'s own tests hold (no behavior change there).
+    package = _package(format="gguf", default_context=4096)
+    assert runtimes.accepting_runtimes(package)[0].key == "ollama"
+
+    # 5) install: the pull list gives the package a row for each runtime the machine has
+    # (`<runtime.key> <name>`, unprefixed for Ollama -- Codex r1, fixes 2-4), and the install line
+    # dispatches through the first one that accepts it there; reordering the table changes which
+    # one wins, proving the choice comes from `RUNTIMES`, not a name hardcoded anywhere here.
+    doc = fixture_document([package])
+    doc = doc.model_copy(
+        update={
+            "machines": [
+                block.model_copy(update={"profile": block.profile.model_copy(update={"runtimes": ["ollama", "third"]})})
+                for block in doc.machines
+            ]
+        }
+    )
+    rows = pull_rows(doc, "workstation", packages=[package])
+    by_runtime = {row.runtime: row.name for row in rows}
+    assert set(by_runtime) == {"ollama", "third"}
+    assert by_runtime["third"] == "third third-pull-name"
+    assert by_runtime["ollama"] is not None and by_runtime["ollama"] != by_runtime["third"]
+
+    ollama_wins = install_target(doc.machines[0], "workstation", packages=[package])
+    assert ollama_wins is not None and ollama_wins[1] == by_runtime["ollama"]
+
+    monkeypatch.setattr(runtimes, "RUNTIMES", (third, runtimes.OLLAMA))  # reorder: Third now first
+    third_wins = install_target(doc.machines[0], "workstation", packages=[package])
+    assert third_wins is not None and third_wins[1] == "third-pull-name"  # Third's own command, unprefixed

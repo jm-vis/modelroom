@@ -4,14 +4,26 @@ Moved out of `views.py` (size guard, AP9-RM U11) and extended there: where the f
 machine was read, the line takes the best row that also fits it (`disk_fit.best_on_disk`) and says
 under it which rows were passed over, and where no row fits it says so in red instead of offering a
 command. `views.py` re-exports `INSTALL_LABEL` and `install_target`.
+
+`install_target` reads its name off `runtimes.accepting_on_machine`/`runtime.command` where a
+caller passes `packages` (AP9-SV2-L, Codex r1 fix 4) -- `views.py` does not yet (it is unchanged,
+outside this sub-package's file ownership), so every call from the shipped run keeps taking the
+`entry_pull_name` fallback below, byte for byte; only a caller built for this (`tests/test_runtimes.py`,
+the third-entry probe) exercises the table-dispatched branch. The command's own words ("ollama
+pull …") stay Ollama's: AP9-SV2-I gives a non-Ollama runtime's install line its own verb.
 """
 
 from __future__ import annotations
 
+from typing import Sequence
+
+from . import runtimes
+from .contracts import Package
 from .disk_fit import best_on_disk, known, none_fits_words, skipped_words
 from .document import MachineRanking, RankedEntry
 from .intro import label_line
 from .pull_choice import entry_pull_name
+from .quantization import package_identity_key
 from .room import Disk
 from .screen import Line, install_pull_line
 
@@ -24,7 +36,24 @@ OTHER_INSTALL_NOTE_WITH_LIST = "run it on that computer, or choose a package for
 NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 
 
-def install_target(block: MachineRanking, install_for: str | None, disk: Disk | None = None) -> tuple[RankedEntry, str] | None:
+def _entry_name(entry: RankedEntry, block: MachineRanking, packages: Sequence[Package]) -> str | None:
+    """`entry`'s pull name, dispatched through the first runtime this machine has that accepts its
+    package where `packages` names it (`runtimes.accepting_on_machine`); `entry_pull_name`
+    unchanged otherwise -- the two agree for Ollama always (`runtime.command` **is**
+    `pull_choice.package_pull_name` there)."""
+    if packages:
+        by_identity = {package_identity_key(package): package for package in packages}
+        package = by_identity.get(tuple(entry.package_identity))
+        if package is not None:
+            accepting = runtimes.accepting_on_machine(package, block.profile)
+            if accepting:
+                return accepting[0].command(package)
+    return entry_pull_name(entry)
+
+
+def install_target(
+    block: MachineRanking, install_for: str | None, disk: Disk | None = None, packages: Sequence[Package] = ()
+) -> tuple[RankedEntry, str] | None:
     """The first row of the machine this run is on that also fits its disk, and its local Ollama name.
 
     Only for that machine: the local Ollama name of a package is about the machine that would
@@ -36,7 +65,7 @@ def install_target(block: MachineRanking, install_for: str | None, disk: Disk | 
     entry, _skipped = best_on_disk(block.ranked, disk)
     if entry is None:
         return None
-    name = entry_pull_name(entry)
+    name = _entry_name(entry, block, packages)
     return None if name is None else (entry, name)
 
 
@@ -47,6 +76,7 @@ def install_lines(
     disk: Disk | None,
     dash: str,
     pull_other_machines: frozenset[str] = frozenset(),
+    packages: Sequence[Package] = (),
 ) -> list[Line]:
     """The install line of a block, behind a blank line; nothing where a row has no local name.
 
@@ -62,7 +92,7 @@ def install_lines(
     entry, skipped = best_on_disk(block.ranked, read)
     if own and block.ranked and entry is None:
         return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
-    target = install_target(block, block.machine if install_for is not None else None, read)
+    target = install_target(block, block.machine if install_for is not None else None, read, packages)
     if target is None:
         return []
     entry, name = target

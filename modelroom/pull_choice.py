@@ -10,12 +10,14 @@ only reads what the render wrote.
   name does not tell file forms apart. Such a name belongs to no row: every row with it is locked,
   has no install line and no disk check.
 - `pull_rows` is one row per shown table row of this machine, in table order, each with its pull
-  name or the reason it cannot be pulled -- one row per runtime that accepts its package where the
-  caller passes the run's `packages` (AP9-SV2-L, the Paar-Regel: two runtimes accepting the same
-  GGUF package give it two rows, each with a list value no answer file can confuse with the
-  other's -- `runtime.words.package_prefix`, empty for Ollama, so today's single-runtime shape and
-  its values stay exactly what they are). Without `packages` (every caller before AP9-SV2-L, and
-  `pull_other.py` still) each shown row stays the one row it always was.
+  name (`runtime.command`, AP9-SV2-L: read off the table, not built here) or the reason it cannot
+  be pulled -- one row per runtime the machine has (`HardwareProfile.runtimes`, AP9-SV2-0; Ollama
+  where it names none, today's default) that also accepts a shown row's package, where the caller
+  passes the run's `packages` (the Paar-Regel: two runtimes accepting the same GGUF package on the
+  same machine give it two rows, each with a list value no answer file can confuse with the
+  other's -- `<runtime.key> <name>`, unprefixed for Ollama, so today's single-runtime shape and its
+  values stay exactly what they are, Codex r1 fixes 2/3). Without `packages` (every caller before
+  AP9-SV2-L, and `pull_other.py` still) each shown row stays the one row it always was.
 - `repo_lines` names the repository of every shown row whose `packager · quant` another shown row
   of the same block has too (F7), with the file form where one repository has both.
 """
@@ -71,10 +73,14 @@ def weights_bytes_of(package: Package) -> float:
     return float(sum(file.size_bytes for file in package.files if file.role in ("weights", "weights_shard")))
 
 
-def _prefixed_pull_name(package: Package, runtime: "runtimes.Runtime") -> str | None:
-    """`package_pull_name`, with the runtime's own prefix in front (empty for Ollama, unchanged)."""
-    name = package_pull_name(package)
-    return None if name is None else f"{runtime.words.package_prefix}{name}"
+def runtime_value(name: str | None, runtime: "runtimes.Runtime") -> str | None:
+    """The one value a pull-list row or a collision key takes for `runtime`'s `name`: unchanged for
+    Ollama, `<runtime.key> <name>` for any other (Codex r1, fix 2) -- the runtime's own stable key,
+    never a display word two runtimes could happen to share. Shared by `pull_collisions` and
+    `pull_rows` so the two can never disagree on what one runtime's value looks like."""
+    if name is None:
+        return None
+    return name if runtime.key == "ollama" else f"{runtime.key} {name}"
 
 
 def pull_collisions(packages: Sequence[Package]) -> dict[str, list[tuple[str, str, str]]]:
@@ -82,17 +88,18 @@ def pull_collisions(packages: Sequence[Package]) -> dict[str, list[tuple[str, st
 
     Over every package that is `active` and `complete` and that a runtime of `runtimes.RUNTIMES`
     accepts -- independent of its provenance, so an `unresolved` counterpart the render hides
-    counts too. A name two different runtimes would give the very same package never collides
-    with itself (`runtime.words.package_prefix` tells them apart, AP9-SV2-L); today only Ollama
-    ever accepts a package, so this is `package.format == "gguf" or package.source == "ollama"`,
-    unchanged.
+    counts too, and independent of which machine will pull it (a collision is a property of the
+    name, not of one machine's runtimes). A name two different runtimes would give the very same
+    package never collides with itself (`runtime_value`'s own key tells them apart, Codex r1 fix
+    2); today only Ollama ever accepts a package, so this is `package.format == "gguf" or
+    package.source == "ollama"`, unchanged, and `runtime.command` is `package_pull_name`, unchanged.
     """
     by_name: dict[str, set[tuple[str, str, str]]] = {}
     for package in packages:
         if not (package.active and package.complete):
             continue
         for runtime in runtimes.accepting_runtimes(package):
-            name = _prefixed_pull_name(package, runtime)
+            name = runtime_value(runtime.command(package), runtime)
             if name is not None:
                 by_name.setdefault(name, set()).add(package_identity_key(package))
     return {name: sorted(identities) for name, identities in by_name.items() if len(identities) > 1}
@@ -163,7 +170,13 @@ def collision_pieces(block: MachineRanking, ambiguous: frozenset[str]) -> list[s
 
 @dataclass(frozen=True)
 class PullRow:
-    """One row of the pull list: the table row it stands for, its name, and why it is locked."""
+    """One row of the pull list: the table row it stands for, its name, and why it is locked.
+
+    `runtime` is the key of the entry this row's name came from (AP9-SV2-L, Codex r1 fix 4):
+    `"ollama"` for every row before this sub-package and for every row without `packages` still --
+    the runtime association a row is chosen with (`_choose`) and pulled with (`pull_chosen`) is
+    read from here, not guessed again.
+    """
 
     rank: int
     cell: str
@@ -173,18 +186,12 @@ class PullRow:
     identity: tuple[str, str, str]
     # Locked because its download is larger than the free disk (AP9-RM U11): `locked` says how much.
     over_disk: bool = False
+    runtime: str = "ollama"
 
     @property
     def value(self) -> str:
         """What an answer file names: the pull name; a locked row a value no answer can take."""
         return self.name if self.locked is None and self.name is not None else f"#{self.rank} locked"
-
-
-def _runtime_pull_name(entry: RankedEntry, runtime: "runtimes.Runtime") -> str | None:
-    """A shown row's pull name for one accepting runtime: `entry_pull_name`, prefixed (empty for
-    Ollama, so its own value never changes)."""
-    name = entry_pull_name(entry)
-    return None if name is None else f"{runtime.words.package_prefix}{name}"
 
 
 def pull_rows(
@@ -196,9 +203,11 @@ def pull_rows(
     packages: Sequence[Package] = (),
 ) -> list[PullRow]:
     """One row per shown table row of `machine`, in table order (regular and appended measured rows);
-    one row per runtime that accepts a shown row's package where `packages` names it (AP9-SV2-L,
-    the Paar-Regel) -- without `packages` (every caller before AP9-SV2-L) each row stays the one
-    row it always was, its name computed exactly as before.
+    one row per runtime this machine has (`runtimes.accepting_on_machine`, AP9-SV2-0's
+    `HardwareProfile.runtimes`) that also accepts a shown row's package, where `packages` names it
+    (AP9-SV2-L, the Paar-Regel, Codex r1 fixes 2-4) -- without `packages` (every caller before
+    AP9-SV2-L, and `pull_other.py` still) each row stays the one row it always was, its name
+    computed exactly as before (`entry_pull_name`) and its `runtime` `"ollama"`.
 
     With the free disk of this machine a row whose download does not fit it is locked with how much
     it needs (AP9-RM U11); a lock of its name comes first. A package in `disk.held` needs no disk
@@ -211,14 +220,20 @@ def pull_rows(
     rows = []
     for entry in block.ranked:
         package = by_identity.get(tuple(entry.package_identity))
-        accepting = runtimes.accepting_runtimes(package) if package is not None else ()
-        names = [(runtime, _runtime_pull_name(entry, runtime)) for runtime in accepting] or [(None, entry_pull_name(entry))]
+        accepting = runtimes.accepting_on_machine(package, block.profile) if package is not None else ()
+        names = (
+            [(runtime.key, runtime_value(runtime.command(package), runtime)) for runtime in accepting]
+            if accepting
+            else [("ollama", entry_pull_name(entry))]
+        )
         cell = f"{entry.packager} {dot} {entry.quantization}"
-        for _runtime, name in names:
+        for runtime_key, name in names:
             locked = NO_PULL_NAME if name is None else NOT_UNIQUE if name in ambiguous else None
             over = locked is None and entry_over_disk(entry, disk)  # a package held already is never over (U11c)
             locked = too_big_words(entry.weights_gib, disk) if over else locked
-            rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over))
+            rows.append(
+                PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over, runtime_key)
+            )
     return rows
 
 
@@ -280,6 +295,7 @@ __all__ = [
     "pull_rows",
     "repo_lines",
     "run_packages",
+    "runtime_value",
     "unique_pull_name",
     "weights_bytes_of",
 ]
