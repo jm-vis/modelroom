@@ -152,42 +152,152 @@ def test_a_progress_line_reaches_the_caller_before_the_process_ends(tmp_path, ch
 # --- every way out ends the process, the pipes and the threads ----------------------------------
 
 
-def test_a_form_fault_with_a_full_queue_ends_the_process_the_pipes_and_every_thread(tmp_path, children):
-    """Codex FR-B1 r2 finding 2: the reader is blocked on a full queue when the consumer stops at the
-    first (malformed) line; the stop signal still ends it."""
-    script = _script(
-        tmp_path,
-        "sys.stdin.buffer.read()\n"
-        "print('not an envelope', flush=True)\n"
-        "for n in range(5000):\n"
-        "    print(json.dumps({'protocol': 1, 'progress': {'status': 'pulling manifest'}}))\n"
-        "sys.stdout.flush()\n"
-        "time.sleep(30)\n",
-    )
+@pytest.fixture
+def saturated(monkeypatch) -> threading.Event:
+    """Set the moment the stdout reader finds the transport's queue full and has to wait -- the
+    proof that the queue is saturated before a test lets the consumer give up."""
+    import queue
+
+    import modelroom.ssh_process as ssh_process
+
+    full = threading.Event()
+
+    class _WatchedQueue(queue.Queue):
+        def put(self, item, block=True, timeout=None):
+            if self.full():
+                full.set()
+            return super().put(item, block, timeout)
+
+    monkeypatch.setattr(ssh_process, "Queue", _WatchedQueue)
+    return full
+
+
+class _WaitForSaturation(_ScriptSsh):
+    """Holds the first line back from the consumer until the queue behind it is full."""
+
+    def __init__(self, script: Path, full: threading.Event) -> None:
+        super().__init__(script)
+        self.full = full
+
+    def run(self, argv, stdin, total, per_line, limits, on_line):
+        def held(raw):
+            assert self.full.wait(10.0), "the queue never filled up"
+            on_line(raw)
+
+        return super().run(argv, stdin, total, per_line, limits, held)
+
+
+_FLOOD = (
+    "for n in range(5000):\n"
+    "    print(json.dumps({'protocol': 1, 'progress': {'status': 'pulling manifest'}}))\n"
+    "sys.stdout.flush()\n"
+    "time.sleep(30)\n"
+)
+
+
+def test_a_form_fault_with_a_full_queue_ends_the_process_the_pipes_and_every_thread(tmp_path, children, saturated):
+    """Codex FR-B1 r2 finding 2, r3 finding 4: the consumer stops at the first (malformed) line only
+    once the reader is proven to wait on a full queue; the stop signal still ends it."""
+    script = _script(tmp_path, "sys.stdin.buffer.read()\nprint('not an envelope', flush=True)\n" + _FLOOD)
     started = time.monotonic()
 
     with pytest.raises(SshError, match="form this modelroom does not read"):
-        call("gpu1", "daemon_pull", {"method": "POST", "path": "/api/pull", "body": _PULL}, _ScriptSsh(script), ssh_path="ssh")
+        call("gpu1", "daemon_pull", {"method": "POST", "path": "/api/pull", "body": _PULL}, _WaitForSaturation(script, saturated), ssh_path="ssh")
 
-    assert time.monotonic() - started < 10.0
+    assert saturated.is_set()
+    assert time.monotonic() - started < 15.0
     _assert_all_ended(children)
 
 
-def test_an_exception_of_the_caller_with_a_full_queue_ends_everything(tmp_path, children):
-    script = _script(
-        tmp_path,
-        "for n in range(5000):\n"
-        "    print(json.dumps({'protocol': 1, 'progress': {'status': 'pulling manifest'}}))\n"
-        "sys.stdout.flush()\n"
-        "time.sleep(30)\n",
-    )
+def test_an_exception_of_the_caller_with_a_full_queue_ends_everything(tmp_path, children, saturated):
+    script = _script(tmp_path, _FLOOD)
 
     def stop(_line):
         raise RuntimeError("the caller gave up")
 
     with pytest.raises(RuntimeError, match="gave up"):
-        _ScriptSsh(script).run(["ssh", "gpu1"], b"{}", 20.0, None, OP_BUDGETS["daemon_pull"].limits, stop)
+        _WaitForSaturation(script, saturated).run(["ssh", "gpu1"], b"{}", 20.0, None, OP_BUDGETS["daemon_pull"].limits, stop)
 
+    assert saturated.is_set()
+    _assert_all_ended(children)
+
+
+# --- a descendant that inherits stderr and keeps running (Codex FR-B1 r3 finding 2) ---------------
+
+
+def _with_grandchild(tmp_path: Path, then: str) -> Path:
+    """A fake `ssh` that first starts a helper of its own -- inheriting stderr, like a `ProxyJump`
+    hop -- which records its PID and keeps running for a minute; then does `then`."""
+    pid_file = tmp_path / "grandchild.pid"
+    return _script(
+        tmp_path,
+        "import subprocess\n"
+        f"pid_file = {str(pid_file)!r}\n"
+        "code = 'import os, sys, time; open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(60)'\n"
+        "helper = subprocess.Popen([sys.executable, '-c', code, pid_file], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)\n"
+        "while not os.path.exists(pid_file) or not open(pid_file).read():\n"
+        "    time.sleep(0.02)\n" + then,
+    )
+
+
+def _grandchild_pid(tmp_path: Path) -> int:
+    return int((tmp_path / "grandchild.pid").read_text())
+
+
+def _assert_grandchild_gone(tmp_path: Path) -> None:
+    pid = _grandchild_pid(tmp_path)
+    deadline = time.monotonic() + 3.0
+    while _pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _pid_alive(pid), "the helper process of the fake ssh still runs"
+
+
+def test_a_timeout_ends_a_helper_that_holds_stderr_and_every_thread(tmp_path, children):
+    script = _with_grandchild(tmp_path, "time.sleep(30)\n")
+    started = time.monotonic()
+
+    outcome = _ScriptSsh(script).run(["ssh", "gpu1"], b"{}", 1.5, None, OP_BUDGETS["hello"].limits, lambda raw: None)
+
+    assert outcome.timed_out is True
+    assert time.monotonic() - started < 5.0
+    _assert_grandchild_gone(tmp_path)
+    _assert_all_ended(children)
+
+
+def test_ctrl_c_ends_a_helper_that_holds_stderr_and_every_thread(tmp_path, children):
+    script = _with_grandchild(tmp_path, "print(json.dumps({'protocol': 1, 'progress': {'status': 'pulling manifest'}}), flush=True)\ntime.sleep(30)\n")
+    arrived = threading.Event()
+    timer = threading.Thread(target=lambda: arrived.wait(10.0) and _thread.interrupt_main(), daemon=True)
+    started = time.monotonic()
+    timer.start()
+
+    with pytest.raises(KeyboardInterrupt):
+        call(
+            "gpu1", "daemon_pull", {"method": "POST", "path": "/api/pull", "body": _PULL}, _ScriptSsh(script),
+            ssh_path="ssh", on_progress=lambda line: arrived.set(),
+        )
+
+    timer.join(5.0)
+    assert time.monotonic() - started < 8.0
+    _assert_grandchild_gone(tmp_path)
+    _assert_all_ended(children)
+
+
+def test_an_answer_whose_helper_keeps_stderr_open_ends_at_once_with_its_result(tmp_path, children):
+    """The fake `ssh` answers and exits; its helper still holds stderr. The call ends with the
+    result right away -- it does not wait out the helper -- and the helper is ended too."""
+    script = _with_grandchild(
+        tmp_path,
+        "sys.stdin.buffer.read()\n"
+        f"print(json.dumps({{'protocol': 1, 'result': {_HELLO!r}}}), flush=True)\n",
+    )
+    started = time.monotonic()
+
+    result = call("gpu1", "hello", {}, _ScriptSsh(script), ssh_path="ssh")
+
+    assert result["result"]["system"] == "linux"
+    assert time.monotonic() - started < 5.0
+    _assert_grandchild_gone(tmp_path)
     _assert_all_ended(children)
 
 

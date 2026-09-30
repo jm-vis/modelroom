@@ -154,24 +154,52 @@ def test_a_connection_cut_mid_pull_gets_its_own_resumable_sentence():
         call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(0), lines=(_PROGRESS,)))
 
 
+_RESUMES = "the pull on gpu1 did not finish: the connection ended; Ollama keeps what arrived, the same pull resumes"
+
+
 @pytest.mark.parametrize(
-    ("stderr", "message"),
+    ("outcome", "sentence"),
     [
-        (b"Host key verification failed.", "host key of gpu1 is not known"),
-        (b"Permission denied (publickey).", "refused the login"),
-        (b"ssh: connect to host gpu1 port 22: Connection refused", "could not be reached over SSH"),
+        (ProcessOutcome(255, stderr=b"Host key verification failed."), "the host key of gpu1 is not known here or has changed; connect once with ssh gpu1 yourself and check it"),
+        (ProcessOutcome(255, stderr=b"@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @"), "the host key of gpu1 is not known here or has changed; connect once with ssh gpu1 yourself and check it"),
+        (ProcessOutcome(255, stderr=b"Permission denied (publickey,password)."), "gpu1 refused the login; modelroom uses your SSH keys and agent, never a password"),
+        (ProcessOutcome(127), "modelroom is not installed on gpu1, or not on the PATH of an SSH command (see README)"),
+        (ProcessOutcome(2, stderr=b"usage: modelroom"), "modelroom on gpu1 is older than 0.2.0; update it there"),
     ],
+    ids=["host-key-unknown", "host-key-changed", "login", "missing-127", "too-old-2"],
 )
-def test_a_pull_that_never_began_keeps_the_sentence_of_its_ssh_fault(stderr, message):
-    """Codex FR-B1 r2 finding 3: the resumable hint only where the pull had begun (a `progress`
-    line arrived) -- a host-key or login fault before that is named as what it is."""
-    with pytest.raises(SshError, match=message):
-        call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(255, stderr=stderr)))
+def test_a_pull_that_fails_before_it_began_keeps_the_sentence_of_its_start_fault(outcome, sentence):
+    """Codex FR-B1 r3 finding 3: a fault that clearly came before the call reached the server keeps
+    its own sentence, a pull included."""
+    with pytest.raises(SshError) as excinfo:
+        call("gpu1", "daemon_pull", _PULL, FaultSsh(outcome))
+    assert str(excinfo.value) == sentence
 
 
-def test_a_pull_that_ends_before_its_first_line_is_a_connection_end_not_a_resume():
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ProcessOutcome(0),
+        ProcessOutcome(255, stderr=b"Connection to gpu1 closed by remote host."),
+        ProcessOutcome(255, stderr=b"client_loop: send disconnect: Connection reset"),
+        ProcessOutcome(1),
+        ProcessOutcome(None),
+    ],
+    ids=["eof-exit-0", "255-closed", "255-reset", "exit-1", "no-code"],
+)
+def test_a_pull_cut_before_its_first_line_keeps_the_resumable_hint(outcome):
+    """Codex FR-B1 r3 finding 3: Ollama may have taken the pull on before it sent a line -- a pull
+    that ends without its final line, and not by a clear start fault, gets the resumable hint."""
+    with pytest.raises(SshError) as excinfo:
+        call("gpu1", "daemon_pull", _PULL, FaultSsh(outcome))
+    assert str(excinfo.value) == _RESUMES
+
+
+def test_the_same_cut_outside_a_pull_is_a_connection_end():
     with pytest.raises(SshError, match="ended before the answer"):
-        call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(0)))
+        call("gpu1", "hello", {}, FaultSsh(ProcessOutcome(0)))
+    with pytest.raises(SshError, match="could not be reached over SSH"):
+        call("gpu1", "hello", {}, FaultSsh(ProcessOutcome(255, stderr=b"Connection reset")))
 
 
 def test_a_pull_cut_by_exit_255_after_progress_also_gets_the_resumable_sentence():

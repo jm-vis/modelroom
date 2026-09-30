@@ -12,9 +12,12 @@ Nothing here can block for good: the stdout reader hands lines over through a sm
 whose `put` gives up as soon as the stop signal is set (a consumer that stopped reading -- a form
 fault, a limit, a timeout, Ctrl-C, any exception -- never leaves the reader hanging on a full
 queue); the consumer waits in short slices, so a Ctrl-C reaches it on Windows too. Every way out of
-`run` goes through the same `finally`: stop signal, terminate, wait, kill, wait, join every thread,
-close every pipe. A pipe is closed only once its own thread has ended (closing a pipe another thread
-still reads from can block the closer); every thread is a daemon thread named `modelroom-ssh-*`.
+`run` goes through the same `finally`: stop signal, terminate, wait, kill, wait, then the rest of the
+process tree (`process_tree.py`: job object / process group -- a helper `ssh` started, holding a pipe,
+ends with it), join every thread, close every pipe. A pipe is closed only once its own thread has
+ended (closing a pipe another thread still reads from can block the closer); a read still blocked by
+a descendant outside the tree is canceled on Windows first. Every thread is a daemon thread named
+`modelroom-ssh-*`.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ import time
 from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
 from typing import Callable, Sequence
+
+from .process_tree import ProcessTree, cancel_blocking_read, popen_options
 
 THREAD_PREFIX = "modelroom-ssh-"
 _QUEUE_MAXSIZE = 8
@@ -88,8 +93,9 @@ class _Clock:
 class _Pipes:
     """The three pipes of one process, their threads, the stop signal and the bounded stderr."""
 
-    def __init__(self, process: subprocess.Popen, line_bytes: int) -> None:
+    def __init__(self, process: subprocess.Popen, line_bytes: int, tree: ProcessTree) -> None:
         self.process = process
+        self.tree = tree
         self.line_bytes = line_bytes
         self.stop = threading.Event()
         self.lines: "Queue[tuple[str, bytes] | None]" = Queue(maxsize=_QUEUE_MAXSIZE)
@@ -135,11 +141,16 @@ class _Pipes:
         return self.stderr()
 
     def close(self) -> None:
-        """Join every thread, then close the pipe it used; a pipe whose thread is still alive (a
-        grandchild process holding it open) is left to that daemon thread, never closed under it."""
+        """Join every thread (the process tree is ended already, so every pipe has reached its end),
+        then close the pipe it used. A read still blocked -- only a descendant that left the tree can
+        hold a pipe open -- is canceled where the system allows it (Windows) and joined again; a pipe
+        whose thread is still alive after that is never closed under it (the close would block)."""
         streams = {"stdin": self.process.stdin, "stdout": self.process.stdout, "stderr": self.process.stderr}
         for name, thread in self.threads.items():
             thread.join(timeout=_JOIN_SECONDS)
+            if thread.is_alive():
+                cancel_blocking_read(thread)
+                thread.join(timeout=_JOIN_SECONDS)
             if not thread.is_alive():
                 _close(streams[name])
 
@@ -203,16 +214,18 @@ class SubprocessSsh:
     def run(self, argv: Sequence[str], stdin: bytes, total, per_line, limits: Limits, on_line: OnLine) -> ProcessOutcome:
         command = [*self.program, *argv[1:]] if self.program else list(argv)
         popen = self.popen if self.popen is not None else subprocess.Popen
-        process = popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_options())
         clock = _Clock(total, per_line)
-        pipes = _Pipes(process, limits.line_bytes)
+        pipes = _Pipes(process, limits.line_bytes, ProcessTree(process))
         try:
             pipes.start(stdin)
             return _consume(pipes, clock, limits, on_line)
         finally:
             pipes.stop.set()
             stop_process(process)
+            pipes.tree.kill()
             pipes.close()
+            pipes.tree.close()
 
 
 def _consume(pipes: _Pipes, clock: _Clock, limits: Limits, on_line: OnLine) -> ProcessOutcome:
@@ -253,6 +266,7 @@ def _await_exit(pipes: _Pipes, clock: _Clock) -> ProcessOutcome:
         if time.monotonic() >= deadline:
             return ProcessOutcome(None, timed_out=True, stderr=pipes.stderr())
         time.sleep(_SLICE_SECONDS)
+    pipes.tree.kill()  # a helper `ssh` left behind (a `ProxyJump` hop) must not hold stderr open
     return ProcessOutcome(pipes.process.returncode, stderr=pipes.finish_stderr())
 
 

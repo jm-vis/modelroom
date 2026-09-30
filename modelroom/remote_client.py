@@ -97,11 +97,11 @@ class SshDaemon:
         error; run ollama pull <name> there to see it`, `<name>` the laptop's own checked name) --
         raised here, turned into a `DaemonError` by `__call__`, and read by the unchanged `_pull` as
         the reason the pull did not finish."""
-        errors: list[bool] = []
+        state = {"error": False}  # one flag, however many error lines arrive -- never a collection
 
         def on_progress(entry: dict) -> None:
             if entry.get("error") is True:
-                errors.append(True)
+                state["error"] = True
                 entry = {"error": f"Ollama on {self.alias} reported an error"}
             if progress is not None:
                 progress(entry)
@@ -110,7 +110,7 @@ class SshDaemon:
         result = _result_of(self.alias, envelope)
         if result["status"] != 200:
             raise SshError(f"Ollama on {self.alias} answered with status {result['status']}")
-        if errors and not result["done"]:
+        if state["error"] and not result["done"]:
             raise SshError(f"Ollama on {self.alias} reported an error; run ollama pull {(body or {}).get('model')} there to see it")
         success = b'{"status":"success"}' if result["done"] else b""
         return Response(status=result["status"], headers={}, body=success)

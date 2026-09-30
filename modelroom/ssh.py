@@ -216,28 +216,34 @@ def _resolved(state: _CallState, outcome: ProcessOutcome) -> dict:
 
 
 def _without_answer(state: _CallState, outcome: ProcessOutcome) -> dict:
-    """No terminal line arrived: the exit code and stderr say why. A pull's resumable hint only where
-    the pull had begun (a `progress` line arrived); a host-key or login fault before that keeps its
-    own sentence."""
+    """No terminal line arrived: the exit code and stderr say why. A fault that clearly came before
+    the call reached modelroom on the server -- the program missing (127) or too old (2), an unknown
+    or changed host key, a refused login (255 with its pattern) -- keeps its own sentence, a pull
+    included. Every other end of a pull without its final line gets the resumable hint, whether or
+    not a `progress` line had arrived: Ollama may have taken the pull on before its first line."""
     alias, code = state.alias, outcome.returncode
     if code == 127 and not state.saw_progress:
         raise SshError(f"modelroom is not installed on {alias}, or not on the PATH of an SSH command (see README)")
     if code == 2 and not state.saw_progress:
         raise SshError(f"modelroom on {alias} is older than 0.2.0; update it there")
-    if state.budget_key == "daemon_pull" and state.saw_progress:
+    start_fault = _start_fault(alias, outcome.stderr) if code == 255 and not state.saw_progress else None
+    if start_fault is not None:
+        raise SshError(start_fault)
+    if state.budget_key == "daemon_pull":
         raise SshError(_PULL_RESUMES.format(alias=alias))
     if code == 255:
-        raise SshError(_classify_255(alias, outcome.stderr))
+        raise SshError(f"{alias} could not be reached over SSH; try ssh {alias} yourself to see why")
     raise SshError(_CONNECTION_ENDED.format(alias=alias))
 
 
-def _classify_255(alias: str, stderr: bytes) -> str:
+def _start_fault(alias: str, stderr: bytes) -> str | None:
+    """The sentence of an exit 255 that clearly ended the call before it began (host key, login)."""
     text = stderr.decode("utf-8", errors="replace")
     if "REMOTE HOST IDENTIFICATION HAS CHANGED" in text or "Host key verification failed" in text:
         return f"the host key of {alias} is not known here or has changed; connect once with ssh {alias} yourself and check it"
     if "Permission denied" in text:
         return f"{alias} refused the login; modelroom uses your SSH keys and agent, never a password"
-    return f"{alias} could not be reached over SSH; try ssh {alias} yourself to see why"
+    return None
 
 
 __all__ = [

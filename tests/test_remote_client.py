@@ -86,6 +86,42 @@ def test_ssh_daemon_turns_error_true_into_the_fixed_string_check_line_accepts():
     assert "sentinel" not in str(excinfo.value)
 
 
+class _ErrorFlood:
+    """A server whose pull sends `count` error lines, one after another, then `done: false` -- the
+    same bytes object each time, so the runner itself holds nothing that grows with `count`."""
+
+    LINE = b'{"protocol":1,"progress":{"error":true}}'
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+
+    def run(self, argv, stdin, total, per_line, limits, on_line):
+        for _ in range(self.count):
+            on_line(self.LINE)
+        on_line(b'{"protocol":1,"result":{"status":200,"done":false}}')
+        return ProcessOutcome(0)
+
+
+def _peak_bytes(count: int) -> int:
+    import tracemalloc
+
+    tracemalloc.start()
+    try:
+        before = tracemalloc.get_traced_memory()[0]
+        with pytest.raises(DaemonError, match="reported an error"):
+            SshDaemon("gpu1", _ErrorFlood(count), ssh_path="ssh")("POST", "/api/pull", {"model": "qwen3.5:9b"})
+        return tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+
+
+def test_a_long_stream_of_error_lines_keeps_the_memory_of_the_client_flat():
+    """Codex FR-B1 r3 finding 1: a pull has no total limit, so the client keeps one flag for "an
+    error line came", never one entry per line -- 60,000 error lines need no more memory than 1,000."""
+    small, large = _peak_bytes(1_000), _peak_bytes(60_000)
+    assert large - small < 64 * 1024, (small, large)
+
+
 def test_a_pull_status_other_than_200_is_its_own_sentence():
     daemon = FixtureDaemon({("POST", "/api/pull"): Response(500, {}, b'{"error": "sentinel text"}')})
     runner = FakeSsh(context=_context(daemon=daemon))

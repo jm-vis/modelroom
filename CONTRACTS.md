@@ -3064,11 +3064,14 @@ other value is a form fault. Each has one fixed sentence at the laptop (`ssh.ERR
 process to exit within what is left of the time limit and reads stderr to its end, so the exit
 code and stderr are the real ones: `127` with no protocol line tries `~/.local/bin/modelroom` once,
 and then `modelroom is not installed on <alias>, or not on the PATH of an SSH command (see
-README)`; `2` with no protocol line `modelroom on <alias> is older than 0.2.0; update it there`; a
-pull that had begun (at least one `progress` line) `the pull on <alias> did not finish: the
-connection ended; Ollama keeps what arrived, the same pull resumes`; `255` its host-key, login or
-reachability sentence (stderr classified by pattern, then dropped); anything else `the connection to
-<alias> ended before the answer`. A pull that never began keeps the sentence of its own SSH fault.
+README)`; `2` with no protocol line `modelroom on <alias> is older than 0.2.0; update it there`;
+`255` whose stderr names an unknown or changed host key or a refused login, its own sentence
+(stderr classified by pattern, then dropped). These clear start faults keep their sentence for a
+pull too. Every other end of a pull without its final line -- with or without a `progress` line
+before it, since Ollama may have taken the pull on before its first line -- is `the pull on <alias>
+did not finish: the connection ended; Ollama keeps what arrived, the same pull resumes`. Outside a
+pull, any other `255` is `<alias> could not be reached over SSH; try ssh <alias> yourself to see
+why`, anything else `the connection to <alias> ended before the answer`.
 
 **Ops (FR-B1: `hello`, `profile`, `room`, `daemon`; `candidates`/`measure` are FR-B2's):**
 
@@ -3099,10 +3102,16 @@ decides what is shown, exactly as it does against `LocalDaemon`.
 
 **The process** (`modelroom/ssh_process.py`): one reader thread per output pipe, one writer thread
 for stdin, the caller's thread the only consumer; the stdout reader hands bounded lines over through
-a small bounded queue whose hand-over gives up at the stop signal. Every way a call ends -- an
-answer, a form fault, a limit, a timeout, Ctrl-C, any exception -- sets the stop signal, ends the
-process (terminate, then kill), joins every thread and closes every pipe before `SshError` or the
-interrupt reaches the caller.
+a small bounded queue whose hand-over gives up at the stop signal. The `ssh` process and every
+process it starts form one tree (`modelroom/process_tree.py`): on Windows a job object of its own,
+on POSIX a session and process group of its own. Every way a call ends -- an answer, a form fault, a
+limit, a timeout, Ctrl-C, any exception -- sets the stop signal, ends the process (terminate, then
+kill) and the rest of its tree (the job terminated, the group sent `SIGKILL`; after an answer too, so
+a helper such as a `ProxyJump` hop cannot hold stderr open), joins the reader threads and closes each
+pipe whose thread has ended, before `SshError` or the interrupt reaches the caller. **Limit:** a
+descendant that leaves that job or starts a session of its own is outside the tree; a read it still
+blocks is canceled on Windows (`CancelSynchronousIo`), on POSIX it cannot be, and its thread (a
+daemon thread) and pipe are then left behind rather than closed under a blocked read.
 
 **Time limits** (seconds, from the ssh process's own start; a limit reached kills the process):
 `hello`/`room` 30, `profile` 180, `daemon` short calls 30, `POST /api/generate` 660, `POST

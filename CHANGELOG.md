@@ -58,7 +58,7 @@ All notable changes to this project are documented in this file. The format foll
   this run reads over SSH is pulled there over SSH instead (FR-B1, below).
 
 - **A computer read over SSH, chosen at the laptop, installed on the server** (AP9-FR, FR-B1;
-  `modelroom/ssh.py`, `ssh_process.py`, `remote_protocol.py`, `remote_server.py`, `remote_client.py`,
+  `modelroom/ssh.py`, `ssh_process.py`, `process_tree.py`, `remote_protocol.py`, `remote_server.py`, `remote_client.py`,
   `guided_remote.py`, `guided_remote_bind.py`, `remote_store.py`;
   CONTRACTS.md, "The remote protocol v1", "Another computer"). Step 1's machine list gains a row, `a
   computer over SSH (its host alias)`, next to `import a profile file`: a host alias (never an
@@ -73,8 +73,10 @@ All notable changes to this project are documented in this file. The format foll
   user name, port, key path, jump host, ssh's own stderr or the server's own text (Ollama's error
   text included) -- every failure is one fixed local sentence naming the alias, an `error` line of
   the server one of five codes with a sentence each. The answer is read to its end and checked line
-  by line (exactly one final line, nothing after it); every way a call ends -- a fault, a limit, a
-  timeout, Ctrl-C -- ends the `ssh` process, its threads and its pipes. A rented server that answers
+  by line (exactly one final line, nothing after it); every way a call ends -- an answer, a fault, a
+  limit, a timeout, Ctrl-C -- ends the `ssh` process and every process it started (a job object on
+  Windows, a process group on POSIX), its reader threads and its pipes; a helper that leaves that
+  job or group is the one thing outside this (CONTRACTS.md, "The remote protocol v1"). A rented server that answers
   as another machine behind the same alias asks once, `same` or `new`; `new` keeps the old machine
   under its neutral key and imports the new one exactly under the alias, in one import. One SSH
   target connects per run (several stored ones ask `ssh_active`, optional), so the question is
