@@ -162,7 +162,7 @@ and offers `<home>/modelroom` instead.
 #### Another computer
 
 A folder can hold the profiles of several machines -- the laptop you sit at and a server you rent,
-say. There are four ways to get another computer into the result:
+say. There are five ways to get another computer into the result:
 
 1. **Run modelroom on that computer** and measure it there -- for a rented instance, over SSH.
    This is the only way that measures a vLLM server as well.
@@ -178,6 +178,12 @@ say. There are four ways to get another computer into the result:
    kept per user account (`~/.modelroom/remote.json`, never in a results folder);
    `MODELROOM_PROFILE_SHARE` overrides it for a script, without storing anything.
 4. **Enter it by hand** from its data sheet (`enter a machine by hand`).
+5. **Choose it at this computer, over SSH**, with modelroom 0.2.0 or newer and Ollama on the
+   server: step 1's row `a computer over SSH (its host alias)` asks for your own SSH alias for it
+   (`~/.ssh/config`), reads its profile, and lets step 5 check its free disk and pull a package
+   onto it -- checked, asked, one Yes -- without you ever running modelroom there by hand. Only
+   your alias is kept, in `~/.modelroom/remote.json`; a password prompt never appears, and a host
+   key modelroom does not already know stops the connection rather than accepting it.
 
 Every profile the folder already holds stands in step 1 as a row of its own and can be picked;
 the result shows only the ones you marked. A folder collects profiles through `import`, which checks
@@ -185,7 +191,7 @@ the file's schema and its name; a file copied by hand into `state/hardware/` is 
 run. modelroom itself never opens a network connection of its own to another computer: the shared
 folder is read and written like any local one, whatever the operating system mounted there for you
 -- a network share or a cloud sync folder included -- and the only other way it reaches a second
-machine is the SSH way above, through the system's own `ssh`.
+machine is the SSH way, through the system's own `ssh`, to the alias you named yourself.
 
 ### Step 2, Packages
 
@@ -508,6 +514,10 @@ checked against the same list before it is followed. `HTTP_PROXY`, `HTTPS_PROXY`
 `NO_PROXY` from the environment are honored for the registries, but a proxy only changes how an
 allowed request travels, never which targets are allowed; the local daemon is reached directly. Details: `CONTRACTS.md`, "Transport security and
 proxying".
+
+The one exception is a computer you name yourself, by its SSH host alias, in "Installing on
+another computer" below: modelroom then runs the system `ssh` to it, with your own SSH
+configuration and keys, never a password. It never connects anywhere else on its own.
 
 ## Language choice
 

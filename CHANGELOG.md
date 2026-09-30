@@ -55,7 +55,26 @@ All notable changes to this project are documented in this file. The format foll
   `modelroom pull <name> --weights-bytes <n>` to paste there -- a new
   subcommand, with no results folder and no configuration, that checks Ollama and the free disk on
   that computer and asks before it pulls (`--yes` for a terminal-less run). A machine already read
-  over SSH is left to the SSH way (FR-B1, not yet built) instead.
+  over SSH is left to the SSH way (FR-B1, below) instead.
+
+- **A computer read over SSH, chosen at the laptop, installed on the server** (AP9-FR, FR-B1;
+  `modelroom/ssh.py`, `remote_server.py`, `remote_client.py`, `guided_remote.py`, `remote_store.py`;
+  CONTRACTS.md, "The remote protocol v1", "Another computer"). Step 1's machine list gains a row, `a
+  computer over SSH (its host alias)`, next to `import a profile file`: a host alias (never an
+  address or a domain), then the same system `ssh` this computer's own configuration already knows
+  -- a fixed argument vector, never a shell string, `StrictHostKeyChecking=yes` and `BatchMode=yes`
+  always on regardless of the user's own config, agent forwarding switched off and checked. The
+  other end is `modelroom remote <op>` on the server (0.2.0 or newer): it measures that machine
+  (`hello`, `profile`), reads its free disk (`room`, named by the alias, never a path or a drive)
+  and, for `POST /api/pull`, runs the same digest-proof pull the guided run already has, through the
+  unchanged `guided_install.py`/`PullTarget` machinery -- nothing there was written twice. Only the
+  alias is ever stored, per user account in `~/.modelroom/remote.json`, never a host name, address,
+  user name, port, key path, jump host, ssh's own stderr or the server's own text (Ollama's error
+  text included) -- every failure is one fixed local sentence naming the alias. A rented server that
+  answers as another machine behind the same alias asks once, `same` or `new`; one SSH target
+  connects per run (several stored ones ask `ssh_active`, optional), so the question is always about
+  exactly one machine. `pull_other`'s own list leaves out every machine already read over SSH --
+  the row above is its own way in for those.
 
 - **Graphics cards of every vendor, llmfit as the fallback** (`modelroom/gpu.py` and the
   `gpu_*.py` modules; CONTRACTS.md, "Hardware measurement", "Graphics adapters"; ADR 0011).

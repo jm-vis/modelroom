@@ -149,6 +149,11 @@ sweep that cannot finish is exit `1` with nothing else written, and a broken
 `modelroom pull <name>` (AP9-FR A4, no results folder and no configuration, so none of the codes
 above apply to it) has its own table under "`modelroom pull`", below "Guided mode".
 
+`modelroom remote <op>` (AP9-FR, FR-B1, "The remote protocol v1") is not interactive and not read
+by a human directly: it always exits `0` once it managed to write a line at all -- a fault of the
+call itself is an `error` line on stdout, never this command's own exit code. The one exception is
+a crash before any line could be written, which is not expected in ordinary operation.
+
 ## Models
 
 Every example below is `EXAMPLES["<ModelName>"]` from `modelroom/examples.py`, verbatim; a
@@ -1389,6 +1394,14 @@ already-allowed request reaches its target, never add a target that was not alre
 allow-list. An operator who wants the local Ollama daemon reached directly even when a proxy is
 configured for everything else sets `NO_PROXY=127.0.0.1` in the environment; that is a deployment
 decision, never something this package decides on its own.
+
+**Another computer's own daemon is never reached over HTTP (AP9-FR, FR-B1).** `SshDaemon`
+(`modelroom/remote_client.py`) is a separate transport again, `daemon.py`'s protocol but not its
+implementation: it never opens a socket itself, it hands a fixed request shape to the system `ssh`
+process (`modelroom/ssh.py`, "The remote protocol v1", above) with a fixed argument vector, never a
+shell string, and the alias checked against `ssh.ALIAS_RE` first. `UrllibTransport`'s allow-list is
+unchanged by this: the HTTP origin it reaches stays `127.0.0.1:11434` only, on whichever machine
+the ssh session's own `remote_server.py` runs.
 
 ### Merge rule (building this run's `Snapshot`)
 
@@ -3068,6 +3081,122 @@ is `node--01`); a host name that gave 0.1.0 no key gives none here.
 read live). Every other line names keys and names as the files do; the answer line of the name typed
 for a machine entered by hand says `not kept: the machine gets a neutral name`, and the answer line of
 the machine list names this machine by its class alone (`this machine (laptop)`).
+
+### The remote protocol v1 (AP9-FR, FR-B1)
+
+The wire between a laptop and `modelroom remote <op>` on another computer, carried over the system
+`ssh` (`modelroom/ssh.py`), never a shell string: a fixed argument vector (`-T -o BatchMode=yes -o
+StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
+-o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o PermitLocalCommand=no -o
+RemoteCommand=none -o RequestTTY=no -o LogLevel=ERROR -- <alias> <program> remote <op>`), the
+program tried as `modelroom` first and, on exit 127 with no protocol line, once more as
+`~/.local/bin/modelroom`. All request data travels as **one JSON object on stdin**, then stdin is
+closed (EOF); nothing about the request ever reaches argv. The gegenstelle (`modelroom/
+remote_server.py`) reads at most 1 MiB of it (`profile`/`candidates` 16 MiB, FR-B2), writes JSON
+lines to stdout and nothing to the disk of the machine it runs on (Ollama's own pull writes
+excepted), and exits `0` whether or not the call itself succeeded -- a fault is an `error` line,
+never a process exit code; exit codes 127/2/255 are read by the caller only for the pre-checks
+(program missing, too old, connection/host-key/login) before any line is trusted.
+
+**The envelope.** Every line is one JSON object, `{"protocol": 1, <exactly one of "progress",
+"result", "error">}`. `progress`: zero or more, before the end. `result`: at most one, the last
+line of a successful call. `error`: at most one, the last line of a failed one, one of
+`bad_request`, `call_refused`, `ollama_unreachable`, `too_large`, `internal` -- never free text of
+the server. A line with another or a missing `protocol`, with none or two of the three fields, or
+after the last line, is a form fault at the laptop (`ssh.SshError`, "answered in a form this
+modelroom does not read"); on `hello` alone, a *well-formed* envelope whose `protocol` is an
+integer other than `1` gets its own sentence naming the number instead of the generic one.
+
+**Ops (FR-B1: `hello`, `profile`, `room`, `daemon`; `candidates`/`measure` are FR-B2's):**
+
+| op | request | `result` |
+|---|---|---|
+| `hello` | `{}` | `{"version": "X.Y.Z"\|null, "system": "linux"\|"win32"\|"darwin", "ollama": "reachable"\|"unreachable", "agent_forwarded": bool, "os_fingerprint": "<salted>"\|"none"}` |
+| `profile` | `{"profile_id": "<16 hex>", "machine_class": null\|"laptop"\|"workstation"\|"server"}` | `{"export": <ExportObject v1>}`, `display_name` the placeholder `"remote"`, `measurements` empty, `Probes.hostname` never called |
+| `room` | `{"cards": [[index, name], ...]}` | `{"disk": {"known": bool, "free_bytes": int\|null, "unclear": bool}, "graphics_free_mib": [..]\|null}` -- no drive, no path |
+| `daemon` | `{"method", "path", "body"}` | short calls: `{"status": int, "body": <JSON>\|null}`; `POST /api/pull` also emits `progress` lines and ends with `{"status": int, "done": bool}` |
+
+`daemon` is checked against `daemon.ALLOWED_CALLS` on the server (`bad_request` outside it -- read
+as `call_refused` by the client's own classification of the codes above), a pull name additionally
+against `pull_choice.PULL_NAME_RE`; a pull's Ollama status line is kept only where it is one of
+Ollama's own stages (`pulling manifest`, `pulling <64 hex>`, `verifying sha256 digest`, `writing
+manifest`, `success`), else `working`, and an Ollama `error` line becomes `{"error": true}` --
+Ollama's own text never crosses the wire. `hello.agent_forwarded` (`SSH_AUTH_SOCK` set in the
+server's own session) stops the run at the laptop before any other op runs for that alias.
+
+**`SshDaemon`** (`modelroom/remote_client.py`) makes a computer read over SSH answer `daemon.py`'s
+`Daemon` protocol unchanged: a short call's `result` becomes a `Response`; a pull's `progress`
+lines become the same shape `guided_install._check_line` already reads (`{"error": true}` becomes
+the fixed string `"Ollama on <alias> reported an error"`); `done: true` becomes a `{"status":
+"success"}` body, otherwise an empty one (`_end_reason` then reads "before success", as it does
+for `LocalDaemon`). Nothing here filters `/api/tags`: the unchanged digest rule of `loadtest.py`
+decides what is shown, exactly as it does against `LocalDaemon`.
+
+**Time limits** (seconds, from the ssh process's own start; a limit reached kills the process):
+`hello`/`room` 30, `profile` 180, `daemon` short calls 30, `POST /api/generate` 660, `POST
+/api/pull` no total limit but 60 s **per line** (a pull that keeps sending status lines is not
+caught by this; a truly silent connection is). **Answer limits:** every line at most 1 MiB (pull
+lines 64 KiB); the whole answer at most 64 KiB (`hello`/`room`), 4 MiB (`profile`), 16 MiB
+(`daemon` short calls and `/api/generate`) -- a pull has no total limit, only its per-line one.
+Either limit reached: `<alias> answered with more than modelroom reads`, the process killed.
+
+**What is not checked**: whether the alias truly names the intended computer (only the identity
+check of "Another computer" below judges that), whether the alias itself is a neutral name (a
+user's own choice, README), the host-key rules of a `ProxyJump` hop (the user's own `ssh_config`),
+where Ollama keeps its models on the server (the same approximation "The pull" already states for
+this computer), and whose daemon actually answers on the server's `127.0.0.1:11434`.
+
+### Another computer (AP9-FR, FR-B1, "Guided mode" step 1 and step 5)
+
+**Aufnahme (step 1, row `ssh`, after `import a profile file`):** a host alias
+(`ssh.ALIAS_RE`, `^[a-z0-9][a-z0-9-]{0,30}$`, no dot, no colon, no `@`, not all digits, and not in
+the shape of a neutral name so an alias and a neutral key can never collide), `hello`, the
+`profile_id` to measure under (the one `~/.modelroom/remote.json` already has for that alias when
+its profile is still in the folder and its fingerprint has not changed, else a fresh one), the
+class question, `profile`. **Write order:** (1) `remote_store.set_alias(profile_id, alias)`,
+atomic; (2) `import_profile(..., name=alias, expected_profile_id=profile_id)` from a temporary
+file, deleted after. A fault before (1) writes nothing; a fault between (1) and (2) leaves
+`remote.json` pointing at a profile not (yet) in the folder -- read as absent until the same alias
+converges it on a later run, never a crash, never a rollback. The profile's `[machines.<name>]` key
+is the alias itself (`neutral.key_for`); Herkunft `ssh` (`selection.Origin`), ranked after `this`,
+before `imported`.
+
+**A changed fingerprint behind a known alias** (a rented machine replaced): the question `<alias>
+now answers with another machine than before. Is it the same machine or a new one?` (default `new`,
+GF decision). `same` keeps the id. `new`: the row `[machines.<alias>]` is first renamed to
+`neutral.key_for` of the *old* profile (its own neutral name, or a free `computer-<8 hex>` where
+that name is taken) -- so the new profile then imports exactly under `[machines.<alias>]` -- then a
+fresh id is measured and imported; the table of *this* run still counts the old profile (a note
+says so), no pull and no measurement for `alias` in this run.
+
+**Every already-stored SSH profile is checked once before it is used actively** (room, pull,
+measurement) even when it was picked directly from the machine list, not just a freshly typed
+alias: the same `hello`/fingerprint comparison and the same question. Under `--answers` with no
+answer for it, `AnswerMissingError` (exit `2`) -- and, once the change was detected, nothing more
+of this alias is touched: no further `hello`/`profile`/`room`/pull/measurement, no further write.
+
+**One active SSH target per run** (GF decision): a freshly typed alias is it outright; with exactly
+one stored SSH profile chosen it is that one; with several, `Which computer over SSH should this
+run connect to?` (`ssh_active`, optional -- unanswered or skipped means none). Every other chosen
+SSH profile is ranked from its stored profile alone, with no connection at all (`free`-line `disk
+unknown (<alias> not connected in this run)`), and is left out of `pull_other`'s own list
+(`pull_other.pull_other_skip`, keyed by `remote_store.aliases`) -- there is exactly one place a
+package reaches such a machine, the active target's own pull below.
+
+**Step 5, the active target only:** its table's `room`/`free` line is its own live reading (`room`
+op), named by the alias, never a path; a second, fresh `room` reading precedes its own pull
+question, `Pull #<rank> onto <alias> now? (<size>)` (`pull_remote`, default No, optional), with the
+same disk check, the same digest proof (over `SshDaemon`, `local already on <alias>`) and the same
+success line (`✓ Pulled <name> · <size> · on <alias>`) the guided run's own pull uses, through the
+unchanged `PullTarget`/`pull_chosen` machinery (`where=" on <alias>"`).
+
+**What `remote.json`/a file never carries** (B6): `HostName`, address, user name, port, key path,
+jump host, ssh's own stderr, the server's own text (error, Ollama's), its paths and drive, its
+local model names and its `/api/ps` names, the shared folder's file names, a Rechnername out of an
+export, and this computer's own name (live in the start line only, FR-N). The alias is the one
+thing kept, as `display_name`, as the machine key, and in `remote.json`. **Grenze:** if the alias
+*is* the server's real short name, that name stands in the folder -- `ALIAS_RE` blocks an address
+or a domain, not a user's own naming choice; README and the question text ask for a neutral one.
 
 ### Migration to schema 2
 

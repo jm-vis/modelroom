@@ -20,21 +20,25 @@ has, where there is one, else a first measurement.
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from .config import Configuration
 from .dialog import Choice
 from .guided_entered import entered_class
+from .guided_remote import SSH_ROW
 from .importer import ProfileScan, _label
 from .intro import card_names, class_words, graphics_words
 from .profile import HardwareProfile
 from .screen import THIS_MACHINE, this_machine_words
+
+OVER_SSH = "  over SSH"
 
 _UNKNOWN = "unknown"
 PROFILE_PREFIX = "profile:"
 NO_MACHINE_NAMES = "no machine of the configuration names this profile"
 # The note in front of the list (71 characters): the way to a machine this run does not run on.
 ANOTHER_COMPUTER = "another computer: pick its profile below, or import the file made there"
+_NO_ALIASES: Mapping[str, str] = {}
 
 
 def _hardware_class(profile: HardwareProfile) -> str:
@@ -66,13 +70,18 @@ def _class_word(profile: HardwareProfile | None) -> str:
     return "" if profile is None or profile.machine_class == _UNKNOWN else profile.machine_class
 
 
-def _profile_choices(scan: ProfileScan, configured: set[str], skip: str | None = None) -> tuple[list[Choice], list[Choice]]:
+def _profile_choices(
+    scan: ProfileScan, configured: set[str], skip: str | None = None, ssh_aliases: Mapping[str, str] = _NO_ALIASES
+) -> tuple[list[Choice], list[Choice]]:
     """Every profile of the folder as a row of its own: the ones a machine names, and the grayed out.
 
     A profile a `[machines.<name>]` names is a choice (`profile:<profile_id>`, AP9-UX C1): its label as
     the import forms it, with the short id where two carry one name, and its hardware. One no machine
     names stays grayed out with that reason; so do `legacy` files and files that do not read.
-    `skip` is the bound profile of row 1, which stands there and not here.
+    `skip` is the bound profile of row 1, which stands there and not here. `ssh_aliases`
+    (`profile_id -> alias`, FR-B1, B3) marks a profile read over SSH with `OVER_SSH` behind its label
+    -- the label itself is already the alias (`neutral.display_name_for`), so this only says *how*
+    it was read.
     """
     rows = sorted(
         ((_hardware_class(profile), _label(profile, scan), profile) for key, profile in scan.profiles.items() if key != skip),
@@ -80,7 +89,8 @@ def _profile_choices(scan: ProfileScan, configured: set[str], skip: str | None =
     )
     chosen, blocked = [], []
     for hardware, label, profile in rows:
-        text = f"{label}  {hardware}"
+        over_ssh = OVER_SSH if profile.profile_id in ssh_aliases else ""
+        text = f"{label}{over_ssh}  {hardware}"
         if profile.profile_id in configured:
             chosen.append(Choice(f"{PROFILE_PREFIX}{profile.profile_id}", text))
         else:
@@ -93,16 +103,23 @@ def _profile_choices(scan: ProfileScan, configured: set[str], skip: str | None =
 
 
 def _machine_choices(
-    scan: ProfileScan, bound: HardwareProfile | None, name: str, configured: Iterable[str], share_label: str
+    scan: ProfileScan,
+    bound: HardwareProfile | None,
+    name: str,
+    configured: Iterable[str],
+    share_label: str,
+    ssh_aliases: Mapping[str, str] = _NO_ALIASES,
 ) -> list[Choice]:
-    """The machine list of step 1, rows 1 to 7 (module docstring); nothing is marked.
+    """The machine list of step 1, rows 1 to 8 (module docstring); nothing is marked.
 
     `bound` is the profile this folder binds this machine to, `name` this machine's key in
     `[machines.<name>]`, `configured` every `profile` a machine of the configuration names. A binding
     to a profile entered by hand is no row 1: nothing of this machine was measured here, so its row
     says `measure now` and the profile stands among the others (decided 2026-09-26, Review r3-N3).
     `share_label` is row 5's own text (FR-S, `guided_share.machine_list_row`): always there, whatever
-    it says -- the shared folder is meant to be found in this list.
+    it says -- the shared folder is meant to be found in this list. `ssh_aliases` (FR-B1, B3) is
+    every profile this user already read over SSH (`remote_store.aliases`); the `ssh` row itself
+    (`a computer over SSH`) always stands, right after `import`.
     """
     here = bound if _measured_here(bound) else None
     rows = []
@@ -110,8 +127,13 @@ def _machine_choices(
         measured = f"as measured {here.recorded_at.date().isoformat()}"
         rows.append(Choice(f"{PROFILE_PREFIX}{here.profile_id}", this_machine_words(name, _class_word(here), measured)))
     rows.append(Choice("this-machine", this_machine_words(name, "measure again" if here is not None else "measure now")))
-    chosen, blocked = _profile_choices(scan, set(configured), here.profile_id if here is not None else None)
-    tail = [Choice("import", "import a profile file"), Choice("share", share_label), Choice("enter", "enter a machine by hand")]
+    chosen, blocked = _profile_choices(scan, set(configured), here.profile_id if here is not None else None, ssh_aliases)
+    tail = [
+        Choice("import", "import a profile file"),
+        Choice("ssh", SSH_ROW),
+        Choice("share", share_label),
+        Choice("enter", "enter a machine by hand"),
+    ]
     return [*rows, *chosen, *tail, *blocked]
 
 
@@ -141,6 +163,7 @@ def chosen_machines(config: Configuration, picked: Sequence[str], name: str, arr
 __all__ = [
     "ANOTHER_COMPUTER",
     "NO_MACHINE_NAMES",
+    "OVER_SSH",
     "PROFILE_PREFIX",
     "chosen_machines",
     "machine_answer_words",

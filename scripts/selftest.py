@@ -681,6 +681,7 @@ def run_steps(work: Path) -> list[Step]:
     from selftest_entered import entered_steps
     from selftest_head import head_count_step
     from selftest_pull import pull_steps
+    from selftest_remote import remote_step
     pointer = _redirect_home(work / "home")
     results = work / "results"
     results.mkdir(parents=True)
@@ -697,6 +698,7 @@ def run_steps(work: Path) -> list[Step]:
     steps.append(_testset_step())
     steps += [Step(*step) for step in pull_steps(results, pointer, machine, first_lines, started)]
     steps += [Step(*step) for step in entered_steps(work, answers_toml, started + timedelta(minutes=2))]
+    steps.append(Step(*remote_step()))  # FR-B1: the gegenstelle, a real local process
     steps.append(_live_search_smoke())
     return steps
 

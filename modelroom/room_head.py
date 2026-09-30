@@ -20,10 +20,10 @@ from typing import Literal
 from .document import MachineRanking
 from .intro import LABEL_COLUMN
 from .reserve import old_default_hint
-from .room import LiveRoom, LoadedModel, disk_words, gb, graphics_words
+from .room import UNCLEAR_REASON, LiveRoom, LoadedModel, disk_words, gb, graphics_words
 from .screen import JOIN_WIDTH
 
-Where = Literal["this", "other", "render"]
+Where = Literal["this", "other", "render", "ssh"]
 
 ROOM_LABEL = "room"
 LOADED_LABEL = "loaded"
@@ -122,11 +122,26 @@ def _shared_piece(block: MachineRanking) -> str:
 def _disk_piece(live: LiveRoom | None, where: Where) -> str:
     """The free disk read for this machine, whichever it is; else the words of `where`."""
     disk = live.disk if live is not None else None
+    if where == "ssh":
+        return _ssh_disk_piece(disk)
     if disk is not None and disk.known:
         return disk_words(disk)
     if where == "this":
         return disk_words(disk) if disk is not None else DISK_UNKNOWN
     return ANOTHER_COMPUTER_DISK if where == "other" else RENDER_DISK
+
+
+def _ssh_disk_piece(disk) -> str:
+    """The active SSH machine's own words (FR-B1, B5), named by its alias, never a path: known,
+    `unclear` (two candidate places), or the connection itself failed (`disk.reason` then already
+    names it, `"<alias> not reached"`, set by `guided_remote.read_room`)."""
+    if disk is not None and disk.known:
+        return f"disk {gb(disk.free_bytes)} free on {disk.drive} (where Ollama keeps its models)"
+    if disk is not None and disk.reason == UNCLEAR_REASON:
+        return f"disk unknown on {disk.drive} (two places Ollama may use)"
+    if disk is not None and disk.reason:
+        return f"disk unknown ({disk.reason})"
+    return f"disk unknown on {disk.drive}" if disk is not None and disk.drive else DISK_UNKNOWN
 
 
 def _loaded_piece(model: LoadedModel) -> str:

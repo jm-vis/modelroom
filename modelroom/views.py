@@ -452,7 +452,12 @@ def _block_head(block: MachineRanking, scenario: Scenario, dot: str, origin: str
     confirmed or absent check leaves the line as it is. A machine that is not the one of this run
     says so after its label (U2): `imported`, or `another computer`.
     """
-    where = {"imported": f" {dot} imported", "entered": f" {dot} another computer", "folder": f" {dot} another computer"}
+    where = {
+        "imported": f" {dot} imported",
+        "entered": f" {dot} another computer",
+        "folder": f" {dot} another computer",
+        "ssh": f" {dot} over SSH",  # FR-B1, B3
+    }
     label = f"{block.label}{where.get(origin or 'this', '')}"
     if block.status == "ranked":
         return f"{label} {dot} context {context_short(scenario.context_requested)}{_deviation(block)}"
@@ -542,6 +547,7 @@ class RunView:
     live: Mapping[str, LiveRoom] | None = None
     origins: Mapping[str, str] = field(default_factory=dict)
     pull_other_machines: frozenset[str] = frozenset()
+    ssh_active: str | None = None  # FR-B1, B5: the `room` line names this one by its alias
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -585,7 +591,12 @@ def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
     """Under the head of a block (U10): the budgets and the disk (`room`), and what Ollama holds
     (`loaded`) where it holds something -- for the machine the live values were read on."""
     live = None if view.live is None else view.live.get(block.machine)
-    where = "render" if view.live is None else "this" if block.machine == view.install_for else "other"
+    where = (
+        "render" if view.live is None
+        else "this" if block.machine == view.install_for
+        else "ssh" if block.machine == view.ssh_active
+        else "other"
+    )
     lines = _labeled(ROOM_LABEL, head_pieces(block, live, where), dot)
     loaded = loaded_pieces(live)
     return lines + (_labeled(LOADED_LABEL, loaded, dot) if loaded else [])

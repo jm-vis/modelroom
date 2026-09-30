@@ -26,6 +26,7 @@ _DASH = "–"
 ORIGIN_WORDS = {
     "imported": "imported profile · not this computer",
     "folder": "profile from this folder · not this computer",
+    "ssh": "read over SSH · not this computer",  # AP9-FR, FR-B1, B3
 }
 
 

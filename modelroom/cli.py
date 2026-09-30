@@ -43,6 +43,8 @@ from .binding import (
     write_pointer,
 )
 from .cli_pull import run_pull
+from .cli_remote import OPS as REMOTE_OPS
+from .cli_remote import run_remote
 from .config import ConfigError, Configuration, load_config
 from .contracts import HardwareSnapshot, SchemaVersionError
 from .daemon import Daemon
@@ -76,6 +78,7 @@ from .profile import MACHINE_CLASSES, HardwareProfile, MachineClass, fit_block_r
 from .remote_store import RemoteStoreError
 from .render_cmd import render_with_config
 from .room import RoomProbes
+from .ssh import SshRunner
 from .state import (
     LockHeldError,
     StaleRunError,
@@ -165,6 +168,13 @@ def build_parser() -> argparse.ArgumentParser:
     pull_parser.add_argument("--weights-bytes", type=int, help="The download's size, for the disk check before it")
     pull_parser.add_argument("--yes", action="store_true", help="Pull without asking (no terminal needs this)")
 
+    remote_parser = subparsers.add_parser(
+        "remote",
+        help="The gegenstelle of another computer's SSH way in (FR-B1): reads one JSON request from "
+        "stdin, writes JSON answer lines to stdout. Not interactive; run by modelroom itself, over SSH.",
+    )
+    remote_parser.add_argument("op", choices=REMOTE_OPS, help="hello, profile, room, or daemon")
+
     return parser
 
 
@@ -180,11 +190,12 @@ def main(
     daemon: "Daemon | None" = None,
     servers: dict | None = None,
     room: "RoomProbes | None" = None,
+    ssh: "SshRunner | None" = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon, servers, room)
+        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon, servers, room, ssh)
     if args.answers is not None:
         print(f"--answers belongs to the guided mode; {args.command} never asks a question", file=sys.stderr)
         return 2
@@ -206,6 +217,9 @@ def main(
     if args.command == "pull":
         # No results folder and no configuration (A4): nothing here is swept, nothing bound.
         return run_pull(args.name, args.weights_bytes, args.yes, daemon=daemon, room=room, now=now, out=out)
+    if args.command == "remote":
+        # The gegenstelle (B2): stdin/stdout only, no results folder, nothing swept, nothing bound.
+        return run_remote(args.op)
     parser.error(f"unknown command: {args.command}")
     return 2  # pragma: no cover - argparse.error already exits
 
@@ -223,6 +237,7 @@ def _cmd_guided(
     daemon: "Daemon | None" = None,
     servers: dict | None = None,
     room: "RoomProbes | None" = None,
+    ssh: "SshRunner | None" = None,
 ) -> int:
     """`modelroom` with no subcommand: the guided mode (`modelroom/guided.py`).
 
@@ -248,6 +263,7 @@ def _cmd_guided(
             daemon=daemon,
             servers=servers,
             room=room,  # `None`: the real room of this machine (`room.default_room_probes`, AP9-UX2 U8)
+            ssh=ssh,  # `None`: the real ssh of this machine (`ssh.default_ssh`, FR-B1)
             # A run that answers from a file is read from a log: no color, whatever the
             # terminal it was started in (CONTRACTS.md, "Guided mode", the start screen).
             colored=None if args.answers is None else False,

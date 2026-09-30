@@ -586,7 +586,7 @@ def _bound_run(tmp_path: Path) -> str:
 def test_the_machine_list_keeps_its_order(tmp_path: Path):
     """Rows 1-6 of AP9-UX C in three cases: a profile measured here, none, one entered by hand."""
     first = [choice.value for choice in _recorded_machines(tmp_path / "none", RUN1, FULL_ANSWERS)]
-    assert first == ["this-machine", "import", "share", "enter"]
+    assert first == ["this-machine", "import", "ssh", "share", "enter"]  # FR-B1, B3: the ssh row
 
     bound = _bound_run(tmp_path)
     for index, name in enumerate(("alpha", "beta")):
@@ -600,6 +600,7 @@ def test_the_machine_list_keeps_its_order(tmp_path: Path):
         f"profile:{'3' * 16}",
         f"profile:{'4' * 16}",
         "import",
+        "ssh",  # FR-B1, B3: the ssh row
         "share",
         "enter",
         "broken:broken.json",
@@ -2475,7 +2476,9 @@ def _watched(tmp_path: Path, answers: dict, probes=None) -> _WatchingAsker:
 def test_the_machine_list_offers_entering_a_machine_by_hand_after_measuring_and_importing(tmp_path: Path):
     machines = _watched(tmp_path, {**FULL_ANSWERS, "machines": []}).choices["machines"]
 
-    assert [choice.value for choice in machines if choice.disabled is None] == ["this-machine", "import", "share", "enter"]
+    assert [choice.value for choice in machines if choice.disabled is None] == [
+        "this-machine", "import", "ssh", "share", "enter",  # FR-B1, B3: the ssh row
+    ]
     assert next(choice.label for choice in machines if choice.value == "enter") == "enter a machine by hand"
 
 
@@ -2954,7 +2957,10 @@ def test_every_profile_of_the_folder_is_a_choice(tmp_path: Path):
     rows = asker.choices["machines"]
     values = [choice.value for choice in rows]
     bound = read_pointer(_pointer(tmp_path)).binding_for(_results(tmp_path))
-    assert values == [f"profile:{bound}", "this-machine", *(f"profile:{key}" for key in servers), "import", "share", "enter"]
+    assert values == [
+        f"profile:{bound}", "this-machine", *(f"profile:{key}" for key in servers),
+        "import", "ssh", "share", "enter",  # FR-B1, B3: the ssh row
+    ]
     for key, cards in servers.items():
         row = next(choice for choice in rows if choice.value == f"profile:{key}")
         assert row.label.startswith(f"computer-{key[:SHORT_ID_LEN]}  {cards}"), row.label  # FR-N: neutral, unique

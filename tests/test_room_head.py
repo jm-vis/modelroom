@@ -108,6 +108,25 @@ def test_this_machine_without_live_data_says_disk_unknown():
     )
 
 
+def test_the_active_ssh_machine_names_its_disk_by_alias_where_ollama_keeps_its_models():
+    """FR-B1, B5, the brief's own wording: known, unclear, and a failed connection (already named
+    by `guided_remote.read_room` in `disk.reason`) -- and never the local wording ("Ollama models")."""
+    known = LiveRoom(disk=Disk(int(812.4 * GIB), "gpu1"))
+    assert head_pieces(_block(), known, "ssh")[-1] == "disk 812.4 GB free on gpu1 (where Ollama keeps its models)"
+
+    unclear = LiveRoom(disk=Disk(None, "gpu1", "two places Ollama may use"))
+    assert head_pieces(_block(), unclear, "ssh")[-1] == "disk unknown on gpu1 (two places Ollama may use)"
+
+    unreachable = LiveRoom(disk=Disk(None, "gpu1", "gpu1 not reached"))
+    assert head_pieces(_block(), unreachable, "ssh")[-1] == "disk unknown (gpu1 not reached)"
+
+
+def test_the_local_machines_own_disk_wording_is_unchanged_by_the_ssh_case():
+    """The brief's SSH wording ("where Ollama keeps its models") must not leak onto "this"/"other"."""
+    assert head_pieces(_block(), LiveRoom(disk=DISK), "this")[-1] == "disk 41.2 GB free on C: (Ollama models)"
+    assert "where Ollama keeps its models" not in head_pieces(_block(), LiveRoom(disk=DISK), "this")[-1]
+
+
 def test_the_head_never_says_free_now():
     live = LiveRoom(disk=DISK, loaded=(), graphics_free_mib=(512.0,))
     lines = _room_text(_block(), RunView(install_for="laptop", live={"laptop": live}))

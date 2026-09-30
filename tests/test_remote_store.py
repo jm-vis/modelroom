@@ -24,6 +24,7 @@ from modelroom.remote_store import (
     is_share_path,
     read_remote,
     remote_path_for,
+    set_alias,
     set_profile_share,
     this_machine,
 )
@@ -118,6 +119,33 @@ def test_set_profile_share_never_touches_this_machine_or_ssh(tmp_path):
 
     assert this_machine(path) == THIS_MACHINE
     assert aliases(path) == {}
+
+
+# --- FR-B1: `set_alias`, the writer of `ssh` -----------------------------------------------------
+
+
+def test_set_alias_adds_a_mapping(tmp_path):
+    path = remote_path_for(tmp_path / ".modelroom" / "guided.json")
+    set_alias(path, PROFILE_ID, "gpu1")
+    assert aliases(path) == {PROFILE_ID: "gpu1"}
+
+
+def test_a_new_mapping_for_an_alias_replaces_its_old_one(tmp_path):
+    path = remote_path_for(tmp_path / ".modelroom" / "guided.json")
+    set_alias(path, PROFILE_ID, "gpu1")
+    set_alias(path, "b1b2b3b4b5b6b7b8", "gpu1")
+    assert aliases(path) == {"b1b2b3b4b5b6b7b8": "gpu1"}
+
+
+def test_set_alias_never_touches_this_machine_or_profile_share(tmp_path):
+    path = remote_path_for(tmp_path / ".modelroom" / "guided.json")
+    assert this_machine(path) == THIS_MACHINE
+    set_profile_share(path, "Z:\\profiles")
+
+    set_alias(path, PROFILE_ID, "gpu1")
+
+    assert this_machine(path) == THIS_MACHINE
+    assert read_remote(path).profile_share == "Z:\\profiles"
 
 
 def test_a_broken_file_ends_a_command_with_exit_3(tmp_path, capsys):

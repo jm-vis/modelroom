@@ -177,6 +177,22 @@ def aliases(path: Path) -> dict[str, str]:
     return dict(read_remote(path).ssh)
 
 
+def set_alias(path: Path, profile_id: str, alias: str) -> None:
+    """Store `profile_id -> alias` (FR-B1, B3): a new mapping for `alias` replaces any old one it
+    had -- one alias belongs to one profile_id at most (`RemoteStore._check_ssh`). Read, changed,
+    written back atomically under the account lock, like every other write of this file."""
+    handle = _account_lock(path)
+    try:
+        stored = read_remote(path)
+        ssh = {pid: name for pid, name in stored.ssh.items() if name != alias}
+        ssh[profile_id] = alias
+        atomic_write_json(path, stored.model_copy(update={"ssh": ssh}).model_dump(mode="json"))
+    except OSError as exc:
+        raise RemoteStoreError(UNWRITTEN) from exc
+    finally:
+        release_lock(handle)
+
+
 def set_profile_share(path: Path, value: str | None) -> None:
     """Store or clear `profile_share`, the one field `guided_share` ever writes here (FR-S).
 
@@ -205,6 +221,7 @@ __all__ = [
     "is_share_path",
     "read_remote",
     "remote_path_for",
+    "set_alias",
     "set_profile_share",
     "this_machine",
 ]

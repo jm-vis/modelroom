@@ -47,6 +47,22 @@ def _fixed_room(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(room, "default_room_probes", lambda: fixed_room())
 
 
+class _UnusedSsh:
+    """The default `GuidedRun.ssh` of every test that never touches FR-B1 at all: a loud failure
+    the moment anything tries to use it, instead of a silent real connection (FR-B1, "Teststrategie
+    ohne echten Server"). A test of the SSH way builds its own `FakeSsh`/`FaultSsh` and passes it in."""
+
+    def run(self, *args, **kwargs):  # pragma: no cover - only reached by a test-authoring mistake
+        raise AssertionError("a test reached the default ssh runner; pass ssh=FakeSsh(...)/FaultSsh(...) instead")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ssh(monkeypatch: pytest.MonkeyPatch):
+    from modelroom import ssh
+
+    monkeypatch.setattr(ssh, "default_ssh", lambda: _UnusedSsh())
+
+
 @pytest.fixture(autouse=True)
 def _fixed_this_machine(monkeypatch: pytest.MonkeyPatch):
     """This computer's neutral key (FR-N) is random in a real run; a test gets the same one every time,

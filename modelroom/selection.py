@@ -20,7 +20,7 @@ from .config import Configuration
 from .contracts import Snapshot
 from .ranking import ModelFacts
 
-Origin = Literal["this", "imported", "entered", "folder"]
+Origin = Literal["this", "ssh", "imported", "entered", "folder"]
 
 # The note of a run that chose no model (Codex F1): an empty choice is a choice, and the result of
 # the run shows none of the folder's models; `modelroom render` without a run still shows them all.
@@ -82,18 +82,22 @@ def machine_origins(
     machines: Iterable[str],
     *,
     this: Iterable[str] = (),
+    ssh: Iterable[str] = (),
     imported: Iterable[str] = (),
     entered: Iterable[str] = (),
 ) -> dict[str, Origin]:
-    """The origin of every chosen machine by precedence (Codex r1-14): `this` machine names, then the
-    machines whose profile id this run imported (even one the folder held already), then entered, then
-    `folder`. `this` names machines, `imported` and `entered` profile ids."""
-    this, imported, entered = set(this), set(imported), set(entered)
+    """The origin of every chosen machine by precedence (Codex r1-14; FR-B1 B3: `ssh` after `this`,
+    before `imported`): `this` machine names, then the profile id this run read over SSH, then the
+    ones this run imported (even one the folder held already), then entered, then `folder`. `this`
+    and `ssh` name profile ids, `imported` and `entered` too."""
+    this, ssh, imported, entered = set(this), set(ssh), set(imported), set(entered)
     origins: dict[str, Origin] = {}
     for machine in machines:
         profile = config.machines[machine].profile if machine in config.machines else None
         if machine in this:
             origins[machine] = "this"
+        elif profile in ssh:
+            origins[machine] = "ssh"
         elif profile in imported:
             origins[machine] = "imported"
         elif profile in entered:

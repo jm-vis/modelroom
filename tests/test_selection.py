@@ -124,3 +124,22 @@ def test_origins_follow_their_precedence():
 
     # `laptop` was measured here and imported: this wins; `server` imported and entered: imported wins.
     assert origins == {"laptop": "this", "server": "imported", "studio": "entered", "rack": "folder"}
+
+
+def test_ssh_origin_stands_after_this_and_before_imported():
+    """FR-B1, B3: a profile read over SSH is `ssh`, ranked right after `this`, before `imported`."""
+    from modelroom.selection import machine_origins
+
+    data = _config().model_dump(mode="json")
+    machine = {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False}
+    data["machines"] = {
+        "laptop": {**machine, "writer": True, "profile": "1" * 16},
+        "gpu1": {**machine, "profile": "2" * 16},
+        "gpu2": {**machine, "profile": "3" * 16},
+    }
+    config = Configuration.from_dict(data)
+    machines = ("laptop", "gpu1", "gpu2")
+
+    origins = machine_origins(config, machines, this={"laptop"}, ssh={"2" * 16}, imported={"2" * 16, "3" * 16})
+
+    assert origins == {"laptop": "this", "gpu1": "ssh", "gpu2": "imported"}
