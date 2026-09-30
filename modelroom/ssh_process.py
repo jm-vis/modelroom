@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
 from typing import Callable, Sequence
 
-from .process_tree import ProcessTree, ProcessTreeError, cancel_blocking_read, popen_options
+from .process_tree import ProcessTree, abandon, cancel_blocking_read, popen_options
 
 THREAD_PREFIX = "modelroom-ssh-"
 _QUEUE_MAXSIZE = 8
@@ -219,9 +219,8 @@ class SubprocessSsh:
         process = popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_options())
         try:
             tree = ProcessTree(process)  # Windows: into its job, then resumed -- or ended (fail closed)
-        except ProcessTreeError:
-            for stream in (process.stdin, process.stdout, process.stderr):
-                _close(stream)
+        except BaseException:  # ProcessTreeError, any exception, Ctrl-C: nothing of it is left behind
+            abandon(process)
             raise
         clock = _Clock(total, per_line)
         pipes = _Pipes(process, limits.line_bytes, tree)

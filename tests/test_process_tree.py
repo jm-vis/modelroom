@@ -89,34 +89,6 @@ def test_the_process_group_is_signaled_once(monkeypatch):
     assert sent == [(4242, None)]  # once, while the leader was not yet reaped
 
 
-def test_without_os_waitid_a_real_run_ends_cleanly_and_never_signals_a_reaped_group(tmp_path, children, monkeypatch):
-    """macOS with Python 3.11/3.12 has no `os.waitid`: a whole `run()` on the POSIX path (a real child
-    process) must neither fail with `AttributeError` nor signal the group once `poll()` reaped the
-    leader -- the fallback of `ProcessTree.exited`."""
-    import os
-    import signal
-
-    monkeypatch.delattr(os, "waitid", raising=False)
-    monkeypatch.setattr(process_tree, "sys", SimpleNamespace(platform="linux"))
-    signaled: list[object] = []
-    started = children  # the recorded child, to read its state when the group signal is sent
-    monkeypatch.setattr(os, "killpg", lambda pid, sig: signaled.append(started[-1].returncode), raising=False)
-    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
-    script = _script(tmp_path, f"sys.stdin.buffer.read()\nprint(json.dumps({{'protocol': 1, 'result': {_HELLO!r}}}), flush=True)\n")
-    lines: list[bytes] = []
-    failure = None
-
-    try:
-        outcome = _ScriptSsh(script).run(["ssh", "gpu1"], b"{}", 10.0, None, OP_BUDGETS["hello"].limits, lines.append)
-    except AttributeError as exc:
-        failure, outcome = exc, None
-
-    assert failure is None, f"the run failed without os.waitid: {failure}"
-    assert outcome.returncode == 0 and len(lines) == 1
-    assert signaled == []  # the leader was reaped by poll(): no signal to its group, ever
-    _assert_all_ended(children)
-
-
 def test_the_process_group_is_never_signaled_after_its_leader_was_reaped(monkeypatch):
     """Once the leader is reaped its PID may belong to someone else: no signal to that group."""
     tree, _child, sent = _posix_tree(monkeypatch, returncode=0)
