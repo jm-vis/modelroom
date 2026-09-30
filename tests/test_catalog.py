@@ -11,19 +11,22 @@ import pytest
 from pydantic import ValidationError
 
 from modelroom.catalog import (
-    CATALOG_ATTRIBUTION,
-    CATALOG_DATA_LICENSE,
     CATALOG_FILE,
     CATALOG_MAX_BYTES,
-    CATALOG_MAX_LINES,
+    CATALOG_MAX_TEXT_LEN,
     DISPLAYED_KINDS,
     PIPELINE_TAG_TO_KIND,
     Catalog,
-    CatalogDocumentV2,
     CatalogError,
     CatalogFamily,
     CatalogModel,
     load_catalog,
+)
+from modelroom.catalog_schema import (
+    CATALOG_ATTRIBUTION,
+    CATALOG_DATA_LICENSE,
+    CATALOG_MAX_MODELS,
+    CatalogDocumentV2,
 )
 from modelroom.contracts import SchemaVersionError
 from modelroom.examples import EXAMPLES
@@ -71,6 +74,30 @@ LARGE_REPOS = (
     "deepseek-ai/DeepSeek-V4-Flash-0731",
     "zai-org/GLM-5.3-Flash",
 )
+
+
+# --- EXAMPLES has no `kind` (schema 1 predates it); `kind` now has no default outside the v1
+# reader (Codex r1, finding 1), so every direct CatalogModel/CatalogFamily/Catalog construction
+# below a schema-1 EXAMPLES entry needs one injected, exactly as `_build_catalog_v1` injects it.
+
+
+def _model_dict(**overrides) -> dict:
+    return {**EXAMPLES["CatalogModel"], "kind": "text", **overrides}
+
+
+def _family_dict() -> dict:
+    family = copy.deepcopy(EXAMPLES["CatalogFamily"])
+    for model in family["models"]:
+        model.setdefault("kind", "text")
+    return family
+
+
+def _catalog_dict() -> dict:
+    catalog = copy.deepcopy(EXAMPLES["Catalog"])
+    for family in catalog["families"]:
+        for model in family["models"]:
+            model.setdefault("kind", "text")
+    return catalog
 
 
 def test_shipped_catalog_loads_and_covers_the_example_configurations_families():
@@ -217,11 +244,12 @@ def test_catalog_excerpt_gives_latest_legacy_and_unknown():
 def test_a_model_with_a_successor_is_not_latest():
     evidence = {"latest_source": "https://huggingface.co/acme", "latest_checked": "2026-09-23"}
     with pytest.raises(ValidationError, match="successor is not latest"):
-        CatalogModel.model_validate({**EXAMPLES["CatalogModel"], "latest": True, **evidence})
+        CatalogModel.model_validate(_model_dict(latest=True, **evidence))
 
 
 def _latest_model(**changes) -> dict:
     model = copy.deepcopy(EXAMPLES["CatalogFamily"]["models"][1])
+    model.setdefault("kind", "text")
     model.update(changes)
     return model
 
@@ -233,7 +261,7 @@ def test_latest_needs_its_evidence_and_check_date(missing):
 
 
 def test_evidence_without_latest_is_refused():
-    legacy = {**EXAMPLES["CatalogModel"], "latest_source": "https://huggingface.co/acme", "latest_checked": "2026-09-23"}
+    legacy = _model_dict(latest_source="https://huggingface.co/acme", latest_checked="2026-09-23")
     with pytest.raises(ValidationError, match="latest"):
         CatalogModel.model_validate(legacy)
 
@@ -255,7 +283,7 @@ def test_latest_source_is_an_https_page_with_a_host(source):
     ],
 )
 def test_latest_source_on_the_hub_is_the_publisher_page_or_collection(source):
-    family = copy.deepcopy(EXAMPLES["CatalogFamily"])
+    family = _family_dict()
     family["models"][1]["latest_source"] = source
     CatalogFamily.model_validate(family)
 
@@ -273,7 +301,7 @@ def test_latest_source_on_the_hub_is_the_publisher_page_or_collection(source):
     ],
 )
 def test_latest_source_on_the_hub_must_be_the_publishers(source):
-    family = copy.deepcopy(EXAMPLES["CatalogFamily"])
+    family = _family_dict()
     family["models"][1]["latest_source"] = source
     with pytest.raises(ValidationError, match="latest_source"):
         CatalogFamily.model_validate(family)
@@ -286,28 +314,28 @@ def test_latest_checked_is_a_date():
 
 def test_a_model_is_not_its_own_successor():
     with pytest.raises(ValidationError):
-        CatalogModel.model_validate({**EXAMPLES["CatalogModel"], "successor": "acme/Nova-7B"})
+        CatalogModel.model_validate(_model_dict(successor="acme/Nova-7B"))
 
 
 def test_source_must_be_a_hugging_face_page():
     with pytest.raises(ValidationError):
-        CatalogModel.model_validate({**EXAMPLES["CatalogModel"], "source": "https://example.org/nova"})
+        CatalogModel.model_validate(_model_dict(source="https://example.org/nova"))
 
 
 def test_ollama_name_comes_as_a_pair():
     with pytest.raises(ValidationError):
-        CatalogModel.model_validate({**EXAMPLES["CatalogModel"], "ollama_tag": None})
+        CatalogModel.model_validate(_model_dict(ollama_tag=None))
 
 
 def test_models_stay_under_the_family_publisher():
-    family = copy.deepcopy(EXAMPLES["CatalogFamily"])
+    family = _family_dict()
     family["models"][1]["hf_repo"] = "packager/Nova-7B-2512"
     with pytest.raises(ValidationError, match="publisher"):
         CatalogFamily.model_validate(family)
 
 
 def test_successor_cycle_is_rejected():
-    family = copy.deepcopy(EXAMPLES["CatalogFamily"])
+    family = _family_dict()
     family["models"][1].update({"latest": False, "latest_source": None, "latest_checked": None, "successor": "acme/Nova-7B"})
     with pytest.raises(ValidationError, match="cycle"):
         CatalogFamily.model_validate(family)
@@ -317,8 +345,8 @@ def test_successor_cycle_across_two_families_is_rejected():
     catalog = {
         "schema_version": 1,
         "families": [
-            {"name": "a", "publisher": "acme", "models": [{"hf_repo": "acme/A", "successor": "acme/B", "source": "https://huggingface.co/acme/A"}]},
-            {"name": "b", "publisher": "acme", "models": [{"hf_repo": "acme/B", "successor": "acme/A", "source": "https://huggingface.co/acme/B"}]},
+            {"name": "a", "publisher": "acme", "models": [{"hf_repo": "acme/A", "successor": "acme/B", "source": "https://huggingface.co/acme/A", "kind": "text"}]},
+            {"name": "b", "publisher": "acme", "models": [{"hf_repo": "acme/B", "successor": "acme/A", "source": "https://huggingface.co/acme/B", "kind": "text"}]},
         ],
     }
     with pytest.raises(ValidationError, match="cycle"):
@@ -326,7 +354,7 @@ def test_successor_cycle_across_two_families_is_rejected():
 
 
 def test_hf_repo_is_unique_across_the_catalog():
-    catalog = copy.deepcopy(EXAMPLES["Catalog"])
+    catalog = _catalog_dict()
     second = copy.deepcopy(catalog["families"][0])
     second["name"] = "nova-copy"
     catalog["families"].append(second)
@@ -516,21 +544,43 @@ def test_control_characters_in_note_are_rejected():
         CatalogDocumentV2.model_validate(_document(models=[_row(note="line one\nline two")]))
 
 
-def test_a_file_over_one_mebibyte_is_rejected(tmp_path):
-    document = _document()
-    document["models"][0]["note"] = "x" * (CATALOG_MAX_BYTES + 1)
+def _padded(text: str, target_bytes: int) -> str:
+    """`text` (pure ASCII JSON) with extra spaces after the opening brace, so its serialized
+    byte length is exactly `target_bytes`; whitespace there is insignificant JSON."""
+    pad = target_bytes - len(text.encode("utf-8"))
+    assert pad >= 0, "text is already longer than target_bytes"
+    return "{" + " " * pad + text[1:]
+
+
+def test_reading_stops_at_the_byte_cap_boundary(tmp_path):
+    """Codex r1, finding 4: the reader takes at most `CATALOG_MAX_BYTES + 1` bytes off disk, so
+    a file exactly at the cap loads and one byte more is rejected -- proven at the boundary,
+    not by loading a multi-megabyte file into memory first."""
+    text = json.dumps(_document())
+    at_cap = _padded(text, CATALOG_MAX_BYTES)
+    over_cap = _padded(text, CATALOG_MAX_BYTES + 1)
     path = tmp_path / "catalog.json"
-    path.write_text(json.dumps(document), encoding="utf-8")
+    path.write_text(at_cap, encoding="utf-8")
+    load_catalog(path)
+    path.write_text(over_cap, encoding="utf-8")
     with pytest.raises(CatalogError, match="bytes"):
         load_catalog(path)
 
 
-def test_a_file_over_five_thousand_lines_is_rejected(tmp_path):
+def test_more_than_five_thousand_models_is_rejected(tmp_path):
+    """Codex r1, finding 3: the limit counts model **entries**, not text lines -- 5001 short,
+    unique, minimal rows are rejected even though the file stays under 1 MiB (every optional
+    field left out, so each defaults, keeping the file compact on purpose)."""
+    rows = [
+        {"hf_repo": f"acme/G{i}", "source": f"https://huggingface.co/acme/G{i}", "kind": "text", "family": f"g{i}", "publisher": "acme", "added": "2026-09-25"}
+        for i in range(CATALOG_MAX_MODELS + 1)
+    ]
+    document = _document(models=rows)
+    text = json.dumps(document)
+    assert len(text.encode("utf-8")) <= CATALOG_MAX_BYTES, "fixture drifted: no longer a compact-JSON scenario"
     path = tmp_path / "catalog.json"
-    padding = "\n" * (CATALOG_MAX_LINES + 10)
-    text = json.dumps(_document()) + padding
     path.write_text(text, encoding="utf-8")
-    with pytest.raises(CatalogError, match="lines"):
+    with pytest.raises(CatalogError, match="models"):
         load_catalog(path)
 
 
@@ -569,3 +619,158 @@ def test_attribution_missing_or_different_is_rejected():
         CatalogDocumentV2.model_validate(document)
     with pytest.raises(ValidationError, match="attribution"):
         CatalogDocumentV2.model_validate(_document(attribution="modelroom catalog, someone else"))
+
+
+# --- Codex r1 (round 1 review of the first cut): fixes below, one section per finding -----------
+
+
+# Finding 1: `kind` has no default outside the v1 reader; a schema-2 row without it is refused.
+
+
+def test_kind_missing_in_schema_2_is_rejected_via_load_catalog(tmp_path):
+    document = _document()
+    del document["models"][0]["kind"]
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(CatalogError, match="kind"):
+        load_catalog(path)
+
+
+def test_kind_default_of_text_applies_only_to_the_v1_reader():
+    """A v1 row with no `kind` at all reads as `text` (unchanged); the same omission in a v2
+    document is a missing required field, not a silent default (previous section)."""
+    catalog = load_catalog(FIXTURES / "catalog_excerpt.toml")
+    assert catalog.model_for("acme/Nova-7B-2512").kind == "text"
+
+
+# Finding 2: `successor`, `successor_source` and `successor_checked` must be set together.
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"successor": "acme/Nova-7B-2512"},
+        {"successor_source": "https://huggingface.co/acme/Nova-7B-2512"},
+        {"successor_checked": "2026-09-23"},
+        {"successor": "acme/Nova-7B-2512", "successor_source": "https://huggingface.co/acme/Nova-7B-2512"},
+        {"successor": "acme/Nova-7B-2512", "successor_checked": "2026-09-23"},
+        {"successor_source": "https://huggingface.co/acme/Nova-7B-2512", "successor_checked": "2026-09-23"},
+    ],
+)
+def test_every_partial_combination_of_successor_evidence_is_rejected(fields):
+    overrides = {"successor": None, "successor_source": None, "successor_checked": None, **fields}
+    row = _row(1, **overrides)
+    with pytest.raises(ValidationError, match="successor"):
+        CatalogDocumentV2.model_validate(_document(models=[_row(0), row]))
+
+
+# Finding 3: every text field caps at 300 characters (`license` was the named gap).
+
+
+def test_license_over_three_hundred_characters_is_rejected():
+    with pytest.raises(ValidationError):
+        CatalogModel.model_validate(_model_dict(license="x" * (CATALOG_MAX_TEXT_LEN + 1)))
+
+
+# Finding 5: a `RecursionError` from deeply nested JSON, and a `to_catalog()` failure that only
+# surfaces once rows are grouped into families, both end as `CatalogError`, not an uncaught
+# exception or a raw pydantic `ValidationError`.
+
+
+def test_deeply_nested_json_is_a_catalog_error_not_a_recursion_error(tmp_path):
+    nested = "[" * 6000 + "]" * 6000
+    text = '{"x": ' + nested + "}"
+    path = tmp_path / "catalog.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(CatalogError):
+        load_catalog(path)
+
+
+def test_a_foreign_hub_publisher_in_latest_source_fails_in_to_catalog_as_a_catalog_error(tmp_path):
+    """`latest_source` pointing at a foreign account passes `CatalogDocumentV2` (it has no
+    publisher-evidence rule of its own) and is only caught once `to_catalog()` groups the row
+    into its `CatalogFamily` -- outside the old code's `try/except ValidationError`."""
+    row = _row(latest_source="https://huggingface.co/someone-else")
+    document = _document(models=[row])
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(CatalogError, match="latest_source"):
+        load_catalog(path)
+
+
+# Finding 6: a `gguf_repos` entry's owner must be the model's own publisher or a listed packager.
+
+
+def test_gguf_repos_with_a_foreign_owner_is_rejected():
+    row = _row(gguf_repos=["foreign/Unrelated-GGUF"])
+    with pytest.raises(ValidationError, match="gguf_repos"):
+        CatalogDocumentV2.model_validate(_document(models=[row]))
+
+
+def test_gguf_repos_owned_by_the_publisher_or_a_listed_packager_is_accepted():
+    row = _row(gguf_repos=["acme/Nova-7B-2512-GGUF", "packager/Nova-7B-2512-GGUF"])
+    CatalogDocumentV2.model_validate(_document(models=[row]))
+
+
+# Finding 7: `parameters_b` accepts only finite, non-negative numbers or `null` -- no strings,
+# no `NaN`/`Infinity` (Python's `json` module parses those non-standard bare tokens by default).
+
+
+@pytest.mark.parametrize("broken", [float("nan"), float("inf"), float("-inf"), "7.5"])
+def test_parameters_b_rejects_non_finite_and_non_numeric_values(broken, tmp_path):
+    document = _document()
+    document["models"][0]["parameters_b"] = broken
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(CatalogError, match="parameters_b"):
+        load_catalog(path)
+
+
+def test_parameters_b_accepts_a_plain_integer():
+    row = _row(parameters_b=7)
+    document = CatalogDocumentV2.model_validate(_document(models=[row]))
+    assert document.models[0].parameters_b == 7.0
+
+
+# Finding 10: the schema is told apart by content, never by the file's extension.
+
+
+def test_schema_2_json_under_a_toml_shaped_name_still_loads_as_schema_2(tmp_path):
+    document = _document()
+    path = tmp_path / "catalog.toml"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    catalog = load_catalog(path)
+    assert catalog.schema_version == 2
+
+
+def test_schema_1_toml_under_a_json_shaped_name_still_loads_as_schema_1(tmp_path):
+    reference_text = (FIXTURES / "catalog_v1_reference.toml").read_text(encoding="utf-8")
+    path = tmp_path / "catalog.json"
+    path.write_text(reference_text, encoding="utf-8")
+    catalog = load_catalog(path)
+    assert catalog.schema_version == 1
+    assert catalog.is_publisher("mistralai")
+
+
+# Finding 11: a fixed v1 reference (`git show 0a7138c:modelroom/catalog.toml`), compared value by
+# value across all 62 rows, plus the exact ordered display list -- not a count and a few names.
+
+
+def test_the_shipped_catalog_matches_the_v1_reference_value_by_value_for_every_row():
+    reference = load_catalog(FIXTURES / "catalog_v1_reference.toml")
+    shipped = load_catalog()
+    reference_repos = {model.hf_repo for family in reference.families for model in family.models}
+    assert len(reference_repos) == 62
+    for repo in reference_repos:
+        before = reference.model_for(repo)
+        after = shipped.model_for(repo)
+        assert after is not None, repo
+        before_values = (before.latest, before.successor, before.ollama_base, before.ollama_tag, before.source)
+        after_values = (after.latest, after.successor, after.ollama_base, after.ollama_tag, after.source)
+        assert before_values == after_values, repo
+
+
+def test_the_shipped_display_list_matches_the_v1_reference_order_exactly():
+    reference = load_catalog(FIXTURES / "catalog_v1_reference.toml")
+    shipped = load_catalog()
+    assert latest_model_names(shipped) == latest_model_names(reference)

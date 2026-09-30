@@ -171,6 +171,7 @@ _CATALOG_MODEL = {
     "ollama_base": "nova",
     "ollama_tag": "7b",
     "source": "https://huggingface.co/acme/Nova-7B-2512",
+    "kind": "text",
 }
 _CATALOG_FAMILY = {
     "name": "nova",
@@ -186,6 +187,7 @@ _CATALOG_FAMILY = {
             "ollama_base": None,
             "ollama_tag": None,
             "source": "https://huggingface.co/acme/Nova-7B-2512",
+            "kind": "text",
         },
     ],
 }
