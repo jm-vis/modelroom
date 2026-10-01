@@ -340,7 +340,7 @@ def machine_runtime_keys(profile: HardwareProfile | None) -> frozenset[str]:
 
 def machine_has_vllm(profile: HardwareProfile | None, live: object) -> bool:
     """Whether vLLM is present on this machine, in *this* run (P1: "`runtimes`, or detected
-    live") -- the one decision `guided_search._tensor_search_step` (the tensor search) and
+    live") -- the one decision `guided_search._tensor_hits` (the tensor search) and
     `guided._fetch_step` (`build_tensor`) both make, through this function alone (fix round 0c:
     two call sites once carried this same test separately, the SV2-L lesson against that).
 

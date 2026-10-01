@@ -11,21 +11,17 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from modelroom.catalog import Catalog, load_catalog
-from modelroom.config import Configuration
 from modelroom.guided_context import Checked
-from modelroom.guided_folder import CONFIG_NAME
 from modelroom.guided_search import (
     DID_YOU_MEAN_KEY,
     KEEP_THE_WORD,
     KEEP_THE_WORD_LABEL,
     NO_WORD_ANSWER,
-    SearchStep,
-    _tensor_search_step,
+    _tensor_hits,
     candidate_choices,
     no_gguf_clause,
     search_answer,
@@ -33,8 +29,6 @@ from modelroom.guided_search import (
     searched_sentence,
 )
 from modelroom.http import FixtureTransport, RequestBudget, Response
-from modelroom.search import SearchOutcome
-from modelroom.search_apply import write_configuration
 
 
 def _log(accounts: list[dict]) -> dict:
@@ -223,53 +217,31 @@ class _FakeRun:
         self.problems.append(message)
 
 
-def _config(tmp_path: Path) -> Configuration:
-    config = Configuration.from_dict(
-        {
-            "schema_version": 3,
-            "families": [],
-            "packagers": [],
-            "publishers": [],
-            "machines": {},
-            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "docs" / "models.md")},
-        }
-    )
-    write_configuration(tmp_path / CONFIG_NAME, config, now=_FakeRun.now, expected_text=None)
-    return config
-
-
-def _step(hits: list) -> SearchStep:
-    outcome = SearchOutcome(query="nova", hits=hits, budget_used=0, budget_limit=150)
-    return SearchStep(outcome=outcome, models=[], checked=Checked(), context=8192, filtered=True)
-
-
-def test_no_vllm_machine_asks_no_tensor_search(tmp_path: Path):
+def test_no_vllm_machine_asks_no_tensor_search():
     """P1: a machine without vLLM (no `checked.profile`, or one whose `runtimes` do not name it)
     costs no extra request at all -- an ordinary Ollama run and its goldens are unchanged."""
-    config = _config(tmp_path)
     hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
-    step = _step([hit])
 
     def _unreachable(method: str, url: str, headers=None):
         raise AssertionError(f"no request should be made for a machine without vLLM: {method} {url}")
 
     run = _FakeRun(transport=_unreachable, budget=None, catalog=load_catalog())
 
-    _tensor_search_step(run, config, tmp_path, step, Checked())
+    repos = _tensor_hits(run, Checked(), [hit])
 
+    assert repos == {}
     assert run.problems == []
     assert run.screen.notes == []
 
 
-def test_a_vllm_machine_writes_the_tensor_repos_it_finds(tmp_path: Path):
+def test_a_vllm_machine_finds_the_tensor_repos_a_base_model_has():
     """A machine whose profile names `vllm` among its `runtimes` is searched, once per distinct
-    resolved base model of this very search; a repository found lands in that base model's
-    `repos`, the same place a GGUF hit would (`search_apply.apply_tensor_repos`)."""
+    resolved base model of this very search; what is found is returned, not written -- the write
+    happens later, through the same selection-and-write path a GGUF hit goes through
+    (`guided.py::_search_step`, `search_apply.apply_hits`/`apply_tensor_repos`)."""
     from modelroom.tensor_search import tensor_search_url
 
-    config = _config(tmp_path)
     hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
-    step = _step([hit, hit])  # two hits of the same base model: still one search, not two
 
     transport = FixtureTransport(
         {
@@ -287,15 +259,14 @@ def test_a_vllm_machine_writes_the_tensor_repos_it_finds(tmp_path: Path):
     run = _FakeRun(transport=transport, budget=RequestBudget(50), catalog=load_catalog())
     checked = Checked(profile=SimpleNamespace(runtimes=["ollama", "vllm"]))
 
-    _tensor_search_step(run, config, tmp_path, step, checked)
+    repos = _tensor_hits(run, checked, [hit, hit])  # two hits of the same base model: still one search
 
     assert len(transport.calls) == 2  # one account each, never once per hit
+    assert repos == {"acme/Nova-7B": ["RedHatAI/Nova-7B-FP8"]}
     assert run.problems == []
-    written = (tmp_path / CONFIG_NAME).read_text(encoding="utf-8")
-    assert "RedHatAI/Nova-7B-FP8" in written
 
 
-def test_a_live_detected_server_with_no_stored_runtimes_also_searches(tmp_path: Path):
+def test_a_live_detected_server_with_no_stored_runtimes_also_searches():
     """Fix round 0c: the second of P1's two sources ("runtimes, or detected live") -- a machine
     whose profile names no `vllm` at all (or has none) still runs the tensor search when *this*
     run's own step 1 found a vLLM server actually serving a model, through the one function
@@ -304,9 +275,7 @@ def test_a_live_detected_server_with_no_stored_runtimes_also_searches(tmp_path: 
     from modelroom.tensor_search import tensor_search_url
     from modelroom.vllm_server import ServedModel
 
-    config = _config(tmp_path)
     hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
-    step = _step([hit])
 
     transport = FixtureTransport(
         {
@@ -325,29 +294,17 @@ def test_a_live_detected_server_with_no_stored_runtimes_also_searches(tmp_path: 
     run.servers.found["vllm"] = ServedModel(id="acme/Nova-7B", root="acme/Nova-7B", max_model_len=4096)
     checked = Checked(profile=None)  # no bound profile at all, never mind a stored runtimes list
 
-    _tensor_search_step(run, config, tmp_path, step, checked)
+    repos = _tensor_hits(run, checked, [hit])
 
     assert len(transport.calls) == 2
-    written = (tmp_path / CONFIG_NAME).read_text(encoding="utf-8")
-    assert "RedHatAI/Nova-7B-FP8" in written
+    assert repos == {"acme/Nova-7B": ["RedHatAI/Nova-7B-FP8"]}
 
 
 def test_a_key_prompt_alone_does_not_count_as_detected():
     """E5: a server that asks for a key is not counted as vLLM detected -- neither source then
     says so, so the search asks nothing (red-first against the naive "any entry in `found`
     means vLLM" reading)."""
-    config = Configuration.from_dict(
-        {
-            "schema_version": 3,
-            "families": [],
-            "packagers": [],
-            "publishers": [],
-            "machines": {},
-            "paths": {"state": "//x/state", "markdown": "//x/models.md"},
-        }
-    )
     hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
-    step = _step([hit])
 
     def _unreachable(method: str, url: str, headers=None):
         raise AssertionError(f"no request should be made: {method} {url}")
@@ -356,7 +313,9 @@ def test_a_key_prompt_alone_does_not_count_as_detected():
     run.servers.found["vllm"] = "asks for an API key"
     checked = Checked(profile=None)
 
-    _tensor_search_step(run, config, Path("/does-not-matter"), step, checked)
+    repos = _tensor_hits(run, checked, [hit])
+
+    assert repos == {}
 
 
 def _tensor_page(hits: list[dict]) -> Response:

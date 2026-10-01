@@ -493,11 +493,19 @@ def _assemble_packages(
             repo, sha, base_model, group_files, extra_files, run_at, transport, tensor_label_cache, build_tensor
         )
         stub, approvals = _carry_forward_approval(stub, previous_by_key)
-        # Fix round 0b: a tensor group stays locked `unresolved`/`format` -- `decide_provenance`
-        # never even sees it -- unless `build_tensor` says this run may resolve tensor packages
-        # at all (the vLLM gate above). A GGUF group is unaffected either way.
         if stub.format == "tensor" and not build_tensor:
-            provenance, unresolved_reason = "unresolved", "format"
+            # Fix round 0b/1 (Codex finding 3): without `build_tensor` this run asks nothing new
+            # for a tensor group -- but a fact this project already has at this exact revision is
+            # not re-locked just because this run cannot afford to re-check it. `_carried_tensor_facts`
+            # is the one place that tells "nothing known yet" apart from "known, at this revision".
+            carried = _carried_tensor_facts(stub, previous_by_key)
+            if carried is None:
+                provenance, unresolved_reason = "unresolved", "format"
+            else:
+                stub = stub.model_copy(
+                    update={"quantization": carried.quantization, "quantization_source": carried.quantization_source}
+                )
+                provenance, unresolved_reason = carried.provenance, carried.unresolved_reason
         else:
             provenance, unresolved_reason = decide_provenance(
                 stub, base_model, tags, approvals, hf_card_data=card_data, hf_targets=targets
@@ -616,3 +624,24 @@ def _carry_forward_approval(
     if previous.base_model_hf_repo != stub.base_model_hf_repo:
         return stub, []
     return stub.model_copy(update={"approval": previous.approval}), [previous.approval]
+
+
+def _carried_tensor_facts(stub: Package, previous_by_key: dict[tuple[str, str, str], Package]) -> Package | None:
+    """The previous package this tensor group's identity and **revision** match, if that earlier
+    run ever resolved it past the format lock (fix round 1, Codex finding 3).
+
+    Revision-bound, unlike the approval carry-forward above (which only matches identity and the
+    base model): `package_identity_key` alone says nothing about the file *content* a label was
+    read from, and a new commit may be a different model entirely. Only an exact `revision` match
+    -- the same commit this run's tree fetch just read -- makes a previous quantization label or
+    provenance verdict still a fact about *this* package; a previous package of a different
+    revision is simply not found here, same as one this project has never seen at all. The base
+    model is not checked separately: `base_model_hf_repo` is not part of either package's repo
+    identity, and the revision match already pins the exact content this verdict is about.
+    """
+    previous = previous_by_key.get(package_identity_key(stub))
+    if previous is None or previous.revision != stub.revision:
+        return None
+    if previous.provenance == "unresolved":
+        return None
+    return previous

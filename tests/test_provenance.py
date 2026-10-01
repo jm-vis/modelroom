@@ -271,6 +271,35 @@ def test_the_publishers_own_repo_is_from_metadata():
     assert (provenance, reason) == ("from_metadata", None)
 
 
+def test_the_publishers_own_repo_still_needs_the_target_set():
+    """Fix round 1, Codex finding 5: the own-repo shortcut skips the relation check alone -- a
+    repository that is not even in `targets` is still `repo_name`, own-repo or not (this never
+    happens in the real fetch, since AP9-UX2 P3 always adds the own repo as a target, but the
+    rule itself must not depend on that being true)."""
+    package = _hf_tensor_package(repo="acme/Nova-7B", weight_filenames=["model.safetensors"])
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=[], approvals=[], hf_targets=_NOVA_TARGETS  # no own-repo entry
+    )
+    assert (provenance, reason) == ("unresolved", "repo_name")
+
+
+def test_the_publishers_own_repo_still_needs_the_file_stem_check():
+    """Fix round 1, Codex finding 5: an unrelated file dropped in the publisher's own repository
+    (a draft/MTP model, P1's own example) is still `file_stem` -- the own-repo shortcut is the
+    relation check alone, never the file-stem check too."""
+    package = _hf_tensor_package(repo="acme/Nova-7B", weight_filenames=["draft.safetensors"])
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(
+        package,
+        base_model,
+        hf_tags=["base_model:finetune:acme/Nova-7B-Base"],
+        approvals=[],
+        hf_targets=_NOVA_TENSOR_TARGETS,
+    )
+    assert (provenance, reason) == ("unresolved", "file_stem")
+
+
 def test_a_quantized_tensor_repo_is_from_metadata():
     package = _hf_tensor_package(
         repo="RedHatAI/Nova-7B-FP8", weight_filenames=["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]

@@ -40,7 +40,7 @@ from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, Llmfit
 from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
-from .runtimes import fit_for
+from .runtimes import fit_for, machine_has_vllm
 from .ranking import (
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
@@ -208,17 +208,30 @@ def _missing_profile_reason(profile_id: str, scan: ProfileScan) -> str:
 # --- eligibility and package facts -------------------------------------------------------------
 
 
-def _eligible_packages(snapshot: Snapshot) -> list[Package]:
-    """Every package a fit may be computed for: shown provenance, complete and active.
+def _eligible_packages(
+    snapshot: Snapshot, profile: HardwareProfile | None = None, live: object = None
+) -> list[Package]:
+    """Every package a fit may be computed for: shown provenance, complete, active, and -- fix
+    round 1 (Codex finding 4) -- visible on the machine this list is being read for.
 
     The base model is not checked here: `Snapshot` itself refuses a package whose
     `base_model_hf_repo` is not among its `base_models`, so every package that reaches this
     point has an architecture the fit can read.
+
+    A tensor package is never shown, counted or ranked for a machine `runtimes.machine_has_vllm`
+    does not call vLLM on -- the one visibility rule the summary line, the scale, the card, the
+    ranked table and the rendered document all read through this one function, never a filter of
+    their own. `profile`/`live` default to "no vLLM, no machine in particular": a caller that
+    does not know which machine it is building for (there was none before this fix round) reads
+    exactly the snapshot a run before P3 would have -- no tensor package ever eligible at all.
     """
     return [
         package
         for package in snapshot.packages
-        if package.provenance in _ELIGIBLE_PROVENANCE and package.complete and package.active
+        if package.provenance in _ELIGIBLE_PROVENANCE
+        and package.complete
+        and package.active
+        and (package.format != "tensor" or machine_has_vllm(profile, live))
     ]
 
 
@@ -522,6 +535,7 @@ def build_render_document(
     rating_source: RatingSource | None = None,
     *,
     models: Mapping[str, ModelFacts] | None = None,
+    live_vllm: Mapping[str, object] | None = None,
 ) -> RenderDocument:
     """The one object a render produces; pure, no I/O and no clock read.
 
@@ -531,17 +545,29 @@ def build_render_document(
     document (CONTRACTS.md, "Render (schema 2)"). `models` is what the rule knows of each base
     model (ADR 0009); without it the snapshot says it (`snapshot_model_facts`), and no model is
     `legacy`. Several base models among the packages give one row per model (`ranking.shown_rows`).
+
+    `live_vllm` (fix round 1, Codex finding 4) maps a machine key to whatever that very run's own
+    step 1 found for `"vllm"` (`GuidedRun.servers.found.get("vllm")`) -- a guided run's own render
+    step passes it for the one machine it is running on; `modelroom render` (no guided run, no
+    server talked to) passes nothing, so every machine reads `runtimes.machine_has_vllm` off its
+    stored profile `runtimes` alone -- no live server there. Each machine's
+    own eligible packages -- never one shared list -- are read fresh per block, so a tensor
+    package a machine's own profile or live detection does not call vLLM on is never counted,
+    ranked or shown in its table, whatever another machine of the same document sees.
     """
     base_model_by_repo = {bm.hf_repo: bm for bm in snapshot.base_models}
-    packages = _eligible_packages(snapshot)
+    live_vllm = live_vllm or {}
+    # The ranking rule (one row per model, or one per package) is a presentation choice about the
+    # whole document, not about any one machine's own visibility -- read with no profile, so it
+    # never depends on which machines happen to have vLLM (fix round 1).
+    per_model = len({package.base_model_hf_repo for package in _eligible_packages(snapshot)}) > 1
     facts = models if models is not None else snapshot_model_facts(snapshot)
-    per_model = len({package.base_model_hf_repo for package in packages}) > 1
     blocks = [
         _machine_block(
             machine,
             machine_config,
             profiles[machine],
-            packages,
+            _eligible_packages(snapshot, profiles[machine].profile, live_vllm.get(machine)),
             base_model_by_repo,
             measurements.get(getattr(profiles[machine].profile, "profile_id", ""), []),
             scenario,

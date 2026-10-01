@@ -102,6 +102,26 @@ def test_compressed_tensors_without_config_groups_is_none():
     assert tensor_quant_label(config) == (None, None)
 
 
+@pytest.mark.parametrize("wrong_shape", [[], "awq", 4, True])
+def test_a_wrongly_typed_quantization_config_is_none_never_a_dtype_fallback(wrong_shape):
+    """Fix round 1, Codex finding 6: a `quantization_config` that is *present* but not an object
+    is a shape error, not an absence -- `{"quantization_config": [], "torch_dtype": "bfloat16"}`
+    must never read as `BF16`. Only a genuinely *missing* (or explicit `null`) `quantization_config`
+    falls back to dtype; `test_no_quantization_config_reads_dtype_then_text_config` above proves
+    that case still works."""
+    config = _config("hf_qwen3_8b_awq_config.json")
+    config["quantization_config"] = wrong_shape
+    assert "torch_dtype" in config  # the fallback this bug reached for is still right there
+    assert tensor_quant_label(config) == (None, None)
+
+
+def test_an_explicit_null_quantization_config_still_falls_back_to_dtype():
+    """The one shape that *is* an absence: `null` reads the same as the key missing entirely."""
+    config = _config("hf_qwen3_8b_awq_config.json")
+    config["quantization_config"] = None
+    assert tensor_quant_label(config) == ("F16", "config")
+
+
 def test_config_over_64_kib_is_none():
     """P2: the 64 KiB bound is enforced by the caller (`hf.py`) before the body is even parsed as
     JSON -- this proves the bound's own size, so a change to one of the real fixtures cannot

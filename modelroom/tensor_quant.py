@@ -145,18 +145,22 @@ def tensor_quant_label(config: dict) -> tuple[str | None, QuantizationSource | N
     """`(quantization, quantization_source)` for one tensor repository's parsed `config.json`.
 
     A `quantization_config` object decides first (AWQ, GPTQ, FP8 or one of compressed-tensors'
-    three shapes); without one, the model's own dtype decides (`BF16`/`F16`/`F32`). Any other
-    shape -- an unknown method, an unlisted bit width, no dtype at all -- is `(None, None)`:
-    `quantization_source` is only ever `"config"` when a label was actually produced, never a
-    bare "we looked" marker (`Package.quantization_source`, SV2-0).
+    three shapes); **missing or `null`** falls back to the model's own dtype (`BF16`/`F16`/`F32`).
+    A `quantization_config` that is *present but not an object* (fix round 1, Codex finding 6 --
+    `{"quantization_config": [], "torch_dtype": "bfloat16"}` must never read as `BF16`) is a shape
+    error, not an absence: it never falls back to dtype, only ever `(None, None)` -- the same as
+    an unknown method or an unlisted bit width. `quantization_source` is only ever `"config"`
+    when a label was actually produced, never a bare "we looked" marker
+    (`Package.quantization_source`, SV2-0).
     """
     layer_config = _layer_config(config)
     quantization_config = config.get("quantization_config")
-    label = (
-        _quantization_config_label(quantization_config)
-        if isinstance(quantization_config, dict)
-        else _dtype_label(config, layer_config)
-    )
+    if quantization_config is None:
+        label = _dtype_label(config, layer_config)
+    elif isinstance(quantization_config, dict):
+        label = _quantization_config_label(quantization_config)
+    else:
+        label = None
     return (label, "config") if label is not None else (None, None)
 
 

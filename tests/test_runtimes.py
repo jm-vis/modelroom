@@ -215,18 +215,17 @@ def test_machine_has_vllm_every_combination_of_profile_and_live_detection(runtim
 
 
 def test_both_call_sites_read_the_one_function_not_their_own_logic():
-    """Fix round 0c (the SV2-L lesson against two separately-tested paths, "Codex-Tropfen"):
-    `guided._fetch_step` and `guided_search._tensor_search_step` each compute their gate with
-    exactly one call to `runtimes.machine_has_vllm`, patched here to prove neither one re-derives
-    the answer on its own -- a stub that always disagrees with the real function makes both sites
-    behave as the stub says, not as the real inputs would."""
+    """The two call sites that once each tested "does this machine have vLLM" their own way
+    (`guided._fetch_step`, `guided_search._tensor_hits`) now read `runtimes.machine_has_vllm`
+    and nothing else: a second, independently written copy of the same test is exactly the kind
+    of drift two call sites of one decision are prone to once they stop sharing it."""
     import inspect
 
     import modelroom.guided as guided_module
     import modelroom.guided_search as guided_search_module
 
     assert "machine_has_vllm(" in inspect.getsource(guided_module._fetch_step)
-    assert "machine_has_vllm(" in inspect.getsource(guided_search_module._tensor_search_step)
+    assert "machine_has_vllm(" in inspect.getsource(guided_search_module._tensor_hits)
     # Neither source reads `machine_runtime_keys` or `ServedModel` on its own any more -- the one
     # function in `runtimes.py` is the only place either fact is read.
     assert "machine_runtime_keys" not in inspect.getsource(guided_module)

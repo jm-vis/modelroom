@@ -437,3 +437,104 @@ def test_the_last_column_counts_with_the_requests_of_the_run():
     assert count_fitting(_profile(), MACHINE, PACKAGES, BY_REPO, 131072, 3) == 0
     assert one[131072] == "2 of 3 packages fit"
     assert three[131072] == "none of 3 packages fits"
+
+
+# --- tensor visibility in the balance (fix round 1, Codex finding 4) -----------------------------
+
+
+def _config_with_snapshot(tmp_path: Path, packages: list[Package]) -> Configuration:
+    from modelroom.contracts import Area, Snapshot
+    from modelroom.state import write_snapshot
+
+    config = Configuration.from_dict(
+        {
+            "schema_version": 3,
+            "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-8B"}]}],
+            "packagers": [],
+            "publishers": ["acme"],
+            "machines": {},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "docs" / "models.md")},
+        }
+    )
+    write_snapshot(
+        config,
+        Snapshot(
+            schema_version=2,
+            run_at=NOW,
+            areas=[
+                Area(
+                    source="huggingface", base_model_hf_repo="acme/Nova-8B", packager="acme",
+                    status="complete", last_success=NOW, error=None,
+                )
+            ],
+            base_models=[_base_model(repo="acme/Nova-8B")],
+            packages=packages,
+        ).model_dump(mode="json"),
+    )
+    return config
+
+
+def _gguf_package() -> Package:
+    return Package(
+        source="huggingface",
+        repo="packager/Nova-8B-GGUF",
+        revision="a" * 40,
+        base_model_hf_repo="acme/Nova-8B",
+        format="gguf",
+        files=[{"name": "Nova-8B-Q4_K_M.gguf", "role": "weights", "size_bytes": 3 * GIB, "digest": None}],
+        complete=True,
+        quantization="Q4_K_M",
+        quantization_source="filename",
+        default_context=None,
+        provenance="from_metadata",
+        unresolved_reason=None,
+        approval=None,
+        observed_at=NOW,
+        last_seen=NOW,
+        active=True,
+    )
+
+
+def _tensor_package() -> Package:
+    return Package(
+        source="huggingface",
+        repo="acme/Nova-8B",
+        revision="b" * 40,
+        base_model_hf_repo="acme/Nova-8B",
+        format="tensor",
+        files=[{"name": "model.safetensors", "role": "weights", "size_bytes": 5 * GIB, "digest": None}],
+        complete=True,
+        quantization="BF16",
+        quantization_source="config",
+        default_context=None,
+        provenance="from_metadata",
+        unresolved_reason=None,
+        approval=None,
+        observed_at=NOW,
+        last_seen=NOW,
+        active=True,
+    )
+
+
+def test_the_balance_excludes_a_resolved_tensor_package_without_vllm(tmp_path: Path):
+    """Fix round 1, Codex finding 4: the step-2 balance (`snapshot_facts`) counts a resolved
+    tensor package only on a machine `runtimes.machine_has_vllm` calls vLLM on -- the same
+    visibility rule the ranked table reads (`render._eligible_packages`, proven directly in
+    `tests/test_render.py`)."""
+    from modelroom.guided_context import snapshot_facts
+
+    config = _config_with_snapshot(tmp_path, [_gguf_package(), _tensor_package()])
+
+    without_vllm = snapshot_facts(config, profile=_profile())
+    assert without_vllm.packages == 1
+
+    with_vllm_profile = _profile().model_copy(update={"runtimes": ["ollama", "vllm"]})
+    with_vllm = snapshot_facts(config, profile=with_vllm_profile)
+    assert with_vllm.packages == 2
+
+    from modelroom.vllm_server import ServedModel
+
+    live_only = snapshot_facts(
+        config, profile=_profile(), live=ServedModel(id="acme/Nova-8B", root="acme/Nova-8B", max_model_len=4096)
+    )
+    assert live_only.packages == 2

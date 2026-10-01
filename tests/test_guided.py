@@ -44,6 +44,7 @@ from fixture_support import (
     TWO_L4_ID,
     area_problems,
     build_transport,
+    envelope_response,
     example_without_eurollm,
     expected_hf_areas,
     export_of,
@@ -54,6 +55,7 @@ from fixture_support import (
     offline_servers,
     packager_probes,
     ps_answer,
+    vllm_servers,
     windows_probes,
     windows_runner,
     write_example_without_eurollm,
@@ -236,6 +238,52 @@ def test_the_balance_of_step_two_counts_models_and_not_answers(tmp_path: Path):
     _code, lines = _run(tmp_path, two_models)
 
     assert any(line.strip().startswith("✓ Packages        2 models,") for line in lines)
+
+
+def test_a_full_dialog_run_writes_the_tensor_repo_of_the_chosen_base_model_only(tmp_path: Path):
+    """Fix round 1, Codex findings 1/2: a tensor repository P1's search finds for a resolved base
+    model goes through the same selection-and-write path the GGUF hits already use -- it lands in
+    the configuration only once that base model is actually chosen, through the same `change` as
+    `apply_hits` (`guided.py::_search_step`), never through a write path of the search's own.
+    """
+    from modelroom.tensor_search import tensor_search_url
+
+    found_repo = "RedHatAI/Qwen3.5-9B-FP8"
+    redhatai_hit = Response(
+        status=200,
+        headers={},
+        body=json.dumps(
+            [{"id": found_repo, "tags": ["base_model:Qwen/Qwen3.5-9B", "base_model:quantized:Qwen/Qwen3.5-9B"]}]
+        ).encode("utf-8"),
+    )
+    transport_mapping = {
+        **guided_transport_mapping(),
+        ("GET", tensor_search_url("Qwen3.5-9B", "RedHatAI")): redhatai_hit,
+        # The subsequent fetch of step 2 asks for this very target; answered "does not exist" (the
+        # same pattern `qwen25_transport_mapping` already uses), so the run completes without a new
+        # Hub recording -- this test is about the write path, not about resolving the repository.
+        ("GET", f"https://huggingface.co/api/models/{found_repo}"): envelope_response(
+            "hf_unsloth_does_not_exist_model.json"
+        ),
+    }
+
+    code, lines = _run(tmp_path, FULL_ANSWERS, transport=build_transport(transport_mapping), servers=vllm_servers())
+
+    assert code == 0
+    config = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))
+    base_model = next(
+        base
+        for family in config["families"]
+        for base in family["base_models"]
+        if base["hf_repo"] == "Qwen/Qwen3.5-9B"
+    )
+    assert found_repo in base_model["repos"]
+    # DeepSeek was found by the same search (it is in the catalog) but never chosen -- its own
+    # base model gets no tensor repository written, proving "only chosen models are saved".
+    other_bases = [
+        base for family in config["families"] for base in family["base_models"] if base["hf_repo"] != "Qwen/Qwen3.5-9B"
+    ]
+    assert all(not any("RedHatAI" in repo for repo in base.get("repos", [])) for base in other_bases)
 
 
 def test_a_search_log_that_cannot_be_written_is_a_fault_and_no_traceback(tmp_path: Path):

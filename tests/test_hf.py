@@ -1521,6 +1521,37 @@ def test_a_config_json_over_64_kib_is_none_not_an_error():
     assert (outcome.packages[0].quantization, outcome.packages[0].quantization_source) == (None, None)
 
 
+def test_a_wrongly_typed_quantization_config_is_none_through_the_whole_fetch():
+    """Fix round 1, Codex finding 6, end to end: a present-but-wrongly-shaped `quantization_config`
+    (here a list) must not resolve to the dtype fallback (`BF16`) anywhere along the real fetch
+    path, and the area stays `complete` -- an invalid quantization label is a documented extra
+    gone missing, never a reason to end the area."""
+    sha = "6" * 40
+    repo = "acme/Nova-7B-FP8"
+    tree = [{"type": "file", "path": "model.safetensors", "size": 1, "lfs": {"oid": "m"}}]
+    body = b'{"quantization_config": [], "torch_dtype": "bfloat16"}'
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            ("GET", f"{HF}/{repo}/resolve/{sha}/config.json"): Response(status=200, headers={}, body=body),
+        }
+    )
+    base_model = BaseModelSpec(
+        hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=None,
+        architecture=_unknown_architecture("acme/Nova-7B"),
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="acme", targets=[repo], run_at=RUN_AT, build_tensor=True)
+
+    assert outcome.status == "complete", outcome.error
+    assert (outcome.packages[0].quantization, outcome.packages[0].quantization_source) == (None, None)
+
+
 def test_a_budget_exhausted_on_the_config_json_request_ends_the_area_incomplete():
     sha = "4" * 40
     repo = "acme/Nova-7B-FP8"
@@ -1550,3 +1581,120 @@ def test_a_budget_exhausted_on_the_config_json_request_ends_the_area_incomplete(
 
     assert outcome.status == "incomplete"
     assert outcome.error == "budget exhausted"
+
+
+def test_a_revision_bound_label_survives_a_run_without_vllm_in_between():
+    """Fix round 1, Codex finding 3: with vLLM -> without -> with, in the same results folder, at
+    the exact same revision throughout. A run without vLLM makes no new `config.json` request at
+    all (not even mapped in this transport -- one would raise `KeyError`) and still carries the
+    earlier label and provenance forward, because this project already proved them true for this
+    exact commit; the third run (vLLM again) re-confirms them from a real, fresh request, not
+    from the carried copy -- the two must simply agree."""
+    sha = "7" * 40
+    repo = "acme/Nova-7B-FP8"
+    tree = [{"type": "file", "path": "model.safetensors", "size": 1, "lfs": {"oid": "m"}}]
+    with_config = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            ("GET", f"{HF}/{repo}/resolve/{sha}/config.json"): Response(
+                status=200, headers={}, body=b'{"torch_dtype": "bfloat16"}'
+            ),
+        }
+    )
+    without_config = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            # Deliberately no config.json mapping: a request for it would raise KeyError.
+        }
+    )
+    # The publisher's own repository (P3's own-repo shortcut, fix round 1): no tags needed for
+    # it to resolve, keeping this test about the carry-forward alone.
+    base_model = BaseModelSpec(
+        hf_repo=repo, repo_aliases=[], publisher="acme", parameters_b=None,
+        architecture=_unknown_architecture(repo),
+    )
+
+    def _by_key(outcome) -> dict:
+        return {package_identity_key(p): p for p in outcome.packages}
+
+    with_1 = fetch_hf_area(with_config, base_model, owner="acme", targets=[repo], run_at=RUN_AT, build_tensor=True)
+    assert with_1.status == "complete", with_1.error
+    assert (with_1.packages[0].quantization, with_1.packages[0].quantization_source) == ("BF16", "config")
+    assert (with_1.packages[0].provenance, with_1.packages[0].unresolved_reason) == ("from_metadata", None)
+
+    without = fetch_hf_area(
+        without_config, base_model, owner="acme", targets=[repo], run_at=RUN_AT,
+        previous_by_key=_by_key(with_1), build_tensor=False,
+    )
+    assert without.status == "complete", without.error
+    assert (without.packages[0].quantization, without.packages[0].quantization_source) == ("BF16", "config")
+    assert (without.packages[0].provenance, without.packages[0].unresolved_reason) == ("from_metadata", None)
+
+    with_2 = fetch_hf_area(
+        with_config, base_model, owner="acme", targets=[repo], run_at=RUN_AT,
+        previous_by_key=_by_key(without), build_tensor=True,
+    )
+    assert with_2.status == "complete", with_2.error
+    assert (with_2.packages[0].quantization, with_2.packages[0].quantization_source) == ("BF16", "config")
+    assert (with_2.packages[0].provenance, with_2.packages[0].unresolved_reason) == ("from_metadata", None)
+
+
+def test_a_new_revision_without_vllm_does_not_carry_the_old_labels_forward():
+    """The carry-forward is revision-bound: a package the file tree now shows at a *different*
+    revision is content this project has never actually checked, so it stays `unresolved`/
+    `format` with no label -- exactly as if nothing had ever been fetched for it before."""
+    repo = "acme/Nova-7B-FP8"
+    old_sha = "8" * 40
+    new_sha = "9" * 40
+    tree = [{"type": "file", "path": "model.safetensors", "size": 1, "lfs": {"oid": "m"}}]
+    previous = Package(
+        source="huggingface",
+        repo=repo,
+        revision=old_sha,
+        base_model_hf_repo="acme/Nova-7B",
+        format="tensor",
+        files=[PackageFile(name="model.safetensors", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization="BF16",
+        quantization_source="config",
+        default_context=None,
+        provenance="from_metadata",
+        unresolved_reason=None,
+        approval=None,
+        observed_at=RUN_AT,
+        last_seen=RUN_AT,
+        active=True,
+    )
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + new_sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{new_sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+        }
+    )
+    base_model = BaseModelSpec(
+        hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=None,
+        architecture=_unknown_architecture("acme/Nova-7B"),
+    )
+
+    outcome = fetch_hf_area(
+        transport, base_model, owner="acme", targets=[repo], run_at=RUN_AT,
+        previous_by_key={package_identity_key(previous): previous}, build_tensor=False,
+    )
+
+    assert outcome.status == "complete", outcome.error
+    assert (outcome.packages[0].quantization, outcome.packages[0].quantization_source) == (None, None)
+    assert (outcome.packages[0].provenance, outcome.packages[0].unresolved_reason) == ("unresolved", "format")

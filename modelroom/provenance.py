@@ -128,32 +128,33 @@ def _decide_huggingface_tensor(
 ) -> tuple[str, str | None]:
     """Decide provenance for a Hugging Face **tensor** package (P3, AP9-SV2-P).
 
-    Three differences from the GGUF rule above:
+    Two differences from the GGUF rule above -- and, fix round 1 (Codex finding 5): **only**
+    these two, never a third shortcut that skips a check every other tensor repo still has to
+    pass:
 
-    1. **The publisher's own repository** (`package.repo == base_model.hf_repo`) resolves
-       `from_metadata` without a relation check at all: that repository *is* the base model, and
-       its own tags name its own predecessor (`Qwen/Qwen3-8B` carries
-       `base_model:finetune:Qwen/Qwen3-8B-Base`), which the relation check would read as
-       `derivative`, not `quantized`.
-    2. Every other tensor repository still needs the relation check (`quantized`), exactly like
-       a GGUF package.
-    3. **No file-stem check.** Transformers weight file names are fixed by the library, never by
-       a packager's naming convention: `model.safetensors`, or one of the two sharded index forms
-       (`model-0000N-of-0000M.safetensors`, `model.safetensors-0000N-of-0000M.safetensors`).
-       `identity_stem` already stripped the shard counter before grouping the files into this
-       package, so the check here is only against the three un-sharded stems; a weight file that
-       matches none of them is `("unresolved", "file_stem")`, same reason the GGUF rule uses for
-       the same kind of mismatch.
+    1. **The publisher's own repository** (`package.repo == base_model.hf_repo`) skips the
+       relation check **alone**: that repository *is* the base model, and its own tags name its
+       own predecessor (`Qwen/Qwen3-8B` carries `base_model:finetune:Qwen/Qwen3-8B-Base`), which
+       `check_relation` would read as `derivative`, not `quantized` -- but it still has to be one
+       of `targets` and its weight files still have to pass the file-stem check below; neither is
+       about the relation, and skipping them let an unrelated file dropped in the same repo (a
+       `draft.safetensors`, P1's own example) through unchecked.
+    2. **No file-stem check against the base name.** Transformers weight file names are fixed by
+       the library, never by a packager's naming convention: `model.safetensors`, or one of the
+       two sharded index forms (`model-0000N-of-0000M.safetensors`,
+       `model.safetensors-0000N-of-0000M.safetensors`). `identity_stem` already stripped the
+       shard counter before grouping the files into this package, so the check here is only
+       against the three un-sharded stems; a weight file that matches none of them is
+       `("unresolved", "file_stem")`, same reason the GGUF rule uses for the same kind of
+       mismatch -- applied to every tensor repo, the publisher's own included.
     """
-    if package.repo == base_model.hf_repo:
-        return "from_metadata", None
-
     if package.repo not in targets:
         return "unresolved", "repo_name"
 
-    status, _reason = check_relation(hf_tags, card_data, base_model.hf_repo)
-    if status != "quantized":
-        return "unresolved", status
+    if package.repo != base_model.hf_repo:
+        status, _reason = check_relation(hf_tags, card_data, base_model.hf_repo)
+        if status != "quantized":
+            return "unresolved", status
 
     weight_files = [f for f in package.files if f.role in ("weights", "weights_shard")]
     if not weight_files:
