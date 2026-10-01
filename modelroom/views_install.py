@@ -14,7 +14,7 @@ row itself (`entry_pull_name`). For Ollama the command is `ollama pull <name>`, 
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from . import runtimes
 from .contracts import Package
@@ -36,11 +36,12 @@ NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 
 
 def best_row(
-    block: MachineRanking, disk: Disk | None, packages: Sequence[Package] = ()
+    block: MachineRanking, disk: Disk | None, packages: Sequence[Package] = (), held: Mapping[str, frozenset] | None = None
 ) -> tuple[RankedEntry | None, list[tuple[str, str | None]], list[int]]:
     """`disk_fit.best_on_disk` with the runtime decided first: the first shown row whose download
     fits the disk as its runtime sees it (`pull_choice.runtime_disk` -- what the Ollama daemon holds
-    frees only an Ollama row), its `row_names`, and the ranks skipped for it. The runtime of a row
+    frees only an Ollama row, what another runtime's own `on_disk` found -- `held`, by runtime key --
+    frees only that runtime's row), its `row_names`, and the ranks skipped for it. The runtime of a row
     is the first of this machine that accepts its package; Ollama where none does or the package
     is not known, so a machine with Ollama alone gets exactly `best_on_disk`'s answer."""
     skipped = []
@@ -48,14 +49,18 @@ def best_row(
         package = next((package for package in packages if package_identity_key(package) == tuple(entry.package_identity)), None)
         names = row_names(entry, package, block.profile)
         key = names[0][0] if names else runtimes.OLLAMA.key
-        if not entry_over_disk(entry, runtime_disk(key, disk)):
+        if not entry_over_disk(entry, runtime_disk(key, disk, held)):
             return entry, names, skipped
         skipped.append(entry.rank)
     return None, [], skipped
 
 
 def install_choice(
-    block: MachineRanking, install_for: str | None, disk: Disk | None = None, packages: Sequence[Package] = ()
+    block: MachineRanking,
+    install_for: str | None,
+    disk: Disk | None = None,
+    packages: Sequence[Package] = (),
+    held: Mapping[str, frozenset] | None = None,
 ) -> tuple[RankedEntry, "runtimes.Runtime", str] | None:
     """The first row of the machine this run is on that also fits its disk, the runtime it is
     installed with and its install name there.
@@ -68,7 +73,7 @@ def install_choice(
     """
     if install_for is None or block.machine != install_for or not block.ranked:
         return None
-    entry, names, _skipped = best_row(block, disk, packages)
+    entry, names, _skipped = best_row(block, disk, packages, held)
     if entry is None or not names or names[0][1] is None:
         return None
     key, name = names[0]
@@ -91,6 +96,7 @@ def install_lines(
     dash: str,
     pull_other_machines: frozenset[str] = frozenset(),
     packages: Sequence[Package] = (),
+    held: Mapping[str, frozenset] | None = None,
 ) -> list[Line]:
     """The install line of a block, behind a blank line; nothing where a row has no local name.
 
@@ -99,14 +105,15 @@ def install_lines(
     under the table it went under (test round, 2026-09-25). A pull name more than one package
     answers to has a note instead (U4); another machine of a guided run gets its command with the
     machine named, and the reminder that this run pulls only here (U3). The disk of this machine
-    moves the line to the best row that fits it, or turns it into the red `no package fits` (U11).
+    moves the line to the best row that fits it, or turns it into the red `no package fits` (U11);
+    `held` is what each runtime but Ollama holds itself (`guided_install.other_runtimes_held`).
     """
     own = install_for is not None and block.machine == install_for
     read = known(disk) if own else None
-    entry, _names, skipped = best_row(block, read, packages)
+    entry, _names, skipped = best_row(block, read, packages, held)
     if own and block.ranked and entry is None:
         return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
-    target = install_choice(block, block.machine if install_for is not None else None, read, packages)
+    target = install_choice(block, block.machine if install_for is not None else None, read, packages, held)
     if target is None:
         return []
     entry, runtime, name = target

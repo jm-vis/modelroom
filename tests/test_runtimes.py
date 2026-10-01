@@ -379,3 +379,39 @@ def test_the_install_line_checks_the_disk_against_its_own_runtimes_holdings(monk
 
     assert len(install(["third"])) == 1 and install(["third"])[0].startswith("install   no package fits")
     assert install(["ollama"]) == ["install   #1  ollama pull hf.co/unsloth/Nova-7B-GGUF:Q4_K_M"]
+
+
+def test_what_another_runtime_holds_itself_frees_its_row_in_the_install_line_as_in_the_pull_list(tmp_path, monkeypatch):
+    """The third runtime's own `on_disk` finds the package, the Ollama daemon holds nothing, the
+    disk is too small for the download. The pull list marks the row "local already" and leaves it
+    a choice; the install line under the table, given the same holdings
+    (`guided_install.other_runtimes_held`, as the guided run passes them), offers its command
+    instead of saying no package fits."""
+    from modelroom.guided_install import PullContext, other_runtimes_held, pull_step
+    from modelroom.pull_choice import ambiguous_names
+    from modelroom.quantization import package_identity_key
+    from modelroom.room import GIB, Disk, LiveRoom
+    from modelroom.screen import plain
+    from modelroom.views import RunView, terminal_blocks
+
+    from fixture_rows import document, package
+    from test_pull_choice import _Recording, _run
+
+    q4 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+    holds = frozenset({package_identity_key(q4)})
+    monkeypatch.setattr(runtimes, "RUNTIMES", (*runtimes.RUNTIMES, _third(on_disk=lambda target, packages: holds)))
+    doc = _on_machine(document([q4]), ["third"])
+    disk = Disk(int(1 * GIB), "C:")
+    asker = _Recording({"pull_package": "none"})
+    run, _lines = _run(tmp_path, asker)
+    context = PullContext(doc, "workstation", [q4], ambiguous_names([q4]), disk)
+
+    held = other_runtimes_held(run, context)
+    view = RunView(install_for="workstation", live={"workstation": LiveRoom(disk=disk)}, packages=[q4], held=held)
+    shown = [plain(line).strip() for line in terminal_blocks(doc, "workstation", view=view)]
+
+    assert held == {"third": holds}
+    assert [line for line in shown if line.startswith("install")] == ["install   #1  third get acme/nova:Q4_K_M"]
+    pull_step(run, context, True)
+    first = asker.lists["pull_package"][0]
+    assert (first.value, first.disabled, first.label.endswith("local already")) == ("third acme/nova:Q4_K_M", None, True)

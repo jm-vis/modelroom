@@ -549,6 +549,7 @@ class RunView:
     pull_other_machines: frozenset[str] = frozenset()
     ssh_active: str | None = None  # FR-B1, B5: the `room` line names this one by its alias
     packages: Sequence[Package] = ()  # the run's packages: the install line's runtime (`views_install`)
+    held: Mapping[str, frozenset] = field(default_factory=dict)  # what each runtime but Ollama holds itself
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -569,7 +570,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     if block.ranked:
         lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
     disk = _disk(block, view)
-    return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages)
+    return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, view.held)
 
 
 def _disk(block: MachineRanking, view: RunView) -> Disk | None:

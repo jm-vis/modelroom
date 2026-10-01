@@ -203,13 +203,14 @@ def row_names(entry: RankedEntry, package: Package | None, profile: HardwareProf
     return [(runtime.key, runtime.install_name(package)) for runtime in runtimes.accepting_on_machine(package, profile)]
 
 
-def runtime_disk(runtime: str, disk: Disk | None) -> Disk | None:
+def runtime_disk(runtime: str, disk: Disk | None, held: Mapping[str, frozenset] | None = None) -> Disk | None:
     """`disk` as the rows of the runtime with key `runtime` see it: `disk.held` is what the Ollama
     daemon holds (the guided run reads it there), so it counts for Ollama's rows alone -- for any
-    other runtime the same free disk, with nothing held."""
+    other runtime the same free disk, holding what its own `on_disk` found (`held`, by runtime
+    key; nothing where `held` does not name it)."""
     if disk is None or runtime == runtimes.OLLAMA.key:
         return disk
-    return replace(disk, held=frozenset())
+    return replace(disk, held=frozenset((held or {}).get(runtime, frozenset())))
 
 
 def pull_rows(

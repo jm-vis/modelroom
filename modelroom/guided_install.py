@@ -196,6 +196,14 @@ def held_by_runtime(
     return held
 
 
+def other_runtimes_held(run: "GuidedRun", context: PullContext) -> dict[str, frozenset[tuple[str, str, str]]]:
+    """What each runtime but Ollama holds of this machine's rows, by its own `on_disk` -- for the
+    install line under the table (`views.RunView.held`). Ollama's own holding is the disk read
+    before the render (`Disk.held`) already, so its daemon is not asked again here."""
+    rows = pull_rows(context.document, context.machine, packages=context.packages)
+    return held_by_runtime(run, [row for row in rows if row.runtime != OLLAMA.key], context.packages)
+
+
 def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: bool | None = None) -> None:
     """The chosen row: a note where it is local, else its command, the disk check (U8), the question.
 
