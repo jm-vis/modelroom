@@ -361,7 +361,8 @@ def load_catalog(path: Path = CATALOG_FILE) -> Catalog:
 def _build_catalog_v1(text: str, path: Path) -> Catalog:
     try:
         data = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, RecursionError) as exc:  # deep nesting overflows the parser
+    # Deep nesting overflows the parser; an integer past Python's digit limit is a plain ValueError.
+    except (tomllib.TOMLDecodeError, RecursionError, ValueError) as exc:
         raise CatalogError(f"{path}: cannot read catalog: {exc}") from exc
     check_version_field(data, CATALOG_TOML_SCHEMA_RANGE, path)
     try:

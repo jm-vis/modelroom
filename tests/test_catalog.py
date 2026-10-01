@@ -772,6 +772,21 @@ def test_deeply_nested_json_is_a_catalog_error_not_a_recursion_error(tmp_path):
         load_catalog(path)
 
 
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("catalog.toml", "schema_version = 1\nx = " + "9" * 5000 + "\n"),
+        ("catalog.json", '{"schema_version": 2, "x": ' + "9" * 5000 + "}"),
+    ],
+    ids=["toml", "json"],
+)
+def test_an_integer_past_the_digit_limit_is_a_catalog_error(name, text, tmp_path):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(CatalogError):
+        load_catalog(path)
+
+
 def test_deeply_nested_toml_is_a_catalog_error_not_a_recursion_error(tmp_path):
     text = "schema_version = 1\nx = " + "[" * 6000 + "]" * 6000 + "\n"
     path = tmp_path / "catalog.toml"
