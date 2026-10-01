@@ -56,6 +56,13 @@
       "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Image",
       "kind": "image-generation", "family": "line-image", "publisher": "acme", "added": "2026-09-25",
       "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-Video", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Video",
+      "kind": "video-generation", "family": "line-video", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
     }
   ]
 }

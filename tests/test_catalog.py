@@ -430,7 +430,7 @@ def test_display_selection_shows_only_latest_text_and_vision_kinds():
     catalog = load_catalog(FIXTURES / "catalog_v2_kinds.json")
     names = latest_model_names(catalog)
     assert names == ["Line-Text", "Line-Vision"]
-    for kind in ("embedding", "speech-recognition", "speech-synthesis", "audio", "image-generation"):
+    for kind in ("embedding", "speech-recognition", "speech-synthesis", "audio", "image-generation", "video-generation"):
         assert kind not in DISPLAYED_KINDS
 
 
@@ -443,7 +443,7 @@ def test_todays_shipped_display_list_is_unchanged_by_the_kind_filter():
     assert "GLM-5.3-Flash" in names
 
 
-def test_pipeline_tag_to_kind_names_all_eleven_values():
+def test_pipeline_tag_to_kind_names_all_fifteen_values():
     """The mapping is a constant of the schema and is repeated here verbatim."""
     expected = {
         "text-generation": "text",
@@ -457,16 +457,20 @@ def test_pipeline_tag_to_kind_names_all_eleven_values():
         "audio-text-to-text": "audio",
         "text-to-image": "image-generation",
         "image-to-image": "image-generation",
+        "text-to-video": "video-generation",
+        "image-to-video": "video-generation",
+        "image-text-to-video": "video-generation",
+        "video-to-video": "video-generation",
     }
     assert PIPELINE_TAG_TO_KIND == expected
-    assert len(expected) == 11
+    assert len(expected) == 15
 
 
 def test_every_kind_of_the_schema_loads_a_valid_row():
     catalog = load_catalog(FIXTURES / "catalog_v2_kinds.json")
     kinds = {model.kind for family in catalog.families for model in family.models}
     assert kinds == set(PIPELINE_TAG_TO_KIND.values())
-    assert len(kinds) == 7
+    assert len(kinds) == 8
 
 
 def test_successor_source_migration_of_the_shipped_catalog_passes_the_ownership_rule():
@@ -944,10 +948,10 @@ def test_every_reasoned_missing_statement_of_the_schema_1_file_is_a_note():
     assert notes == NOTES
 
 
-# `kind` per row, from the Hub: `pipeline_tag` through the table where it is one of the eleven
+# `kind` per row, from the Hub: `pipeline_tag` through the table where it is one of the fifteen
 # values; otherwise from the tags and the model card (image and text in, text out is `vision`).
-# `MiniMaxAI/MiniMax-H3` makes video with sound, which none of the seven kinds names; it keeps the
-# `text` every schema-1 row read as until the schema has a kind for it.
+# `MiniMaxAI/MiniMax-H3` (`image-text-to-video`) makes video with sound.
+VIDEO_REPOS = frozenset({"MiniMaxAI/MiniMax-H3"})
 VISION_REPOS = frozenset(
     {
         "mistralai/Ministral-3-14B-Instruct-2512",
@@ -981,6 +985,8 @@ def test_every_shipped_row_carries_the_kind_its_hub_evidence_gives():
         for model in family.models:
             if model.hf_repo in VISION_REPOS:
                 expected = "vision"
+            elif model.hf_repo in VIDEO_REPOS:
+                expected = "video-generation"
             elif model.hf_repo in EMBEDDING_REPOS:
                 expected = "embedding"
             else:

@@ -44,12 +44,15 @@ CATALOG_MAX_TEXT_LEN = 300
 CATALOG_MAX_GGUF_REPOS = 50
 
 Age = Literal["latest", "legacy", "unknown"]
-Kind = Literal["text", "vision", "embedding", "speech-recognition", "speech-synthesis", "audio", "image-generation"]
+Kind = Literal[
+    "text", "vision", "embedding", "speech-recognition", "speech-synthesis", "audio", "image-generation",
+    "video-generation",
+]
 _HUB = "https://huggingface.co/"
 # `urlsplit(...).hostname` is lowercase and without the port.
 _HUB_HOSTS = frozenset({"huggingface.co", "www.huggingface.co", "hf.co"})
 
-# `pipeline_tag` on the Hub -> `kind` in this schema, the eleven values a repository without a
+# `pipeline_tag` on the Hub -> `kind` in this schema, the fifteen values a repository without a
 # `pipeline_tag`, or with one outside this table, never becomes a row for. A future addition is a
 # schema change with a test of its own, never a silent new value.
 PIPELINE_TAG_TO_KIND: dict[str, Kind] = {
@@ -58,6 +61,8 @@ PIPELINE_TAG_TO_KIND: dict[str, Kind] = {
     "automatic-speech-recognition": "speech-recognition", "text-to-speech": "speech-synthesis",
     "text-to-audio": "audio", "audio-to-audio": "audio", "audio-text-to-text": "audio",
     "text-to-image": "image-generation", "image-to-image": "image-generation",
+    "text-to-video": "video-generation", "image-to-video": "video-generation",
+    "image-text-to-video": "video-generation", "video-to-video": "video-generation",
 }
 # The two kinds a page of a search with no word shows: a positive list, so a future kind never
 # appears there unannounced.

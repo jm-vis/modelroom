@@ -1289,7 +1289,7 @@
       "gguf_repos": [],
       "hf_repo": "MiniMaxAI/MiniMax-H3",
       "hub_created": null,
-      "kind": "text",
+      "kind": "video-generation",
       "latest": false,
       "latest_checked": null,
       "latest_source": null,
