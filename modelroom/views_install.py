@@ -1,7 +1,7 @@
 """The `install` line under a machine's table: the one line a reader copies to get a package.
 
 Moved out of `views.py` (size guard, AP9-RM U11) and extended there: where the free disk of the
-machine was read, the line takes the best row that also fits it (`disk_fit.best_on_disk`) and says
+machine was read, the line takes the best row that also fits it (`best_row`) and says
 under it which rows were passed over, and where no row fits it says so in red instead of offering a
 command. `views.py` re-exports `INSTALL_LABEL` and `install_target`.
 
@@ -18,10 +18,10 @@ from typing import Sequence
 
 from . import runtimes
 from .contracts import Package
-from .disk_fit import best_on_disk, known, none_fits_words, skipped_words
+from .disk_fit import entry_over_disk, known, none_fits_words, skipped_words
 from .document import MachineRanking, RankedEntry
 from .intro import label_line
-from .pull_choice import row_names, runtime_value
+from .pull_choice import row_names, runtime_disk, runtime_value
 from .quantization import package_identity_key
 from .room import Disk
 from .screen import Line, install_pull_line
@@ -35,6 +35,25 @@ OTHER_INSTALL_NOTE_WITH_LIST = "run it on that computer, or choose a package for
 NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 
 
+def best_row(
+    block: MachineRanking, disk: Disk | None, packages: Sequence[Package] = ()
+) -> tuple[RankedEntry | None, list[tuple[str, str | None]], list[int]]:
+    """`disk_fit.best_on_disk` with the runtime decided first: the first shown row whose download
+    fits the disk as its runtime sees it (`pull_choice.runtime_disk` -- what the Ollama daemon holds
+    frees only an Ollama row), its `row_names`, and the ranks skipped for it. The runtime of a row
+    is the first of this machine that accepts its package; Ollama where none does or the package
+    is not known, so a machine with Ollama alone gets exactly `best_on_disk`'s answer."""
+    skipped = []
+    for entry in block.ranked:
+        package = next((package for package in packages if package_identity_key(package) == tuple(entry.package_identity)), None)
+        names = row_names(entry, package, block.profile)
+        key = names[0][0] if names else runtimes.OLLAMA.key
+        if not entry_over_disk(entry, runtime_disk(key, disk)):
+            return entry, names, skipped
+        skipped.append(entry.rank)
+    return None, [], skipped
+
+
 def install_choice(
     block: MachineRanking, install_for: str | None, disk: Disk | None = None, packages: Sequence[Package] = ()
 ) -> tuple[RankedEntry, "runtimes.Runtime", str] | None:
@@ -43,18 +62,14 @@ def install_choice(
 
     Only for that machine: the install name of a package is about the machine that would install
     it. The runtime is the first of this machine that accepts the row's package (`row_names`,
-    table order); a package no runtime of the machine accepts, or one without a name, has none.
-    Without a free disk that was read the first row is the one, as before AP9-RM U11. The pull of
-    step 5 lets the user choose another row (U6).
+    table order), decided before the disk is checked (`best_row`); a package no runtime of the
+    machine accepts, or one without a name, has none. Without a free disk that was read the first
+    row is the one, as before AP9-RM U11. The pull of step 5 lets the user choose another row (U6).
     """
     if install_for is None or block.machine != install_for or not block.ranked:
         return None
-    entry, _skipped = best_on_disk(block.ranked, disk)
-    if entry is None:
-        return None
-    package = next((package for package in packages if package_identity_key(package) == tuple(entry.package_identity)), None)
-    names = row_names(entry, package, block.profile)
-    if not names or names[0][1] is None:
+    entry, names, _skipped = best_row(block, disk, packages)
+    if entry is None or not names or names[0][1] is None:
         return None
     key, name = names[0]
     return entry, runtimes.runtime_of(key), name
@@ -88,7 +103,7 @@ def install_lines(
     """
     own = install_for is not None and block.machine == install_for
     read = known(disk) if own else None
-    entry, skipped = best_on_disk(block.ranked, read)
+    entry, _names, skipped = best_row(block, read, packages)
     if own and block.ranked and entry is None:
         return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
     target = install_choice(block, block.machine if install_for is not None else None, read, packages)
@@ -112,6 +127,7 @@ __all__ = [
     "NOT_UNIQUE_INSTALL",
     "OTHER_INSTALL_NOTE",
     "OTHER_INSTALL_NOTE_WITH_LIST",
+    "best_row",
     "install_choice",
     "install_lines",
     "install_target",

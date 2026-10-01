@@ -327,3 +327,55 @@ def test_a_third_in_memory_runtime_accepting_gguf_gives_a_second_row_per_package
     assert [choice.value for choice in lists["pull_package"]][:4] == [row.value for row in rows]
     assert f"install   #2  third get {name}:Q4_K_M" in said
     assert not any(line.startswith("install") and "ollama pull" in line for line in said)
+
+
+# --- what the Ollama daemon holds frees Ollama's rows alone ----------------------------------------
+
+
+def _held_by_ollama(q4):
+    """A free disk too small for `q4`'s download, on which the Ollama daemon holds `q4` already."""
+    from modelroom.quantization import package_identity_key
+    from modelroom.room import GIB, Disk
+
+    return Disk(int(1 * GIB), "C:", held=frozenset({package_identity_key(q4)}))
+
+
+def test_what_ollama_holds_frees_no_row_of_another_runtime_in_the_pull_list(monkeypatch):
+    """`pull_rows` with a disk and no map of holdings: `disk.held` is the Ollama daemon's, so the
+    Ollama row needs no disk, while the third runtime's row of the same package, which holds
+    nothing itself, is locked for its download."""
+    from modelroom.pull_choice import pull_rows
+
+    from fixture_rows import document, package
+
+    monkeypatch.setattr(runtimes, "RUNTIMES", (*runtimes.RUNTIMES, _third(install_name=runtimes.OLLAMA.install_name)))
+    q4 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+    doc = _on_machine(document([q4]), ["ollama", "third"])
+
+    rows = pull_rows(doc, "workstation", disk=_held_by_ollama(q4), packages=[q4])
+
+    assert [(row.runtime, row.over_disk, row.locked is None) for row in rows] == [("ollama", False, True), ("third", True, False)]
+    assert [(row.runtime, row.over_disk) for row in pull_rows(doc, "workstation", disk=_held_by_ollama(q4))] == [("ollama", False)]
+
+
+def test_the_install_line_checks_the_disk_against_its_own_runtimes_holdings(monkeypatch):
+    """The install line under the table decides the row's runtime before the disk: on a machine
+    with the third runtime alone, what the Ollama daemon holds does not make its download fit, so
+    no command is offered -- the line says no package fits. With Ollama on the machine, the same
+    holding frees the row and the line is Ollama's, as before."""
+    from modelroom.room import LiveRoom
+    from modelroom.screen import plain
+    from modelroom.views import RunView, terminal_blocks
+
+    from fixture_rows import document, package
+
+    monkeypatch.setattr(runtimes, "RUNTIMES", (*runtimes.RUNTIMES, _third()))
+    q4 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+
+    def install(keys):
+        view = RunView(install_for="workstation", live={"workstation": LiveRoom(disk=_held_by_ollama(q4))}, packages=[q4])
+        lines = [plain(line).strip() for line in terminal_blocks(_on_machine(document([q4]), keys), "workstation", view=view)]
+        return [line for line in lines if line.startswith("install")]
+
+    assert len(install(["third"])) == 1 and install(["third"])[0].startswith("install   no package fits")
+    assert install(["ollama"]) == ["install   #1  ollama pull hf.co/unsloth/Nova-7B-GGUF:Q4_K_M"]

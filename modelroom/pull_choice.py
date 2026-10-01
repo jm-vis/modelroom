@@ -203,6 +203,15 @@ def row_names(entry: RankedEntry, package: Package | None, profile: HardwareProf
     return [(runtime.key, runtime.install_name(package)) for runtime in runtimes.accepting_on_machine(package, profile)]
 
 
+def runtime_disk(runtime: str, disk: Disk | None) -> Disk | None:
+    """`disk` as the rows of the runtime with key `runtime` see it: `disk.held` is what the Ollama
+    daemon holds (the guided run reads it there), so it counts for Ollama's rows alone -- for any
+    other runtime the same free disk, with nothing held."""
+    if disk is None or runtime == runtimes.OLLAMA.key:
+        return disk
+    return replace(disk, held=frozenset())
+
+
 def pull_rows(
     document: RenderDocument,
     machine: str,
@@ -220,7 +229,8 @@ def pull_rows(
     With the free disk of this machine a row whose download does not fit it is locked with how much
     it needs (AP9-RM U11); a lock of its name comes first. A package the row's runtime holds needs
     no disk and is never locked for it (U11c): `held` names, by runtime key, what each runtime
-    holds, and replaces `disk.held` for that runtime's rows; without it `disk.held` counts for all.
+    holds, and replaces `disk.held` for that runtime's rows; without it `disk.held` counts for
+    Ollama's rows alone (`runtime_disk`).
     """
     block = next((block for block in document.machines if block.machine == machine), None)
     if block is None:
@@ -231,7 +241,7 @@ def pull_rows(
         package = by_identity.get(tuple(entry.package_identity))
         cell = f"{entry.packager} {dot} {entry.quantization}"
         for key, name in row_names(entry, package, block.profile):
-            own = disk if held is None or disk is None else replace(disk, held=held.get(key, frozenset()))
+            own = runtime_disk(key, disk) if held is None or disk is None else replace(disk, held=held.get(key, frozenset()))
             locked = NO_PULL_NAME if name is None else NOT_UNIQUE if runtime_value(name, key) in ambiguous else None
             over = locked is None and entry_over_disk(entry, own)  # a package held already is never over (U11c)
             locked = too_big_words(entry.weights_gib, own) if over else locked
@@ -297,6 +307,7 @@ __all__ = [
     "pull_rows",
     "repo_lines",
     "row_names",
+    "runtime_disk",
     "run_packages",
     "runtime_value",
     "unique_pull_name",
