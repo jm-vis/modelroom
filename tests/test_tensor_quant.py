@@ -104,7 +104,7 @@ def test_compressed_tensors_without_config_groups_is_none():
 
 @pytest.mark.parametrize("wrong_shape", [[], "awq", 4, True])
 def test_a_wrongly_typed_quantization_config_is_none_never_a_dtype_fallback(wrong_shape):
-    """Fix round 1, Codex finding 6: a `quantization_config` that is *present* but not an object
+    """A `quantization_config` that is *present* but not an object
     is a shape error, not an absence -- `{"quantization_config": [], "torch_dtype": "bfloat16"}`
     must never read as `BF16`. Only a genuinely *missing* (or explicit `null`) `quantization_config`
     falls back to dtype; `test_no_quantization_config_reads_dtype_then_text_config` above proves

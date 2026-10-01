@@ -586,3 +586,38 @@ def test_the_install_line_and_the_pull_step_offer_the_same_row(tmp_path, monkeyp
             assert installs == [f"install   #1 {NOT_UNIQUE_INSTALL}"]
         else:
             assert installs == []
+
+
+# --- visibility: read from the table, never from the format alone -------------------------------
+
+
+def _hf_tensor() -> Package:
+    return _package(format="tensor", quantization="BF16", quantization_source="config")
+
+
+def _ollama_tensor() -> Package:
+    return _ollama_package(format="tensor", quantization=None, provenance="unresolved", unresolved_reason="format")
+
+
+def test_only_a_package_a_present_runtime_must_serve_is_hidden():
+    """F3: a Hugging Face tensor package is vLLM's alone, shown only with vLLM; an Ollama package,
+    an Ollama tensor (MLX) build included, and every GGUF are shown on any machine."""
+    hf_tensor, ollama_tensor, gguf = _hf_tensor(), _ollama_tensor(), _package()
+    without = runtimes.visible_packages([hf_tensor, ollama_tensor, gguf], [(_profile(runtimes=["ollama"]), None)])
+    with_vllm = runtimes.visible_packages([hf_tensor, ollama_tensor, gguf], [(_profile(runtimes=["ollama", "vllm"]), None)])
+
+    assert without == [ollama_tensor, gguf]
+    assert with_vllm == [hf_tensor, ollama_tensor, gguf]
+
+
+def test_visibility_follows_the_table_rows_own_rule(monkeypatch):
+    """A row that names its own packages (`Runtime.shown_only_with`) is all it takes: here the Ollama
+    row is made to claim GGUF builds, and a machine without Ollama then no longer sees them."""
+    import dataclasses
+
+    gated = dataclasses.replace(runtimes.OLLAMA, shown_only_with=lambda package: package.format == "gguf")
+    monkeypatch.setattr(runtimes, "RUNTIMES", (gated, runtimes.VLLM))
+    gguf = _package()
+
+    assert runtimes.visible_packages([gguf], [(_profile(runtimes=["vllm"]), None)]) == []
+    assert runtimes.visible_packages([gguf], [(_profile(runtimes=["ollama"]), None)]) == [gguf]

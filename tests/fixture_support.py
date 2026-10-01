@@ -471,11 +471,10 @@ def qwen35_4b_transport_mapping() -> dict[tuple[str, str], Response]:
 
 
 def no_tensor_hits_mapping() -> dict[tuple[str, str], Response]:
-    """Fix round 0c: every tensor-search page (P1, `tensor_search.search_tensor_repos`) a run
+    """Every tensor-search page (P1, `tensor_search.search_tensor_repos`) a run
     with Qwen3.5-9B and/or the DeepSeek base model resolved could ask, answered with an empty
-    list. `guided_search._tensor_hits` now asks whenever `runtimes.machine_has_vllm` says so -- the
-    bound profile's `runtimes`, *or* a vLLM server detected live in the very same run (fix round
-    0c's own point): a guided run with a live-serving vLLM fixture (`fixture_servers.vllm_servers`)
+    list. the tensor search asks whenever a chosen machine has vLLM -- by its profile's `runtimes`, *or*
+    a vLLM server detected live in the very same run: a guided run with a live-serving vLLM fixture (`fixture_servers.vllm_servers`)
     reaches this search even where its profile carries no stored `runtimes` at all, so every such
     run needs these two accounts answered, not only the ones that set `runtimes` explicitly.
     Empty answers keep every existing assertion about what a run writes unchanged.

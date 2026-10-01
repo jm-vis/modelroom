@@ -79,7 +79,7 @@ class SearchStep:
     `checked` and `context` are the machine and the context the fit of every line was computed for,
     so the instruction line of the list says the same numbers the list shows.
 
-    `tensor_repos` (fix round 1, Codex findings 1/2, P1) maps a resolved base model to the tensor
+    `tensor_repos` (P1) maps a resolved base model to the tensor
     repositories P1's search found for it -- a read only, no write: which of them end up in the
     configuration is decided later, by the selection, through the same write path a GGUF hit goes
     through (`guided.py::_search_step`, `search_apply.apply_hits`/`apply_tensor_repos` folded into

@@ -84,6 +84,12 @@ class Runtime:
     question); `model_place` is where its models live on disk; `on_disk(target, packages)` is its
     own "already there" check, the identities of those `packages` it provably holds; `words` are
     the words above.
+
+    `shown_only_with` names the packages that are this runtime's alone to serve, so an output
+    shows them only for a machine that has it (F3, `visible_packages`). It is not `accepts`:
+    `accepts` says what a runtime loads and pairs a package with rows, and a package two runtimes
+    load is still everyone's to see. Ollama claims nothing (its packages are always shown); vLLM
+    claims the Hugging Face tensor package.
     """
 
     key: RuntimeKey
@@ -98,6 +104,7 @@ class Runtime:
     model_place: Callable[..., Sequence[Path]]
     on_disk: Callable[[Any, Sequence[Package]], frozenset]
     words: RuntimeWords
+    shown_only_with: Callable[[Package], bool] = lambda package: False
 
 
 def _not_built_yet(field_name: str, sub_package: str) -> Callable[..., Any]:
@@ -117,6 +124,11 @@ def _ollama_accepts(package: Package) -> bool:
     """Which packages Ollama loads: a GGUF build, from Hugging Face or the Ollama library, or any
     package the Ollama library itself packed -- unchanged (`fit.py`, `pull_choice.py`)."""
     return package.format == "gguf" or package.source == "ollama"
+
+
+def _huggingface_tensor(package: Package) -> bool:
+    """A Hugging Face tensor (safetensors) package: what only vLLM serves among the table's rows."""
+    return package.source == "huggingface" and package.format == "tensor"
 
 
 def _ollama_install_name(package: Package) -> str | None:
@@ -296,6 +308,7 @@ VLLM = Runtime(
         key_text="vLLM · rows start with vllm serve; the others are pulled into Ollama",
         question="Which package should be installed?",
     ),
+    shown_only_with=_huggingface_tensor,
 )
 
 RUNTIMES: tuple[Runtime, ...] = (OLLAMA, VLLM)
@@ -338,19 +351,23 @@ def machine_runtime_keys(profile: HardwareProfile | None) -> frozenset[str]:
     return frozenset({"ollama"})
 
 
-def machine_has_vllm(profile: HardwareProfile | None, live: object) -> bool:
-    """Whether vLLM is present on one machine, in *this* run (P1: "`runtimes`, or detected
-    live") -- the per-machine decision every vLLM gate reads: `any_has_vllm` (the tensor search
-    and `build_tensor` of a guided run) and `visible_packages` (what an output shows).
+def present_runtimes(profile: HardwareProfile | None, live: object) -> frozenset[str]:
+    """The runtimes one machine has in *this* run (P1: "`runtimes`, or detected live").
 
-    `profile` is that machine's `HardwareProfile`, read exactly like `machine_runtime_keys`
-    already reads it. `live` is whatever a caller's own step-1 bookkeeping holds for `"vllm"` on
-    that machine (`GuidedRun.servers.found.get("vllm")` for the machine the run is on, nothing for
-    any other): only a real `ServedModel` answer counts as detected -- a server that asked for a
-    key, one whose answer could not be read, or nothing at all, does not (E5, the edge-case table:
-    "does not count as detected").
+    `profile` is that machine's `HardwareProfile`, read by `machine_runtime_keys`. `live` is
+    whatever a caller's own step-1 bookkeeping holds for `"vllm"` on that machine
+    (`GuidedRun.servers.found.get("vllm")` for the machine the run is on, nothing for any other):
+    only a real `ServedModel` answer counts as detected -- a server that asked for a key, one whose
+    answer could not be read, or nothing at all, does not (E5: "does not count as detected").
     """
-    return "vllm" in machine_runtime_keys(profile) or isinstance(live, ServedModel)
+    keys = machine_runtime_keys(profile)
+    return keys | {"vllm"} if isinstance(live, ServedModel) else keys
+
+
+def machine_has_vllm(profile: HardwareProfile | None, live: object) -> bool:
+    """Whether vLLM is present on one machine in this run -- what every vLLM gate reads:
+    `any_has_vllm` (the tensor search and `build_tensor` of a guided run)."""
+    return "vllm" in present_runtimes(profile, live)
 
 
 # `machine_has_vllm`'s two inputs for one machine: its profile, and what was detected live on it.
@@ -363,14 +380,22 @@ def any_has_vllm(machines: Sequence[MachineRuntimes]) -> bool:
 
 
 def visible_packages(packages: Sequence[Package], machines: Sequence[MachineRuntimes]) -> list[Package]:
-    """The one visibility rule (F3): `packages` as an output for `machines` may show or count them.
+    """The one visibility rule (F3): the `packages` an output for `machines` may show or count.
 
-    A tensor package is visible only when at least one of `machines` has vLLM; every other package
-    always is. One machine for its own table or scale, every shown machine for a document-wide
-    number or summary. The snapshot itself is never filtered: it keeps the raw facts.
+    Read from the table, never from a package's format: a package one or more rows claim
+    (`Runtime.shown_only_with`) is visible only when at least one of `machines` has one of those
+    runtimes; a package no row claims -- every Ollama package, a tensor (MLX) build of the Ollama
+    library included, and every GGUF -- is always visible. One machine for its own table or scale,
+    every shown machine for a document-wide number or summary. The snapshot itself is never
+    filtered: it keeps the raw facts.
     """
-    vllm = any_has_vllm(machines)
-    return [package for package in packages if package.format != "tensor" or vllm]
+    present = frozenset().union(*(present_runtimes(profile, live) for profile, live in machines))
+    return [package for package in packages if _shown_with(package, present)]
+
+
+def _shown_with(package: Package, present: frozenset[str]) -> bool:
+    claiming = [runtime.key for runtime in RUNTIMES if runtime.shown_only_with(package)]
+    return not claiming or any(key in present for key in claiming)
 
 
 def accepting_on_machine(package: Package, profile: HardwareProfile | None) -> tuple[Runtime, ...]:
@@ -418,6 +443,7 @@ __all__ = [
     "local_servers",
     "machine_has_vllm",
     "machine_runtime_keys",
+    "present_runtimes",
     "runtime_of",
     "visible_packages",
 ]

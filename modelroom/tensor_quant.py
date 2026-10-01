@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 SAFE_REPO_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*){0,3}$")
 
 # P2: a start file beyond the weights is one of these suffixes -- the files vLLM reads at startup
-# besides the weights themselves (README, images and `.gitattributes` are not, Codex r1-6).
+# besides the weights themselves (README, images and `.gitattributes` are not).
 _START_FILE_SUFFIXES = (".json", ".tiktoken", ".jinja")
 _START_FILE_NAMES = ("tokenizer.model",)
 
@@ -62,7 +62,7 @@ def start_files(files: Sequence["PackageFile"]) -> list["PackageFile"]:
     shards always count; an extra file counts only when its name ends in `.json`,
     `tokenizer.model`, `.tiktoken` or `.jinja` -- this is also "download" (I2) and the one list
     "already on disk" (I3) is checked against (A5): README, `.gitattributes` and images are
-    never among them (Codex r1-6).
+    never among them.
     """
     return [file for file in files if file.role in ("weights", "weights_shard") or _is_start_extra(file.name)]
 
@@ -146,7 +146,7 @@ def tensor_quant_label(config: dict) -> tuple[str | None, QuantizationSource | N
 
     A `quantization_config` object decides first (AWQ, GPTQ, FP8 or one of compressed-tensors'
     three shapes); **missing or `null`** falls back to the model's own dtype (`BF16`/`F16`/`F32`).
-    A `quantization_config` that is *present but not an object* (fix round 1, Codex finding 6 --
+    A `quantization_config` that is *present but not an object* (e.g.
     `{"quantization_config": [], "torch_dtype": "bfloat16"}` must never read as `BF16`) is a shape
     error, not an absence: it never falls back to dtype, only ever `(None, None)` -- the same as
     an unknown method or an unlisted bit width. `quantization_source` is only ever `"config"`

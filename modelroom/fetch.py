@@ -53,7 +53,7 @@ def run_fetch(
     that same count and stops where the shared budget ends. `request_used`/`request_budget` in
     the result are the shared budget's totals.
 
-    `build_tensor` (AP9-SV2-P, fix round 0b, default `False`) is passed on to every
+    `build_tensor` (AP9-SV2-P, default `False`) is passed on to every
     `hf.fetch_hf_area` call unchanged: a tensor (safetensors) package resolves past
     `unresolved`/`format` only when it is `True`, which the guided mode's fetch step sets only
     for a machine whose bound profile has vLLM among its `runtimes`. A caller that never passes

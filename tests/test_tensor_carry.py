@@ -147,7 +147,7 @@ def test_with_vllm_then_without_then_with_keeps_facts_and_verdicts(tmp_path):
 
 
 def test_the_draft_keeps_its_label_without_vllm_although_it_is_unresolved(tmp_path):
-    """Codex r2 finding 3: an `unresolved` verdict is no reason to drop a known content fact."""
+    """An `unresolved` verdict is no reason to drop a known content fact."""
     config = config_for(tmp_path)
     first = run_fetch(config, build_transport(mapping(with_config=True)), RUN1, None, build_tensor=True)
     second = run_fetch(config, build_transport(mapping(with_config=False)), RUN2, first.snapshot, build_tensor=False)
@@ -169,7 +169,7 @@ def test_without_any_earlier_vllm_run_a_tensor_group_stays_locked(tmp_path):
 
 
 def test_a_new_assignment_at_the_same_revision_is_decided_again_not_copied(tmp_path):
-    """Codex r2 finding 8: the revision confirms the content, not its relation to the base model
+    """The revision confirms the content, not its relation to the base model
     it is assigned to now. Without vLLM the verdict is decided again from the kept facts, with
     no new request, and equals what a run with vLLM decides for the same assignment."""
     before = config_for(tmp_path, BASE, other=True)
@@ -219,7 +219,7 @@ def _outputs(config: Configuration) -> dict[str, bytes]:
 
 
 def test_tensor_packages_from_an_earlier_vllm_run_leave_no_trace_in_the_output_without_vllm(tmp_path):
-    """Codex r2 finding 4: the whole Markdown and JSON output for a machine without vLLM, byte for
+    """The whole Markdown and JSON output for a machine without vLLM, byte for
     byte -- the document-wide counts included -- is the same whether the snapshot holds tensor
     packages a vLLM run resolved (and an incomplete fetch since then kept), tensor packages that
     were only ever locked, or no tensor package at all. The snapshot itself keeps its raw facts."""

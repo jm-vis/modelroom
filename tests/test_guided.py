@@ -308,7 +308,7 @@ def test_a_full_dialog_run_writes_the_tensor_repo_of_the_chosen_base_model_only(
 
 
 def test_another_chosen_machine_with_vllm_turns_on_the_search_and_the_build(tmp_path: Path):
-    """Codex r2 finding 9: P1 searches as soon as **a chosen machine** has vLLM -- here not the
+    """P1 searches as soon as **a chosen machine** has vLLM -- here not the
     machine the run is on (no vLLM server, none in its profile), but a second chosen machine whose
     stored profile names `vllm`. The search and the build run; the tensor package shows in that
     machine's block only."""

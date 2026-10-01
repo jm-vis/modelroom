@@ -439,7 +439,7 @@ def test_the_last_column_counts_with_the_requests_of_the_run():
     assert three[131072] == "none of 3 packages fits"
 
 
-# --- tensor visibility in the balance (fix round 1, Codex finding 4) -----------------------------
+# --- tensor visibility in the balance -----------------------------
 
 
 def _config_with_snapshot(tmp_path: Path, packages: list[Package]) -> Configuration:
@@ -534,7 +534,7 @@ def test_the_balance_counts_a_tensor_package_only_for_machines_with_vllm(tmp_pat
     assert snapshot_facts(config, machines=[(_profile(), None), (with_vllm, None)]).packages == 2
 
 
-# --- the vLLM gate of a guided run: any chosen machine (Codex r2 finding 9) ------------------------
+# --- the vLLM gate of a guided run: any chosen machine ------------------------
 
 
 def _chosen_run(tmp_path: Path, chosen: tuple[str, ...], live: object = None):

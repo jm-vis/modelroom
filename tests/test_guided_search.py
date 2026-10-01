@@ -208,7 +208,7 @@ class _FakeRun:
     now: datetime = datetime(2026, 9, 30, 9, 0, 0, tzinfo=timezone.utc)
     screen: _FakeScreen = field(default_factory=_FakeScreen)
     problems: list[str] = field(default_factory=list)
-    # `runtimes.machine_has_vllm`'s other source (fix round 0c): a server detected serving in
+    # `runtimes.machine_has_vllm`'s other source: a server detected serving in
     # this very run's own step 1. Empty by default, like a run that never saw one.
     servers: SimpleNamespace = field(default_factory=lambda: SimpleNamespace(found={}))
 

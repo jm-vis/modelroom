@@ -98,7 +98,7 @@ def render_with_config(
     `disks` is the free disk a guided run read, per machine name: the Markdown view marks a download
     larger than it (AP9-RM U11). `modelroom render` reads no machine and passes nothing.
 
-    `live_vllm` (fix round 1, Codex finding 4) is the same shape, for the same reason: a guided
+    `live_vllm` is the same shape, for the same reason: a guided
     run's own render step passes what *this run's own step 1* found for `"vllm"`, by machine name
     (`GuidedRun.servers.found.get("vllm")`), so a tensor package this very run resolved by live
     detection (no stored profile `runtimes`) still shows on its own machine's table. `modelroom

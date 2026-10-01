@@ -12,6 +12,8 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from modelroom.contracts import Approval, Architecture, BaseModelSpec, Package, PackageFile
 from modelroom.provenance import decide_provenance
 
@@ -235,14 +237,17 @@ _NOVA_TENSOR_TARGETS = (*_NOVA_TARGETS, "acme/Nova-7B")
 def _hf_tensor_package(
     *, repo: str, weight_filenames: list[str], revision: str = _HF_REVISION_NEW, base_model_hf_repo: str = "acme/Nova-7B"
 ) -> Package:
+    from modelroom.contracts import shards_complete
+
+    files = [PackageFile(name=name, role="weights_shard", size_bytes=1, digest=None) for name in weight_filenames]
     return Package(
         source="huggingface",
         repo=repo,
         revision=revision,
         base_model_hf_repo=base_model_hf_repo,
         format="tensor",
-        files=[PackageFile(name=name, role="weights_shard", size_bytes=1, digest=None) for name in weight_filenames],
-        complete=True,
+        files=files,
+        complete=shards_complete(files),
         quantization=None,
         quantization_source=None,
         default_context=None,
@@ -272,7 +277,7 @@ def test_the_publishers_own_repo_is_from_metadata():
 
 
 def test_the_publishers_own_repo_still_needs_the_target_set():
-    """Fix round 1, Codex finding 5: the own-repo shortcut skips the relation check alone -- a
+    """The own-repo shortcut skips the relation check alone -- a
     repository that is not even in `targets` is still `repo_name`, own-repo or not (this never
     happens in the real fetch, since AP9-UX2 P3 always adds the own repo as a target, but the
     rule itself must not depend on that being true)."""
@@ -285,7 +290,7 @@ def test_the_publishers_own_repo_still_needs_the_target_set():
 
 
 def test_the_publishers_own_repo_still_needs_the_file_stem_check():
-    """Fix round 1, Codex finding 5: an unrelated file dropped in the publisher's own repository
+    """An unrelated file dropped in the publisher's own repository
     (a draft/MTP model, P1's own example) is still `file_stem` -- the own-repo shortcut is the
     relation check alone, never the file-stem check too."""
     package = _hf_tensor_package(repo="acme/Nova-7B", weight_filenames=["draft.safetensors"])
@@ -336,6 +341,49 @@ def test_an_odd_weight_file_name_is_file_stem():
         package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=targets
     )
     assert (provenance, reason) == ("unresolved", "file_stem")
+
+
+def _tensor_verdict(weight_filenames: list[str]) -> tuple[str, str | None]:
+    package = _hf_tensor_package(repo="RedHatAI/Nova-7B-FP8", weight_filenames=weight_filenames)
+    targets = (*_NOVA_TENSOR_TARGETS, "RedHatAI/Nova-7B-FP8")
+    return decide_provenance(package, _nova_base_model(), hf_tags=_quantized_tags(), approvals=[], hf_targets=targets)
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["model.safetensors"],
+        ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"],
+        ["model.safetensors-00001-of-00002.safetensors", "model.safetensors-00002-of-00002.safetensors"],
+    ],
+    ids=["single", "sharded", "sharded-with-inner-extension"],
+)
+def test_each_of_the_three_library_file_forms_is_from_metadata(names):
+    assert _tensor_verdict(names) == ("from_metadata", None)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "model.safetensors.safetensors",
+        "model-00001-of-00002.safetensors.bak",
+        "model-00003-of-00002.safetensors",
+        "model-00000-of-00002.safetensors",
+        "model-00001-of-00000.safetensors",
+        "model-1-of-2.safetensors",
+        "model-split-00001-of-00001.safetensors",
+        "model.safetensors-00001-of-00001.gguf",
+        "Model.safetensors",
+        "model.SAFETENSORS",
+        "sub/model.safetensors",
+        "model",
+        "model.safetensors-00001-of-00001",
+    ],
+)
+def test_a_name_that_only_looks_like_a_library_file_form_is_file_stem(name):
+    """The whole file name must be one of the three forms, with a shard number between 1 and the
+    total -- a stem that merely normalizes to `model` is not enough."""
+    assert _tensor_verdict([name]) == ("unresolved", "file_stem")
 
 
 def test_a_sharded_tensor_repo_outside_the_target_set_is_repo_name():

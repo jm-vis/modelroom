@@ -449,7 +449,7 @@ def _group_quantization(
     repo's `config.json` (cached in `tensor_label_cache`, fetched at most once per repo), or
     `(None, None)` for anything else (`_assemble_packages`, P2).
 
-    `build_tensor` (fix round 0b): a tensor group costs no `config.json` request and no safe-path
+    `build_tensor`: a tensor group costs no `config.json` request and no safe-path
     check at all when it is `False` -- exactly AP9-SV1's own behavior, on a machine without vLLM
     among its `runtimes`.
     """
@@ -482,7 +482,7 @@ def _assemble_packages(
     files = _files_from_tree(entries)
     groups, extra_files = _weight_groups(files)
     # P2: one `config.json` request serves every tensor group of this repo (two stems of one
-    # repo read it once, Codex r1-7); fetched on first use, never when the repo has no tensor
+    # repo read it once); fetched on first use, never when the repo has no tensor
     # group at all (an all-GGUF repo costs nothing extra). A one-entry cache, not a plain local:
     # `_group_quantization` has to tell "not fetched yet" apart from "fetched, no label".
     tensor_label_cache: dict[str, tuple[str | None, Literal["config"] | None]] = {}

@@ -389,8 +389,8 @@ search order.
 **Provenance for a Hugging Face tensor package (AP9-SV2-P, P3, `modelroom/provenance.py`).** Once
 the format lock's one exception (above) lets a tensor package reach a verdict at all, the rule is
 close to the GGUF one but not the same. `decide_provenance` itself has no notion of "which
-machine" -- the rule below is the same one wherever it runs; `hf.py`'s `build_tensor` (fix round
-0b, "Request budget") is what decides whether a tensor group is even offered to it at all, never
+machine" -- the rule below is the same one wherever it runs; `hf.py`'s `build_tensor`
+("Request budget") is what decides whether a tensor group is even offered to it at all, never
 this function's own business:
 
 1. The repository must still be one of the base model's package targets, or `("unresolved",
@@ -405,11 +405,11 @@ this function's own business:
    `metadata_conflict` reasons).
 4. **No file-stem check.** A packager's naming convention does not apply to a Transformers
    repository: its weight file names are fixed by the library, never by a packager, so each
-   weight file's un-sharded stem (`quantization.normalize_file_stem`, shard suffix removed) must
-   be one of exactly three forms -- `model`, or `model.safetensors` (both shapes
-   `model-0000N-of-0000M.safetensors` and `model.safetensors-0000N-of-0000M.safetensors` reduce
-   to) -- else `("unresolved", "file_stem")`, the same reason the GGUF rule uses for an unrelated
-   file dropped in the same repo.
+   **whole** weight file name must be one of exactly three forms -- `model.safetensors`,
+   `model-NNNNN-of-MMMMM.safetensors` or `model.safetensors-NNNNN-of-MMMMM.safetensors`, with
+   `1 <= NNNNN <= MMMMM` -- else `("unresolved", "file_stem")`, the same reason the GGUF rule uses
+   for an unrelated file dropped in the same repo. A name that only normalizes to the stem
+   `model` (`model.safetensors.safetensors`, `model-split-00001-of-00001.safetensors`) does not pass.
 5. Approvals are checked first, same as GGUF (see "Hugging Face" rule above): an approval whose
    `content` matches the package's current `revision` resolves `("approved", None)` before any
    of the rules above run.
@@ -1447,7 +1447,7 @@ as its own separate call, checked and booked (or raising `BudgetExhaustedError`)
 made, failure paths included, never only after the fact.
 
 **A tensor repository's quantization costs at most one more request per repo and revision, and
-only when the fetch may build tensor packages at all (AP9-SV2-P, P2, fix round 0b).**
+only when the fetch may build tensor packages at all (AP9-SV2-P, P2).**
 `hf.py::fetch_hf_area` takes `build_tensor` (`False` by default, matching every fetch before this
 step): with it `False`, a tensor weight group never reads `config.json` and never runs the
 safe-path check at all. What it then becomes depends on what this project already knows about
@@ -1473,7 +1473,7 @@ Whether such a package is shown anywhere is not the fetch's business: the render
 machine ("Render (schema 2)", tensor visibility). With it `True`, `_assemble_packages` reads the repo's `config.json`
 at the already-known revision once -- cached for the rest of that repo's groups, so a repository
 with two tensor stems (a main build and a draft/MTP model dropped in the same repo) still costs
-one request, not two (Codex r1-7). A repository with no tensor group costs nothing extra either
+one request, not two. A repository with no tensor group costs nothing extra either
 way; the request is charged through the same shared transport as every other call in the area, so
 it can also end the area `incomplete (budget exhausted)` like any other. Every other failure of
 this one request -- a status other than `200`, a body over `tensor_quant.MAX_CONFIG_JSON_BYTES`
@@ -5056,15 +5056,21 @@ card; a hint, never a limit.
 | `users` | `int \| None` | schema 2; `1..10240`; set only together with `requests_origin` |
 | `requests_origin` | `"default" \| "entered" \| "from_users" \| None` | schema 2; `None` for a scenario that is not the configuration's |
 
-**Tensor visibility (AP9-SV2-P, F3).** A tensor package is shown or counted only for machines
-with vLLM (`runtimes.visible_packages`, the one filter; per machine `runtimes.machine_has_vllm`:
-its stored profile's `runtimes`, plus live detection for the machine a guided run is on). Each
-machine block reads the packages visible for that machine alone. Every document-wide number --
-`package_count`, the ranking rule's one-row-per-model choice -- and the guided mode's balance and
-card read the packages visible for at least one machine the document shows. A document none of
-whose machines has vLLM is therefore byte for byte the one built without any tensor package,
-whatever the snapshot holds; the snapshot itself keeps every package and its raw facts.
-`base_model_count` counts the snapshot's base models, which no package changes.
+**Package visibility (AP9-SV2-P, F3).** Which packages an output may show or count is read from
+the runtime table, never from a package's format (`runtimes.visible_packages`, the one filter):
+a row's `shown_only_with` names the packages that are that runtime's alone to serve, and such a
+package is visible only where at least one machine has one of the runtimes claiming it
+(`runtimes.present_runtimes`: the stored profile's `runtimes`, plus live detection for the
+machine a guided run is on). Ollama claims nothing, so every Ollama package -- an Ollama-library
+tensor (MLX) build included -- and every GGUF are shown on every machine, as before; vLLM claims
+the Hugging Face tensor package. `shown_only_with` is not `accepts`: `accepts` pairs a package with
+the runtimes that load it, and a package two runtimes load stays visible wherever either is.
+Each machine block reads the packages visible for that machine alone. Every document-wide number
+-- `package_count`, the ranking rule's one-row-per-model choice -- and the guided mode's balance
+and card read the packages visible for at least one machine the document shows. A document none
+of whose machines has vLLM is therefore byte for byte the one built without any Hugging Face
+tensor package, whatever the snapshot holds; the snapshot itself keeps every package and its raw
+facts. `base_model_count` counts the snapshot's base models, which no package changes.
 
 ```json
 {

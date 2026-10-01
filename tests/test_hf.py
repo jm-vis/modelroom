@@ -1258,7 +1258,7 @@ def test_a_safetensors_repository_gives_one_complete_tensor_package(repo, base, 
     """What a vLLM server serves is the `tensor` package of today: complete, the weights the sum of
     the safetensors files, no quantization word, and `unresolved`/`format` (AP9-SV1, D).
 
-    Fix round 0b (AP9-SV2-P): `build_tensor` defaults to `False` here, same as every caller of
+    AP9-SV2-P: `build_tensor` defaults to `False` here, same as every caller of
     `fetch_hf_area` this project ships before the guided mode's fetch step sets it -- a tensor
     group stays locked exactly as AP9-SV1 left it, on a machine without vLLM, whatever its tags
     say (`test_a_safetensors_repository_resolves_when_build_tensor_is_true` below is the P3 case)."""
@@ -1274,7 +1274,7 @@ def test_a_safetensors_repository_gives_one_complete_tensor_package(repo, base, 
 
 @pytest.mark.parametrize(("repo", "base", "sha", "fixture", "weights"), _TENSOR_REPO_CASES, ids=["one-file", "two-shards"])
 def test_a_safetensors_repository_resolves_when_build_tensor_is_true(repo, base, sha, fixture, weights):
-    """AP9-SV2-P, P3, gated by fix round 0b's `build_tensor` (set only for a machine with vLLM,
+    """AP9-SV2-P, P3, gated by `build_tensor` (set only for a machine with vLLM,
     P1): the `one-file` repo is its base model's own repository (AP9-UX2 P3), resolved without a
     relation check at all; the `two-shards` repo (`Qwen/Qwen3-8B-AWQ`) is a real quantized build
     whose tags and weight file stems both pass P3's tensor rule. `config.json` is not mapped in
@@ -1370,7 +1370,7 @@ QWEN3_AWQ_REPO = "Qwen/Qwen3-8B-AWQ"
 
 
 def test_config_json_is_read_once_per_repo_with_two_tensor_groups():
-    """Codex r1-7: a repo with two weight-file stems (a main build and a draft/MTP model dropped
+    """A repo with two weight-file stems (a main build and a draft/MTP model dropped
     in the same repo, P3's own example) costs exactly one `config.json` request -- the label
     applies to every tensor group of the repo."""
     tree = [
@@ -1408,7 +1408,7 @@ def test_config_json_is_read_once_per_repo_with_two_tensor_groups():
 
 
 def test_without_build_tensor_a_tensor_group_costs_no_request_and_stays_locked():
-    """Fix round 0b: the gate itself, proven red-first -- an Ollama-only fetch
+    """The gate itself -- an Ollama-only fetch
     (`build_tensor` at its default `False`) of a
     publisher repo that genuinely has safetensors builds no tensor package at all: no
     `config.json` request (not even mapped in this transport -- a `KeyError` would fail the test
@@ -1522,7 +1522,7 @@ def test_a_config_json_over_64_kib_is_none_not_an_error():
 
 
 def test_a_wrongly_typed_quantization_config_is_none_through_the_whole_fetch():
-    """Fix round 1, Codex finding 6, end to end: a present-but-wrongly-shaped `quantization_config`
+    """End to end: a present-but-wrongly-shaped `quantization_config`
     (here a list) must not resolve to the dtype fallback (`BF16`) anywhere along the real fetch
     path, and the area stays `complete` -- an invalid quantization label is a documented extra
     gone missing, never a reason to end the area."""
@@ -1584,7 +1584,7 @@ def test_a_budget_exhausted_on_the_config_json_request_ends_the_area_incomplete(
 
 
 def test_a_revision_bound_label_survives_a_run_without_vllm_in_between():
-    """Fix round 1, Codex finding 3: with vLLM -> without -> with, in the same results folder, at
+    """With vLLM -> without -> with, in the same results folder, at
     the exact same revision throughout. A run without vLLM makes no new `config.json` request at
     all (not even mapped in this transport -- one would raise `KeyError`) and still carries the
     earlier label and provenance forward, because this project already proved them true for this
@@ -1617,7 +1617,7 @@ def test_a_revision_bound_label_survives_a_run_without_vllm_in_between():
             # Deliberately no config.json mapping: a request for it would raise KeyError.
         }
     )
-    # The publisher's own repository (P3's own-repo shortcut, fix round 1): no tags needed for
+    # The publisher's own repository (P3's own-repo shortcut): no tags needed for
     # it to resolve, keeping this test about the carry-forward alone.
     base_model = BaseModelSpec(
         hf_repo=repo, repo_aliases=[], publisher="acme", parameters_b=None,

@@ -337,7 +337,7 @@ def fetch_with_config(
     `Transport` (a `FixtureTransport` in tests, `UrllibTransport()` in production) calls this
     directly, with no argparse/CLI process involved.
 
-    `build_tensor` (AP9-SV2-P, fix round 0b, default `False`) is passed on to `run_fetch`
+    `build_tensor` (AP9-SV2-P, default `False`) is passed on to `run_fetch`
     unchanged. Neither this function nor `_cmd_fetch` (a plain `modelroom fetch --config
     --machine`, with no pointer/profile binding of its own) ever sets it to `True`: only the
     guided mode's fetch step, which knows the folder's bound profile, does.

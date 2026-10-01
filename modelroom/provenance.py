@@ -11,9 +11,10 @@ automatic rule ever reaches further than `from_metadata` -- `approved` needs a h
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Sequence
 
-from .quantization import SIZE_TOKEN_RE, match_base_prefix, normalize_file_stem, stem_basename
+from .quantization import SIZE_TOKEN_RE, match_base_prefix, stem_basename
 from .relation import check_relation
 
 if TYPE_CHECKING:
@@ -113,10 +114,22 @@ def _decide_huggingface(
 
 
 # A Transformers repository's own weight file names, fixed by the library rather than by any
-# packager's naming convention (P3): a single file, or one of the two sharded index forms (the
-# shard suffix is not re-checked here -- `identity_stem`/`has_shard_suffix` already grouped the
-# file into this package by it, so only the un-sharded stem has to match one of these three).
-_TENSOR_WEIGHT_STEMS = frozenset({"model", "model.safetensors"})
+# packager's naming convention (P3), matched against the **whole** file name: `model.safetensors`,
+# `model-NNNNN-of-MMMMM.safetensors`, or `model.safetensors-NNNNN-of-MMMMM.safetensors`, with
+# `1 <= NNNNN <= MMMMM`. A name that merely normalizes to the stem `model` does not pass.
+_TENSOR_WEIGHT_NAME_RE = re.compile(
+    r"model(?:\.safetensors)?(?:-(?P<index>\d{5})-of-(?P<total>\d{5}))?\.safetensors"
+)
+
+
+def _is_library_weight_name(name: str) -> bool:
+    match = _TENSOR_WEIGHT_NAME_RE.fullmatch(name)
+    if match is None:
+        return False
+    if match.group("index") is None:
+        return name == "model.safetensors"
+    index, total = int(match.group("index")), int(match.group("total"))
+    return 1 <= index <= total
 
 
 def _decide_huggingface_tensor(
@@ -128,25 +141,23 @@ def _decide_huggingface_tensor(
 ) -> tuple[str, str | None]:
     """Decide provenance for a Hugging Face **tensor** package (P3, AP9-SV2-P).
 
-    Two differences from the GGUF rule above -- and, fix round 1 (Codex finding 5): **only**
-    these two, never a third shortcut that skips a check every other tensor repo still has to
-    pass:
+    Exactly two differences from the GGUF rule above, never a third shortcut that skips a check
+    every other tensor repo still has to pass:
 
     1. **The publisher's own repository** (`package.repo == base_model.hf_repo`) skips the
        relation check **alone**: that repository *is* the base model, and its own tags name its
        own predecessor (`Qwen/Qwen3-8B` carries `base_model:finetune:Qwen/Qwen3-8B-Base`), which
-       `check_relation` would read as `derivative`, not `quantized` -- but it still has to be one
-       of `targets` and its weight files still have to pass the file-stem check below; neither is
-       about the relation, and skipping them let an unrelated file dropped in the same repo (a
-       `draft.safetensors`, P1's own example) through unchecked.
+       `check_relation` would read as `derivative`, not `quantized`. It still has to be one of
+       `targets`, and its weight files still have to pass the file-name check below: neither is
+       about the relation, and an unrelated file dropped in the same repo (a `draft.safetensors`)
+       must not pass.
     2. **No file-stem check against the base name.** Transformers weight file names are fixed by
-       the library, never by a packager's naming convention: `model.safetensors`, or one of the
-       two sharded index forms (`model-0000N-of-0000M.safetensors`,
-       `model.safetensors-0000N-of-0000M.safetensors`). `identity_stem` already stripped the
-       shard counter before grouping the files into this package, so the check here is only
-       against the three un-sharded stems; a weight file that matches none of them is
-       `("unresolved", "file_stem")`, same reason the GGUF rule uses for the same kind of
-       mismatch -- applied to every tensor repo, the publisher's own included.
+       the library, never by a packager's naming convention: each whole weight file name must be
+       `model.safetensors`, `model-NNNNN-of-MMMMM.safetensors` or
+       `model.safetensors-NNNNN-of-MMMMM.safetensors` with `1 <= NNNNN <= MMMMM`
+       (`_is_library_weight_name`); anything else is `("unresolved", "file_stem")`, the reason
+       the GGUF rule uses for the same kind of mismatch -- for every tensor repo, the publisher's
+       own included.
     """
     if package.repo not in targets:
         return "unresolved", "repo_name"
@@ -161,7 +172,7 @@ def _decide_huggingface_tensor(
         return "unresolved", "no_weights"
 
     for weight_file in weight_files:
-        if normalize_file_stem(weight_file.name) not in _TENSOR_WEIGHT_STEMS:
+        if not _is_library_weight_name(weight_file.name):
             return "unresolved", "file_stem"
 
     return "from_metadata", None

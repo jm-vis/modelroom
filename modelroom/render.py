@@ -217,7 +217,8 @@ def _eligible_packages(snapshot: Snapshot, machines: Sequence[MachineRuntimes] =
     point has an architecture the fit can read.
 
     `machines` are the machines the list is read for -- one machine for its own block or scale,
-    every shown machine for a document-wide number. No machines means no vLLM: no tensor package.
+    every shown machine for a document-wide number. No machines means no runtime present:
+    no package a runtime claims (a Hugging Face tensor package).
     """
     return [
         package
@@ -544,7 +545,7 @@ def build_render_document(
 
     Visibility (`runtimes.visible_packages`): each machine's block reads the packages visible for
     that machine alone; every document-wide number (`package_count`, the ranking rule) reads the
-    packages visible for at least one shown machine. A tensor package therefore leaves no trace in
+    packages visible for at least one shown machine. A Hugging Face tensor package therefore leaves no trace in
     a document none of whose machines has vLLM; the snapshot keeps its raw facts.
     """
     base_model_by_repo = {bm.hf_repo: bm for bm in snapshot.base_models}

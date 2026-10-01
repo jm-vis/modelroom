@@ -346,7 +346,7 @@ def test_approved_provenance_is_eligible():
     assert len(_ranked_identities(_document([approved]))) == 1
 
 
-# --- tensor visibility (fix round 1, Codex finding 4) --------------------------------------------
+# --- tensor visibility --------------------------------------------
 
 
 def _tensor_package(**overrides) -> Package:
@@ -391,6 +391,39 @@ def test_a_locked_tensor_package_is_not_counted_without_vllm_either():
     assert _document([gguf, locked]).model_dump() == _document([gguf]).model_dump()
 
 
+def _ollama_mlx_package() -> Package:
+    """An Ollama library build in the tensor format (an MLX tag): an Ollama package, not a vLLM one."""
+    return Package(
+        source="ollama",
+        ollama_name="nova:8b-mlx-bf16",
+        manifest_digest="sha256:" + "c" * 64,
+        base_model_hf_repo="acme/Nova-8B",
+        format="tensor",
+        files=[PackageFile(name="weights", role="weights", size_bytes=5 * GIB, digest=None)],
+        complete=True,
+        quantization=None,
+        default_context=None,
+        provenance="unresolved",
+        unresolved_reason="format",
+        approval=None,
+        observed_at=NOW,
+        last_seen=NOW,
+        active=True,
+    )
+
+
+def test_an_ollama_tensor_package_counts_without_vllm_as_it_always_did():
+    """F3: Ollama packages are always shown. Only a package no runtime of the shown machines can
+    serve is hidden -- a Hugging Face tensor package, which only vLLM serves."""
+    gguf = _hf_package()
+    mlx = _ollama_mlx_package()
+
+    document = _document([gguf, mlx, _tensor_package()])
+
+    assert document.package_count == 2
+    assert document.model_dump() == _document([gguf, mlx]).model_dump()
+
+
 def test_the_document_counts_a_tensor_package_once_any_shown_machine_has_vllm():
     """The document-wide counts are about the machines the document shows: one with vLLM is
     enough for a tensor package to count; the block of the other machine still never sees it."""
@@ -426,7 +459,7 @@ def test_a_resolved_tensor_package_is_ranked_on_a_machine_with_vllm():
     """The counter-proof: the same package, the same machine, only `runtimes` now names `vllm` --
     the tensor package reaches eligibility (it still ranks or is set aside like any other
     package from here; no runtime of AP9-SV2-L accepts it yet, so it is `not covered`, not a
-    table row -- that wiring is AP9-SV2-F's, not this fix round's)."""
+    table row -- that wiring is AP9-SV2-F's)."""
     gguf = _hf_package()
     profile_with_vllm = _profile()
     profile_with_vllm = profile_with_vllm.model_copy(update={"runtimes": ["ollama", "vllm"]})

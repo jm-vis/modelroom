@@ -563,7 +563,7 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tu
     chosen = chosen_hits(step.models, picked, config.packagers or DEFAULT_PACKAGERS)
     if not chosen:
         return _load(config_file), 0
-    # Base models, not answers (second-model round, 2026-09-24) -- a base model nobody picked is
+    # Base models, not answers -- a base model nobody picked is
     # never written for, whatever P1's search found for it (`step.tensor_repos`).
     bases = {str(hit.resolved_base_model) for hit in chosen}
     tensor_for_chosen = {base: repos for base, repos in step.tensor_repos.items() if base in bases}
@@ -602,7 +602,7 @@ def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     if not chosen:
         return config, NOTHING_CHOSEN_SUMMARY, False
     # All three numbers about one thing -- the snapshot this folder now holds. `apply_hits` keeps
-    # what was there, so a balance may not mix the two frames (second-model round, 2026-09-24);
+    # what was there, so a balance may not mix the two frames;
     # counted for the chosen machines, as the result document will be.
     facts = snapshot_facts(config, run.selection, chosen_runtimes(run, config))
     return config, packages_summary(len(facts.model_names), facts.packages, facts.repositories), True
@@ -660,7 +660,7 @@ def _render_step(
 
     def seen(document) -> None:
         # Read inside the callback, while the render still holds the lock: card, table and pull packages
-        # rest on one snapshot (second-model round, 2026-09-24).
+        # rest on one snapshot.
         packages = run_packages(config, chosen)  # before the eligibility filter (U4, Codex r3-1)
         facts = snapshot_facts(config, chosen, machines)
         written.append((document, facts, PullContext(document, here, packages, ambiguous_names(packages), disk)))

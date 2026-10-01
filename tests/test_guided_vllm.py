@@ -444,7 +444,7 @@ def test_a_run_with_a_vllm_server_writes_the_same_bytes_as_one_without(tmp_path:
     (`qwen25_tensor_package`); the profile is `profiles_v4/two_l4_server.json` with this machine's
     fingerprint, bound by the pointer.
 
-    Fix round 0b (AP9-SV2-P): the exception is the four files a resolved tensor package reaches
+    AP9-SV2-P: the exception is the four files a resolved tensor package reaches
     -- the fetch's own snapshot (`modelroom.json`), the run status, and the render that counts
     and lists it (`models.json`/`models.md`) -- never anything about the measurement or the
     daemon side of this run, which stay byte-identical either way. A vLLM server detected live in
