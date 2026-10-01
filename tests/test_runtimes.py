@@ -162,8 +162,8 @@ def test_machine_runtime_keys_reads_the_profiles_own_list_where_it_names_any():
     assert runtimes.machine_runtime_keys(_profile(runtimes=["vllm"])) == frozenset({"vllm"})
 
 
-# --- machine_has_vllm: the one decision both the tensor search and the fetch step read (fix
-# round 0c) -- "runtimes, or detected live" (P1), never tested separately at either call site ---
+# --- machine_has_vllm: the one decision both the tensor search and the fetch step read --
+# "runtimes, or detected live" (P1), never tested separately at either call site ---
 
 
 def _served() -> "ServedModel":

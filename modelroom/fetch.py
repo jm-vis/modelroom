@@ -54,10 +54,12 @@ def run_fetch(
     the result are the shared budget's totals.
 
     `build_tensor` (AP9-SV2-P, default `False`) is passed on to every
-    `hf.fetch_hf_area` call unchanged: a tensor (safetensors) package resolves past
-    `unresolved`/`format` only when it is `True`, which the guided mode's fetch step sets only
-    for a machine whose bound profile has vLLM among its `runtimes`. A caller that never passes
-    it -- every plain `modelroom fetch` -- reads and writes exactly as before this step.
+    `hf.fetch_hf_area` call unchanged. With `True` a tensor (safetensors) package may cost new
+    requests (its `config.json`) to learn its quantisation; with `False` no such request is made,
+    but facts already learned for the same repository and revision carry over, and provenance is
+    decided again against the current base model either way. The guided mode's fetch step sets
+    it when any chosen machine has vLLM (`guided_context.vllm_among_chosen`); a plain
+    `modelroom fetch` never sets it.
     """
     shared = budget if isinstance(budget, RequestBudget) else RequestBudget(budget)
     budgeted = BudgetedTransport(transport, shared)
