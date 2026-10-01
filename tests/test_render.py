@@ -1020,10 +1020,13 @@ def test_no_labeled_line_reaches_a_hundred_and_one_characters(length):
 
 
 def test_a_name_so_long_that_none_of_them_fits_leaves_the_count_and_the_reason():
+    from types import SimpleNamespace
+
     from modelroom.views import _set_aside_pieces
 
     class _Entry:
         packager, quantization, reason = "a" * 120, "Q4_K_M", "a weight file has no size"
+        fit = SimpleNamespace(runtime="ollama")  # the piece names the runtime's prefix (AP9-SV2-F)
 
     pieces = _set_aside_pieces("not covered", [_Entry()])
 

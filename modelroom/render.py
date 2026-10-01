@@ -42,6 +42,7 @@ from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
 from .runtimes import MachineRuntimes, fit_for, visible_packages
+from .vllm_words import is_vllm, reason_sentence as vllm_reason_sentence, row_note as vllm_row_note
 from .ranking import (
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
@@ -316,42 +317,35 @@ _SHARED_MEMORY_NOTE = (
 _FROM_SIZE_SENTENCE = " From the size of the package, not its architecture."
 
 
-def _capitalized(text: str) -> str:
-    return text[:1].upper() + text[1:]
-
-
-def _vllm_reason_sentence(fit: Fit) -> tuple[str, list[str]]:
-    """The sentence a vLLM row's own `Fit.reason` adds, or `("", [])` where there is none to add
-    (Codex r1-2): today this is only F1's "no head count, computed on one card" note -- a fit
-    that still computed, not a guard failure (`fit_vllm._vllm_guard_reason` ends those before the
-    formula ever runs, so `reason` and a computed/no-fit row's own text never collide in meaning).
-    An Ollama row's `reason` is always `None`, so this never changes one.
-    """
-    if fit.runtime != "vllm" or not fit.reason:
-        return "", []
-    return f" {_capitalized(fit.reason)}.", ["fit.reason"]
-
-
 def _computed_note(fit: Fit, shared_memory: bool = False, cards: int = 1) -> Note:
     """The row note of a computed fit; `shared_memory` names a `gpu` row of unified memory so, and
-    `cards` is the number of graphics cards a `gpu_split` row is spread over -- the whole machine's
-    for Ollama (it spreads over every usable card there is), but `Fit.cards` (`t`) for vLLM (Codex
-    r1 sweep): a row's own tensor-parallel size can fall short of the machine's card count (F1, a
-    head count that does not divide it, or a group smaller than the whole machine on a mixed-cards
-    one), and the machine-wide number would then claim more cards -- and a smaller reserve on each
-    -- than this row actually uses.
+    `cards` is the number of graphics cards a `gpu_split` row is spread over -- the whole machine's,
+    as Ollama spreads over every usable card there is.
+
+    A vLLM row is judged by another rule (requests at once on its own `Fit.cards`), so its note is
+    vLLM's own (`vllm_words.row_note`, Codex r2-1) and none of the mode sentences above reaches it.
     """
-    shared = shared_memory and fit.mode == "gpu"
-    code, template, facts = _SHARED_MEMORY_NOTE if shared else _MODE_NOTES[str(fit.mode)]
-    shown_cards = fit.cards if fit.runtime == "vllm" else cards
-    text = template.format(need=fit.need_gib, pool=fit.pool_gib, cards=shown_cards, per_card=fit.reserve_gib / max(shown_cards, 1))
+    if is_vllm(fit):
+        code, text, facts = vllm_row_note(fit)
+    else:
+        shared = shared_memory and fit.mode == "gpu"
+        code, template, facts = _SHARED_MEMORY_NOTE if shared else _MODE_NOTES[str(fit.mode)]
+        text = template.format(need=fit.need_gib, pool=fit.pool_gib, cards=cards, per_card=fit.reserve_gib / max(cards, 1))
     if fit.basis == "size":
         text += _FROM_SIZE_SENTENCE
         facts = [*facts, "fit.basis"]
-    reason_text, reason_facts = _vllm_reason_sentence(fit)
-    text += reason_text
-    facts = [*facts, *reason_facts]
-    return Note(code=code, subject="package", origin="computed", text=_clip(text), facts=facts)
+    reason_text, reason_facts = vllm_reason_sentence(fit)
+    return Note(code=code, subject="package", origin="computed", text=_clip(text + reason_text), facts=[*facts, *reason_facts])
+
+
+def _vllm_no_fit_note(fit: Fit) -> Note:
+    """A vLLM row under `No fit`: not even one request at once on its cards (`vllm_words.row_note`),
+    never Ollama's need against the pool left after its reserve (Codex r2-1)."""
+    code, text, facts = vllm_row_note(fit)
+    from_size = _FROM_SIZE_SENTENCE if fit.basis == "size" else ""
+    reason_text, reason_facts = vllm_reason_sentence(fit)
+    facts = [*facts, *(["fit.basis"] if from_size else []), *reason_facts]
+    return Note(code=code, subject="package", origin="computed", text=_clip(f"{text}{from_size}{reason_text}"), facts=facts)
 
 
 def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = False) -> Note:
@@ -367,6 +361,8 @@ def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = Fa
     # the pool, so the need can be below the pool and the note must not claim an overrun
     # (probe: need 7.125 GiB against a pool of 7.2 GiB is `no_fit`).
     fit = set_aside.fit
+    if is_vllm(fit):
+        return _vllm_no_fit_note(fit)
     # A package set aside on the size basis says on what basis: the number that put it there was
     # computed from its size, not from its architecture (second-model round, 2026-09-24).
     from_size = _FROM_SIZE_SENTENCE if fit.basis == "size" else ""
@@ -380,19 +376,14 @@ def _set_aside_note(set_aside: SetAside, covered: bool, shared_memory: bool = Fa
             f"and nothing is left after {reserves} of {fit.reserve_gib:.1f} GiB "
             f"({fit.pool_gib + fit.reserve_gib:.1f} GiB in all)"
         )
-    reason_text, reason_facts = _vllm_reason_sentence(fit)
     return Note(
         code="no_fit",
         subject="package",
         origin="computed",
-        text=_clip(
-            f"Fit contract v1 does not count this as a fit: it needs about {fit.need_gib:.1f} GiB "
-            f"{room}.{from_size}{reason_text}"
-        ),
+        text=_clip(f"Fit contract v1 does not count this as a fit: it needs about {fit.need_gib:.1f} GiB {room}.{from_size}"),
         facts=["fit.need_gib", "fit.pool_gib"]
         + ([] if fit.pool_gib > 0 else ["fit.reserve_gib"])
-        + (["fit.basis"] if fit.basis == "size" else [])
-        + reason_facts,
+        + (["fit.basis"] if fit.basis == "size" else []),
     )
 
 

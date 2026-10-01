@@ -4,8 +4,9 @@ A vLLM server that answers on `127.0.0.1:8000` states which model it serves (`st
 statement, never measured, never ranked, never provenance). Step 4 says so, says before the one
 question whether its number will count for this run (AP9-UX E), offers the load test of
 `modelroom/loadtest_vllm.py` -- n requests at once, three batches -- as a row of the one list, and
-computes how many requests of the ranking's context one card holds (`modelroom/fit_vllm.py`), for
-the one package of this folder the server serves. The card of step 5 carries one row for it.
+shows how many requests of the ranking's context its cards hold (`runtimes.fit_for`, the render's
+own fit), for the one package of this folder the server serves. The card of step 5 carries one row
+for it.
 
 **Nothing is persisted**: no measurement file, no profile, no snapshot, no configuration, no
 render document changes (CONTRACTS.md, "Local servers and the vLLM load test", ADR 0008). What
@@ -32,6 +33,7 @@ from .scenario_text import requests_words
 from .screen import NOTE_INDENT, context_tokens_text, names_words
 from .state import UnreadableStateFileError, read_snapshot
 from .vllm_server import KEY_REASON, ServedModel, ServedModelsError, VllmKeyError, VllmServerError, read_vllm_models
+from .vllm_words import card_gib
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
@@ -305,17 +307,19 @@ def _fit(
 
 
 def fit_lines(fit: Fit) -> list[str]:
-    """The three notes of a vLLM fit: the cards, the three parts of its budget, and the requests it
-    holds -- `fit.cards` is `t` (F1), so a single card reads exactly as SV1's own line did."""
-    card_gib = (fit.pool_gib + fit.reserve_gib) / fit.cards
+    """The notes of a vLLM fit: the cards, the three parts of its budget, and the requests it
+    holds -- `fit.cards` is `t` (F1), so a single card reads exactly as SV1's own line did -- then,
+    where there is one, `fit.reason`: why `t` stayed on one card (Codex r2-2), the very words the
+    row's note in the Markdown file and the JSON carry."""
     cards_word = "card" if fit.cards == 1 else "cards"
     basis = ", from size" if fit.basis == "size" else ""
     return [
-        f"vLLM fit, computed: {fit.cards} {cards_word} of {card_gib:.2f} GiB, {VLLM_GPU_MEMORY_UTILIZATION} of each for vLLM",
+        f"vLLM fit, computed: {fit.cards} {cards_word} of {card_gib(fit):.2f} GiB, {VLLM_GPU_MEMORY_UTILIZATION} of each for vLLM",
         f"weights {fit.weights_gib:.2f} GiB, runtime {fit.cards * VLLM_RUNTIME_OVERHEAD_GIB:.2f} GiB "
         f"({fit.cards} {cards_word}, one recording), KV cache {fit.kv_gib:.2f} GiB",
         f"{requests_words(fit.at_once)} of context {context_tokens_text(fit.context)} at once{basis}: "
         f"{fit.fit_class.replace('_', ' ')}",
+        *([fit.reason] if fit.reason else []),
     ]
 
 

@@ -13,26 +13,18 @@ from __future__ import annotations
 from typing import Sequence
 
 from . import runtimes
-from .document import RankedEntry, SetAsideEntry
+from .document import MachineRanking, RankedEntry, SetAsideEntry
 from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VLLM_RUNTIME_OVERHEAD_GIB, equal_size_group
 from .profile import HardwareProfile
-from .screen import ranks_text
+from .ranking_words import key_pieces
+from .screen import GPU_SPLIT_HINT, ranks_text
 from .vllm_server import ServedModel
+from .vllm_words import CLASS_RULE, PERCENT_SCOPE, is_vllm, key_pieces_with_vllm
 
 RUNTIME_LABEL = "runtime"
 _PROFILE_ONLY = "(from its profile)"
 _INSTALLED_NOT_SERVING = "installed, not serving"
 _ANOTHER_MODEL = "another model"
-# F4 (Codex r1-5): `screen.FIT_SCALE_HINT`'s percentage rule ("ample: up to 60 % of the pool", ...)
-# is Ollama's own -- `fit_vllm.vllm_fit_class` never reads a percentage of a pool at all, only how
-# many requests fit at once. Named only once a vLLM row is shown, so an Ollama-only table's legend
-# stays byte-identical to before AP9-SV2 (`legend_lines` below).
-_OLLAMA_PERCENT_SCOPE = "The percentage rule above is Ollama's own."
-_VLLM_CLASS_RULE = (
-    "vLLM's classes count requests at once instead: no fit below one, tight from one below the "
-    "requests this ranking assumes, fits from that many below twice them, ample at twice them or "
-    "more (architecture basis only)."
-)
 
 
 def package_prefix(fit_runtime: str) -> str:
@@ -47,26 +39,44 @@ def packager_cell(entry: RankedEntry | SetAsideEntry) -> str:
     return f"{package_prefix(entry.fit.runtime)}{entry.packager}"
 
 
-def legend_lines(entries: Sequence[RankedEntry]) -> list[str]:
+def shown_entries(block: MachineRanking) -> list[RankedEntry | SetAsideEntry]:
+    """Every row the table of `block` shows: ranked, `Not covered` and `No fit` alike (Codex r2-4).
+    A word the key owes a row is owed wherever that row stands, not only among the ranked ones."""
+    return [*block.ranked, *block.not_covered, *block.no_fit]
+
+
+def key_text(block: MachineRanking) -> list[str]:
+    """The whole key under a machine's table, for the Markdown file and the terminal alike.
+
+    Ollama's own (`ranking_words.key_pieces`) where no row the table shows is vLLM's -- byte-identical
+    to before AP9-SV2. Once one is, wherever it stands (`shown_entries`): Ollama's `gpu_split`
+    piece scoped to Ollama, with vLLM's own mode and pool beside it (Codex r2-3), then
+    `legend_lines` -- the share rule's scope, vLLM's class rule and every runtime's `key_text`."""
+    entries = shown_entries(block)
+    pieces = key_pieces(block)
+    if any(is_vllm(entry.fit) for entry in entries):
+        pieces = key_pieces_with_vllm(pieces, GPU_SPLIT_HINT)
+    return pieces + legend_lines(entries)
+
+
+def legend_lines(entries: Sequence[RankedEntry | SetAsideEntry]) -> list[str]:
     """Everything the legend carries beyond Ollama's own `screen.FIT_HINT`, once a vLLM row is
     shown: first that the percentage rule above is Ollama's and what vLLM's classes count instead
-    (`_OLLAMA_PERCENT_SCOPE`, `_VLLM_CLASS_RULE`, Codex r1-5), then `words.key_text` of every
-    runtime a shown row's `Fit.runtime` names, each at most once, in table order. Empty where no
-    row names a runtime that carries one (every Ollama-only table) -- `key_pieces(block)` alone is
-    then exactly `screen.FIT_HINT` plus `PER_MODEL_PIECES`, byte-identical to before AP9-SV2."""
+    (`vllm_words.PERCENT_SCOPE`, `vllm_words.CLASS_RULE`, Codex r1-5: `fit_vllm.vllm_fit_class`
+    reads requests at once, never a share of a pool), then `words.key_text` of every runtime a
+    shown row's `Fit.runtime` names, each at most once, in table order. Empty where no row names a
+    runtime that carries one (every Ollama-only table)."""
     seen: list[str] = []
     key_texts: list[str] = []
-    has_vllm = False
     for entry in entries:
         runtime = runtimes.runtime_of(entry.fit.runtime)
-        has_vllm = has_vllm or runtime.key == runtimes.VLLM.key
         text = runtime.words.key_text
         if text is not None and runtime.key not in seen:
             seen.append(runtime.key)
             key_texts.append(text)
-    if not has_vllm:
+    if not any(is_vllm(entry.fit) for entry in entries):
         return key_texts
-    return [_OLLAMA_PERCENT_SCOPE, _VLLM_CLASS_RULE, *key_texts]
+    return [PERCENT_SCOPE, *CLASS_RULE, *key_texts]
 
 
 def runtime_line(profile: HardwareProfile | None, live: object = None, served_matches_run: bool = False) -> str | None:
@@ -142,10 +152,12 @@ def vllm_pool_pieces(entries: Sequence[RankedEntry], dash: str) -> list[str]:
 
 __all__ = [
     "RUNTIME_LABEL",
+    "key_text",
     "legend_lines",
     "package_prefix",
     "packager_cell",
     "runtime_line",
+    "shown_entries",
     "unequal_cards_note",
     "vllm_pool_pieces",
 ]

@@ -93,10 +93,11 @@ def test_legend_names_vllm_once_even_with_several_of_its_rows():
     lines = legend_lines(entries)
 
     assert lines == [
-        "The percentage rule above is Ollama's own.",
-        "vLLM's classes count requests at once instead: no fit below one, tight from one below the "
-        "requests this ranking assumes, fits from that many below twice them, ample at twice them or "
-        "more (architecture basis only).",
+        "the percentages above are Ollama's own",
+        "vLLM's classes count requests at once instead: no fit below one",
+        "tight from one up to below the requests this ranking assumes",
+        "fits from that many up to below twice them",
+        "ample at twice them or more (architecture basis only)",
         "vLLM · rows start with vllm serve; the others are pulled into Ollama",
     ]
 

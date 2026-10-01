@@ -16,12 +16,12 @@ from typing import Mapping, Sequence
 from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
-from .views_runtime import RUNTIME_LABEL, legend_lines, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces
+from .views_runtime import RUNTIME_LABEL, key_text, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
 from .disk_fit import DISK_LABEL, disk_words, entry_over_disk
 from .pull_choice import collision_pieces, repo_lines
-from .ranking_words import EACH_MACHINE_SENTENCE, key_pieces, several_ranked, showing_line, shown_pieces
+from .ranking_words import EACH_MACHINE_SENTENCE, several_ranked, showing_line, shown_pieces
 from .render import format_header_line
 from .room import Disk, LiveRoom
 from .room_head import LOADED_LABEL, ROOM_LABEL, head_pieces, loaded_pieces, reserve_hint_rows
@@ -268,7 +268,7 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
             "",
             *([f"{over}.", ""] if over else []),
             *([_cell(" · ".join(repos)), ""] if repos else []),
-            " · ".join(key_pieces(block) + legend_lines(block.ranked)),
+            " · ".join(key_text(block)),
             "",
             SPEED_HINT,
             "",
@@ -402,7 +402,8 @@ def _set_aside_pieces(word: str, entries: list[SetAsideEntry]) -> list[str]:
     """
     grouped: dict[str, list[str]] = {}
     for entry in entries:
-        grouped.setdefault(entry.reason, []).append(f"{entry.packager} {entry.quantization}")
+        # The runtime's prefix as in every packager cell (F4): `vLLM · acme AWQ`, nothing for Ollama.
+        grouped.setdefault(entry.reason, []).append(f"{packager_cell(entry)} {entry.quantization}")
     pieces = []
     for reason, names in sorted(grouped.items()):
         count = str(len(names))
@@ -577,8 +578,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
-        key_text = key_pieces(block) + legend_lines(block.ranked)
-        lines += _labeled_rows(KEY_LABEL, joined(key_text, dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
+        lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
     disk = _disk(block, view)
     return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view))
 

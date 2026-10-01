@@ -28,6 +28,8 @@ GOLDEN = Path(__file__).parent / "golden"
 SNAPSHOT_RUN_AT = datetime(2026, 9, 30, 8, 0, 0, tzinfo=timezone.utc)
 RENDERED_AT = datetime(2026, 9, 30, 8, 5, 0, tzinfo=timezone.utc)
 BASE_REPO = "Qwen/Qwen3-8B"
+# Fix r2 (Codex r2-3): what the legend says vLLM's `gpu_split` is, beside Ollama's "all cards together".
+VLLM_SPLIT_PIECE = "vLLM gpu_split: only the cards its row names, the first of the largest equal size"
 
 
 def _profile() -> HardwareProfile:
@@ -280,11 +282,111 @@ def test_an_unequal_cards_machine_describes_the_group_not_a_packages_own_usage()
     entries = {entry.base_model_hf_repo: entry for entry in document.machines[0].ranked}
     assert {repo: entry.fit.cards for repo, entry in entries.items()} == {"acme/Eight-7B": 2, "acme/NoHeads-7B": 1}
     # Sweep (Codex r1): the row's own note must say its own card count too, not the machine's four
-    # (`profile.gpus`) -- the same "per-row, not per-machine" bug class as findings 1 and 4.
-    assert "spread over 2 cards" in entries["acme/Eight-7B"].note.text
-    assert "the reserve of 1.8" in entries["acme/Eight-7B"].note.text
-    assert "spread over" not in entries["acme/NoHeads-7B"].note.text  # t = 1: mode "gpu", one card
+    # (`profile.gpus`) -- the same "per-row, not per-machine" bug class as findings 1 and 4. Since
+    # Fix r2 the note is vLLM's own (requests at once on its cards), never Ollama's reserve wording.
+    assert "at once on 2 cards of 22.5 GiB" in entries["acme/Eight-7B"].note.text
+    assert "at once on one card of 22.5 GiB" in entries["acme/NoHeads-7B"].note.text
+    for entry in entries.values():
+        assert "graphics memory" not in entry.note.text and "after the reserve" not in entry.note.text
 
     terminal = document_terminal(document)
     assert "vLLM can split over the 3 cards of 22.49 GB; 1 smaller card is left out" in terminal
     assert "vLLM on 1 card:" in terminal and "vLLM on 2 cards:" in terminal
+    # Codex r2-3: the legend's own mode words may not claim `all cards together` for vLLM, which
+    # uses two of the three equal cards here and never the smaller T4.
+    markdown = document_markdown(document)
+    for text in (markdown, terminal):
+        assert "gpu_split: all cards together (Ollama)" in text
+        assert VLLM_SPLIT_PIECE in text
+        assert "gpu_split: all cards together ·" not in text.replace("\n", " ")
+
+
+# --- Fix r2 (Codex r2 on 8d05e92): every text that explains a row reads `Fit.runtime` ---------------
+
+
+def _qwen3_base(heads: int | None = 32) -> BaseModelSpec:
+    """The brief's own rechenbeispiel model; `heads=None` forces `t = 1` (F1)."""
+    return _base_model().model_copy(update={"architecture": _architecture().model_copy(update={"num_attention_heads": heads})})
+
+
+def _awq(size: int = 6_098_581_864) -> Package:
+    return _tensor_package().model_copy(
+        update={"repo": "acme/Qwen3-8B-AWQ", "files": [PackageFile(name="model.safetensors", role="weights", size_bytes=size, digest=None)]}
+    )
+
+
+# One case per class vLLM's formula reaches (F2): the head count (None -> `t = 1`), the requests, the
+# weights, and the words the row's note must carry instead of Ollama's "Fits into graphics memory".
+VLLM_CLASSES = {
+    # The rechenbeispiel at `t = 4`: 15 at once, 10 assumed -> fits.
+    "fits": (32, 10, 6_098_581_864, "vLLM holds 15 requests at once on 4 cards of 22.5 GiB"),
+    # The same 15 against 5 assumed: twice them or more -> ample.
+    "ample": (32, 5, 6_098_581_864, "vLLM holds 15 requests at once on 4 cards of 22.5 GiB"),
+    # The rechenbeispiel at `t = 1`: 3 of 10 at once -> tight (52.2 GiB needed against a 20.7 GiB pool).
+    "tight": (None, 10, 6_098_581_864, "vLLM holds only 3 of 10 requests at once on one card of 22.5 GiB"),
+    # 20 GB of weights on one card leave no KV cache at all -> no fit.
+    "no_fit": (None, 10, 20_000_000_000, "vLLM holds not even one request at once on one card of 22.5 GiB"),
+}
+
+
+@pytest.mark.parametrize("fit_class", list(VLLM_CLASSES))
+def test_every_vllm_class_explains_its_row_by_requests_at_once(fit_class):
+    """Codex r2-1: a vLLM row's note says how many requests its cards hold at once against the
+    requests the ranking assumes -- never Ollama's "Fits into graphics memory" or its reserve,
+    which for `tight` (3 of 10) claimed a fit that does not hold. Through the full document:
+    the row's note, the Markdown table, the JSON and the terminal view."""
+    heads, requests, size, said = VLLM_CLASSES[fit_class]
+    document = _render(_profile(), [_qwen3_base(heads)], [_awq(size)], requests=requests)
+
+    block = document.machines[0]
+    entry = (block.no_fit if fit_class == "no_fit" else block.ranked)[0]
+    assert (entry.fit.runtime, entry.fit.fit_class) == ("vllm", fit_class)
+    assert said in entry.note.text
+    for ollama_words in ("graphics memory", "after the reserve", "Fit contract v1"):
+        assert ollama_words not in entry.note.text
+    assert entry.note.text in document_markdown(document)
+    listed = document_json(document)["machines"][0]["no_fit" if fit_class == "no_fit" else "ranked"][0]
+    assert listed["note"]["text"] == entry.note.text and listed["fit"].get("at_once", 0) == entry.fit.at_once
+    terminal = document_terminal(document)
+    if fit_class == "no_fit":
+        assert "1 no fit (vLLM · acme AWQ)" in terminal
+    else:
+        row = next(line for line in terminal.splitlines() if "vLLM · acme · AWQ" in line)
+        assert f" {fit_class} " in row
+
+
+def test_an_ollama_only_table_on_a_vllm_machine_keeps_its_own_key():
+    """The counter-proof: a machine with vLLM that shows no vLLM row keeps Ollama's key, word for word."""
+    from modelroom.screen import FIT_HINT
+
+    document = _render(_profile(), [_base_model()], [_gguf_package()])
+
+    assert " · ".join(FIT_HINT) in document_markdown(document)
+    assert "(Ollama)" not in document_markdown(document) and "vLLM's" not in document_terminal(document)
+
+
+@pytest.mark.parametrize("where", ["no_fit", "not_covered"])
+def test_vllm_rows_set_aside_get_the_legend_beside_ranked_ollama_rows(where):
+    """Codex r2-4: the legend reads every row the table shows, not the ranked ones alone. Ollama
+    ranks here, and the one vLLM row stands under `No fit` or `Not covered` -- the reader still
+    needs vLLM's own class rule, its prefix and its mode words, in the Markdown and the terminal."""
+    tensor = _awq(20_000_000_000 if where == "no_fit" else 0)
+    document = _render(_profile(), [_qwen3_base(None)], [_gguf_package(), tensor])
+
+    block = document.machines[0]
+    assert {entry.fit.runtime for entry in block.ranked} == {"ollama"}
+    assert [entry.fit.runtime for entry in getattr(block, where)] == ["vllm"]
+    terminal = document_terminal(document)
+    for text in (document_markdown(document), terminal):
+        assert "vLLM's classes count requests at once instead: no fit below one" in text
+        assert "gpu_split: all cards together (Ollama)" in text
+        assert "vLLM · rows start with vllm serve; the others are pulled into Ollama" in text
+    assert "vLLM · acme AWQ" in terminal  # the `shown` line names the set-aside row as vLLM's
+
+
+def test_the_terminal_view_of_a_machine_with_vllm_stays_within_100_columns():
+    """Sweep (Fix r2): the legend's vLLM sentences are pieces the terminal can wrap between; one
+    sentence of 200 characters ran past the 100-column window the view is drawn for."""
+    lines = document_terminal(_document()).splitlines()
+
+    assert [line for line in lines if len(line) > 100] == []

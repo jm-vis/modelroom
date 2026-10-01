@@ -110,17 +110,18 @@
           "measurement_group": 1,
           "measurement_id": null,
           "note": {
-            "code": "spread_over_graphics_cards",
+            "code": "vllm_requests_at_once",
             "facts": [
-              "fit.mode",
+              "fit.runtime",
+              "fit.at_once",
+              "fit.requests",
+              "fit.cards",
               "fit.need_gib",
-              "fit.pool_gib",
-              "fit.reserve_gib",
-              "profile.gpus"
+              "fit.pool_gib"
             ],
             "origin": "computed",
             "subject": "package",
-            "text": "Fits into graphics memory spread over 4 cards: it needs about 56.7 GiB of the 82.8 GiB left after the reserve of 1.8 GiB on each card."
+            "text": "vLLM holds 15 requests at once on 4 cards of 22.5 GiB; the 10 requests need about 56.7 GiB of the 82.8 GiB it takes (0.92 of each card)."
           },
           "package_context": null,
           "package_identity": [

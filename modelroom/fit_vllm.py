@@ -17,9 +17,10 @@ otherwise (`architecture.state_bytes`, AP9-UX2 P1).
 
 The class says how the requests the ranking assumes stand against what the card holds: `no_fit`
 below one request, `tight` below the requests, `ample` at twice the requests or more on the
-architecture basis, `fits` otherwise. The largest card of the machine is computed; tensor parallel
-over several cards is not (CONTRACTS.md, "Local servers and the vLLM load test", ADR 0008).
-`fit.py` is unchanged, and nothing here is persisted.
+architecture basis, `fits` otherwise. Since AP9-SV2-F `vllm_fit_as_fit` computes this per card
+over the `t` equal cards tensor parallel chooses (F1, F2) and returns fit contract v1's own `Fit`;
+what a row then says about itself is `vllm_words`'s. Tensor parallel is computed, never measured
+(ADR 0008). `fit.py` is unchanged, and nothing here is persisted.
 """
 
 from __future__ import annotations

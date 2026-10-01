@@ -147,15 +147,18 @@ def _run(
     keep: bool = False,
     own: bool = True,
     daemon=None,
+    hub: dict | None = None,
 ) -> tuple[int, list[str]]:
-    """`keep`: the folder was laid out by the test already (e.g. with an imported profile)."""
+    """`keep`: the folder was laid out by the test already (e.g. with an imported profile); `hub`:
+    recorded Hub answers this one test replaces."""
     results = (tmp_path / "results").resolve() if keep else _folder(tmp_path, bound, own)
     lines: list[str] = []
+    mapping = {**guided_transport_mapping(), **qwen25_transport_mapping(), **_choosable_qwen25(), **(hub or {})}
     code = run_guided(
         FileAsker(ANSWERS if answers is None else answers),
         here=results,
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
-        transport=build_transport({**guided_transport_mapping(), **qwen25_transport_mapping(), **_choosable_qwen25()}),
+        transport=build_transport(mapping),
         probes=windows_probes(host="workstation"),
         daemon=daemon if daemon is not None else offline_daemon(),
         servers=servers if servers is not None else vllm_servers(),
@@ -254,6 +257,26 @@ def test_step_4_reads_the_lines_of_the_brief_with_the_vllm_row_picked(tmp_path: 
         "33 requests of context 4k at once, from size: fits",
         "✓ Measurement     vLLM measured",
     ]
+
+
+def test_step_4_says_why_tensor_parallel_stayed_on_one_card(tmp_path: Path):
+    """Codex r2-2: a base model whose config names no head count computes on one card (F1), and
+    step 4 says why -- the very reason `Fit.reason` carries into the Markdown and the JSON, read
+    here through the guided run itself, not `fit_lines` called by hand."""
+    from modelroom.fit_vllm import NO_HEAD_COUNT_REASON
+
+    config = json.loads((FIXTURES / "hf_qwen25_05b_instruct_config.json").read_text(encoding="utf-8"))
+    del config["num_attention_heads"]
+    url = f"https://huggingface.co/{QWEN25_REPO}/resolve/{QWEN25_SHA}/config.json"
+    hub = {("GET", url): Response(status=200, headers={}, body=json.dumps(config).encode("utf-8"))}
+
+    code, lines = _run(tmp_path, hub=hub)
+
+    step = _step(lines, 4)
+    assert code == 0
+    assert "vLLM fit, computed: 1 card of 22.49 GiB, 0.92 of each for vLLM" in step
+    fit_line = step.index("vLLM fit, computed: 1 card of 22.49 GiB, 0.92 of each for vLLM")
+    assert step[fit_line + 3] == NO_HEAD_COUNT_REASON
 
 
 def test_the_start_screen_names_the_served_model_and_the_card_its_speed(tmp_path: Path):
