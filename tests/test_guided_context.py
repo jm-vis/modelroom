@@ -437,3 +437,193 @@ def test_the_last_column_counts_with_the_requests_of_the_run():
     assert count_fitting(_profile(), MACHINE, PACKAGES, BY_REPO, 131072, 3) == 0
     assert one[131072] == "2 of 3 packages fit"
     assert three[131072] == "none of 3 packages fits"
+
+
+# --- tensor visibility in the balance -----------------------------
+
+
+def _config_with_snapshot(tmp_path: Path, packages: list[Package]) -> Configuration:
+    from modelroom.contracts import Area, Snapshot
+    from modelroom.state import write_snapshot
+
+    config = Configuration.from_dict(
+        {
+            "schema_version": 3,
+            "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-8B"}]}],
+            "packagers": [],
+            "publishers": ["acme"],
+            "machines": {},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "docs" / "models.md")},
+        }
+    )
+    write_snapshot(
+        config,
+        Snapshot(
+            schema_version=2,
+            run_at=NOW,
+            areas=[
+                Area(
+                    source="huggingface", base_model_hf_repo="acme/Nova-8B", packager="acme",
+                    status="complete", last_success=NOW, error=None,
+                )
+            ],
+            base_models=[_base_model(repo="acme/Nova-8B")],
+            packages=packages,
+        ).model_dump(mode="json"),
+    )
+    return config
+
+
+def _gguf_package() -> Package:
+    return Package(
+        source="huggingface",
+        repo="packager/Nova-8B-GGUF",
+        revision="a" * 40,
+        base_model_hf_repo="acme/Nova-8B",
+        format="gguf",
+        files=[{"name": "Nova-8B-Q4_K_M.gguf", "role": "weights", "size_bytes": 3 * GIB, "digest": None}],
+        complete=True,
+        quantization="Q4_K_M",
+        quantization_source="filename",
+        default_context=None,
+        provenance="from_metadata",
+        unresolved_reason=None,
+        approval=None,
+        observed_at=NOW,
+        last_seen=NOW,
+        active=True,
+    )
+
+
+def _tensor_package() -> Package:
+    return Package(
+        source="huggingface",
+        repo="acme/Nova-8B",
+        revision="b" * 40,
+        base_model_hf_repo="acme/Nova-8B",
+        format="tensor",
+        files=[{"name": "model.safetensors", "role": "weights", "size_bytes": 5 * GIB, "digest": None}],
+        complete=True,
+        quantization="BF16",
+        quantization_source="config",
+        default_context=None,
+        provenance="from_metadata",
+        unresolved_reason=None,
+        approval=None,
+        observed_at=NOW,
+        last_seen=NOW,
+        active=True,
+    )
+
+
+def test_the_balance_counts_a_tensor_package_only_for_machines_with_vllm(tmp_path: Path):
+    """The step-2 balance and the card (`snapshot_facts`) count a tensor package only when one of
+    the machines they are read for has vLLM -- the same visibility rule the ranked table reads
+    (`runtimes.visible_packages`, proven directly in `tests/test_render.py`)."""
+    from modelroom.guided_context import snapshot_facts
+    from modelroom.vllm_server import ServedModel
+
+    config = _config_with_snapshot(tmp_path, [_gguf_package(), _tensor_package()])
+    with_vllm = _profile().model_copy(update={"runtimes": ["ollama", "vllm"]})
+    served = ServedModel(id="acme/Nova-8B", root="acme/Nova-8B", max_model_len=4096)
+
+    assert snapshot_facts(config).packages == 1
+    assert snapshot_facts(config, machines=[(_profile(), None)]).packages == 1
+    assert snapshot_facts(config, machines=[(with_vllm, None)]).packages == 2
+    assert snapshot_facts(config, machines=[(_profile(), served)]).packages == 2
+    assert snapshot_facts(config, machines=[(_profile(), None), (with_vllm, None)]).packages == 2
+
+
+# --- the vLLM gate of a guided run: any chosen machine ------------------------
+
+
+def _chosen_run(tmp_path: Path, chosen: tuple[str, ...], live: object = None):
+    """A run on this machine (`here`, without vLLM) in a folder that also holds a server with a
+    stored vLLM profile; `chosen` names which of `"here"`/`"server"` the run picked."""
+    from types import SimpleNamespace
+
+    from modelroom.remote_store import remote_path_for, this_machine
+    from modelroom.selection import RunSelection
+    from modelroom.state import atomic_write_json
+
+    pointer = tmp_path / "pointer.json"
+    here = this_machine(remote_path_for(pointer))
+    own = _profile().model_copy(update={"profile_id": "1" * 16})
+    server = _profile().model_copy(update={"profile_id": "2" * 16, "runtimes": ["ollama", "vllm"]})
+    config = Configuration.from_dict(
+        {
+            "schema_version": 3,
+            "families": [{"name": "nova", "base_models": [{"hf_repo": "acme/Nova-8B"}]}],
+            "packagers": [],
+            "publishers": ["acme"],
+            "machines": {
+                here: {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True, "profile": own.profile_id},
+                "server": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": False, "profile": server.profile_id},
+            },
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "docs" / "models.md")},
+        }
+    )
+    config.paths.hardware_dir.mkdir(parents=True)
+    for profile in (own, server):
+        atomic_write_json(config.paths.hardware_dir / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
+    names = tuple(here if name == "here" else name for name in chosen)
+    run = SimpleNamespace(
+        pointer_path=pointer,
+        selection=RunSelection(machines=names, models=()),
+        servers=SimpleNamespace(found={} if live is None else {"vllm": live}),
+    )
+    return run, config
+
+
+@pytest.mark.parametrize(
+    ("chosen", "live", "expected"),
+    [
+        (("here", "server"), None, True),  # another chosen machine's stored profile is enough
+        (("here",), None, False),  # a vLLM server in the folder that was not chosen does not count
+        (("server",), None, True),
+        (("here",), "served", True),  # live detection counts for the machine the run is on
+        ((), "served", False),  # ... but only when that machine is chosen
+        (("server",), "asks for an API key", True),
+        (("here",), "asks for an API key", False),  # E5: a key prompt is no detection
+    ],
+    ids=["other-chosen", "other-not-chosen", "only-other", "live-here", "live-here-nothing-chosen",
+         "other-with-key-prompt-here", "key-prompt"],
+)
+def test_vllm_among_chosen_reads_every_chosen_machine(tmp_path: Path, chosen, live, expected):
+    from modelroom.guided_context import vllm_among_chosen
+    from modelroom.vllm_server import ServedModel
+
+    if live == "served":
+        live = ServedModel(id="acme/Nova-8B", root="acme/Nova-8B", max_model_len=4096)
+    run, config = _chosen_run(tmp_path, chosen, live)
+
+    assert vllm_among_chosen(run, config) is expected
+
+
+@pytest.mark.parametrize(("runtimes", "expected"), [(None, "1 package from"), (["ollama", "vllm"], "2 packages from")])
+def test_the_empty_card_counts_a_tensor_package_only_for_a_named_machine_with_vllm(tmp_path: Path, runtimes, expected):
+    """The card of a step 5 that wrote no document counts with the same visibility rule, for the
+    machines it names (their stored profiles)."""
+    from modelroom.result_card import empty_card
+    from modelroom.state import atomic_write_json
+
+    base = _config_with_snapshot(tmp_path, [_gguf_package(), _tensor_package()])
+    profile = _profile().model_copy(update={"profile_id": "3" * 16, "runtimes": runtimes})
+    base.paths.hardware_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(base.paths.hardware_dir / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
+    data = base.model_dump(mode="json")
+    data["machines"] = {"server": {"reserve_ram_gib": 8.0, "reserve_vram_gib": 1.0, "writer": True, "profile": profile.profile_id}}
+    config = Configuration.from_dict(data)
+    facts = empty_card(config, folder=tmp_path, scenario=context_scenario(8192), now=NOW)
+
+    assert next(fact for fact in facts if fact.label == "models").note.startswith(expected)
+
+
+def test_chosen_runtimes_gives_live_detection_to_this_machine_only(tmp_path: Path):
+    from modelroom.guided_context import chosen_runtimes
+
+    run, config = _chosen_run(tmp_path, ("here", "server"), "live answer")
+
+    (here_profile, here_live), (server_profile, server_live) = chosen_runtimes(run, config)
+    assert (here_profile.profile_id, here_live) == ("1" * 16, "live answer")
+    assert (server_profile.profile_id, server_live) == ("2" * 16, None)

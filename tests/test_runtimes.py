@@ -162,6 +162,80 @@ def test_machine_runtime_keys_reads_the_profiles_own_list_where_it_names_any():
     assert runtimes.machine_runtime_keys(_profile(runtimes=["vllm"])) == frozenset({"vllm"})
 
 
+# --- machine_has_vllm: the one decision both the tensor search and the fetch step read --
+# "runtimes, or detected live" (P1), never tested separately at either call site ---
+
+
+def _served() -> "ServedModel":
+    from modelroom.vllm_server import ServedModel
+
+    return ServedModel(id="acme/Nova-7B", root="acme/Nova-7B", max_model_len=4096)
+
+
+@pytest.mark.parametrize(
+    ("live", "expected"),
+    [
+        (None, False),
+        ("asks for an API key", False),  # E5: a key prompt does not count as detected
+        (_served(), True),
+    ],
+    ids=["not-live", "key-prompt", "live-serving"],
+)
+def test_machine_has_vllm_without_a_profile_at_all(live, expected):
+    assert runtimes.machine_has_vllm(None, live) is expected
+
+
+@pytest.mark.parametrize(
+    ("runtimes_field", "live", "expected"),
+    [
+        ([], None, False),
+        ([], "asks for an API key", False),
+        ([], _served(), True),
+        (["vllm"], None, True),
+        (["vllm"], "asks for an API key", True),
+        (["vllm"], _served(), True),
+        (["ollama"], None, False),
+        (["ollama"], _served(), True),
+    ],
+    ids=[
+        "no-runtimes-not-live",
+        "no-runtimes-key-prompt",
+        "no-runtimes-live-serving",
+        "stored-vllm-not-live",
+        "stored-vllm-key-prompt",
+        "stored-vllm-live-serving",
+        "stored-ollama-only-not-live",
+        "stored-ollama-only-live-serving",
+    ],
+)
+def test_machine_has_vllm_every_combination_of_profile_and_live_detection(runtimes_field, live, expected):
+    """Profile yes/no (stored `runtimes` naming `vllm` or not) crossed with live yes/no/key-only:
+    `machine_has_vllm` is `True` exactly when either source says so, never when neither does."""
+    assert runtimes.machine_has_vllm(_profile(runtimes=runtimes_field), live) is expected
+
+
+def test_both_call_sites_read_the_one_function_not_their_own_logic():
+    """The two gates of a guided run -- the tensor search and `build_tensor` -- read one decision,
+    `guided_context.vllm_among_chosen` (every chosen machine through `runtimes.machine_has_vllm`),
+    and nothing else: a second, independently written copy of the same test is exactly the kind
+    of drift two call sites of one decision are prone to once they stop sharing it."""
+    import inspect
+
+    import modelroom.guided as guided_module
+    import modelroom.guided_context as guided_context_module
+    import modelroom.guided_search as guided_search_module
+
+    assert "vllm_among_chosen(" in inspect.getsource(guided_module._fetch_step)
+    assert "vllm_among_chosen(" in inspect.getsource(guided_search_module.search_step)
+    assert "any_has_vllm(" in inspect.getsource(guided_context_module.vllm_among_chosen)
+    assert "machine_has_vllm(" in inspect.getsource(runtimes.any_has_vllm)
+    # Neither module reads a machine's runtimes on its own -- `runtimes.py` is the only place.
+    for module in (guided_module, guided_search_module):
+        source = inspect.getsource(module)
+        assert "machine_runtime_keys" not in source
+        assert "machine_has_vllm" not in source
+
+
 def test_accepting_on_machine_narrows_to_the_machines_own_runtimes(monkeypatch):
     import types
 
@@ -512,3 +586,38 @@ def test_the_install_line_and_the_pull_step_offer_the_same_row(tmp_path, monkeyp
             assert installs == [f"install   #1 {NOT_UNIQUE_INSTALL}"]
         else:
             assert installs == []
+
+
+# --- visibility: read from the table, never from the format alone -------------------------------
+
+
+def _hf_tensor() -> Package:
+    return _package(format="tensor", quantization="BF16", quantization_source="config")
+
+
+def _ollama_tensor() -> Package:
+    return _ollama_package(format="tensor", quantization=None, provenance="unresolved", unresolved_reason="format")
+
+
+def test_only_a_package_a_present_runtime_must_serve_is_hidden():
+    """F3: a Hugging Face tensor package is vLLM's alone, shown only with vLLM; an Ollama package,
+    an Ollama tensor (MLX) build included, and every GGUF are shown on any machine."""
+    hf_tensor, ollama_tensor, gguf = _hf_tensor(), _ollama_tensor(), _package()
+    without = runtimes.visible_packages([hf_tensor, ollama_tensor, gguf], [(_profile(runtimes=["ollama"]), None)])
+    with_vllm = runtimes.visible_packages([hf_tensor, ollama_tensor, gguf], [(_profile(runtimes=["ollama", "vllm"]), None)])
+
+    assert without == [ollama_tensor, gguf]
+    assert with_vllm == [hf_tensor, ollama_tensor, gguf]
+
+
+def test_visibility_follows_the_table_rows_own_rule(monkeypatch):
+    """A row that names its own packages (`Runtime.shown_only_with`) is all it takes: here the Ollama
+    row is made to claim GGUF builds, and a machine without Ollama then no longer sees them."""
+    import dataclasses
+
+    gated = dataclasses.replace(runtimes.OLLAMA, shown_only_with=lambda package: package.format == "gguf")
+    monkeypatch.setattr(runtimes, "RUNTIMES", (gated, runtimes.VLLM))
+    gguf = _package()
+
+    assert runtimes.visible_packages([gguf], [(_profile(runtimes=["vllm"]), None)]) == []
+    assert runtimes.visible_packages([gguf], [(_profile(runtimes=["ollama"]), None)]) == [gguf]

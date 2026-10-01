@@ -40,6 +40,7 @@ from .fetch_types import AreaOutcome, error_text
 from .http import BudgetExhaustedError, Transport
 from .provenance import decide_provenance
 from .quantization import has_shard_suffix, identity_stem, non_weight_role, package_identity_key, parse_hf_quant
+from . import tensor_quant
 
 HF_API = "https://huggingface.co/api"
 
@@ -189,6 +190,7 @@ def fetch_hf_area(
     targets: Sequence[str],
     run_at: datetime,
     previous_by_key: dict[tuple[str, str, str], Package] | None = None,
+    build_tensor: bool = False,
 ) -> AreaOutcome:
     """Fetch every target of `base_model` that belongs to `owner` and assemble their packages.
 
@@ -206,6 +208,15 @@ def fetch_hf_area(
     stood in the previous snapshot; when a freshly assembled package shares its identity with
     one that carried an `Approval`, that approval is carried forward into `decide_provenance` so
     an approval bound to still-current content survives this fetch.
+
+    `build_tensor` (AP9-SV2-P) lets a tensor (safetensors) weight group read its `config.json`
+    and pass the safe-path check. `False` (the default) makes no such request: the group keeps
+    the content facts an earlier build read at this exact revision and is judged again, or stays
+    `unresolved`/`format` when there are none (`_carried_tensor_facts`). `True` is reached only
+    from the guided mode's fetch step, when a chosen machine has vLLM
+    (`guided_context.vllm_among_chosen`, P1's own gate): it resolves the base model's own
+    repository (always a target since AP9-UX2 P3) alongside whatever P1's tensor search wrote into
+    `repos`, both through the one ordinary `package_targets` mechanism.
     """
     packages: list[Package] = []
     for repo in [target for target in targets if target.split("/", 1)[0] == owner]:
@@ -245,7 +256,17 @@ def fetch_hf_area(
             entries = _fetch_tree(transport, repo, sha)
             packages.extend(
                 _assemble_packages(
-                    repo, sha, base_model, tags, card_data, targets, entries, run_at, previous_by_key or {}
+                    repo,
+                    sha,
+                    base_model,
+                    tags,
+                    card_data,
+                    targets,
+                    entries,
+                    run_at,
+                    previous_by_key or {},
+                    transport,
+                    build_tensor,
                 )
             )
         except BudgetExhaustedError as exc:
@@ -414,6 +435,35 @@ def _finalize(stub: Package, provenance: str, unresolved_reason: str | None) -> 
     return Package(**data)
 
 
+def _group_quantization(
+    package_format: str,
+    representative: str,
+    group_files_all: list[PackageFile],
+    repo: str,
+    sha: str,
+    transport: Transport,
+    tensor_label_cache: dict[str, tuple[str | None, Literal["config"] | None]],
+    build_tensor: bool,
+) -> tuple[str | None, Literal["filename", "config"] | None]:
+    """`(quantization, quantization_source)` for one weight group: a GGUF filename, a tensor
+    repo's `config.json` (cached in `tensor_label_cache`, fetched at most once per repo), or
+    `(None, None)` for anything else (`_assemble_packages`, P2).
+
+    `build_tensor`: a tensor group costs no `config.json` request and no safe-path
+    check at all when it is `False` -- exactly AP9-SV1's own behavior, on a machine without vLLM
+    among its `runtimes`.
+    """
+    if package_format == "gguf":
+        quantization = parse_hf_quant(representative)
+        return quantization, ("filename" if quantization is not None else None)
+    if package_format != "tensor" or not build_tensor:
+        return None, None
+    _check_safe_tensor_paths(group_files_all)
+    if "label" not in tensor_label_cache:
+        tensor_label_cache["label"] = _fetch_tensor_quant(transport, repo, sha)
+    return tensor_label_cache["label"]
+
+
 def _assemble_packages(
     repo: str,
     sha: str,
@@ -426,41 +476,118 @@ def _assemble_packages(
     entries: list[dict],
     run_at: datetime,
     previous_by_key: dict[tuple[str, str, str], Package],
+    transport: Transport,
+    build_tensor: bool,
 ) -> list[Package]:
     files = _files_from_tree(entries)
-    weight_files = [f for f in files if f.role in ("weights", "weights_shard")]
-    extra_files = [f for f in files if f.role in ("mmproj", "other")]
-
-    groups: dict[str, list[PackageFile]] = {}
-    for file in weight_files:
-        groups.setdefault(identity_stem(file.name), []).append(file)
+    groups, extra_files = _weight_groups(files)
+    # P2: one `config.json` request serves every tensor group of this repo (two stems of one
+    # repo read it once); fetched on first use, never when the repo has no tensor
+    # group at all (an all-GGUF repo costs nothing extra). A one-entry cache, not a plain local:
+    # `_group_quantization` has to tell "not fetched yet" apart from "fetched, no label".
+    tensor_label_cache: dict[str, tuple[str | None, Literal["config"] | None]] = {}
 
     packages: list[Package] = []
     for group_files in groups.values():
-        representative = group_files[0].name
-        stub = Package(
-            source="huggingface",
-            repo=repo,
-            revision=sha,
-            base_model_hf_repo=base_model.hf_repo,
-            format=_package_format(representative),
-            files=[*group_files, *extra_files],
-            complete=shards_complete(group_files),
-            quantization=parse_hf_quant(representative),
-            default_context=None,
-            provenance="unresolved",
-            unresolved_reason="format",
-            approval=None,
-            observed_at=run_at,
-            last_seen=run_at,
-            active=True,
+        stub = _group_stub(
+            repo, sha, base_model, group_files, extra_files, run_at, transport, tensor_label_cache, build_tensor
         )
         stub, approvals = _carry_forward_approval(stub, previous_by_key)
+        known = stub if stub.format != "tensor" or build_tensor else _carried_tensor_facts(stub, previous_by_key)
+        if known is None:
+            packages.append(_finalize(stub, "unresolved", "format"))
+            continue
         provenance, unresolved_reason = decide_provenance(
-            stub, base_model, tags, approvals, hf_card_data=card_data, hf_targets=targets
+            known, base_model, tags, approvals, hf_card_data=card_data, hf_targets=targets
         )
-        packages.append(_finalize(stub, provenance, unresolved_reason))
+        packages.append(_finalize(known, provenance, unresolved_reason))
     return packages
+
+
+def _weight_groups(files: list[PackageFile]) -> tuple[dict[str, list[PackageFile]], list[PackageFile]]:
+    """`files` split into weight groups (by `identity_stem`) and the non-weight extras every
+    group carries alongside its own weights."""
+    weight_files = [f for f in files if f.role in ("weights", "weights_shard")]
+    extra_files = [f for f in files if f.role in ("mmproj", "other")]
+    groups: dict[str, list[PackageFile]] = {}
+    for file in weight_files:
+        groups.setdefault(identity_stem(file.name), []).append(file)
+    return groups, extra_files
+
+
+def _group_stub(
+    repo: str,
+    sha: str,
+    base_model: BaseModelSpec,
+    group_files: list[PackageFile],
+    extra_files: list[PackageFile],
+    run_at: datetime,
+    transport: Transport,
+    tensor_label_cache: dict[str, tuple[str | None, Literal["config"] | None]],
+    build_tensor: bool,
+) -> Package:
+    """One weight group's `Package`, `unresolved`/`format` until `decide_provenance` judges it."""
+    representative = group_files[0].name
+    package_format = _package_format(representative)
+    group_files_all = [*group_files, *extra_files]
+    quantization, quantization_source = _group_quantization(
+        package_format, representative, group_files_all, repo, sha, transport, tensor_label_cache, build_tensor
+    )
+    return Package(
+        source="huggingface",
+        repo=repo,
+        revision=sha,
+        base_model_hf_repo=base_model.hf_repo,
+        format=package_format,
+        files=group_files_all,
+        complete=shards_complete(group_files),
+        quantization=quantization,
+        quantization_source=quantization_source,
+        default_context=None,
+        provenance="unresolved",
+        unresolved_reason="format",
+        approval=None,
+        observed_at=run_at,
+        last_seen=run_at,
+        active=True,
+    )
+
+
+def _check_safe_tensor_paths(files: list[PackageFile]) -> None:
+    """P2: every start file of a tensor group (weights and the small extras alike) must be a
+    safe, cache-relative path. The message never carries the unsafe path itself; the caller
+    (`fetch_hf_area`'s own `except Exception` clause, the same one any other shape problem goes
+    through) prefixes it with the repo, so the final text reads exactly `<repo>: unsafe file name`.
+    """
+    for file in tensor_quant.start_files(files):
+        if not tensor_quant.is_safe_repo_path(file.name):
+            raise ValueError("unsafe file name")
+
+
+def _fetch_tensor_quant(transport: Transport, repo: str, sha: str) -> tuple[str | None, Literal["config"] | None]:
+    """One tensor repo's quantization label, read from its `config.json` at `sha` (P2).
+
+    Any failure but a budget exhaustion -- a transport error, a status other than `200`, a body
+    over `tensor_quant.MAX_CONFIG_JSON_BYTES`, or JSON that is not an object -- resolves to
+    `(None, None)`: the label is a documented extra on top of the package (P2), never a reason
+    to end the area. `BudgetExhaustedError` is not caught here and ends the area like any other
+    exhausted budget (CONTRACTS.md, "Request budget").
+    """
+    try:
+        response = transport("GET", f"https://huggingface.co/{repo}/resolve/{sha}/config.json")
+    except BudgetExhaustedError:
+        raise
+    except Exception:
+        return None, None
+    if response.status != 200 or len(response.body) > tensor_quant.MAX_CONFIG_JSON_BYTES:
+        return None, None
+    try:
+        config = response.json()
+    except Exception:
+        return None, None
+    if not isinstance(config, dict):
+        return None, None
+    return tensor_quant.tensor_quant_label(config)
 
 
 def _carry_forward_approval(
@@ -487,3 +614,31 @@ def _carry_forward_approval(
     if previous.base_model_hf_repo != stub.base_model_hf_repo:
         return stub, []
     return stub.model_copy(update={"approval": previous.approval}), [previous.approval]
+
+
+def _carried_tensor_facts(stub: Package, previous_by_key: dict[tuple[str, str, str], Package]) -> Package | None:
+    """`stub` with the content facts an earlier run read for this tensor group, for a run that
+    may not read them itself (no `build_tensor`); `None` when no such facts exist yet.
+
+    Two kinds of knowledge are kept apart, and this function is where that is decided:
+
+    - **Content facts** -- the quantization label and its source, read from `config.json` --
+      depend on the repository and its revision alone. They are carried when a previous package
+      has the same identity and exactly this revision, and was built past the format lock (its
+      reason is not `format`), whatever its provenance verdict: an `unresolved` package (a draft
+      model's `file_stem`) keeps its label too. A different revision may be different content,
+      so nothing is carried then.
+    - **Verdicts** -- provenance, the reason -- also depend on which base model the package is
+      assigned to now. They are never carried: the caller decides again with
+      `decide_provenance`, from these facts and the current assignment, which needs no request.
+      The same repository moved to another base model at the same revision gets the verdict a
+      run with vLLM would give it, never the one of its former assignment.
+    """
+    previous = previous_by_key.get(package_identity_key(stub))
+    if previous is None or previous.revision != stub.revision or previous.format != "tensor":
+        return None
+    if previous.unresolved_reason == "format":
+        return None
+    return stub.model_copy(
+        update={"quantization": previous.quantization, "quantization_source": previous.quantization_source}
+    )

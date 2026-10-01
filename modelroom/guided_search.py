@@ -23,17 +23,18 @@ Everything but `search_step` is pure. `GuidedRun` is only an annotation here (`T
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from .config import Configuration
 from .dialog import Choice
-from .guided_context import Checked, machine_checked
+from .guided_context import Checked, machine_checked, vllm_among_chosen
 from .guided_models import ModelChoice, list_context, model_choices, unusable_counts
 from .screen import number_word, repositories_note, searched_note, yes_no
 from .search import DEFAULT_PACKAGERS, SearchError, SearchOutcome, run_search
 from .state import write_search_log
+from .tensor_search import search_tensor_repos
 
 if TYPE_CHECKING:  # pragma: no cover -- the annotation only; no import at run time
     from .guided import GuidedRun
@@ -77,6 +78,12 @@ class SearchStep:
 
     `checked` and `context` are the machine and the context the fit of every line was computed for,
     so the instruction line of the list says the same numbers the list shows.
+
+    `tensor_repos` (P1) maps a resolved base model to the tensor
+    repositories P1's search found for it -- a read only, no write: which of them end up in the
+    configuration is decided later, by the selection, through the same write path a GGUF hit goes
+    through (`guided.py::_search_step`, `search_apply.apply_hits`/`apply_tensor_repos` folded into
+    one `change`). Empty for a machine without vLLM, or when the search found nothing.
     """
 
     outcome: SearchOutcome
@@ -84,6 +91,7 @@ class SearchStep:
     checked: Checked
     context: int
     filtered: bool
+    tensor_repos: dict[str, list[str]] = field(default_factory=dict)
 
 
 def search_step(run: GuidedRun, config: Configuration, results_dir: Path) -> SearchStep:
@@ -112,6 +120,7 @@ def search_step(run: GuidedRun, config: Configuration, results_dir: Path) -> Sea
         again = _did_you_mean(run, step.outcome.candidates)
         if again is not None:
             step = _searched(run, config, again, filtered, checked, context)
+    step = replace(step, tensor_repos=_tensor_hits(run, vllm_among_chosen(run, config), step.outcome.hits))
     _report(run, config, step)
     return step
 
@@ -161,6 +170,38 @@ def _searched(
         requests=config.guided.requests,
     )
     return SearchStep(outcome=outcome, models=models, checked=checked, context=context, filtered=filtered)
+
+
+def _tensor_hits(run: GuidedRun, wanted: bool, hits: Sequence) -> dict[str, list[str]]:
+    """P1: the vLLM tensor search, a read only -- no write.
+
+    Only when `wanted` -- `guided_context.vllm_among_chosen`, the one gate `guided._fetch_step`'s
+    `build_tensor` reads too: at least one chosen machine has vLLM -- and only then, every base
+    model this very search resolved (`hits`, not only the ones a person later picks: this step
+    runs *before* the choice, there is no "later" to wait for here) is asked once per
+    `tensor_search.TENSOR_PACKAGERS` account. A run without a vLLM machine asks no account here
+    at all, so an ordinary Ollama run spends no extra request and its goldens stay byte-identical.
+
+    What is found is only *read*, never written: `guided.py::_search_step` decides, after the
+    person has chosen, which of these base models to keep, and folds them into the exact same
+    write `apply_hits` already makes for the resolved GGUF repositories of that choice -- the
+    existing selection-and-write path the GGUF hits already go through
+    (`search_apply.apply_hits`/`apply_tensor_repos`, one `change`, one lock, one re-read on
+    conflict), never a write path of this step's own. A base model nobody picks is never written
+    for, whatever this search found.
+    """
+    if not wanted:
+        return {}
+    bases = list(dict.fromkeys(hit.resolved_base_model for hit in hits if hit.resolved_base_model is not None))
+    repos_by_base: dict[str, list[str]] = {}
+    for base in bases:
+        outcome = search_tensor_repos(run.transport, run.budget, base)
+        if outcome.repos:
+            repos_by_base[base] = list(outcome.repos)
+        note = outcome.note()
+        if note is not None:
+            run.screen.note(f"{base}: {note}")
+    return repos_by_base
 
 
 def _did_you_mean(run: GuidedRun, candidates: Sequence[str]) -> str | None:

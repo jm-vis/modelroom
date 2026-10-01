@@ -141,6 +141,61 @@ def test_an_unknown_architecture_has_no_kv_token_bytes():
     assert state_bytes(architecture) == 0
 
 
+# --- num_attention_heads (AP9-SV2-P, P4) ----------------------------------------------------------
+
+
+def test_num_attention_heads_is_read_nested_too():
+    """Qwen3.5-4B (`hf_qwen_qwen35_4b_config.json`) names `num_attention_heads` only under
+    `text_config`, the multimodal shape P4 exists for -- read the same way the three required
+    hybrid fields already are."""
+    model = json.loads((FIXTURES / "hf_qwen_qwen35_4b_model.json").read_text(encoding="utf-8"))
+    config = json.loads((FIXTURES / "hf_qwen_qwen35_4b_config.json").read_text(encoding="utf-8"))
+    assert config["text_config"]["num_attention_heads"] == 16
+
+    architecture = architecture_from_hf_config("Qwen/Qwen3.5-4B", model["sha"], config)
+
+    assert architecture.num_attention_heads == 16
+
+
+def test_num_attention_heads_is_read_at_the_top_level_too():
+    config = json.loads((FIXTURES / "hf_synthetic_dense_config.json").read_text(encoding="utf-8"))
+    assert "text_config" not in config
+
+    architecture = architecture_from_hf_config("acme/Synthetic-7B", None, config)
+
+    assert architecture.kind == "dense_classic"
+    assert architecture.num_attention_heads == 32
+
+
+def test_num_attention_heads_is_kept_even_when_the_rest_of_the_shape_is_unknown():
+    """F1 (SV2-F): the tensor-parallel rule needs the head count even for an architecture whose
+    kind could not be read at all -- it is kept the same way `max_context` already is."""
+    config = {"num_attention_heads": 16, "num_experts": 8}  # a MoE config: kind stays "unknown"
+
+    architecture = architecture_from_hf_config("acme/Nova-7B", None, config)
+
+    assert architecture.kind == "unknown"
+    assert architecture.num_attention_heads == 16
+
+
+def test_num_attention_heads_is_none_when_the_config_names_none():
+    config = _qwen35_config()
+    del config["text_config"]["num_attention_heads"]
+    assert architecture_from_hf_config("Qwen/Qwen3.5-9B", None, config).num_attention_heads is None
+
+
+def test_num_attention_heads_out_of_range_refuses_the_whole_architecture():
+    with pytest.raises(ValidationError):
+        Architecture(
+            source_repo="acme/Synthetic-7B",
+            kind="dense_classic",
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            head_dim=128,
+            num_attention_heads=-1,
+        )
+
+
 # --- the contract ---------------------------------------------------------------------------------
 
 

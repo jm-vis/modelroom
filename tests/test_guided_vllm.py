@@ -443,7 +443,23 @@ def test_a_run_with_a_vllm_server_writes_the_same_bytes_as_one_without(tmp_path:
     The snapshot is the fetch's own, from the recorded Hub answers, and holds the served package
     (`qwen25_tensor_package`); the profile is `profiles_v4/two_l4_server.json` with this machine's
     fingerprint, bound by the pointer.
+
+    AP9-SV2-P: the exception is the four files a resolved tensor package reaches
+    -- the fetch's own snapshot (`modelroom.json`), the run status, and the render that counts
+    and lists it (`models.json`/`models.md`) -- never anything about the measurement or the
+    daemon side of this run, which stay byte-identical either way. A vLLM server detected live in
+    *this* run's own step 1 (`guided.GuidedRun.servers.found["vllm"]`) is exactly P1's "runtimes
+    oder live erkannt" gate, so the base model's own tensor package (always a target since
+    AP9-UX2 P3, on every machine) resolves `from_metadata` only in the `with`-vLLM run; the
+    `without` run leaves it locked `unresolved`/`format`, the same as every machine without
+    vLLM, before or after this step.
     """
+    tensor_sensitive = {
+        "results/state/modelroom.json",
+        "results/state/run-status.json",
+        "results/docs/models.json",
+        "results/docs/models.md",
+    }
     without = tmp_path / "run"
     code, _lines = _run(without, servers=offline_servers(), daemon=_answering_daemon())
     first = _written(without)
@@ -455,15 +471,24 @@ def test_a_run_with_a_vllm_server_writes_the_same_bytes_as_one_without(tmp_path:
     assert (code, code_with) == (0, 0)
     assert "✓ Measurement     vLLM measured" in [line.strip() for line in lines]
     assert set(first) == set(second)
-    assert {"results/state/modelroom.json", "results/docs/models.md", "results/docs/models.json"} <= set(first)
-    assert [name for name in first if first[name] != second[name]] == []
-    snapshot = json.loads(second["results/state/modelroom.json"])
-    fetched = [package for package in snapshot["packages"] if package["repo"] == QWEN25_REPO]
+    assert tensor_sensitive <= set(first)
+    assert [name for name in first if name not in tensor_sensitive and first[name] != second[name]] == []
+
+    def _qwen25_package(written: dict) -> dict:
+        snapshot = json.loads(written["results/state/modelroom.json"])
+        fetched = [package for package in snapshot["packages"] if package["repo"] == QWEN25_REPO]
+        assert len(fetched) == 1
+        return fetched[0]
+
+    without_vllm = _qwen25_package(first)
+    assert (without_vllm["provenance"], without_vllm["unresolved_reason"]) == ("unresolved", "format")
+    assert (without_vllm["quantization"], without_vllm["quantization_source"]) == (None, None)
+
+    with_vllm = _qwen25_package(second)
     expected = json.loads(qwen25_tensor_package().model_dump_json())
-    assert len(fetched) == 1
     for key in ("source", "repo", "revision", "base_model_hf_repo", "format", "complete", "quantization", "provenance"):
-        assert fetched[0][key] == expected[key], key
-    assert [f for f in fetched[0]["files"] if f["role"] == "weights"] == expected["files"]
+        assert with_vllm[key] == expected[key], key
+    assert [f for f in with_vllm["files"] if f["role"] == "weights"] == expected["files"]
     assert not (without / "results" / "state" / "measurements").exists()
 
 

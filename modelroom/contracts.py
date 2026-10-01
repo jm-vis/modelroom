@@ -202,6 +202,12 @@ class Architecture(BaseModel):
     num_hidden_layers: int | None = Field(default=None, gt=0, le=2**31 - 1)
     num_key_value_heads: int | None = Field(default=None, gt=0, le=2**31 - 1)
     head_dim: int | None = Field(default=None, gt=0, le=2**31 - 1)
+    # AP9-SV2-P (ADR 0014): the attention head count, read whenever the config names one --
+    # independent of `kind` (kept even for `unknown`, the same way `max_context` already is --
+    # a tensor-parallel package may still need it when the rest of the shape could not be read).
+    # vLLM's own tensor-parallel rule requires the head count to divide evenly by the card count;
+    # `t = 1` is used wherever this is `None` (SV2-F).
+    num_attention_heads: int | None = Field(default=None, gt=0, le=2**31 - 1)
     layer_types: list[str] | None = None
     max_context: int | None = Field(default=None, gt=0, le=2**31 - 1)
     # `hybrid_linear` only (AP9-UX2 P1, ADR 0010): the linear-attention layers' state, read from

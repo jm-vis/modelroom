@@ -37,6 +37,7 @@ from modelroom.profile import (
     fit_block_reason,
     normalize_profile_v1,
 )
+from modelroom.quantization import package_identity_key
 from modelroom.ranking import RANKING_RULE, TOP_LIMIT
 from modelroom.render import (
     LEGACY_FIT_REASON,
@@ -343,6 +344,174 @@ def test_approved_provenance_is_eligible():
         approval={"date": "2026-09-01", "content": "a" * 40, "by": "acme-ai-team"},
     )
     assert len(_ranked_identities(_document([approved]))) == 1
+
+
+# --- tensor visibility --------------------------------------------
+
+
+def _tensor_package(**overrides) -> Package:
+    fields = dict(
+        source="huggingface",
+        repo="acme/Nova-8B",
+        revision="b" * 40,
+        base_model_hf_repo="acme/Nova-8B",
+        format="tensor",
+        files=[PackageFile(name="model.safetensors", role="weights", size_bytes=5 * GIB, digest=None)],
+        complete=True,
+        quantization="BF16",
+        quantization_source="config",
+        default_context=None,
+        provenance="from_metadata",
+        unresolved_reason=None,
+        approval=None,
+        observed_at=NOW,
+        last_seen=NOW,
+        active=True,
+    )
+    fields.update(overrides)
+    return Package(**fields)
+
+
+def test_a_resolved_tensor_package_is_invisible_on_a_machine_without_vllm():
+    """A resolved tensor package (an existing snapshot -- it does not matter which run resolved
+    it, or how) never reaches the summary, the ranking, the table or the document-wide counts of
+    a document whose machines `runtimes.machine_has_vllm` does not call vLLM on: the whole
+    document is the one built without it at all."""
+    gguf = _hf_package()
+    without_tensor = _document([gguf])
+    with_tensor = _document([gguf, _tensor_package()])
+
+    assert with_tensor.model_dump() == without_tensor.model_dump()
+
+
+def test_a_locked_tensor_package_is_not_counted_without_vllm_either():
+    gguf = _hf_package()
+    locked = _tensor_package(quantization=None, quantization_source=None, provenance="unresolved", unresolved_reason="format")
+
+    assert _document([gguf, locked]).model_dump() == _document([gguf]).model_dump()
+
+
+def _ollama_mlx_package() -> Package:
+    """An Ollama library build in the tensor format (an MLX tag): an Ollama package, not a vLLM one."""
+    return Package(
+        source="ollama",
+        ollama_name="nova:8b-mlx-bf16",
+        manifest_digest="sha256:" + "c" * 64,
+        base_model_hf_repo="acme/Nova-8B",
+        format="tensor",
+        files=[PackageFile(name="weights", role="weights", size_bytes=5 * GIB, digest=None)],
+        complete=True,
+        quantization=None,
+        default_context=None,
+        provenance="unresolved",
+        unresolved_reason="format",
+        approval=None,
+        observed_at=NOW,
+        last_seen=NOW,
+        active=True,
+    )
+
+
+def test_an_ollama_tensor_package_counts_without_vllm_as_it_always_did():
+    """F3: Ollama packages are always shown. Only a package no runtime of the shown machines can
+    serve is hidden -- a Hugging Face tensor package, which only vLLM serves."""
+    gguf = _hf_package()
+    mlx = _ollama_mlx_package()
+
+    document = _document([gguf, mlx, _tensor_package()])
+
+    assert document.package_count == 2
+    assert document.model_dump() == _document([gguf, mlx]).model_dump()
+
+
+def test_the_document_counts_a_tensor_package_once_any_shown_machine_has_vllm():
+    """The document-wide counts are about the machines the document shows: one with vLLM is
+    enough for a tensor package to count; the block of the other machine still never sees it."""
+    gguf = _hf_package()
+    other_id = "0123456789abcdef"
+    with_vllm = _profile().model_copy(update={"runtimes": ["ollama", "vllm"], "profile_id": other_id})
+    config = _config(
+        {
+            "workstation": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": True, "profile": PROFILE_ID},
+            "server": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": False, "profile": other_id},
+        }
+    )
+    document = build_render_document(
+        config,
+        _snapshot([gguf, _tensor_package()]),
+        {"workstation": _ready(), "server": _ready(with_vllm)},
+        {},
+        default_scenario(),
+        RENDERED_AT,
+    )
+
+    assert document.package_count == 2
+    blocks = {block.machine: block for block in document.machines}
+    seen_on = {
+        machine: {tuple(entry.package_identity) for entry in [*block.ranked, *block.not_covered]}
+        for machine, block in blocks.items()
+    }
+    assert package_identity_key(_tensor_package()) in seen_on["server"]
+    assert package_identity_key(_tensor_package()) not in seen_on["workstation"]
+
+
+def test_a_resolved_tensor_package_is_ranked_on_a_machine_with_vllm():
+    """The counter-proof: the same package, the same machine, only `runtimes` now names `vllm` --
+    the tensor package reaches eligibility (it still ranks or is set aside like any other
+    package from here; no runtime of AP9-SV2-L accepts it yet, so it is `not covered`, not a
+    table row -- that wiring is AP9-SV2-F's)."""
+    gguf = _hf_package()
+    profile_with_vllm = _profile()
+    profile_with_vllm = profile_with_vllm.model_copy(update={"runtimes": ["ollama", "vllm"]})
+
+    document = _document([gguf, _tensor_package()], profiles={"workstation": _ready(profile_with_vllm)})
+
+    identities = {tuple(entry.package_identity) for entry in document.machines[0].not_covered}
+    assert package_identity_key(_tensor_package()) in identities
+
+
+def test_a_tensor_package_is_visible_through_live_detection_alone():
+    """`runtimes.machine_has_vllm`'s other source: `live_vllm`, keyed by machine, needs no stored
+    `runtimes` at all -- only `build_render_document` reads it (`render_with_config`/the guided
+    mode's own render step thread it through unchanged)."""
+    from modelroom.vllm_server import ServedModel
+
+    gguf = _hf_package()
+    config = _config()
+    document = build_render_document(
+        config,
+        _snapshot([gguf, _tensor_package()]),
+        {"workstation": _ready()},  # the stored profile itself names no runtimes
+        {},
+        default_scenario(),
+        RENDERED_AT,
+        live_vllm={"workstation": ServedModel(id="acme/Nova-8B", root="acme/Nova-8B", max_model_len=4096)},
+    )
+
+    identities = {tuple(entry.package_identity) for entry in document.machines[0].not_covered}
+    assert package_identity_key(_tensor_package()) in identities
+
+
+def test_live_vllm_of_another_machine_does_not_leak_into_this_ones_table():
+    """`live_vllm` is read per machine key -- a live server detected for a *different* configured
+    machine never makes a tensor package visible on this one."""
+    gguf = _hf_package()
+    config = _config(
+        {
+            "workstation": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": True, "profile": PROFILE_ID},
+        }
+    )
+    document = build_render_document(
+        config,
+        _snapshot([gguf, _tensor_package()]),
+        {"workstation": _ready()},
+        {},
+        default_scenario(),
+        RENDERED_AT,
+        live_vllm={"some-other-machine": "a live server, but not this one's"},
+    )
+
+    assert document.model_dump() == _document([gguf]).model_dump()
 
 
 # --- the ranking ------------------------------------------------------------------------------

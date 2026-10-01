@@ -8,17 +8,26 @@ which account that was (decided 2026-09-25).
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Any
+
+from modelroom.catalog import Catalog, load_catalog
 from modelroom.guided_search import (
     DID_YOU_MEAN_KEY,
     KEEP_THE_WORD,
     KEEP_THE_WORD_LABEL,
     NO_WORD_ANSWER,
+    _tensor_hits,
     candidate_choices,
     no_gguf_clause,
     search_answer,
     search_notes,
     searched_sentence,
 )
+from modelroom.http import FixtureTransport, RequestBudget, Response
 
 
 def _log(accounts: list[dict]) -> dict:
@@ -178,3 +187,81 @@ def test_the_candidates_are_a_list_with_none_of_these_last_and_the_first_under_t
 
 def test_the_key_of_that_question_is_the_one_the_answer_file_uses():
     assert DID_YOU_MEAN_KEY == "did_you_mean"
+
+
+# --- the vLLM tensor search of step 2 (AP9-SV2-P, P1) ----------------------------------------------
+
+
+@dataclass
+class _FakeScreen:
+    notes: list[str] = field(default_factory=list)
+
+    def note(self, line: str) -> None:
+        self.notes.append(line)
+
+
+@dataclass
+class _FakeRun:
+    transport: Any
+    budget: Any
+    catalog: Catalog
+    now: datetime = datetime(2026, 9, 30, 9, 0, 0, tzinfo=timezone.utc)
+    screen: _FakeScreen = field(default_factory=_FakeScreen)
+    problems: list[str] = field(default_factory=list)
+    # `runtimes.machine_has_vllm`'s other source: a server detected serving in
+    # this very run's own step 1. Empty by default, like a run that never saw one.
+    servers: SimpleNamespace = field(default_factory=lambda: SimpleNamespace(found={}))
+
+    def failed(self, message: str) -> None:
+        self.problems.append(message)
+
+
+def test_no_vllm_machine_asks_no_tensor_search():
+    """P1: a run without a vLLM machine among its chosen ones costs no extra request at all -- an
+    ordinary Ollama run and its goldens are unchanged."""
+    hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
+
+    def _unreachable(method: str, url: str, headers=None):
+        raise AssertionError(f"no request should be made for a machine without vLLM: {method} {url}")
+
+    run = _FakeRun(transport=_unreachable, budget=None, catalog=load_catalog())
+
+    repos = _tensor_hits(run, False, [hit])
+
+    assert repos == {}
+    assert run.problems == []
+    assert run.screen.notes == []
+
+
+def test_a_vllm_machine_finds_the_tensor_repos_a_base_model_has():
+    """With a vLLM machine among the chosen ones (`guided_context.vllm_among_chosen`, proven in
+    `tests/test_guided_context.py`) every distinct resolved base model of this very search is
+    searched once; what is found is returned, not written -- the write happens later, through the
+    same selection-and-write path a GGUF hit goes through (`guided.py::_search_step`)."""
+    from modelroom.tensor_search import tensor_search_url
+
+    hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
+
+    transport = FixtureTransport(
+        {
+            ("GET", tensor_search_url("Nova-7B", "acme")): _tensor_page(
+                [
+                    {
+                        "id": "RedHatAI/Nova-7B-FP8",
+                        "tags": ["base_model:acme/Nova-7B", "base_model:quantized:acme/Nova-7B"],
+                    }
+                ]
+            ),
+            ("GET", tensor_search_url("Nova-7B", "RedHatAI")): _tensor_page([]),
+        }
+    )
+    run = _FakeRun(transport=transport, budget=RequestBudget(50), catalog=load_catalog())
+
+    repos = _tensor_hits(run, True, [hit, hit])  # two hits of the same base model: still one search
+
+    assert len(transport.calls) == 2  # one account each, never once per hit
+    assert repos == {"acme/Nova-7B": ["RedHatAI/Nova-7B-FP8"]}
+    assert run.problems == []
+
+def _tensor_page(hits: list[dict]) -> Response:
+    return Response(status=200, headers={}, body=json.dumps(hits).encode("utf-8"))

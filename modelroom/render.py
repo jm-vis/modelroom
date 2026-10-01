@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package, Rating, Snapshot
@@ -40,7 +40,7 @@ from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, Llmfit
 from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
-from .runtimes import fit_for
+from .runtimes import MachineRuntimes, fit_for, visible_packages
 from .ranking import (
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
@@ -208,16 +208,21 @@ def _missing_profile_reason(profile_id: str, scan: ProfileScan) -> str:
 # --- eligibility and package facts -------------------------------------------------------------
 
 
-def _eligible_packages(snapshot: Snapshot) -> list[Package]:
-    """Every package a fit may be computed for: shown provenance, complete and active.
+def _eligible_packages(snapshot: Snapshot, machines: Sequence[MachineRuntimes] = ()) -> list[Package]:
+    """Every package a fit may be computed for: shown provenance, complete, active, and visible
+    for `machines` (`runtimes.visible_packages`, the one visibility rule).
 
     The base model is not checked here: `Snapshot` itself refuses a package whose
     `base_model_hf_repo` is not among its `base_models`, so every package that reaches this
     point has an architecture the fit can read.
+
+    `machines` are the machines the list is read for -- one machine for its own block or scale,
+    every shown machine for a document-wide number. No machines means no runtime present:
+    no package a runtime claims (a Hugging Face tensor package).
     """
     return [
         package
-        for package in snapshot.packages
+        for package in visible_packages(snapshot.packages, machines)
         if package.provenance in _ELIGIBLE_PROVENANCE and package.complete and package.active
     ]
 
@@ -522,6 +527,7 @@ def build_render_document(
     rating_source: RatingSource | None = None,
     *,
     models: Mapping[str, ModelFacts] | None = None,
+    live_vllm: Mapping[str, object] | None = None,
 ) -> RenderDocument:
     """The one object a render produces; pure, no I/O and no clock read.
 
@@ -531,17 +537,29 @@ def build_render_document(
     document (CONTRACTS.md, "Render (schema 2)"). `models` is what the rule knows of each base
     model (ADR 0009); without it the snapshot says it (`snapshot_model_facts`), and no model is
     `legacy`. Several base models among the packages give one row per model (`ranking.shown_rows`).
+
+    `live_vllm` maps a machine key to whatever that very run's own step 1 found for `"vllm"`
+    (`GuidedRun.servers.found.get("vllm")`) -- a guided run's own render step passes it for the
+    one machine it is running on; `modelroom render` (no guided run, no server talked to) passes
+    nothing, so every machine is judged by its stored profile `runtimes` alone.
+
+    Visibility (`runtimes.visible_packages`): each machine's block reads the packages visible for
+    that machine alone; every document-wide number (`package_count`, the ranking rule) reads the
+    packages visible for at least one shown machine. A Hugging Face tensor package therefore leaves no trace in
+    a document none of whose machines has vLLM; the snapshot keeps its raw facts.
     """
     base_model_by_repo = {bm.hf_repo: bm for bm in snapshot.base_models}
-    packages = _eligible_packages(snapshot)
+    live_vllm = live_vllm or {}
+    machine_runtimes = {machine: (profiles[machine].profile, live_vllm.get(machine)) for machine in config.machines}
+    shown = list(machine_runtimes.values())
+    per_model = len({package.base_model_hf_repo for package in _eligible_packages(snapshot, shown)}) > 1
     facts = models if models is not None else snapshot_model_facts(snapshot)
-    per_model = len({package.base_model_hf_repo for package in packages}) > 1
     blocks = [
         _machine_block(
             machine,
             machine_config,
             profiles[machine],
-            packages,
+            _eligible_packages(snapshot, [machine_runtimes[machine]]),
             base_model_by_repo,
             measurements.get(getattr(profiles[machine].profile, "profile_id", ""), []),
             scenario,
@@ -556,7 +574,7 @@ def build_render_document(
         snapshot_run_at=snapshot.run_at,
         rendered_at=rendered_at,
         base_model_count=len(snapshot.base_models),
-        package_count=len(snapshot.packages),
+        package_count=len(visible_packages(snapshot.packages, shown)),
         scenario=scenario,
         ranking_rule=RANKING_RULE_PER_MODEL if per_model else RANKING_RULE,
         rating_unavailable=rating_error,

@@ -216,7 +216,16 @@ def offline_servers() -> dict:
 
 
 def qwen25_tensor_package(**overrides):
-    """The `tensor` package the recorded vLLM server serves, as the fetch records it from the Hub."""
+    """The `tensor` package the recorded vLLM server serves, as the fetch records it from the Hub.
+
+    `repo == base_model_hf_repo`: this is the base model's own repository (AP9-UX2 P3), which
+    AP9-SV2-P's provenance rule resolves `from_metadata` without a relation check at all. Its
+    `config.json` names no `quantization_config` and `torch_dtype: "bfloat16"`
+    (`tests/fixtures/hf_qwen25_05b_instruct_config.json`), so `tensor_quant.tensor_quant_label`
+    reads `BF16` wherever a test's transport maps that repo's `config.json` -- the two tests that
+    do not (`test_guided_vllm_match.py`'s `match_served` cases) pass `quantization=None` of their
+    own accord through `overrides` where that still matters to them.
+    """
     from modelroom.contracts import Package, PackageFile
 
     fields = {
@@ -231,9 +240,10 @@ def qwen25_tensor_package(**overrides):
             )
         ],
         "complete": True,
-        "quantization": None,
-        "provenance": "unresolved",
-        "unresolved_reason": "format",
+        "quantization": "BF16",
+        "quantization_source": "config",
+        "provenance": "from_metadata",
+        "unresolved_reason": None,
         "observed_at": DAEMON_OBSERVED_AT,
         "last_seen": DAEMON_OBSERVED_AT,
         "active": True,

@@ -26,12 +26,7 @@ from typing import Callable, Iterable, Sequence
 from .binding import KnownProfile, PointerFileError, default_pointer_path, read_pointer, resolve_profile_target, write_pointer
 from .catalog import Catalog, load_catalog
 from .config import (
-    CONFIG_SCHEMA_VERSION,
-    DEFAULT_RESERVE_VRAM_GIB,
-    ConfigError,
-    Configuration,
-    load_config,
-    read_config_schema_version,
+    CONFIG_SCHEMA_VERSION, DEFAULT_RESERVE_VRAM_GIB, ConfigError, Configuration, load_config, read_config_schema_version,
 )
 from .contracts import SchemaVersionError
 from .daemon import Daemon, LocalDaemon
@@ -39,7 +34,7 @@ from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import USERS_KEY, USERS_QUESTION
-from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
+from .guided_context import chosen_runtimes, context_step, snapshot_facts, snapshot_packages, vllm_among_chosen
 from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES
 from . import room as room_module
 # The folder question moved to `guided_folder.py` (AP9-UX2 U1/U7); the names stay readable here.
@@ -54,7 +49,7 @@ from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_ident
 from .pull_other import KEY as PULL_OTHER_KEY, QUESTION as PULL_OTHER_QUESTION
 from .pull_other import eligible_other_machines, pull_other_step
 from .pull_choice import ambiguous_names, run_packages
-from .room import RoomProbes, free_disk, live_room
+from .room import Disk, RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
 from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices, _measured_here  # noqa: F401
 from .guided_machines import chosen_machines, machine_answer_words
@@ -64,31 +59,13 @@ from .guided_remote_measure import QUESTIONS as REMOTE_MEASURE_QUESTIONS
 from .guided_remote_measure import combine_measured
 from .local_servers import QUESTIONS as SERVER_QUESTIONS, ServerRun, card_facts, default_transports, load_tests
 from .guided_models import (
-    ModelChoice,
-    ask_models,
-    chosen_hits,
-    hint_line,
-    list_context,
-    model_choices,
-    picked_names,
-    unusable_counts,
+    ModelChoice, ask_models, chosen_hits, hint_line, list_context, model_choices, picked_names, unusable_counts,
 )
-from .guided_search import (
-    DID_YOU_MEAN_KEY,
-    DID_YOU_MEAN_QUESTION,
-    FILTER_QUESTION,
-    SEARCH_QUESTION,
-    search_step,
-)
+from .guided_search import DID_YOU_MEAN_KEY, DID_YOU_MEAN_QUESTION, FILTER_QUESTION, SEARCH_QUESTION, search_step
 from .http import RequestBudget, Transport, UrllibTransport
 from .guided_write import Change, Said, create_config, neutral_change, update_config, with_found_profiles, with_profile, with_writer
 from .importer import (
-    ImportConflictError,
-    PrerequisiteError,
-    ProfileScan,
-    StoredFileError,
-    import_profile,
-    scan_profiles,
+    ImportConflictError, PrerequisiteError, ProfileScan, StoredFileError, import_profile, scan_profiles,
 )
 from .guided_share import QUESTIONS as SHARE_QUESTIONS
 from .guided_share import machine_list_row
@@ -103,27 +80,11 @@ from .neutral_sweep import load_names, sweep
 from .remote_store import aliases as ssh_aliases_of, read_remote, remote_path_for, this_machine
 from .profile import MACHINE_CLASSES, HardwareProfile, os_fingerprint
 from .screen import (
-    CLONE_QUESTION,
-    NOTHING_CHOSEN_SUMMARY,
-    THIS_FOLDER,
-    Screen,
-    clone_words,
-    import_notes,
-    machines_summary,
-    machines_words,
-    measured_note,
-    names_words,
-    packages_summary,
-    yes_no,
+    CLONE_QUESTION, NOTHING_CHOSEN_SUMMARY, THIS_FOLDER, Screen, clone_words, import_notes, machines_summary,
+    machines_words, measured_note, names_words, packages_summary, yes_no,
 )
-from .search import (
-    DEFAULT_GUIDED_BUDGET,
-    DEFAULT_PACKAGERS,
-    SearchError,
-    SearchOutcome,
-    apply_hits,
-    run_search,
-)
+from .search import DEFAULT_GUIDED_BUDGET, DEFAULT_PACKAGERS, SearchError, SearchOutcome, apply_hits, run_search
+from .search_apply import apply_tensor_repos
 from .selection import NO_MACHINE_CHOSEN, NO_MODEL_CHOSEN, RunSelection, machine_origins, narrow_config
 from .state import LockHeldError, write_search_log
 from .views import RunView, context_short, show_nothing, show_result
@@ -332,13 +293,12 @@ def _stored_schema_version(config_file: Path) -> int:
 def _configure_found_profiles(run: GuidedRun, config_file: Path) -> Configuration:
     """Give every profile in the folder a `[machines.<name>]` entry, so the render covers it.
 
-    The render computes one ranking per configured machine, so a profile the configuration does
-    not name is left out of the result -- and the machine list would then say "already in this
-    results folder" about a machine that is in no result at all. This is the same rule
-    `import-profile` follows for a profile it finds without an entry (CONTRACTS.md, "Export and
-    import"): the name comes from the `display_name`, the reserves from `[defaults]`, `writer`
-    is false. The matching is worked out on the file as it is at the write, and again after a
-    conflict (`guided_write.with_found_profiles`).
+    The render computes one ranking per configured machine, so a profile the configuration does not
+    name is left out of the result -- and the machine list would then say "already in this results
+    folder" about a machine that is in no result at all. This is the same rule `import-profile`
+    follows for a profile it finds without an entry (CONTRACTS.md, "Export and import"): the name
+    comes from the `display_name`, the reserves from `[defaults]`, `writer` is false. The matching is
+    worked out on the file as it is at the write, and again after a conflict (`with_found_profiles`).
     """
     _sweep(run, config_file)
     said = Said()
@@ -466,13 +426,13 @@ def _record_profile(
 ) -> Configuration:
     """Name the profile this machine is now bound to in `[machines.<name>].profile`.
 
-    The configuration is read again first: the dialog took time, and another process may have
-    changed the file meanwhile (an `import-profile` adds a `[machines.<name>]` entry). Writing
-    the copy this run loaded before the dialog would drop that change. That re-read can also show
-    a file this measurement no longer belongs to -- the machine entry gone or renamed, or
-    `[paths]` pointing at another state folder, where this `profile_id` names nothing. Then the
-    entry is left alone and the run says so; the profile itself is written and bound either way.
-    Both checks hold again for the read after a conflict (`guided_write.with_profile`).
+    The configuration is read again first: the dialog took time, and another process may have changed
+    the file meanwhile (an `import-profile` adds a `[machines.<name>]` entry). Writing the copy this
+    run loaded before the dialog would drop that change. That re-read can also show a file this
+    measurement no longer belongs to -- the machine entry gone or renamed, or `[paths]` pointing at
+    another state folder, where this `profile_id` names nothing. Then the entry is left alone and the
+    run says so; the profile itself is written and bound either way, the checks held again after a
+    conflict (`guided_write.with_profile`).
     """
     said = Said()
     profile_id = read_pointer(run.pointer_path).binding_for(results_dir)
@@ -583,15 +543,14 @@ def _bound_profile(run: GuidedRun, scan: ProfileScan, results_dir: Path) -> Hard
 def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tuple[Configuration, int]:
     """The search of step 2 (`modelroom/guided_search.py`), then the choice, then the write-back.
 
-    The list holds one line per **model** with the fit its size allows, and only the ones that can
-    be picked: a hand test of 2026-09-24 showed 120 repository lines nobody could choose from. The
-    repositories behind a chosen model are `guided_models.chosen_hits`', and they go through the
-    unchanged `apply_hits`. Returns the configuration and how many models were chosen.
+    The list holds one line per **model** with the fit its size allows, and only the ones that can be
+    picked: a hand test of 2026-09-24 showed 120 repository lines nobody could choose from. The
+    repositories behind a chosen model are `guided_models.chosen_hits`', unchanged through `apply_hits`.
+    Returns the configuration and how many models were chosen.
 
     **Every way out of this step reads the file again**, the two that change nothing included: the
     fetch runs on what this step returns, and after a dialog that took as long as the user took, the
-    copy this run loaded before it may name another writer, another state directory or other models
-    than the file does (second-model round, 2026-09-25).
+    copy loaded before it may name another writer, state directory or models than the file does now.
     """
     step = search_step(run, config, config_file.parent)
     if not step.models:
@@ -604,19 +563,22 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tu
     chosen = chosen_hits(step.models, picked, config.packagers or DEFAULT_PACKAGERS)
     if not chosen:
         return _load(config_file), 0
-    # Read again here, after the last question of this step and immediately before the change is
-    # applied and written: the search and the selection list both took time (see `_record_profile`).
-    # `apply_hits` is pure, so after a conflict it is simply applied to the new state again.
+    # Base models, not answers -- a base model nobody picked is
+    # never written for, whatever P1's search found for it (`step.tensor_repos`).
+    bases = {str(hit.resolved_base_model) for hit in chosen}
+    tensor_for_chosen = {base: repos for base, repos in step.tensor_repos.items() if base in bases}
+
+    # Read again here, immediately before the change is applied and written (see `_record_profile`).
     def change(current: Configuration) -> Configuration:
         try:
-            return apply_hits(current, chosen, catalog=run.catalog)
+            updated = apply_hits(current, chosen, catalog=run.catalog)
         except ConfigError as exc:
             raise GuidedError(str(exc)) from exc
+        if tensor_for_chosen:
+            updated = apply_tensor_repos(updated, tensor_for_chosen, catalog=run.catalog)
+        return updated
 
     updated = _write_config(run, config_file, change)
-    # Base models, not answers: an answer file may name two repositories of one model, and the
-    # configuration and the card then hold one (second-model round, 2026-09-24).
-    bases = {str(hit.resolved_base_model) for hit in chosen}
     _remember_models(run, [model for model in step.models if model.base_model in bases])
     return updated, len(bases)
 
@@ -640,8 +602,9 @@ def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     if not chosen:
         return config, NOTHING_CHOSEN_SUMMARY, False
     # All three numbers about one thing -- the snapshot this folder now holds. `apply_hits` keeps
-    # what was there, so a balance may not mix the two frames (second-model round, 2026-09-24).
-    facts = snapshot_facts(config, run.selection)
+    # what was there, so a balance may not mix the two frames;
+    # counted for the chosen machines, as the result document will be.
+    facts = snapshot_facts(config, run.selection, chosen_runtimes(run, config))
     return config, packages_summary(len(facts.model_names), facts.packages, facts.repositories), True
 
 
@@ -658,13 +621,16 @@ def context_default(config: Configuration) -> int:
 
 
 def _fetch_step(run: GuidedRun, config: Configuration) -> None:
+    """Step 2's fetch. `build_tensor` is `guided_context.vllm_among_chosen`, the same gate the
+    tensor search of this step reads; `False` reads and writes exactly as every fetch always did."""
     from .cli import fetch_with_config
 
     if not config.families:
         run.screen.note("no base model is configured yet, so there is nothing to fetch")
         return
     name = _machine_key(run)
-    code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget)
+    build_tensor = vllm_among_chosen(run, config)
+    code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget, build_tensor=build_tensor)
     if code != 0:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
 
@@ -689,30 +655,49 @@ def _render_step(
         run.screen.note(NO_MACHINE_CHOSEN)
     if not chosen.models:
         run.screen.note(NO_MODEL_CHOSEN)
+    machines = chosen_runtimes(run, config)  # the card counts for the machines the document shows
+    live = run.servers.found.get("vllm")
 
     def seen(document) -> None:
-        # Read inside the callback, which runs while the render still holds the lock: the card, the
-        # table and the packages of the pull rest on one snapshot (second-model round, 2026-09-24).
+        # Read inside the callback, while the render still holds the lock: card, table and pull packages
+        # rest on one snapshot.
         packages = run_packages(config, chosen)  # before the eligibility filter (U4, Codex r3-1)
-        written.append((document, snapshot_facts(config, chosen), PullContext(document, here, packages, ambiguous_names(packages), disk)))
+        facts = snapshot_facts(config, chosen, machines)
+        written.append((document, facts, PullContext(document, here, packages, ambiguous_names(packages), disk)))
 
-    # The free disk is read once, before the render: the Markdown file, the table and the pull list
-    # mark the same rows (AP9-RM U11); the check before a pull reads it again.
+    # Free disk read once, before the render: Markdown, table and pull list mark the same rows (AP9-RM
+    # U11); the check before a pull reads it again.
     disk = free_disk(run.room)
-    if daemon_reachable:
-        # A package the daemon holds already needs no disk and is never marked (U11c, Codex r3-1).
+    if daemon_reachable:  # a package the daemon holds already needs no disk and is never marked (U11c)
         disk = replace(disk, held=held_identities(run, run_packages(config, chosen)))
-    code = render_with_config(config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk})
+    code = render_with_config(
+        config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk}, live_vllm={here: live}
+    )
     if not written:
         shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only
         show_nothing(run.screen, shown, config_file.parent, scenario, run.now, card_facts(run), chosen.origins)
         return code, None
+    return _shown_render_result(run, config, config_file, chosen, here, disk, daemon_reachable, written, code)
+
+
+def _shown_render_result(
+    run: GuidedRun,
+    config: Configuration,
+    config_file: Path,
+    chosen: RunSelection,
+    here: str,
+    disk: Disk,
+    daemon_reachable: bool,
+    written: list,
+    code: int,
+) -> tuple[int, PullContext]:
+    """The non-empty tail of `_render_step`: build the card's view from the one document just written."""
     document, facts, context = written[0]
     own = next((block.profile for block in document.machines if block.machine == here), None)
     live = {here: live_room(run.room, own, run.daemon if daemon_reachable else None, disk)}  # U10: this machine only
     live.update(active_room(run, document))  # B5: the active SSH machine's own room, if it has a table here
-    # A3 (AP9-FR): the other machines `pull_other_step` will list a row for, after this table --
-    # computed once, here, so the note under a table and the list that may follow never disagree.
+    # A3 (AP9-FR): other machines `pull_other_step` lists after this table, computed once so the note
+    # under a table and the list that may follow never disagree.
     other_machines = eligible_other_machines(document, here, context.ambiguous)
     view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines,
                    ssh_active=run.ssh_active, packages=context.packages, held=other_runtimes_held(run, context))
@@ -739,13 +724,13 @@ def run_guided(
 ) -> int:
     """Run the whole guided mode; returns the exit code (`0` when a document was written).
 
-    `here` is the folder "this folder" means -- the caller passes it in, this package never
-    resolves a path against the working directory on its own. Everything else is the usual
-    dependency injection: the transport, the daemon and the other local servers of this machine by
-    key (`local_servers.py`), its probes, the clock, the pointer file and the shipped catalog.
-    `colored` says whether the start screen may carry color; `modelroom --answers <file>` passes
-    `False`, `None` asks the stream (`intro.use_color`). `room`: the free memory and disk of this
-    machine (`room.py`); `None` is the real one.
+    `here` is the folder "this folder" means -- the caller passes it in, this package never resolves
+    a path against the working directory on its own. Everything else is the usual dependency
+    injection: the transport, the daemon and the other local servers of this machine by key
+    (`local_servers.py`), its probes, the clock, the pointer file and the shipped catalog. `colored`
+    says whether the start screen may carry color; `modelroom --answers <file>` passes `False`, `None`
+    asks the stream (`intro.use_color`). `room`: the free memory and disk of this machine (`room.py`);
+    `None` is the real one.
     """
     run = GuidedRun(
         asker=asker,

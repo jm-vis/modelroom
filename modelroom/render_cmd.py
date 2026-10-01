@@ -91,11 +91,19 @@ def render_with_config(
     on_document: Callable[[RenderDocument], None] | None = None,
     selection: RunSelection | None = None,
     disks: Mapping[str, Disk] | None = None,
+    live_vllm: Mapping[str, object] | None = None,
 ) -> int:
     """Run `render` against an already-loaded `Configuration` -- the programmatic entry point.
 
     `disks` is the free disk a guided run read, per machine name: the Markdown view marks a download
     larger than it (AP9-RM U11). `modelroom render` reads no machine and passes nothing.
+
+    `live_vllm` is the same shape, for the same reason: a guided
+    run's own render step passes what *this run's own step 1* found for `"vllm"`, by machine name
+    (`GuidedRun.servers.found.get("vllm")`), so a tensor package this very run resolved by live
+    detection (no stored profile `runtimes`) still shows on its own machine's table. `modelroom
+    render` passes nothing -- it never talks to a server -- so every machine there is judged by
+    its stored profile `runtimes` alone (`render.build_render_document`, `runtimes.machine_has_vllm`).
 
     `selection` is what a guided run chose (`selection.RunSelection`): the document then covers only
     its machines and its models, ranked with the release and the size its step 2 showed (AP9-UX B,
@@ -118,28 +126,9 @@ def render_with_config(
     `echo`.
     """
     rendered_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
-    json_path = config.paths.markdown.with_suffix(".json")
-    if json_path == config.paths.markdown:
-        print(
-            f"{config.paths.markdown}: paths.markdown must not be a .json file -- the render "
-            "writes its JSON view next to it under the same stem",
-            file=sys.stderr,
-        )
-        return 2
-
-    # Same ordering as `fetch` (F13): the schema-version gate on the existing snapshot runs
-    # before the lock is taken -- an unsupported version exits 3 with nothing written, not even a
-    # lock file. And R7-12: "nothing to render" is decided from this same pre-read, still before
-    # the lock, because `acquire_lock` creates the state directory and the lock file as a side
-    # effect of opening it. `_render_locked` re-reads the snapshot once the lock is held.
-    try:
-        pre_read = read_snapshot(config)
-    except (SchemaVersionError, UnreadableStateFileError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
-    if pre_read is None:
-        print("nothing to render, run fetch first", file=sys.stderr)
-        return 1
+    json_path, code = _render_precheck(config)
+    if code:
+        return code
 
     try:
         handle = acquire_lock(config.paths.lock_file, "render", rendered_at)
@@ -149,10 +138,46 @@ def render_with_config(
 
     try:
         return _render_locked(
-            config, rendered_at, rating, scenario or scenario_from_config(config), json_path, echo, on_document, selection, disks
+            config,
+            rendered_at,
+            rating,
+            scenario or scenario_from_config(config),
+            json_path,
+            echo,
+            on_document,
+            selection,
+            disks,
+            live_vllm,
         )
     finally:
         release_lock(handle)
+
+
+def _render_precheck(config: Configuration) -> tuple[Path, int]:
+    """`json_path` plus the two checks before the lock (F13, R7-12): the schema-version gate on the
+    existing snapshot runs before the lock is taken -- an unsupported version exits 3 with nothing
+    written, not even a lock file -- and "nothing to render" is decided from this same pre-read,
+    still before the lock, because `acquire_lock` creates the state directory and the lock file as
+    a side effect of opening it. Returns an exit code on either failure, else `0` -- `_render_locked`
+    re-reads the snapshot once the lock is held.
+    """
+    json_path = config.paths.markdown.with_suffix(".json")
+    if json_path == config.paths.markdown:
+        print(
+            f"{config.paths.markdown}: paths.markdown must not be a .json file -- the render "
+            "writes its JSON view next to it under the same stem",
+            file=sys.stderr,
+        )
+        return json_path, 2
+    try:
+        pre_read = read_snapshot(config)
+    except (SchemaVersionError, UnreadableStateFileError) as exc:
+        print(str(exc), file=sys.stderr)
+        return json_path, 3
+    if pre_read is None:
+        print("nothing to render, run fetch first", file=sys.stderr)
+        return json_path, 1
+    return json_path, 0
 
 
 def _render_locked(
@@ -165,6 +190,7 @@ def _render_locked(
     on_document: Callable[[RenderDocument], None] | None = None,
     selection: RunSelection | None = None,
     disks: Mapping[str, Disk] | None = None,
+    live_vllm: Mapping[str, object] | None = None,
 ) -> int:
     """Read, build and write both views; a broken profile file is a note, never the whole render.
 
@@ -195,7 +221,9 @@ def _render_locked(
     scan = scan_profiles(config.paths.hardware_dir)
     profiles = _machine_profiles(shown, scan)
     measurements, notes = _measurements_of(config, profiles)
-    built = build_render_document(shown, snapshot, profiles, measurements, scenario, rendered_at, rating, models=models)
+    built = build_render_document(
+        shown, snapshot, profiles, measurements, scenario, rendered_at, rating, models=models, live_vllm=live_vllm
+    )
     document = with_requests_origin(built, config)
     # Each file is replaced atomically, but two files cannot be replaced as one: between the two
     # writes a reader can see the new JSON view next to the old Markdown one. The JSON view goes

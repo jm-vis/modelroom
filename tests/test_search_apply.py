@@ -313,3 +313,55 @@ def test_a_hit_that_is_the_publisher_repo_is_not_added_twice(tmp_path: Path):
     config = apply_hits(_empty_config(tmp_path), [_resolved_hit("Qwen/Qwen3.5-9B")], catalog=load_catalog())
 
     assert config.families[0].base_models[0].repos == ["Qwen/Qwen3.5-9B"]
+
+
+# --- apply_tensor_repos (AP9-SV2-P, P1) -------------------------------------------------------
+
+
+def test_apply_tensor_repos_adds_a_repo_to_an_existing_base_model(tmp_path: Path):
+    from modelroom.catalog import load_catalog
+    from modelroom.search_apply import apply_hits, apply_tensor_repos
+
+    config = apply_hits(
+        _empty_config(tmp_path), [_resolved_hit("unsloth/Qwen3.5-9B-GGUF")], catalog=load_catalog()
+    )
+
+    updated = apply_tensor_repos(config, {"Qwen/Qwen3.5-9B": ["RedHatAI/Qwen3.5-9B-FP8"]}, catalog=load_catalog())
+
+    assert "RedHatAI/Qwen3.5-9B-FP8" in updated.families[0].base_models[0].repos
+    # The GGUF repos it already had stay, in order; the tensor repo is new, not a replacement.
+    assert updated.families[0].base_models[0].repos[:-1] == config.families[0].base_models[0].repos
+
+
+def test_apply_tensor_repos_creates_the_base_model_and_its_publisher_when_neither_exists(tmp_path: Path):
+    from modelroom.catalog import load_catalog
+    from modelroom.search_apply import apply_tensor_repos
+
+    config = apply_tensor_repos(
+        _empty_config(tmp_path), {"acme/Nova-7B": ["RedHatAI/Nova-7B-FP8"]}, catalog=load_catalog()
+    )
+
+    assert "acme" in config.publishers
+    base = next(b for family in config.families for b in family.base_models if b.hf_repo == "acme/Nova-7B")
+    assert base.repos == ["RedHatAI/Nova-7B-FP8"]
+
+
+def test_apply_tensor_repos_is_idempotent(tmp_path: Path):
+    from modelroom.catalog import load_catalog
+    from modelroom.search_apply import apply_tensor_repos
+
+    repos_by_base = {"acme/Nova-7B": ["RedHatAI/Nova-7B-FP8"]}
+    once = apply_tensor_repos(_empty_config(tmp_path), repos_by_base, catalog=load_catalog())
+    twice = apply_tensor_repos(once, repos_by_base, catalog=load_catalog())
+
+    assert twice.model_dump() == once.model_dump()
+
+
+def test_apply_tensor_repos_skips_a_base_model_with_no_repos_found(tmp_path: Path):
+    from modelroom.catalog import load_catalog
+    from modelroom.search_apply import apply_tensor_repos
+
+    config = _empty_config(tmp_path)
+    updated = apply_tensor_repos(config, {"acme/Nova-7B": []}, catalog=load_catalog())
+
+    assert updated.model_dump() == config.model_dump()

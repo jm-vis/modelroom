@@ -44,6 +44,7 @@ from fixture_support import (
     TWO_L4_ID,
     area_problems,
     build_transport,
+    envelope_response,
     example_without_eurollm,
     expected_hf_areas,
     export_of,
@@ -54,6 +55,7 @@ from fixture_support import (
     offline_servers,
     packager_probes,
     ps_answer,
+    vllm_servers,
     windows_probes,
     windows_runner,
     write_example_without_eurollm,
@@ -236,6 +238,98 @@ def test_the_balance_of_step_two_counts_models_and_not_answers(tmp_path: Path):
     _code, lines = _run(tmp_path, two_models)
 
     assert any(line.strip().startswith("✓ Packages        2 models,") for line in lines)
+
+
+TENSOR_FOUND = "RedHatAI/Qwen3.5-9B-FP8"
+TENSOR_UNCHOSEN = "RedHatAI/DeepSeek-R1-0528-Qwen3-8B-FP8"
+TENSOR_SHA = "e" * 40
+
+
+def _tensor_hit(repo: str, base: str) -> Response:
+    tags = [f"base_model:{base}", f"base_model:quantized:{base}"]
+    return Response(status=200, headers={}, body=json.dumps([{"id": repo, "tags": tags}]).encode("utf-8"))
+
+
+def _tensor_dialog_transport():
+    """The whole guided run, plus one vLLM build found for each of the two base models the search
+    resolves, and the Hub answers a fetch of the chosen one's build reads."""
+    from modelroom.tensor_search import tensor_search_url
+
+    hf = "https://huggingface.co"
+    info = {"sha": TENSOR_SHA, "tags": json.loads(_tensor_hit(TENSOR_FOUND, "Qwen/Qwen3.5-9B").body)[0]["tags"]}
+    tree = [
+        {"type": "file", "path": "model.safetensors", "size": 9_000_000_000, "lfs": {"oid": "f" * 64}},
+        {"type": "file", "path": "config.json", "size": 900},
+    ]
+    return build_transport(
+        {
+            **guided_transport_mapping(),
+            ("GET", tensor_search_url("Qwen3.5-9B", "RedHatAI")): _tensor_hit(TENSOR_FOUND, "Qwen/Qwen3.5-9B"),
+            ("GET", tensor_search_url("DeepSeek-R1-0528-Qwen3-8B", "RedHatAI")): _tensor_hit(TENSOR_UNCHOSEN, DEEPSEEK_BASE),
+            ("GET", f"{hf}/api/models/{TENSOR_FOUND}"): Response(status=200, headers={}, body=json.dumps(info).encode()),
+            ("GET", f"{hf}/api/models/{TENSOR_FOUND}/tree/{TENSOR_SHA}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            ("GET", f"{hf}/{TENSOR_FOUND}/resolve/{TENSOR_SHA}/config.json"): Response(
+                status=200, headers={}, body=b'{"quantization_config": {"quant_method": "fp8"}}'
+            ),
+        }
+    )
+
+
+def _all_repos(tmp_path: Path) -> dict[str, list[str]]:
+    config = tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))
+    return {base["hf_repo"]: base.get("repos", []) for family in config["families"] for base in family["base_models"]}
+
+
+def _tensor_calls(transport) -> list[str]:
+    return [url for _method, url in transport.calls if TENSOR_FOUND in url or TENSOR_UNCHOSEN in url]
+
+
+def test_a_full_dialog_run_writes_the_tensor_repo_of_the_chosen_base_model_only(tmp_path: Path):
+    """A tensor repository P1's search finds goes through the same selection-and-write path the
+    GGUF hits use: it lands in the configuration only once its base model is chosen, and the
+    fetch that follows then reads it. A build found for a model nobody chose is neither written
+    nor fetched."""
+    transport = _tensor_dialog_transport()
+
+    code, _lines = _run(tmp_path, FULL_ANSWERS, transport=transport, servers=vllm_servers())
+
+    assert code == 0
+    repos = _all_repos(tmp_path)
+    assert TENSOR_FOUND in repos["Qwen/Qwen3.5-9B"]
+    assert all(TENSOR_UNCHOSEN not in found for found in repos.values())
+    hf = "https://huggingface.co"
+    assert _tensor_calls(transport) == [
+        f"{hf}/api/models/{TENSOR_FOUND}",
+        f"{hf}/api/models/{TENSOR_FOUND}/tree/{TENSOR_SHA}?recursive=true",
+        f"{hf}/{TENSOR_FOUND}/resolve/{TENSOR_SHA}/config.json",
+    ]
+
+
+def test_another_chosen_machine_with_vllm_turns_on_the_search_and_the_build(tmp_path: Path):
+    """P1 searches as soon as **a chosen machine** has vLLM -- here not the
+    machine the run is on (no vLLM server, none in its profile), but a second chosen machine whose
+    stored profile names `vllm`. The search and the build run; the tensor package shows in that
+    machine's block only."""
+    hardware = _results(tmp_path) / "state" / "hardware"
+    hardware.mkdir(parents=True)
+    server = v2_profile(profile_id="6" * 16, display_name="server 02").model_copy(update={"runtimes": ["ollama", "vllm"]})
+    atomic_write_json(hardware / f"{server.profile_id}.json", server.model_dump(mode="json"))
+    transport = _tensor_dialog_transport()
+
+    picked = {**FULL_ANSWERS, "write_config": True, "machines": ["this-machine", f"profile:{server.profile_id}"]}
+    code, _lines = _run(tmp_path, picked, transport=transport, servers=offline_servers())
+
+    assert code == 0
+    assert TENSOR_FOUND in _all_repos(tmp_path)["Qwen/Qwen3.5-9B"]
+    assert f"https://huggingface.co/{TENSOR_FOUND}/resolve/{TENSOR_SHA}/config.json" in _tensor_calls(transport)
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    config = load_config(_config_file(tmp_path))
+    server_key = next(name for name, machine in config.machines.items() if machine.profile == server.profile_id)
+    shown = {block["machine"]: TENSOR_FOUND in json.dumps(block) for block in payload["machines"]}
+    assert shown.pop(server_key) is True
+    assert shown and not any(shown.values())
 
 
 def test_a_search_log_that_cannot_be_written_is_a_fault_and_no_traceback(tmp_path: Path):

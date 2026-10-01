@@ -137,7 +137,8 @@ def empty_card(
     found = [entry for _name, entry in named]
     rows = [(name, entry.label, entry.profile, entry.reason or entry.status) for name, entry in named]
     facts += _machine_facts(rows, now, origins)
-    snapshot = snapshot_facts(config)
+    # Counted for the machines this card names, by their stored profiles (`runtimes.visible_packages`).
+    snapshot = snapshot_facts(config, machines=[(entry.profile, None) for entry in found])
     facts.append(models_fact(snapshot.model_names, snapshot.packages, snapshot.accounts))
     facts.append(context_fact(scenario.context_requested))
     facts.append(speed_fact(0, None, never_measured_of(entry.profile for entry in found)))
