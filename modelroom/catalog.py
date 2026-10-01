@@ -19,7 +19,7 @@ import re
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from urllib.parse import urlsplit
@@ -37,10 +37,11 @@ CATALOG_TOML_SCHEMA_RANGE: tuple[int, int] = (1, 2)
 CATALOG_JSON_SCHEMA_RANGE: tuple[int, int] = (2, 3)
 
 # A publicly published file is adversarial input: read at most one byte past this limit, then
-# reject, on both forms (catalog_schema.py carries the schema-2-only limits: models, publishers,
-# packagers, gguf_repos).
+# reject, on both forms (catalog_schema.py carries the document-wide limits: models, publishers,
+# packagers). Every text value, list entries included, caps at CATALOG_MAX_TEXT_LEN.
 CATALOG_MAX_BYTES = 1024 * 1024
 CATALOG_MAX_TEXT_LEN = 300
+CATALOG_MAX_GGUF_REPOS = 50
 
 Age = Literal["latest", "legacy", "unknown"]
 Kind = Literal["text", "vision", "embedding", "speech-recognition", "speech-synthesis", "audio", "image-generation"]
@@ -94,8 +95,8 @@ class CatalogModel(BaseModel):
     every schema-1 (TOML) row has always had -- but a schema-2 *document* refuses a row that
     never set it at all (`catalog_schema.py`, checked through `model_fields_set`, not through
     this default): the default lets `Catalog`/`CatalogFamily`/`CatalogModel` stay constructible
-    everywhere they already were, while `CatalogDocumentV2` still enforces `kind` as the schema-2
-    bau-brief requires. Every other new field stays optional and unset for a schema-1 row.
+    everywhere they already were, while `CatalogDocumentV2` still requires `kind` on every row.
+    Every other new field stays optional and unset for a schema-1 row.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -109,7 +110,7 @@ class CatalogModel(BaseModel):
     ollama_tag: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
     source: str = Field(max_length=CATALOG_MAX_TEXT_LEN)
 
-    # --- schema 2 (AP9-KA) --------------------------------------------------------------------
+    # --- schema 2 -------------------------------------------------------------------------------
     kind: Kind = "text"
     family: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
     publisher: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
@@ -119,7 +120,9 @@ class CatalogModel(BaseModel):
     hub_created: date | None = None
     successor_source: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
     successor_checked: date | None = None
-    gguf_repos: list[str] = Field(default_factory=list)
+    gguf_repos: list[Annotated[str, Field(max_length=CATALOG_MAX_TEXT_LEN)]] = Field(
+        default_factory=list, max_length=CATALOG_MAX_GGUF_REPOS
+    )
     note: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
 
     @field_validator("hf_repo")
@@ -167,7 +170,10 @@ class CatalogModel(BaseModel):
             return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"parameters_b must be a number or null, not {value!r}")
-        value = float(value)
+        try:
+            value = float(value)
+        except OverflowError as exc:  # a JSON integer too large for a float
+            raise ValueError(f"parameters_b is too large: {exc}") from exc
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"parameters_b must be a finite number >= 0: {value!r}")
         return value
@@ -253,7 +259,7 @@ class PublisherInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    account: str
+    account: str = Field(max_length=CATALOG_MAX_TEXT_LEN)
     name: str = Field(min_length=1, max_length=CATALOG_MAX_TEXT_LEN)
     region: str | None = None
 
@@ -277,7 +283,7 @@ class Catalog(BaseModel):
 
     schema_version: int
     families: list[CatalogFamily] = Field(default_factory=list)
-    # Schema 2 only (AP9-KA): empty/`None` for a catalog read from TOML.
+    # Schema 2 only: empty/`None` for a catalog read from TOML.
     packagers: list[str] = Field(default_factory=list)
     publisher_info: list[PublisherInfo] = Field(default_factory=list)
     data_license: str | None = None
@@ -355,10 +361,10 @@ def load_catalog(path: Path = CATALOG_FILE) -> Catalog:
 def _build_catalog_v1(text: str, path: Path) -> Catalog:
     try:
         data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
+    except (tomllib.TOMLDecodeError, RecursionError) as exc:  # deep nesting overflows the parser
         raise CatalogError(f"{path}: cannot read catalog: {exc}") from exc
     check_version_field(data, CATALOG_TOML_SCHEMA_RANGE, path)
     try:
         return Catalog.model_validate(data)
-    except ValidationError as exc:
+    except (ValidationError, RecursionError) as exc:
         raise CatalogError(f"{path}: invalid catalog: {exc}") from exc

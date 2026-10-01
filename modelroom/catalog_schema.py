@@ -1,7 +1,6 @@
 """The schema-2 catalog document (`catalog.json`): the flat, publicly published shape.
 
-Split out of `catalog.py` (AP9-KA-S, Codex r1, finding 12) to keep both modules under the
-package's size guard. `catalog.py` owns the shared `Catalog`/`CatalogFamily`/`CatalogModel`
+A module of its own so both stay under the package's size guard. `catalog.py` owns the shared `Catalog`/`CatalogFamily`/`CatalogModel`
 shape every reader works against; this module owns the rules that apply to the **document** a
 schema-2 file carries before it is grouped into that shape -- the ones `CatalogModel` alone
 cannot check, because they need sibling fields (`publisher` against the document's `publishers`
@@ -20,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from .catalog import (
     _HUB_HOSTS,
     ACCOUNT_RE,
+    CATALOG_MAX_GGUF_REPOS,  # re-exported next to the other document limits
+    CATALOG_MAX_TEXT_LEN,
     CatalogError,
     CatalogModel,
     Catalog,
@@ -33,11 +34,11 @@ CATALOG_ATTRIBUTION = "modelroom catalog, jm-vis, CC BY 4.0, https://huggingface
 
 # Abuse limits on the schema-2 document: a publicly published file is adversarial input. Counted
 # on the parsed structure (entries), never on raw bytes or line breaks -- a byte limit alone lets
-# many short, valid rows through (Codex r1, finding 3).
+# many short, valid rows through. The per-row `gguf_repos` limit (CATALOG_MAX_GGUF_REPOS) and the
+# text limit sit on the row and publisher shapes in `catalog.py`.
 CATALOG_MAX_MODELS = 5000
 CATALOG_MAX_PUBLISHERS = 500
 CATALOG_MAX_PACKAGERS = 50
-CATALOG_MAX_GGUF_REPOS = 50
 
 
 def _check_successor_evidence(model: CatalogModel) -> None:
@@ -120,7 +121,7 @@ class CatalogDocumentV2(BaseModel):
         if len(value) > CATALOG_MAX_PACKAGERS:
             raise ValueError(f"packagers exceeds {CATALOG_MAX_PACKAGERS} entries")
         for account in value:
-            if not ACCOUNT_RE.fullmatch(account):
+            if len(account) > CATALOG_MAX_TEXT_LEN or not ACCOUNT_RE.fullmatch(account):
                 raise ValueError(f"packagers: not an account name: {account!r}")
         if len(value) != len(set(value)):
             raise ValueError("packagers: an account is listed twice")
@@ -146,7 +147,7 @@ class CatalogDocumentV2(BaseModel):
         for model in self.models:
             # `kind` has a default (`"text"`, the shape every schema-1 row has always had), so a
             # missing value would otherwise pass silently; `model_fields_set` tells an explicit
-            # `"text"` apart from the default (Codex r1, finding 1).
+            # `"text"` apart from the default.
             if "kind" not in model.model_fields_set:
                 raise ValueError(f"{model.hf_repo}: kind is required")
             if model.family is None or model.publisher is None or model.added is None:

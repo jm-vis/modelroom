@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -25,7 +26,10 @@ from modelroom.catalog import (
 from modelroom.catalog_schema import (
     CATALOG_ATTRIBUTION,
     CATALOG_DATA_LICENSE,
+    CATALOG_MAX_GGUF_REPOS,
     CATALOG_MAX_MODELS,
+    CATALOG_MAX_PACKAGERS,
+    CATALOG_MAX_PUBLISHERS,
     CatalogDocumentV2,
 )
 from modelroom.contracts import SchemaVersionError
@@ -64,11 +68,9 @@ REQUIRED_PUBLISHERS = (
 )
 # The day every `latest` row of the shipped catalog was confirmed against its publisher page.
 LATEST_CHECKED = date(2026, 9, 25)
-# The two embedding rows the shipped catalog names, unchanged since the AP9-KA conversion
-# (bau-brief, "Reichweite der Tabelle ...", "Bestandsschutz").
+# The two embedding rows the shipped catalog names, kept through the move from schema 1 to 2.
 EMBEDDING_REPOS = ("Qwen/Qwen3-Embedding-8B", "Qwen/Qwen3-Embedding-0.6B")
-# Rows well above the sizes the rest of the catalog lists, kept through the conversion on purpose
-# (bau-brief: "die als groß markierten Zeilen (catalog.toml:10-11)").
+# Rows well above the sizes the rest of the catalog lists, kept through the move on purpose.
 LARGE_REPOS = (
     "deepseek-ai/DeepSeek-V3.2",
     "deepseek-ai/DeepSeek-V4-Flash-0731",
@@ -76,9 +78,8 @@ LARGE_REPOS = (
 )
 
 
-# --- EXAMPLES has no `kind` (schema 1 predates it); `kind` now has no default outside the v1
-# reader (Codex r1, finding 1), so every direct CatalogModel/CatalogFamily/Catalog construction
-# below a schema-1 EXAMPLES entry needs one injected, exactly as `_build_catalog_v1` injects it.
+# --- The dicts below set `kind` explicitly. `CatalogModel` itself defaults it to `"text"`; only
+# a schema-2 document refuses a row without it (`CatalogDocumentV2`, through `model_fields_set`).
 
 
 def _model_dict(**overrides) -> dict:
@@ -125,8 +126,7 @@ def test_shipped_catalog_claims_no_latest_without_evidence_and_one_successor():
 
 
 # The rows that were given a successor on 2026-09-25, each with a `successor_source` naming the
-# publisher evidence (schema 2, migrated by `scripts/catalog_convert_v1.py` from the comment that
-# used to sit above the row).
+# publisher evidence (schema 2 carries it in fields; schema 1 had it in the comment above the row).
 SUCCESSORS_2026_09_25 = {
     "mistralai/Magistral-Small-2509": "mistralai/Mistral-Small-4-119B-2603",
 }
@@ -182,7 +182,7 @@ def test_a_line_the_publisher_carries_as_current_is_no_successor_of_each_model_b
 
 
 def test_every_successor_row_names_its_evidence_and_the_day_it_was_checked():
-    """Schema 2 (AP9-KA): `successor_source`/`successor_checked` are fields, not a comment."""
+    """Schema 2: `successor_source`/`successor_checked` are fields, not a comment."""
     catalog = load_catalog()
     for repo, successor in SUCCESSORS_2026_09_25.items():
         model = catalog.model_for(repo)
@@ -237,7 +237,7 @@ def test_catalog_excerpt_gives_latest_legacy_and_unknown():
     assert catalog.age_of("acme/Nova-1B") == ("unknown", None)
     assert catalog.age_of("acme/Not-Listed") == ("unknown", None)
     assert catalog.model_for("acme/Nova-7B").ollama_base == "nova"
-    # v1 carries no `kind`; every row reads as `text` in memory (bau-brief, "Leser im Paket").
+    # v1 carries no `kind`; every row reads as `text` in memory.
     assert catalog.model_for("acme/Nova-7B-2512").kind == "text"
 
 
@@ -374,7 +374,7 @@ def test_load_catalog_errors(tmp_path):
         load_catalog(tmp_path / "missing.toml")
 
 
-# --- Schema 2 (AP9-KA): a document with every field, grouped into the same shape schema 1 builds ---
+# --- Schema 2: a document with every field, grouped into the same shape schema 1 builds ---------
 
 
 def _document(models: list[dict] | None = None, **overrides) -> dict:
@@ -402,8 +402,8 @@ def test_shipped_catalog_is_schema_2_with_the_fixed_license_and_attribution():
 
 
 def test_the_shipped_catalog_keeps_every_one_of_the_sixty_two_v1_rows():
-    """Bestandsschutz (bau-brief, "Reichweite der Tabelle ..."): every row of the pre-AP9-KA
-    catalog survives the conversion, including the embedding rows and the large-model rows."""
+    """Every row of the schema-1 catalog survives the move to schema 2, including the embedding
+    rows and the large-model rows."""
     catalog = load_catalog()
     repos = [model.hf_repo for family in catalog.families for model in family.models]
     assert len(repos) == 62
@@ -426,7 +426,7 @@ def test_catalog_v2_fixture_loads_with_a_latest_a_legacy_and_an_embedding_row():
 
 
 def test_display_selection_shows_only_latest_text_and_vision_kinds():
-    """Anzeige-Auswahl (Frage 3 a): `latest` alone is not enough, `kind` must be `text`/`vision`."""
+    """The pages of a search with no word: `latest` alone is not enough, `kind` must be `text`/`vision`."""
     catalog = load_catalog(FIXTURES / "catalog_v2_kinds.json")
     names = latest_model_names(catalog)
     assert names == ["Line-Text", "Line-Vision"]
@@ -435,8 +435,8 @@ def test_display_selection_shows_only_latest_text_and_vision_kinds():
 
 
 def test_todays_shipped_display_list_is_unchanged_by_the_kind_filter():
-    """Every `latest` row of the shipped catalog is already `text` or `vision`, so the filter
-    added by AP9-KA changes nothing it used to show (bau-brief, "Reichweite der Tabelle ...")."""
+    """Every `latest` row of the shipped catalog is already `text` or `vision`, so the `kind`
+    filter changes nothing the list used to show."""
     catalog = load_catalog()
     names = latest_model_names(catalog)
     assert len(names) == 22
@@ -444,7 +444,7 @@ def test_todays_shipped_display_list_is_unchanged_by_the_kind_filter():
 
 
 def test_pipeline_tag_to_kind_names_all_eleven_values():
-    """Frage 2 b: the mapping is a constant of the schema and is repeated here verbatim."""
+    """The mapping is a constant of the schema and is repeated here verbatim."""
     expected = {
         "text-generation": "text",
         "image-text-to-text": "vision",
@@ -470,8 +470,8 @@ def test_every_kind_of_the_schema_loads_a_valid_row():
 
 
 def test_successor_source_migration_of_the_shipped_catalog_passes_the_ownership_rule():
-    """Migration der Nachfolger: both bestand successors carry `successor_source` after the v1 to
-    v2 conversion, and loading the shipped file already proves the ownership rule holds."""
+    """Both successors of the schema-1 catalog carry `successor_source` in schema 2, and loading
+    the shipped file already proves the ownership rule holds."""
     catalog = load_catalog()
     magistral = catalog.model_for("mistralai/Magistral-Small-2509")
     assert magistral.successor_source == "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603"
@@ -553,7 +553,7 @@ def _padded(text: str, target_bytes: int) -> str:
 
 
 def test_reading_stops_at_the_byte_cap_boundary(tmp_path):
-    """Codex r1, finding 4: the reader takes at most `CATALOG_MAX_BYTES + 1` bytes off disk, so
+    """The reader takes at most `CATALOG_MAX_BYTES + 1` bytes off disk, so
     a file exactly at the cap loads and one byte more is rejected -- proven at the boundary,
     not by loading a multi-megabyte file into memory first."""
     text = json.dumps(_document())
@@ -568,17 +568,18 @@ def test_reading_stops_at_the_byte_cap_boundary(tmp_path):
 
 
 def test_more_than_five_thousand_models_is_rejected(tmp_path):
-    """Codex r1, finding 3: the limit counts model **entries**, not text lines -- 5001 short,
-    unique, minimal rows are rejected even though the file stays under 1 MiB (every optional
-    field left out, so each defaults, keeping the file compact on purpose)."""
+    """The limit counts model **entries**, not text lines -- 5000 short, unique, minimal rows
+    load and 5001 are rejected, though the file stays under 1 MiB (every optional field left
+    out, so each defaults, keeping the file compact on purpose)."""
     rows = [
         {"hf_repo": f"acme/G{i}", "source": f"https://huggingface.co/acme/G{i}", "kind": "text", "family": f"g{i}", "publisher": "acme", "added": "2026-09-25"}
         for i in range(CATALOG_MAX_MODELS + 1)
     ]
-    document = _document(models=rows)
-    text = json.dumps(document)
-    assert len(text.encode("utf-8")) <= CATALOG_MAX_BYTES, "fixture drifted: no longer a compact-JSON scenario"
     path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(_document(models=rows[:CATALOG_MAX_MODELS])), encoding="utf-8")
+    assert len(load_catalog(path).families) == CATALOG_MAX_MODELS
+    text = json.dumps(_document(models=rows))
+    assert len(text.encode("utf-8")) <= CATALOG_MAX_BYTES, "fixture drifted: no longer a compact-JSON scenario"
     path.write_text(text, encoding="utf-8")
     with pytest.raises(CatalogError, match="models"):
         load_catalog(path)
@@ -621,10 +622,10 @@ def test_attribution_missing_or_different_is_rejected():
         CatalogDocumentV2.model_validate(_document(attribution="modelroom catalog, someone else"))
 
 
-# --- Codex r1 (round 1 review of the first cut): fixes below, one section per finding -----------
+# --- Required fields, evidence, limits and broken input of a schema-2 document --------------------
 
 
-# Finding 1: `kind` has no default outside the v1 reader; a schema-2 row without it is refused.
+# `kind` defaults to `text` on `CatalogModel`, but a schema-2 document refuses a row without it.
 
 
 def test_kind_missing_in_schema_2_is_rejected_via_load_catalog(tmp_path):
@@ -643,7 +644,7 @@ def test_kind_default_of_text_applies_only_to_the_v1_reader():
     assert catalog.model_for("acme/Nova-7B-2512").kind == "text"
 
 
-# Finding 2: `successor`, `successor_source` and `successor_checked` must be set together.
+# `successor`, `successor_source` and `successor_checked` must be set together.
 
 
 @pytest.mark.parametrize(
@@ -664,7 +665,7 @@ def test_every_partial_combination_of_successor_evidence_is_rejected(fields):
         CatalogDocumentV2.model_validate(_document(models=[_row(0), row]))
 
 
-# Finding 3: every text field caps at 300 characters (`license` was the named gap).
+# Every text value caps at 300 characters, list entries included; every list has its limit.
 
 
 def test_license_over_three_hundred_characters_is_rejected():
@@ -672,8 +673,93 @@ def test_license_over_three_hundred_characters_is_rejected():
         CatalogModel.model_validate(_model_dict(license="x" * (CATALOG_MAX_TEXT_LEN + 1)))
 
 
-# Finding 5: a `RecursionError` from deeply nested JSON, and a `to_catalog()` failure that only
-# surfaces once rows are grouped into families, both end as `CatalogError`, not an uncaught
+def _filled(prefix: str, length: int, fill: str = "a") -> str:
+    """`prefix` padded with `fill` to exactly `length` characters."""
+    assert len(prefix) < length
+    return prefix + fill * (length - len(prefix))
+
+
+def _row_text(field: str, length: int) -> list[dict]:
+    """The fixture's rows with one text value of row 0 (or row 1 for the successor) at `length`."""
+    if field == "successor":
+        target = _filled("acme/S", length)
+        return [_row(0), _row(1, successor=target, successor_source="https://acme.example/successors")]
+    if field == "successor_source":
+        return [_row(0), _row(1, successor_source=_filled("https://acme.example/", length))]
+    values = {
+        "hf_repo": _filled("acme/N", length),
+        "source": _filled("https://huggingface.co/acme/N", length),
+        "latest_source": _filled("https://huggingface.co/collections/acme/n", length),
+        "family": _filled("f", length),
+        "ollama_base": _filled("o", length),
+        "ollama_tag": _filled("t", length),
+        "license": _filled("l", length),
+        "note": _filled("n", length),
+        "gguf_repos": [_filled("packager/G", length)],
+    }
+    return [_row(0, **{field: values[field]})]
+
+
+def _document_text(field: str, length: int) -> dict:
+    if field == "publishers.account":
+        document = _document()
+        document["publishers"].append({"account": _filled("p", length), "name": "Other", "region": None})
+        return document
+    if field == "publishers.name":
+        document = _document()
+        document["publishers"][0]["name"] = _filled("N", length)
+        return document
+    if field == "packagers":
+        return _document(packagers=["packager", _filled("k", length)])
+    return _document(models=_row_text(field, length))
+
+
+TEXT_FIELDS = (
+    "hf_repo", "source", "latest_source", "successor", "successor_source", "family", "ollama_base",
+    "ollama_tag", "license", "note", "gguf_repos", "publishers.account", "publishers.name", "packagers",
+)
+
+
+@pytest.mark.parametrize("field", TEXT_FIELDS)
+def test_every_text_value_loads_at_three_hundred_characters_and_fails_at_three_hundred_one(field, tmp_path):
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(_document_text(field, CATALOG_MAX_TEXT_LEN)), encoding="utf-8")
+    load_catalog(path)
+    path.write_text(json.dumps(_document_text(field, CATALOG_MAX_TEXT_LEN + 1)), encoding="utf-8")
+    with pytest.raises(CatalogError):
+        load_catalog(path)
+
+
+def _document_count(field: str, count: int) -> dict:
+    if field == "gguf_repos":
+        return _document(models=[_row(gguf_repos=[f"packager/Nova-{i}-GGUF" for i in range(count)])])
+    if field == "publishers":
+        extra = [{"account": f"p{i}", "name": f"P{i}", "region": None} for i in range(count - 1)]
+        return _document(publishers=_document()["publishers"] + extra)
+    extra = [f"k{i}" for i in range(count - 1)]
+    return _document(packagers=["packager", *extra])
+
+
+@pytest.mark.parametrize(
+    ("field", "limit"),
+    [("gguf_repos", CATALOG_MAX_GGUF_REPOS), ("publishers", CATALOG_MAX_PUBLISHERS), ("packagers", CATALOG_MAX_PACKAGERS)],
+)
+def test_every_list_loads_at_its_limit_and_fails_one_entry_above(field, limit, tmp_path):
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(_document_count(field, limit)), encoding="utf-8")
+    load_catalog(path)
+    path.write_text(json.dumps(_document_count(field, limit + 1)), encoding="utf-8")
+    with pytest.raises(CatalogError, match=field):
+        load_catalog(path)
+
+
+def test_the_list_limits_are_the_published_ones():
+    assert (CATALOG_MAX_GGUF_REPOS, CATALOG_MAX_PUBLISHERS, CATALOG_MAX_PACKAGERS) == (50, 500, 50)
+    assert (CATALOG_MAX_MODELS, CATALOG_MAX_TEXT_LEN, CATALOG_MAX_BYTES) == (5000, 300, 1024 * 1024)
+
+
+# A `RecursionError` from deeply nested JSON or TOML, and a `to_catalog()` failure that only
+# surfaces once rows are grouped into families, all end as `CatalogError`, not an uncaught
 # exception or a raw pydantic `ValidationError`.
 
 
@@ -681,6 +767,14 @@ def test_deeply_nested_json_is_a_catalog_error_not_a_recursion_error(tmp_path):
     nested = "[" * 6000 + "]" * 6000
     text = '{"x": ' + nested + "}"
     path = tmp_path / "catalog.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(CatalogError):
+        load_catalog(path)
+
+
+def test_deeply_nested_toml_is_a_catalog_error_not_a_recursion_error(tmp_path):
+    text = "schema_version = 1\nx = " + "[" * 6000 + "]" * 6000 + "\n"
+    path = tmp_path / "catalog.toml"
     path.write_text(text, encoding="utf-8")
     with pytest.raises(CatalogError):
         load_catalog(path)
@@ -698,7 +792,7 @@ def test_a_foreign_hub_publisher_in_latest_source_fails_in_to_catalog_as_a_catal
         load_catalog(path)
 
 
-# Finding 6: a `gguf_repos` entry's owner must be the model's own publisher or a listed packager.
+# A `gguf_repos` entry's owner must be the model's own publisher or a listed packager.
 
 
 def test_gguf_repos_with_a_foreign_owner_is_rejected():
@@ -712,11 +806,12 @@ def test_gguf_repos_owned_by_the_publisher_or_a_listed_packager_is_accepted():
     CatalogDocumentV2.model_validate(_document(models=[row]))
 
 
-# Finding 7: `parameters_b` accepts only finite, non-negative numbers or `null` -- no strings,
-# no `NaN`/`Infinity` (Python's `json` module parses those non-standard bare tokens by default).
+# `parameters_b` accepts only finite, non-negative numbers or `null` -- no strings, no
+# `NaN`/`Infinity` (Python's `json` module parses those non-standard bare tokens by default), and
+# no integer too large for a float.
 
 
-@pytest.mark.parametrize("broken", [float("nan"), float("inf"), float("-inf"), "7.5"])
+@pytest.mark.parametrize("broken", [float("nan"), float("inf"), float("-inf"), "7.5", pytest.param(10**400, id="int-beyond-float")])
 def test_parameters_b_rejects_non_finite_and_non_numeric_values(broken, tmp_path):
     document = _document()
     document["models"][0]["parameters_b"] = broken
@@ -732,7 +827,7 @@ def test_parameters_b_accepts_a_plain_integer():
     assert document.models[0].parameters_b == 7.0
 
 
-# Finding 10: the schema is told apart by content, never by the file's extension.
+# The schema is told apart by content, never by the file's extension.
 
 
 def test_schema_2_json_under_a_toml_shaped_name_still_loads_as_schema_2(tmp_path):
@@ -752,22 +847,130 @@ def test_schema_1_toml_under_a_json_shaped_name_still_loads_as_schema_1(tmp_path
     assert catalog.is_publisher("mistralai")
 
 
-# Finding 11: a fixed v1 reference (`git show 0a7138c:modelroom/catalog.toml`), compared value by
+# a fixed schema-1 reference (the last shipped `catalog.toml`), compared value by
 # value across all 62 rows, plus the exact ordered display list -- not a count and a few names.
 
 
-def test_the_shipped_catalog_matches_the_v1_reference_value_by_value_for_every_row():
+# Every field a schema-1 row can carry; each one has to come through the move unchanged.
+V1_FIELDS = frozenset(
+    {"hf_repo", "latest", "latest_source", "latest_checked", "successor", "ollama_base", "ollama_tag", "source"}
+)
+# SHA-256 of the reference file with LF line ends: the last `catalog.toml` that shipped, byte for byte.
+V1_REFERENCE_SHA256 = "5bee020b9c47fde3d3f9dded72da585e53b4b859842d7bb363a6613d14f5bceb"
+
+
+def _rows_in_order(catalog: Catalog) -> list[tuple[str, str, dict]]:
+    return [
+        (family.name, family.publisher, model.model_dump(include=V1_FIELDS))
+        for family in catalog.families
+        for model in family.models
+    ]
+
+
+def test_the_v1_reference_is_the_last_shipped_schema_1_file():
+    raw = (FIXTURES / "catalog_v1_reference.toml").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(raw).hexdigest() == V1_REFERENCE_SHA256
+
+
+def test_the_v1_fields_cover_every_field_a_schema_1_row_reads():
     reference = load_catalog(FIXTURES / "catalog_v1_reference.toml")
-    shipped = load_catalog()
-    reference_repos = {model.hf_repo for family in reference.families for model in family.models}
-    assert len(reference_repos) == 62
-    for repo in reference_repos:
-        before = reference.model_for(repo)
-        after = shipped.model_for(repo)
-        assert after is not None, repo
-        before_values = (before.latest, before.successor, before.ollama_base, before.ollama_tag, before.source)
-        after_values = (after.latest, after.successor, after.ollama_base, after.ollama_tag, after.source)
-        assert before_values == after_values, repo
+    set_fields = {name for family in reference.families for model in family.models for name in model.model_fields_set}
+    assert set_fields <= V1_FIELDS
+    assert {"hf_repo", "source", "latest", "successor", "ollama_base"} <= set_fields
+
+
+def test_the_shipped_catalog_matches_the_v1_reference_value_by_value_for_every_row():
+    """All 62 rows, in the same order, under the same family and publisher, with every schema-1
+    field (`source` included) unchanged."""
+    reference = _rows_in_order(load_catalog(FIXTURES / "catalog_v1_reference.toml"))
+    shipped = _rows_in_order(load_catalog())
+    assert len(reference) == 62
+    assert [row[2]["hf_repo"] for row in shipped] == [row[2]["hf_repo"] for row in reference]
+    for before, after in zip(reference, shipped, strict=True):
+        assert after == before, before[2]["hf_repo"]
+    magistral = load_catalog().model_for("mistralai/Magistral-Small-2509")
+    assert magistral.source == "https://huggingface.co/mistralai/Magistral-Small-2509"
+    assert magistral.successor_source == "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603"
+
+
+# The schema-1 file explained, in a comment above the row, why a statement is missing: no
+# `latest`, no successor, no Ollama name, or no row for a sibling model. Schema 2 carries each of
+# those reasons in `note`; every other row of the shipped catalog has none.
+NOTES = {
+    "mistralai/Devstral-Small-2-24B-Instruct-2512": "No Ollama mapping as of 2026-09-25: the Ollama library's devstral:24b is the 2505 build, a different model.",
+    "mistralai/Magistral-Small-2509": "No Ollama mapping as of 2026-09-25: the Ollama library's magistral:24b is the 2506 build, a different model.",
+    "mistralai/Mistral-Small-3.2-24B-Instruct-2506": "No successor as of 2026-09-25: the newer Mistral Small 4 card compares against Mistral Small 3 but names no specific replaced model.",
+    "utter-project/EuroLLM-9B-Instruct-2512": "No latest as of 2026-09-25: the publisher's EuroLLM collection lists the 2024 and 2512 models side by side, so nothing states this model current.",
+    "utter-project/EuroLLM-22B-Instruct-2512": "No latest as of 2026-09-25: the publisher's EuroLLM collection lists the 2024 and 2512 models side by side, naming the line but not which model of it is current.",
+    "utter-project/EuroMoE-2.6B-A0.6B-Instruct-2512": "No latest as of 2026-09-25: the publisher's EuroLLM collection lists the 2024 and 2512 models side by side, naming the line but not which model of it is current.",
+    "Qwen/Qwen3.5-27B": "No successor as of 2026-09-25: Qwen3.8-27B's card follows the Qwen3.5 and Qwen3.6 series as a whole, naming no specific replaced model.",
+    "Qwen/Qwen3.6-27B": "No successor as of 2026-09-25: Qwen3.8-27B's card compares against this model in tables but does not name it as replaced.",
+    "Qwen/Qwen3.8-27B": "No row for the other model of the Qwen3.8 release, Qwen3.8-2.4T-A95B, as of 2026-09-25: far beyond one machine.",
+    "deepseek-ai/DeepSeek-V3.2": "No successor as of 2026-09-25: the DeepSeek-V4 collection lists several V4 builds side by side, so no catalog row is named current.",
+    "meta-llama/Llama-3.3-70B-Instruct": "No successor as of 2026-09-25: Llama 3 cards are gated and no publisher page names a Llama 4 model as replacing this one.",
+    "meta-llama/Llama-3.1-8B-Instruct": "No successor as of 2026-09-25: Llama 3 cards are gated and no publisher page names a Llama 4 model as replacing this one.",
+    "meta-llama/Llama-3.2-3B-Instruct": "No successor as of 2026-09-25: Llama 3 cards are gated and no publisher page names a Llama 4 model as replacing this one.",
+    "zai-org/GLM-4.7-Flash": "No latest as of 2026-09-25: the model's own collection is an older one, not the publisher's current release.",
+    "moonshotai/Kimi-Linear-48B-A3B-Instruct": "No row for the publisher's other current models (Kimi-K3 and the K2 line) as of 2026-09-25: hundreds of billions of parameters each.",
+    "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": "No Ollama mapping as of 2026-09-25: the Ollama library's nemotron is a Llama-3.1 model from 2024, not this one.",
+    "tiiuae/Falcon-H1-34B-Instruct": "No Ollama mapping as of 2026-09-25: the Ollama library's falcon3 and falcon are earlier lines, not the Falcon-H1 line.",
+    "tiiuae/Falcon-H1R-7B": "No Ollama mapping as of 2026-09-25: the Ollama library's falcon3 and falcon are earlier lines, not the Falcon-H1 line.",
+    "tiiuae/Falcon-H1-7B-Instruct": "No Ollama mapping as of 2026-09-25: the Ollama library's falcon3 and falcon are earlier lines, not the Falcon-H1 line.",
+    "CohereLabs/command-a-reasoning-08-2025": "No Ollama mapping as of 2026-09-25: the Ollama library's command-a:111b is the 03-2025 build, a different model.",
+    "HuggingFaceTB/SmolLM3-3B": "No Ollama mapping as of 2026-09-25: the Ollama library carries SmolLM and SmolLM2, not this model.",
+    "tencent/Hy-MT2-30B-A3B": "No row for the publisher's larger current model Hy4-preview (780B) as of 2026-09-25: no GGUF build of a listed account.",
+    "MiniMaxAI/MiniMax-H3": "No row for the publisher's larger models (MiniMax-M3, 427B) as of 2026-09-25: beyond one machine.",
+}
+
+
+def test_every_reasoned_missing_statement_of_the_schema_1_file_is_a_note():
+    catalog = load_catalog()
+    notes = {model.hf_repo: model.note for family in catalog.families for model in family.models if model.note}
+    assert notes == NOTES
+
+
+# `kind` per row, from the Hub: `pipeline_tag` through the table where it is one of the eleven
+# values; otherwise from the tags and the model card (image and text in, text out is `vision`).
+# `MiniMaxAI/MiniMax-H3` makes video with sound, which none of the seven kinds names; it keeps the
+# `text` every schema-1 row read as until the schema has a kind for it.
+VISION_REPOS = frozenset(
+    {
+        "mistralai/Ministral-3-14B-Instruct-2512",
+        "mistralai/Ministral-3-8B-Instruct-2512",
+        "mistralai/Ministral-3-3B-Instruct-2512",
+        "mistralai/Mistral-Small-4-119B-2603",
+        "mistralai/Devstral-Small-2-24B-Instruct-2512",
+        "mistralai/Magistral-Small-2509",
+        "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+        "Qwen/Qwen3.5-9B",
+        "Qwen/Qwen3.5-4B",
+        "Qwen/Qwen3.5-27B",
+        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen/Qwen3.5-122B-A10B",
+        "Qwen/Qwen3.6-27B",
+        "Qwen/Qwen3.6-35B-A3B",
+        "Qwen/Qwen3.8-27B",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        "google/gemma-4-31B-it",
+        "google/gemma-4-26B-A4B-it",
+        "google/gemma-4-12B-it",
+        "google/gemma-4-E4B-it",
+        "zai-org/GLM-5.3-Flash",
+    }
+)
+
+
+def test_every_shipped_row_carries_the_kind_its_hub_evidence_gives():
+    catalog = load_catalog()
+    for family in catalog.families:
+        for model in family.models:
+            if model.hf_repo in VISION_REPOS:
+                expected = "vision"
+            elif model.hf_repo in EMBEDDING_REPOS:
+                expected = "embedding"
+            else:
+                expected = "text"
+            assert model.kind == expected, model.hf_repo
 
 
 def test_the_shipped_display_list_matches_the_v1_reference_order_exactly():
