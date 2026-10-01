@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "published": "2026-09-25",
+  "data_license": "CC-BY-4.0",
+  "attribution": "modelroom catalog, jm-vis, CC BY 4.0, https://huggingface.co/datasets/jm-vis/modelroom-catalog",
+  "publishers": [
+    {"account": "acme", "name": "Acme Labs", "region": null}
+  ],
+  "packagers": [],
+  "models": [
+    {
+      "hf_repo": "acme/Line-Text", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Text",
+      "kind": "text", "family": "line-text", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-Vision", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Vision",
+      "kind": "vision", "family": "line-vision", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-Embed", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Embed",
+      "kind": "embedding", "family": "line-embed", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-ASR", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-ASR",
+      "kind": "speech-recognition", "family": "line-asr", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-TTS", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-TTS",
+      "kind": "speech-synthesis", "family": "line-tts", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-Audio", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Audio",
+      "kind": "audio", "family": "line-audio", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-Image", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Image",
+      "kind": "image-generation", "family": "line-image", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    },
+    {
+      "hf_repo": "acme/Line-Video", "latest": true, "latest_source": "https://huggingface.co/acme",
+      "latest_checked": "2026-09-25", "successor": null, "successor_source": null, "successor_checked": null,
+      "ollama_base": null, "ollama_tag": null, "source": "https://huggingface.co/acme/Line-Video",
+      "kind": "video-generation", "family": "line-video", "publisher": "acme", "added": "2026-09-25",
+      "parameters_b": null, "license": null, "hub_created": null, "gguf_repos": [], "note": null
+    }
+  ]
+}

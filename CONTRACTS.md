@@ -3633,7 +3633,8 @@ file that does not read or validate.
   "successor": "acme/Nova-7B-2512",
   "ollama_base": "nova",
   "ollama_tag": "7b",
-  "source": "https://huggingface.co/acme/Nova-7B-2512"
+  "source": "https://huggingface.co/acme/Nova-7B-2512",
+  "kind": "text"
 }
 ```
 
@@ -3652,7 +3653,8 @@ file that does not read or validate.
       "successor": "acme/Nova-7B-2512",
       "ollama_base": "nova",
       "ollama_tag": "7b",
-      "source": "https://huggingface.co/acme/Nova-7B-2512"
+      "source": "https://huggingface.co/acme/Nova-7B-2512",
+      "kind": "text"
     },
     {
       "hf_repo": "acme/Nova-7B-2512",
@@ -3662,7 +3664,8 @@ file that does not read or validate.
       "successor": null,
       "ollama_base": null,
       "ollama_tag": null,
-      "source": "https://huggingface.co/acme/Nova-7B-2512"
+      "source": "https://huggingface.co/acme/Nova-7B-2512",
+      "kind": "text"
     }
   ]
 }
@@ -3686,7 +3689,8 @@ file that does not read or validate.
           "successor": "acme/Nova-7B-2512",
           "ollama_base": "nova",
           "ollama_tag": "7b",
-          "source": "https://huggingface.co/acme/Nova-7B-2512"
+          "source": "https://huggingface.co/acme/Nova-7B-2512",
+          "kind": "text"
         },
         {
           "hf_repo": "acme/Nova-7B-2512",
@@ -3696,7 +3700,8 @@ file that does not read or validate.
           "successor": null,
           "ollama_base": null,
           "ollama_tag": null,
-          "source": "https://huggingface.co/acme/Nova-7B-2512"
+          "source": "https://huggingface.co/acme/Nova-7B-2512",
+          "kind": "text"
         }
       ]
     }
