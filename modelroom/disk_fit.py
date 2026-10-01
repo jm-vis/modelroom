@@ -57,10 +57,13 @@ def over_ranks(block: MachineRanking, disk: Disk | None) -> list[int]:
     return [entry.rank for entry in block.ranked if entry_over_disk(entry, disk)]
 
 
-def disk_words(block: MachineRanking, disk: Disk | None, dash: str = "–", mark: str = MARK) -> str | None:
+def disk_words(
+    block: MachineRanking, disk: Disk | None, dash: str = "–", mark: str = MARK, ranks: Sequence[int] | None = None
+) -> str | None:
     """`× #1–10 need more than the 26.4 GB free on C:` (the download and its margin), with what to do
-    where no row fits; else `None`. One row `needs`."""
-    ranks = over_ranks(block, disk)
+    where no row fits; else `None`. One row `needs`. `ranks` are the rows that do not fit where the
+    caller judged them per runtime (`views_install.over_ranks_on_machine`); else `over_ranks`."""
+    ranks = over_ranks(block, disk) if ranks is None else list(ranks)
     if not ranks:
         return None
     read = known(disk)

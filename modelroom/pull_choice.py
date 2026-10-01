@@ -251,10 +251,9 @@ def pull_rows(
 
 
 def default_row(rows: Sequence[PullRow]) -> PullRow | None:
-    """The row an answer file without `pull_package` takes: `#1`, where it has a unique name."""
-    if rows and rows[0].rank == 1 and rows[0].locked is None:
-        return rows[0]
-    return None
+    """The row an answer file without `pull_package` takes: `#1`, where it has a unique name -- of
+    the rows of `#1` (one per runtime of the machine, table order) the first that is not locked."""
+    return next((row for row in rows if row.rank == 1 and row.locked is None), None)
 
 
 def package_of(row: PullRow, packages: Sequence[Package]) -> Package | None:

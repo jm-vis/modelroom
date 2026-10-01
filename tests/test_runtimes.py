@@ -415,3 +415,64 @@ def test_what_another_runtime_holds_itself_frees_its_row_in_the_install_line_as_
     pull_step(run, context, True)
     first = asker.lists["pull_package"][0]
     assert (first.value, first.disabled, first.label.endswith("local already")) == ("third acme/nova:Q4_K_M", None, True)
+
+
+# --- the install line and the pull of step 5 agree, whatever runtimes, holdings and disk -----------
+
+
+@pytest.mark.parametrize("disk_gib", [100, 1], ids=["big-disk", "small-disk"])
+@pytest.mark.parametrize("holder", [None, "ollama", "third"], ids=["held-by-none", "held-by-ollama", "held-by-third"])
+@pytest.mark.parametrize(
+    "machine", [["ollama"], ["third"], ["ollama", "third"], ["third", "ollama"]], ids=["ollama", "third", "ollama+third", "third+ollama"]
+)
+def test_the_install_line_and_the_pull_step_offer_the_same_row(tmp_path, monkeypatch, machine, holder, disk_gib):
+    """One package, the machine's runtimes, who holds it, how much disk is free. The row offered is
+    the first runtime of the machine, in table order (Ollama before the third, whatever order the
+    profile names them in), whose download fits the disk or which holds the package itself; it is
+    local where that runtime holds it. The install line under the table (`terminal_blocks`) and the
+    pull of step 5 with an answer file without `pull_package` (`pull_step`) say the same: the same
+    command, or "local already" in the pull, or no package at all."""
+    import dataclasses
+
+    from modelroom.guided_install import PullContext, other_runtimes_held, pull_step
+    from modelroom.pull_choice import ambiguous_names
+    from modelroom.quantization import package_identity_key
+    from modelroom.room import GIB, Disk, LiveRoom
+    from modelroom.screen import plain
+    from modelroom.views import RunView, terminal_blocks
+
+    from fixture_rows import document, package
+    from test_pull_choice import _Recording, _run
+
+    q4 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+    holds = frozenset({package_identity_key(q4)})
+    own = {key: holds if holder == key else frozenset() for key in ("ollama", "third")}
+    ollama = dataclasses.replace(runtimes.OLLAMA, on_disk=lambda target, packages: own["ollama"])
+    third = _third(install_name=runtimes.OLLAMA.install_name, on_disk=lambda target, packages: own["third"])
+    monkeypatch.setattr(runtimes, "RUNTIMES", (ollama, runtimes.VLLM, third))
+    doc = _on_machine(document([q4]), machine)
+    # The disk read before the render carries what the Ollama daemon held (`guided.py`).
+    disk = Disk(int(disk_gib * GIB), "C:", held=own["ollama"])
+
+    name = "hf.co/unsloth/Nova-7B-GGUF:Q4_K_M"
+    command = {"ollama": f"ollama pull {name}", "third": f"third get {name}"}
+    fits = [key for key in ("ollama", "third") if key in machine and (disk_gib == 100 or holder == key)]
+    offered = fits[0] if fits else None
+
+    run, lines = _run(tmp_path, _Recording({"pull": False}))
+    context = PullContext(doc, "workstation", [q4], ambiguous_names([q4]), disk)
+    view = RunView(
+        install_for="workstation", live={"workstation": LiveRoom(disk=disk)}, packages=[q4], held=other_runtimes_held(run, context)
+    )
+    table = [plain(line).strip() for line in terminal_blocks(doc, "workstation", view=view)]
+    pull_step(run, context, True)
+    pulled = [line.strip() for line in lines if line.strip().startswith("install")]
+
+    installs = [line for line in table if line.startswith("install")]
+    if offered is None:
+        assert len(installs) == 1 and installs[0].startswith("install   no package fits")
+        assert pulled == []
+    else:
+        assert installs == [f"install   #1  {command[offered]}"]
+        local = "install   #1 is local already · say Yes in step 4 to measure it"
+        assert pulled == [local if holder == offered else f"install   #1  {command[offered]}"]
