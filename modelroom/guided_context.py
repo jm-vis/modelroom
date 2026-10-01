@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from pydantic import ValidationError
 
@@ -290,11 +290,29 @@ def machine_checked(pointer_path: Path, config: Configuration, results_dir: Path
     return Checked(name=name, profile=profile, machine_config=machine_config)
 
 
-def vllm_here(run: "GuidedRun", config: Configuration, results_dir: Path) -> tuple[HardwareProfile | None, object]:
-    """`runtimes.machine_has_vllm`'s two inputs for *this* guided run's own machine, read the
-    same way by every step that needs them: the bound profile (`machine_checked`), and whatever
-    this run's own step 1 found for `"vllm"` (`GuidedRun.servers.found.get("vllm")`)."""
-    return machine_checked(run.pointer_path, config, results_dir).profile, run.servers.found.get("vllm")
+def chosen_runtimes(run: "GuidedRun", config: Configuration) -> list[tuple[HardwareProfile | None, object]]:
+    """`runtimes.machine_has_vllm`'s two inputs for every machine this run chose (F3): its stored
+    profile (`[machines.<name>].profile`, the one the render ranks it with), and what this run's
+    own step 1 detected live -- for the machine the run is on only; any other machine has no live
+    detection here, so its stored profile alone speaks for it."""
+    from .remote_store import remote_path_for, this_machine
+
+    here = this_machine(remote_path_for(run.pointer_path))
+    scan = scan_profiles(config.paths.hardware_dir)
+    found = []
+    for name in run.selection.machines:
+        machine = config.machines.get(name)
+        profile = scan.profiles.get(machine.profile) if machine is not None and machine.profile else None
+        found.append((profile, run.servers.found.get("vllm") if name == here else None))
+    return found
+
+
+def vllm_among_chosen(run: "GuidedRun", config: Configuration) -> bool:
+    """Whether at least one machine this run chose has vLLM -- the one gate of the tensor search
+    (`guided_search.search_step`) and of `build_tensor` (`guided._fetch_step`), P1."""
+    from .runtimes import any_has_vllm
+
+    return any_has_vllm(chosen_runtimes(run, config))
 
 
 def scale_choices(levels: tuple[Level, ...], default_context: int, fits: dict[int, str], cap: tuple[int, str] | None) -> list[Choice]:
@@ -363,19 +381,17 @@ def context_cap(base_models: list[BaseModelSpec]) -> tuple[int, str] | None:
 def snapshot_packages(
     config: Configuration,
     selection: "RunSelection | None" = None,
-    profile: HardwareProfile | None = None,
-    live: object = None,
+    machines: Sequence[tuple[HardwareProfile | None, object]] = (),
 ) -> tuple[list[Package], list[BaseModelSpec]]:
     """The packages of this folder's snapshot a fit may be computed for, and its base models.
 
     Through the render's own filter (`render._eligible_packages`) and not a second one of this
     module's, so that the count in the scale is about exactly the packages the ranking of this
     same run will judge -- and through the same selection (`selection.narrow_snapshot`, AP9-UX B).
-    `profile`/`live` (fix round 1, Codex finding 4) are the machine this count is read *for*,
-    passed straight through to `_eligible_packages`: a tensor package never counts here either,
-    on a machine `runtimes.machine_has_vllm` does not call vLLM on. A snapshot that does not read
-    is not this step's business: the scale then shows no count, and the render that follows ends
-    the run with the exit code that file's own reader gives it.
+    `machines` are the machines the count is read for (`runtimes.visible_packages`): the one
+    machine of the scale, or every chosen machine for the balance and the card. A snapshot that
+    does not read is not this step's business: the scale then shows no count, and the render that
+    follows ends the run with the exit code that file's own reader gives it.
     """
     from .render import _eligible_packages
     from .selection import narrow_snapshot
@@ -388,7 +404,7 @@ def snapshot_packages(
         return [], []
     if selection is not None:
         snapshot = narrow_snapshot(snapshot, selection)
-    return _eligible_packages(snapshot, profile, live), snapshot.base_models
+    return _eligible_packages(snapshot, machines), snapshot.base_models
 
 
 @dataclass(frozen=True)
@@ -409,13 +425,12 @@ class SnapshotFacts:
 def snapshot_facts(
     config: Configuration,
     selection: "RunSelection | None" = None,
-    profile: HardwareProfile | None = None,
-    live: object = None,
+    machines: Sequence[tuple[HardwareProfile | None, object]] = (),
 ) -> SnapshotFacts:
     """The four numbers of this folder's snapshot, read through the render's own filter and this
-    run's selection, so the balance of step 2 and the card count what this run chose.
-    `profile`/`live` (fix round 1): the machine this balance is read for -- see `snapshot_packages`."""
-    packages, base_models = snapshot_packages(config, selection, profile, live)
+    run's selection, so the balance of step 2 and the card count what this run chose; `machines`
+    are the machines they are read for (`chosen_runtimes`, see `snapshot_packages`)."""
+    packages, base_models = snapshot_packages(config, selection, machines)
     accounts: list[str] = []
     repositories: list[str] = []
     for package in packages:
@@ -454,7 +469,7 @@ def _answered_requests(run: "GuidedRun", config: Configuration) -> RequestsAnswe
 def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked, requests: int = 1) -> int:
     """The context the user picked, as a number of tokens; a level is translated here. The scale
     counts and caps with the models of this run alone (AP9-UX B and H)."""
-    packages, base_models = snapshot_packages(config, run.selection, checked.profile, run.servers.found.get("vllm"))
+    packages, base_models = snapshot_packages(config, run.selection, [(checked.profile, run.servers.found.get("vllm"))])
     default_context = config.guided.context if config.guided.context is not None else DEFAULT_CONTEXT
     contexts = [level.tokens for level in LEVELS] + [default_context]
     fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts, requests)

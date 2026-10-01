@@ -29,9 +29,8 @@ from typing import TYPE_CHECKING, Sequence
 
 from .config import Configuration
 from .dialog import Choice
-from .guided_context import Checked, machine_checked
+from .guided_context import Checked, machine_checked, vllm_among_chosen
 from .guided_models import ModelChoice, list_context, model_choices, unusable_counts
-from .runtimes import machine_has_vllm
 from .screen import number_word, repositories_note, searched_note, yes_no
 from .search import DEFAULT_PACKAGERS, SearchError, SearchOutcome, run_search
 from .state import write_search_log
@@ -121,7 +120,7 @@ def search_step(run: GuidedRun, config: Configuration, results_dir: Path) -> Sea
         again = _did_you_mean(run, step.outcome.candidates)
         if again is not None:
             step = _searched(run, config, again, filtered, checked, context)
-    step = replace(step, tensor_repos=_tensor_hits(run, checked, step.outcome.hits))
+    step = replace(step, tensor_repos=_tensor_hits(run, vllm_among_chosen(run, config), step.outcome.hits))
     _report(run, config, step)
     return step
 
@@ -173,16 +172,15 @@ def _searched(
     return SearchStep(outcome=outcome, models=models, checked=checked, context=context, filtered=filtered)
 
 
-def _tensor_hits(run: GuidedRun, checked: Checked, hits: Sequence) -> dict[str, list[str]]:
-    """P1: the vLLM tensor search, a read only -- no write (fix round 1, Codex findings 1/2).
+def _tensor_hits(run: GuidedRun, wanted: bool, hits: Sequence) -> dict[str, list[str]]:
+    """P1: the vLLM tensor search, a read only -- no write.
 
-    Only when `runtimes.machine_has_vllm` says this run's machine has vLLM -- the same one
-    function `guided._fetch_step`'s `build_tensor` reads (fix round 0c: neither place tests this
-    on its own) -- and only then, every base model this very search resolved (`hits`, not only
-    the ones a person later picks: this step runs *before* the choice, there is no "later" to
-    wait for here) is asked once per `tensor_search.TENSOR_PACKAGERS` account. A machine without
-    vLLM asks no account here at all, so an ordinary Ollama run spends no extra request and its
-    goldens stay byte-identical.
+    Only when `wanted` -- `guided_context.vllm_among_chosen`, the one gate `guided._fetch_step`'s
+    `build_tensor` reads too: at least one chosen machine has vLLM -- and only then, every base
+    model this very search resolved (`hits`, not only the ones a person later picks: this step
+    runs *before* the choice, there is no "later" to wait for here) is asked once per
+    `tensor_search.TENSOR_PACKAGERS` account. A run without a vLLM machine asks no account here
+    at all, so an ordinary Ollama run spends no extra request and its goldens stay byte-identical.
 
     What is found is only *read*, never written: `guided.py::_search_step` decides, after the
     person has chosen, which of these base models to keep, and folds them into the exact same
@@ -192,7 +190,7 @@ def _tensor_hits(run: GuidedRun, checked: Checked, hits: Sequence) -> dict[str, 
     conflict), never a write path of this step's own. A base model nobody picks is never written
     for, whatever this search found.
     """
-    if not machine_has_vllm(checked.profile, run.servers.found.get("vllm")):
+    if not wanted:
         return {}
     bases = list(dict.fromkeys(hit.resolved_base_model for hit in hits if hit.resolved_base_model is not None))
     repos_by_base: dict[str, list[str]] = {}

@@ -372,28 +372,54 @@ def _tensor_package(**overrides) -> Package:
     return Package(**fields)
 
 
-def _without_snapshot_totals(dump: dict) -> dict:
-    """`RenderDocument.package_count`/`base_model_count` are the whole snapshot's own raw facts
-    ("what this folder's fetch found"), not scoped to any one machine -- a single document can
-    cover machines with and without vLLM at once, so these two document-wide numbers cannot
-    themselves be filtered per machine the way every *machine-scoped* number already is
-    (`SnapshotFacts` for the guided balance, each `MachineRanking` here). Left out of the
-    byte-for-byte comparisons below on purpose; see the fix round 1 report for this boundary."""
-    return {k: v for k, v in dump.items() if k not in ("package_count", "base_model_count")}
-
-
 def test_a_resolved_tensor_package_is_invisible_on_a_machine_without_vllm():
-    """Fix round 1, Codex finding 4: a resolved tensor package (an existing snapshot -- it does
-    not matter which run resolved it, or how) never reaches the summary, the ranking or the
-    table of a machine `runtimes.machine_has_vllm` does not call vLLM on. The document built
-    with it present is otherwise byte-for-byte the one built without it at all, the same the
-    whole document would have been before AP9-SV2-P ever existed (the promise `tests/golden/*`
-    already holds for the guided screen -- this is the same promise at the render layer)."""
+    """A resolved tensor package (an existing snapshot -- it does not matter which run resolved
+    it, or how) never reaches the summary, the ranking, the table or the document-wide counts of
+    a document whose machines `runtimes.machine_has_vllm` does not call vLLM on: the whole
+    document is the one built without it at all."""
     gguf = _hf_package()
     without_tensor = _document([gguf])
     with_tensor = _document([gguf, _tensor_package()])
 
-    assert _without_snapshot_totals(with_tensor.model_dump()) == _without_snapshot_totals(without_tensor.model_dump())
+    assert with_tensor.model_dump() == without_tensor.model_dump()
+
+
+def test_a_locked_tensor_package_is_not_counted_without_vllm_either():
+    gguf = _hf_package()
+    locked = _tensor_package(quantization=None, quantization_source=None, provenance="unresolved", unresolved_reason="format")
+
+    assert _document([gguf, locked]).model_dump() == _document([gguf]).model_dump()
+
+
+def test_the_document_counts_a_tensor_package_once_any_shown_machine_has_vllm():
+    """The document-wide counts are about the machines the document shows: one with vLLM is
+    enough for a tensor package to count; the block of the other machine still never sees it."""
+    gguf = _hf_package()
+    other_id = "0123456789abcdef"
+    with_vllm = _profile().model_copy(update={"runtimes": ["ollama", "vllm"], "profile_id": other_id})
+    config = _config(
+        {
+            "workstation": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": True, "profile": PROFILE_ID},
+            "server": {"reserve_ram_gib": 16.0, "reserve_vram_gib": 1.0, "writer": False, "profile": other_id},
+        }
+    )
+    document = build_render_document(
+        config,
+        _snapshot([gguf, _tensor_package()]),
+        {"workstation": _ready(), "server": _ready(with_vllm)},
+        {},
+        default_scenario(),
+        RENDERED_AT,
+    )
+
+    assert document.package_count == 2
+    blocks = {block.machine: block for block in document.machines}
+    seen_on = {
+        machine: {tuple(entry.package_identity) for entry in [*block.ranked, *block.not_covered]}
+        for machine, block in blocks.items()
+    }
+    assert package_identity_key(_tensor_package()) in seen_on["server"]
+    assert package_identity_key(_tensor_package()) not in seen_on["workstation"]
 
 
 def test_a_resolved_tensor_package_is_ranked_on_a_machine_with_vllm():
@@ -452,7 +478,7 @@ def test_live_vllm_of_another_machine_does_not_leak_into_this_ones_table():
         live_vllm={"some-other-machine": "a live server, but not this one's"},
     )
 
-    assert _without_snapshot_totals(document.model_dump()) == _without_snapshot_totals(_document([gguf]).model_dump())
+    assert document.model_dump() == _document([gguf]).model_dump()
 
 
 # --- the ranking ------------------------------------------------------------------------------

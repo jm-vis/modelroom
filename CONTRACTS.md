@@ -396,10 +396,10 @@ this function's own business:
 1. The repository must still be one of the base model's package targets, or `("unresolved",
    "repo_name")` -- unchanged.
 2. **The base model's own repository** (`package.repo == base_model.hf_repo`, the target
-   AP9-UX2 P3 always adds) resolves `("from_metadata", None)` **without a relation check at
-   all**: that repository *is* the base model, so its own tags necessarily name its own
-   predecessor (`Qwen/Qwen3-8B` carries `base_model:finetune:Qwen/Qwen3-8B-Base`), which
-   `relation.check_relation` would otherwise read as `derivative`, never `quantized`.
+   AP9-UX2 P3 always adds) skips **the relation check alone**: that repository *is* the base
+   model, so its own tags necessarily name its own predecessor (`Qwen/Qwen3-8B` carries
+   `base_model:finetune:Qwen/Qwen3-8B-Base`), which `relation.check_relation` would otherwise
+   read as `derivative`, never `quantized`. Rules 1 and 4 still apply to it.
 3. Every other tensor repository still needs `relation.check_relation`'s `quantized` verdict,
    exactly like a GGUF package (the same `base_model_tag`/`relation_unknown`/`derivative`/
    `metadata_conflict` reasons).
@@ -1450,8 +1450,27 @@ made, failure paths included, never only after the fact.
 only when the fetch may build tensor packages at all (AP9-SV2-P, P2, fix round 0b).**
 `hf.py::fetch_hf_area` takes `build_tensor` (`False` by default, matching every fetch before this
 step): with it `False`, a tensor weight group never reads `config.json` and never runs the
-safe-path check at all -- it stays locked `unresolved`/`format`, exactly as AP9-SV1 always left
-it, on a machine without vLLM. With it `True`, `_assemble_packages` reads the repo's `config.json`
+safe-path check at all. What it then becomes depends on what this project already knows about
+that exact repository and revision, and two kinds of knowledge are kept apart
+(`hf.py::_carried_tensor_facts`, the one place this is decided):
+
+- **Content facts** -- `quantization` and `quantization_source` -- depend on the repository and
+  its revision alone. When the previous snapshot holds the same package identity at exactly this
+  revision, built past the format lock by an earlier run (its reason is not `format`), they are
+  kept as they are, whatever that package's verdict was: an `unresolved` draft model
+  (`draft.safetensors`, `file_stem`) keeps its `BF16`/`config` too. Another revision may be other
+  content, so nothing is kept then.
+- **Verdicts** -- `provenance` and `unresolved_reason` -- also depend on the base model the
+  package is assigned to now. They are never copied from the previous snapshot: with content
+  facts at hand, `decide_provenance` decides again against the current assignment, the current
+  target set and the approvals, which needs no request. The same repository moved to another base
+  model at the same revision therefore gets the verdict a fetch with `build_tensor` would give it,
+  never the one of its former assignment.
+- With no content facts at all (never built, or another revision), the group stays locked
+  `unresolved`/`format`, exactly as AP9-SV1 always left it.
+
+Whether such a package is shown anywhere is not the fetch's business: the render decides that per
+machine ("Render (schema 2)", tensor visibility). With it `True`, `_assemble_packages` reads the repo's `config.json`
 at the already-known revision once -- cached for the rest of that repo's groups, so a repository
 with two tensor stems (a main build and a draft/MTP model dropped in the same repo) still costs
 one request, not two (Codex r1-7). A repository with no tensor group costs nothing extra either
@@ -1461,11 +1480,14 @@ this one request -- a status other than `200`, a body over `tensor_quant.MAX_CON
 (64 KiB), invalid JSON -- resolves `quantization` to `None` instead, never ends the area: the
 label is a documented extra on top of the package, not a requirement for it to exist (P2).
 
-**`build_tensor` itself (fix round 0b)** is the guided mode's own decision, reached in its fetch
-step (`guided.py::_fetch_step`) from the same two sources P1 names for the tensor search below --
-the folder's bound profile naming `vllm` among its `runtimes`, or a vLLM server detected serving
+**`build_tensor` itself** is the guided mode's own decision, reached in its fetch step
+(`guided.py::_fetch_step`) through the one gate the tensor search below reads as well,
+`guided_context.vllm_among_chosen`: `True` when **at least one machine this run chose** has vLLM
+(`runtimes.machine_has_vllm` per machine) -- by the `runtimes` of its stored profile
+(`[machines.<name>].profile`), or, for the machine the run is on, by a vLLM server detected serving
 *in this very run's own step 1* (`GuidedRun.servers.found["vllm"]`, an actual `ServedModel`
-answer only -- a server asking for a key does not count as detected, E5). A plain `modelroom
+answer only -- a server asking for a key does not count as detected, E5). Another chosen machine
+has no live detection here, so its stored profile alone speaks for it. A plain `modelroom
 fetch` (`cli.fetch_with_config`/`run_fetch` called directly, with no pointer or profile of their
 own) never sets it, and reads/writes exactly as AP9-SV1 always did. This is also the base model's
 own repository's whole story: AP9-UX2 P3 made it a `repos` target on *every* machine, for SV1's
@@ -4089,9 +4111,9 @@ selection list is shown -- 7 account pages and one age lookup per distinct resol
 has no search in front of it.
 
 **The vLLM tensor search of step 2 (AP9-SV2-P, P1, `modelroom/tensor_search.py`) only spends from
-this same shared budget when the machine being checked has vLLM** (`runtimes.machine_runtime_keys`
-names it, from the bound profile's `runtimes`): a machine without it costs no extra request at
-all, so an ordinary Ollama run and its goldens are unchanged. When it runs, every base model this
+this same shared budget when at least one chosen machine has vLLM** (`guided_context.vllm_among_chosen`,
+the same gate as `build_tensor` above): a run without one costs no extra request at all, so an
+ordinary Ollama run and its goldens are unchanged. When it runs, every base model this
 very search resolved (`SearchOutcome.hits`, not only the ones later picked -- the search step has
 no later hook to act on a choice from) is asked once per account of `tensor_search.TENSOR_PACKAGERS`
 plus the base model's own owner (`tensor_search.tensor_packagers`): one request each,
@@ -4100,7 +4122,8 @@ hit is kept only when `relation.check_relation` proves it `quantized` from this 
 at most `tensor_search.MAX_TENSOR_REPOS_PER_MODEL` (4) are kept per model, by downloads, the rest
 named as a count (`"and N more vLLM builds not fetched"`), never silently dropped and never
 fetched. `BudgetExhaustedError` ends the search where it stands -- the accounts already asked keep
-their candidates. A repository found is written into that base model's `repos`
+their candidates. A repository found is written into that base model's `repos` only once the
+person chooses that base model, in the same write as the chosen GGUF hits
 (`search_apply.apply_tensor_repos`, the same write-back shape `apply_hits` uses for a GGUF hit,
 including registering the base model's own owner under `publishers` when neither existed yet), so
 the next fetch of this folder reads it through the ordinary `package_targets` mechanism and pays
@@ -5032,6 +5055,16 @@ card; a hint, never a limit.
 |---|---|---|
 | `users` | `int \| None` | schema 2; `1..10240`; set only together with `requests_origin` |
 | `requests_origin` | `"default" \| "entered" \| "from_users" \| None` | schema 2; `None` for a scenario that is not the configuration's |
+
+**Tensor visibility (AP9-SV2-P, F3).** A tensor package is shown or counted only for machines
+with vLLM (`runtimes.visible_packages`, the one filter; per machine `runtimes.machine_has_vllm`:
+its stored profile's `runtimes`, plus live detection for the machine a guided run is on). Each
+machine block reads the packages visible for that machine alone. Every document-wide number --
+`package_count`, the ranking rule's one-row-per-model choice -- and the guided mode's balance and
+card read the packages visible for at least one machine the document shows. A document none of
+whose machines has vLLM is therefore byte for byte the one built without any tensor package,
+whatever the snapshot holds; the snapshot itself keeps every package and its raw facts.
+`base_model_count` counts the snapshot's base models, which no package changes.
 
 ```json
 {

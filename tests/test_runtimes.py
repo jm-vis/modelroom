@@ -215,21 +215,25 @@ def test_machine_has_vllm_every_combination_of_profile_and_live_detection(runtim
 
 
 def test_both_call_sites_read_the_one_function_not_their_own_logic():
-    """The two call sites that once each tested "does this machine have vLLM" their own way
-    (`guided._fetch_step`, `guided_search._tensor_hits`) now read `runtimes.machine_has_vllm`
+    """The two gates of a guided run -- the tensor search and `build_tensor` -- read one decision,
+    `guided_context.vllm_among_chosen` (every chosen machine through `runtimes.machine_has_vllm`),
     and nothing else: a second, independently written copy of the same test is exactly the kind
     of drift two call sites of one decision are prone to once they stop sharing it."""
     import inspect
 
     import modelroom.guided as guided_module
+    import modelroom.guided_context as guided_context_module
     import modelroom.guided_search as guided_search_module
 
-    assert "machine_has_vllm(" in inspect.getsource(guided_module._fetch_step)
-    assert "machine_has_vllm(" in inspect.getsource(guided_search_module._tensor_hits)
-    # Neither source reads `machine_runtime_keys` or `ServedModel` on its own any more -- the one
-    # function in `runtimes.py` is the only place either fact is read.
-    assert "machine_runtime_keys" not in inspect.getsource(guided_module)
-    assert "machine_runtime_keys" not in inspect.getsource(guided_search_module)
+    assert "vllm_among_chosen(" in inspect.getsource(guided_module._fetch_step)
+    assert "vllm_among_chosen(" in inspect.getsource(guided_search_module.search_step)
+    assert "any_has_vllm(" in inspect.getsource(guided_context_module.vllm_among_chosen)
+    assert "machine_has_vllm(" in inspect.getsource(runtimes.any_has_vllm)
+    # Neither module reads a machine's runtimes on its own -- `runtimes.py` is the only place.
+    for module in (guided_module, guided_search_module):
+        source = inspect.getsource(module)
+        assert "machine_runtime_keys" not in source
+        assert "machine_has_vllm" not in source
 
 
 def test_accepting_on_machine_narrows_to_the_machines_own_runtimes(monkeypatch):

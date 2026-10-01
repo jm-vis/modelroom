@@ -34,10 +34,9 @@ from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import USERS_KEY, USERS_QUESTION
-from .guided_context import context_step, snapshot_facts, snapshot_packages, vllm_here
+from .guided_context import chosen_runtimes, context_step, snapshot_facts, snapshot_packages, vllm_among_chosen
 from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES
 from . import room as room_module
-from .runtimes import machine_has_vllm
 # The folder question moved to `guided_folder.py` (AP9-UX2 U1/U7); the names stay readable here.
 from .guided_folder import CONFIG_NAME, MARKDOWN_PATH, STATE_FOLDER  # noqa: F401
 from .guided_folder import QUESTIONS as FOLDER_QUESTIONS
@@ -599,13 +598,13 @@ def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     run.screen.blank()
     run.screen.head(2)
     config, chosen = _search_step(run, config_file, config)
-    _fetch_step(run, config, config_file.parent)
+    _fetch_step(run, config)
     if not chosen:
         return config, NOTHING_CHOSEN_SUMMARY, False
     # All three numbers about one thing -- the snapshot this folder now holds. `apply_hits` keeps
     # what was there, so a balance may not mix the two frames (second-model round, 2026-09-24);
-    # the same machine-visibility `_fetch_step` used for `build_tensor` is read again here.
-    facts = snapshot_facts(config, run.selection, *vllm_here(run, config, config_file.parent))
+    # counted for the chosen machines, as the result document will be.
+    facts = snapshot_facts(config, run.selection, chosen_runtimes(run, config))
     return config, packages_summary(len(facts.model_names), facts.packages, facts.repositories), True
 
 
@@ -621,17 +620,16 @@ def context_default(config: Configuration) -> int:
 # --- the fetch of step 2, and step 5: the render --------------------------------------------------
 
 
-def _fetch_step(run: GuidedRun, config: Configuration, results_dir: Path) -> None:
-    """Step 2's fetch. `results_dir` is only for `machine_checked`, which tells `build_tensor`
-    whether this machine has vLLM (`runtimes.machine_has_vllm`, read the same way by
-    `guided_search._tensor_hits`); `False` reads and writes exactly as every fetch always did."""
+def _fetch_step(run: GuidedRun, config: Configuration) -> None:
+    """Step 2's fetch. `build_tensor` is `guided_context.vllm_among_chosen`, the same gate the
+    tensor search of this step reads; `False` reads and writes exactly as every fetch always did."""
     from .cli import fetch_with_config
 
     if not config.families:
         run.screen.note("no base model is configured yet, so there is nothing to fetch")
         return
     name = _machine_key(run)
-    build_tensor = machine_has_vllm(*vllm_here(run, config, results_dir))
+    build_tensor = vllm_among_chosen(run, config)
     code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget, build_tensor=build_tensor)
     if code != 0:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
@@ -657,13 +655,14 @@ def _render_step(
         run.screen.note(NO_MACHINE_CHOSEN)
     if not chosen.models:
         run.screen.note(NO_MODEL_CHOSEN)
-    profile, live = vllm_here(run, config, config_file.parent)  # the card's own count, below
+    machines = chosen_runtimes(run, config)  # the card counts for the machines the document shows
+    live = run.servers.found.get("vllm")
 
     def seen(document) -> None:
         # Read inside the callback, while the render still holds the lock: card, table and pull packages
         # rest on one snapshot (second-model round, 2026-09-24).
         packages = run_packages(config, chosen)  # before the eligibility filter (U4, Codex r3-1)
-        facts = snapshot_facts(config, chosen, profile, live)
+        facts = snapshot_facts(config, chosen, machines)
         written.append((document, facts, PullContext(document, here, packages, ambiguous_names(packages), disk)))
 
     # Free disk read once, before the render: Markdown, table and pull list mark the same rows (AP9-RM

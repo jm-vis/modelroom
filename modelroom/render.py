@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package, Rating, Snapshot
@@ -40,7 +40,7 @@ from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, Llmfit
 from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
-from .runtimes import fit_for, machine_has_vllm
+from .runtimes import MachineRuntimes, fit_for, visible_packages
 from .ranking import (
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
@@ -208,30 +208,21 @@ def _missing_profile_reason(profile_id: str, scan: ProfileScan) -> str:
 # --- eligibility and package facts -------------------------------------------------------------
 
 
-def _eligible_packages(
-    snapshot: Snapshot, profile: HardwareProfile | None = None, live: object = None
-) -> list[Package]:
-    """Every package a fit may be computed for: shown provenance, complete, active, and -- fix
-    round 1 (Codex finding 4) -- visible on the machine this list is being read for.
+def _eligible_packages(snapshot: Snapshot, machines: Sequence[MachineRuntimes] = ()) -> list[Package]:
+    """Every package a fit may be computed for: shown provenance, complete, active, and visible
+    for `machines` (`runtimes.visible_packages`, the one visibility rule).
 
     The base model is not checked here: `Snapshot` itself refuses a package whose
     `base_model_hf_repo` is not among its `base_models`, so every package that reaches this
     point has an architecture the fit can read.
 
-    A tensor package is never shown, counted or ranked for a machine `runtimes.machine_has_vllm`
-    does not call vLLM on -- the one visibility rule the summary line, the scale, the card, the
-    ranked table and the rendered document all read through this one function, never a filter of
-    their own. `profile`/`live` default to "no vLLM, no machine in particular": a caller that
-    does not know which machine it is building for (there was none before this fix round) reads
-    exactly the snapshot a run before P3 would have -- no tensor package ever eligible at all.
+    `machines` are the machines the list is read for -- one machine for its own block or scale,
+    every shown machine for a document-wide number. No machines means no vLLM: no tensor package.
     """
     return [
         package
-        for package in snapshot.packages
-        if package.provenance in _ELIGIBLE_PROVENANCE
-        and package.complete
-        and package.active
-        and (package.format != "tensor" or machine_has_vllm(profile, live))
+        for package in visible_packages(snapshot.packages, machines)
+        if package.provenance in _ELIGIBLE_PROVENANCE and package.complete and package.active
     ]
 
 
@@ -546,28 +537,28 @@ def build_render_document(
     model (ADR 0009); without it the snapshot says it (`snapshot_model_facts`), and no model is
     `legacy`. Several base models among the packages give one row per model (`ranking.shown_rows`).
 
-    `live_vllm` (fix round 1, Codex finding 4) maps a machine key to whatever that very run's own
-    step 1 found for `"vllm"` (`GuidedRun.servers.found.get("vllm")`) -- a guided run's own render
-    step passes it for the one machine it is running on; `modelroom render` (no guided run, no
-    server talked to) passes nothing, so every machine reads `runtimes.machine_has_vllm` off its
-    stored profile `runtimes` alone -- no live server there. Each machine's
-    own eligible packages -- never one shared list -- are read fresh per block, so a tensor
-    package a machine's own profile or live detection does not call vLLM on is never counted,
-    ranked or shown in its table, whatever another machine of the same document sees.
+    `live_vllm` maps a machine key to whatever that very run's own step 1 found for `"vllm"`
+    (`GuidedRun.servers.found.get("vllm")`) -- a guided run's own render step passes it for the
+    one machine it is running on; `modelroom render` (no guided run, no server talked to) passes
+    nothing, so every machine is judged by its stored profile `runtimes` alone.
+
+    Visibility (`runtimes.visible_packages`): each machine's block reads the packages visible for
+    that machine alone; every document-wide number (`package_count`, the ranking rule) reads the
+    packages visible for at least one shown machine. A tensor package therefore leaves no trace in
+    a document none of whose machines has vLLM; the snapshot keeps its raw facts.
     """
     base_model_by_repo = {bm.hf_repo: bm for bm in snapshot.base_models}
     live_vllm = live_vllm or {}
-    # The ranking rule (one row per model, or one per package) is a presentation choice about the
-    # whole document, not about any one machine's own visibility -- read with no profile, so it
-    # never depends on which machines happen to have vLLM (fix round 1).
-    per_model = len({package.base_model_hf_repo for package in _eligible_packages(snapshot)}) > 1
+    machine_runtimes = {machine: (profiles[machine].profile, live_vllm.get(machine)) for machine in config.machines}
+    shown = list(machine_runtimes.values())
+    per_model = len({package.base_model_hf_repo for package in _eligible_packages(snapshot, shown)}) > 1
     facts = models if models is not None else snapshot_model_facts(snapshot)
     blocks = [
         _machine_block(
             machine,
             machine_config,
             profiles[machine],
-            _eligible_packages(snapshot, profiles[machine].profile, live_vllm.get(machine)),
+            _eligible_packages(snapshot, [machine_runtimes[machine]]),
             base_model_by_repo,
             measurements.get(getattr(profiles[machine].profile, "profile_id", ""), []),
             scenario,
@@ -582,7 +573,7 @@ def build_render_document(
         snapshot_run_at=snapshot.run_at,
         rendered_at=rendered_at,
         base_model_count=len(snapshot.base_models),
-        package_count=len(snapshot.packages),
+        package_count=len(visible_packages(snapshot.packages, shown)),
         scenario=scenario,
         ranking_rule=RANKING_RULE_PER_MODEL if per_model else RANKING_RULE,
         rating_unavailable=rating_error,

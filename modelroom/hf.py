@@ -209,14 +209,14 @@ def fetch_hf_area(
     one that carried an `Approval`, that approval is carried forward into `decide_provenance` so
     an approval bound to still-current content survives this fetch.
 
-    `build_tensor` (AP9-SV2-P, fix round 0b) gates a tensor (safetensors) weight group past the
-    plain `unresolved`/`format` shape every non-GGUF package otherwise carries: `False` (the
-    default, every caller before this round) leaves it exactly as AP9-SV1 always did -- no
-    `config.json` request, no safe-path check, no `decide_provenance` call beyond the format
-    lock. `True` is reached only from the guided mode's fetch step, only for a machine with vLLM
-    (`runtimes.machine_runtime_keys`, P1's own gate): it resolves the base model's own repository
-    (always a target since AP9-UX2 P3) alongside whatever P1's tensor search wrote into `repos`,
-    both through the one ordinary `package_targets` mechanism.
+    `build_tensor` (AP9-SV2-P) lets a tensor (safetensors) weight group read its `config.json`
+    and pass the safe-path check. `False` (the default) makes no such request: the group keeps
+    the content facts an earlier build read at this exact revision and is judged again, or stays
+    `unresolved`/`format` when there are none (`_carried_tensor_facts`). `True` is reached only
+    from the guided mode's fetch step, when a chosen machine has vLLM
+    (`guided_context.vllm_among_chosen`, P1's own gate): it resolves the base model's own
+    repository (always a target since AP9-UX2 P3) alongside whatever P1's tensor search wrote into
+    `repos`, both through the one ordinary `package_targets` mechanism.
     """
     packages: list[Package] = []
     for repo in [target for target in targets if target.split("/", 1)[0] == owner]:
@@ -493,24 +493,14 @@ def _assemble_packages(
             repo, sha, base_model, group_files, extra_files, run_at, transport, tensor_label_cache, build_tensor
         )
         stub, approvals = _carry_forward_approval(stub, previous_by_key)
-        if stub.format == "tensor" and not build_tensor:
-            # Fix round 0b/1 (Codex finding 3): without `build_tensor` this run asks nothing new
-            # for a tensor group -- but a fact this project already has at this exact revision is
-            # not re-locked just because this run cannot afford to re-check it. `_carried_tensor_facts`
-            # is the one place that tells "nothing known yet" apart from "known, at this revision".
-            carried = _carried_tensor_facts(stub, previous_by_key)
-            if carried is None:
-                provenance, unresolved_reason = "unresolved", "format"
-            else:
-                stub = stub.model_copy(
-                    update={"quantization": carried.quantization, "quantization_source": carried.quantization_source}
-                )
-                provenance, unresolved_reason = carried.provenance, carried.unresolved_reason
-        else:
-            provenance, unresolved_reason = decide_provenance(
-                stub, base_model, tags, approvals, hf_card_data=card_data, hf_targets=targets
-            )
-        packages.append(_finalize(stub, provenance, unresolved_reason))
+        known = stub if stub.format != "tensor" or build_tensor else _carried_tensor_facts(stub, previous_by_key)
+        if known is None:
+            packages.append(_finalize(stub, "unresolved", "format"))
+            continue
+        provenance, unresolved_reason = decide_provenance(
+            known, base_model, tags, approvals, hf_card_data=card_data, hf_targets=targets
+        )
+        packages.append(_finalize(known, provenance, unresolved_reason))
     return packages
 
 
@@ -627,21 +617,28 @@ def _carry_forward_approval(
 
 
 def _carried_tensor_facts(stub: Package, previous_by_key: dict[tuple[str, str, str], Package]) -> Package | None:
-    """The previous package this tensor group's identity and **revision** match, if that earlier
-    run ever resolved it past the format lock (fix round 1, Codex finding 3).
+    """`stub` with the content facts an earlier run read for this tensor group, for a run that
+    may not read them itself (no `build_tensor`); `None` when no such facts exist yet.
 
-    Revision-bound, unlike the approval carry-forward above (which only matches identity and the
-    base model): `package_identity_key` alone says nothing about the file *content* a label was
-    read from, and a new commit may be a different model entirely. Only an exact `revision` match
-    -- the same commit this run's tree fetch just read -- makes a previous quantization label or
-    provenance verdict still a fact about *this* package; a previous package of a different
-    revision is simply not found here, same as one this project has never seen at all. The base
-    model is not checked separately: `base_model_hf_repo` is not part of either package's repo
-    identity, and the revision match already pins the exact content this verdict is about.
+    Two kinds of knowledge are kept apart, and this function is where that is decided:
+
+    - **Content facts** -- the quantization label and its source, read from `config.json` --
+      depend on the repository and its revision alone. They are carried when a previous package
+      has the same identity and exactly this revision, and was built past the format lock (its
+      reason is not `format`), whatever its provenance verdict: an `unresolved` package (a draft
+      model's `file_stem`) keeps its label too. A different revision may be different content,
+      so nothing is carried then.
+    - **Verdicts** -- provenance, the reason -- also depend on which base model the package is
+      assigned to now. They are never carried: the caller decides again with
+      `decide_provenance`, from these facts and the current assignment, which needs no request.
+      The same repository moved to another base model at the same revision gets the verdict a
+      run with vLLM would give it, never the one of its former assignment.
     """
     previous = previous_by_key.get(package_identity_key(stub))
-    if previous is None or previous.revision != stub.revision:
+    if previous is None or previous.revision != stub.revision or previous.format != "tensor":
         return None
-    if previous.provenance == "unresolved":
+    if previous.unresolved_reason == "format":
         return None
-    return previous
+    return stub.model_copy(
+        update={"quantization": previous.quantization, "quantization_source": previous.quantization_source}
+    )

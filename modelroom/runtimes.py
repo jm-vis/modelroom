@@ -339,18 +339,38 @@ def machine_runtime_keys(profile: HardwareProfile | None) -> frozenset[str]:
 
 
 def machine_has_vllm(profile: HardwareProfile | None, live: object) -> bool:
-    """Whether vLLM is present on this machine, in *this* run (P1: "`runtimes`, or detected
-    live") -- the one decision `guided_search._tensor_hits` (the tensor search) and
-    `guided._fetch_step` (`build_tensor`) both make, through this function alone (fix round 0c:
-    two call sites once carried this same test separately, the SV2-L lesson against that).
+    """Whether vLLM is present on one machine, in *this* run (P1: "`runtimes`, or detected
+    live") -- the per-machine decision every vLLM gate reads: `any_has_vllm` (the tensor search
+    and `build_tensor` of a guided run) and `visible_packages` (what an output shows).
 
-    `profile` is the folder's bound `HardwareProfile`, read exactly like `machine_runtime_keys`
-    already reads it. `live` is whatever a caller's own step-1 bookkeeping holds for `"vllm"`
-    (`GuidedRun.servers.found.get("vllm")`): only a real `ServedModel` answer counts as detected
-    -- a server that asked for a key, one whose answer could not be read, or nothing at all, does
-    not (E5, the edge-case table: "does not count as detected").
+    `profile` is that machine's `HardwareProfile`, read exactly like `machine_runtime_keys`
+    already reads it. `live` is whatever a caller's own step-1 bookkeeping holds for `"vllm"` on
+    that machine (`GuidedRun.servers.found.get("vllm")` for the machine the run is on, nothing for
+    any other): only a real `ServedModel` answer counts as detected -- a server that asked for a
+    key, one whose answer could not be read, or nothing at all, does not (E5, the edge-case table:
+    "does not count as detected").
     """
     return "vllm" in machine_runtime_keys(profile) or isinstance(live, ServedModel)
+
+
+# `machine_has_vllm`'s two inputs for one machine: its profile, and what was detected live on it.
+MachineRuntimes = tuple[HardwareProfile | None, object]
+
+
+def any_has_vllm(machines: Sequence[MachineRuntimes]) -> bool:
+    """Whether at least one of `machines` has vLLM (`machine_has_vllm` for each)."""
+    return any(machine_has_vllm(profile, live) for profile, live in machines)
+
+
+def visible_packages(packages: Sequence[Package], machines: Sequence[MachineRuntimes]) -> list[Package]:
+    """The one visibility rule (F3): `packages` as an output for `machines` may show or count them.
+
+    A tensor package is visible only when at least one of `machines` has vLLM; every other package
+    always is. One machine for its own table or scale, every shown machine for a document-wide
+    number or summary. The snapshot itself is never filtered: it keeps the raw facts.
+    """
+    vllm = any_has_vllm(machines)
+    return [package for package in packages if package.format != "tensor" or vllm]
 
 
 def accepting_on_machine(package: Package, profile: HardwareProfile | None) -> tuple[Runtime, ...]:
@@ -390,11 +410,14 @@ __all__ = [
     "RuntimeWords",
     "ServerRun",
     "VLLM",
+    "MachineRuntimes",
     "accepting_on_machine",
     "accepting_runtimes",
+    "any_has_vllm",
     "fit_for",
     "local_servers",
     "machine_has_vllm",
     "machine_runtime_keys",
     "runtime_of",
+    "visible_packages",
 ]
