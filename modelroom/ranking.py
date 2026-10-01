@@ -30,6 +30,13 @@ RANKING_RULE_PER_MODEL = (
     f"{_RULE_KEY}; one row per model, its first package under this rule, then every measured package "
     "the rule leaves out"
 )
+# F5 (Codex r5-1): what a machine with rows of both runtimes shows, said where the document has one --
+# each runtime ranked on its own, Ollama's rows by the rule above, then every ranked vLLM package
+# (`render._rankings_by_runtime`, so each section's own count is exact without a new field).
+BOTH_RUNTIMES_RULE = (
+    "; on a machine with both Ollama and vLLM rows each runtime is ranked on its own: Ollama's rows as "
+    "above, then every ranked vLLM package in the order of this rule"
+)
 # The facts a row note names for the sentence it gains from the rule (`row_sentence`); the words of
 # the result (`ranking_words`) read the case of a block from them.
 BEST_FACT = "ranking.best_per_model"

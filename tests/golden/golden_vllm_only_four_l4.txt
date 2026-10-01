@@ -1,9 +1,7 @@
  ── Step 5 of 5  Results ────────────────────────────────────────────────
 
  server · context L 32k
- room      graphics 86.0 GB for models (4 x 22.5 GB cards minus reserve)
-           memory 86.3 GB for models (94.3 GB minus reserve)
-           disk unknown (modelroom render reads no machine live)
+ room      graphics 82.8 GB for vLLM (4 x 22.5 GB cards, 0.92 of each)
  runtime   vLLM (from its profile)
  #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────

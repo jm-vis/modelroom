@@ -137,6 +137,105 @@ def test_one_visibility_rule_for_the_table_and_the_step_3_count():
     assert visible_packages([gguf, tensor], []) == [gguf]
 
 
+# --- Fix r5 (Codex r5 on 3474641): the rule says what each section shows; the head is per runtime -----
+
+
+def _awq_of(index: int, base_repo: str = "Qwen/Qwen3-8B"):
+    return _tensor_package().model_copy(update={"repo": f"acme{index:02d}/Qwen3-8B-AWQ", "base_model_hf_repo": base_repo})
+
+
+def _other_model():
+    from modelroom.contracts import Architecture
+
+    arch = Architecture(
+        source_repo="acme/Other-7B", source_revision="a" * 40, kind="dense_classic",
+        num_hidden_layers=28, num_key_value_heads=4, head_dim=128, num_attention_heads=28, max_context=131072,
+    )
+    return _base_model().model_copy(update={"hf_repo": "acme/Other-7B", "publisher": "acme", "parameters_b": 7.0, "architecture": arch})
+
+
+def _other_gguf():
+    return _gguf_package().model_copy(update={"repo": "unsloth/Other-7B-GGUF", "base_model_hf_repo": "acme/Other-7B"})
+
+
+def test_eleven_vllm_packages_beside_ollama_are_all_shown_and_the_rule_says_so():
+    """Codex r5-1: the vLLM section of a machine with both runtimes lists every ranked vLLM
+    package -- eleven here, past the first ten -- and the document's `ranking_rule` says exactly
+    that; Ollama's own section keeps the rule's first ten."""
+    from modelroom.ranking import RANKING_RULE
+
+    document = _render(_profile(), [_base_model()], [_gguf_package(), *(_awq_of(index) for index in range(11))])
+
+    block = document.machines[0]
+    assert [entry.fit.runtime for entry in block.ranked] == ["ollama"] + ["vllm"] * 11
+    assert document.ranking_rule.startswith(RANKING_RULE) and document.ranking_rule != RANKING_RULE
+    assert "every ranked vLLM package" in document.ranking_rule
+    assert f"Ranking rule: {document.ranking_rule}" in document_markdown(document)
+    assert "Showing 11 of 11 ranked packages." in document_markdown(document)
+
+
+def test_one_row_per_model_for_ollama_and_every_vllm_row_and_the_rule_says_so():
+    """Codex r5-1 with the selection per model on (two models): Ollama's section shows one row per
+    model, the vLLM section every vLLM package, and the per-model rule names both."""
+    from modelroom.ranking import RANKING_RULE_PER_MODEL
+
+    packages = [_gguf_package(), _other_gguf(), _awq_of(1), _awq_of(2)]
+    document = _render(_profile(), [_base_model(), _other_model()], packages)
+
+    block = document.machines[0]
+    assert [entry.fit.runtime for entry in block.ranked] == ["ollama", "ollama", "vllm", "vllm"]
+    assert document.ranking_rule.startswith(RANKING_RULE_PER_MODEL) and "every ranked vLLM package" in document.ranking_rule
+
+
+def test_an_ollama_only_document_keeps_its_rule_word_for_word():
+    from modelroom.ranking import RANKING_RULE
+
+    document = _render(_profile_without_field(), [_base_model()], [_gguf_package(), _tensor_package()])
+
+    assert document.ranking_rule == RANKING_RULE
+
+
+def _live(document, gib: float = 50.0):
+    from modelroom.room import Disk, LiveRoom
+    from modelroom.views import RunView, terminal_blocks
+    from modelroom.screen import plain
+
+    view = RunView(install_for="server", live={"server": LiveRoom(disk=Disk(free_bytes=int(gib * 1024**3), drive="C:"))})
+    return "\n".join(plain(line) for line in terminal_blocks(document, view=view))
+
+
+def test_a_vllm_only_head_names_the_vllm_pool_and_nothing_of_ollama():
+    """Codex r5-2: the `room` line of a machine with vLLM alone says vLLM's pool (0.92 of each card
+    of the largest equal group: 4 x 22.49 -> 82.8 GB), no system-memory budget (vLLM has no RAM
+    fallback) and no disk said to be Ollama's -- with a disk read live, too."""
+    terminal = _live(_vllm_only())
+
+    room = next(line for line in terminal.splitlines() if line.startswith(" room"))
+    assert "graphics 82.8 GB for vLLM" in room
+    assert "memory" not in room and "Ollama" not in terminal and "for models" not in terminal
+
+
+def test_an_empty_vllm_block_with_a_disk_read_says_nothing_of_ollama():
+    """Codex r5-2: a vLLM-only machine with no visible row at all (only GGUF packages exist) -- its
+    empty state carries no Ollama reserve hint and no Ollama disk, decided by the machine's runtimes."""
+    document = _render(_vllm_only_profile(), [_base_model()], [_gguf_package()])
+    assert document.machines[0].ranked == [] and document.machines[0].no_fit == []
+
+    terminal, markdown = _live(document), document_markdown(document)
+    for text in (terminal, markdown):
+        assert "Ollama" not in text and "modelroom.toml" not in text and "Memory reserve" not in text
+
+
+def test_both_runtimes_name_each_budget_by_its_runtime():
+    """Codex r5-2: with both runtimes the head names Ollama's budgets and vLLM's pool apart."""
+    terminal = _live(_both())
+
+    room = [line for line in terminal.splitlines()[:8]]
+    head = " ".join(room)
+    assert "graphics 86.0 GB for Ollama" in head and "memory 86.3 GB for Ollama" in head
+    assert "graphics 82.8 GB for vLLM" in head and "for models" not in head
+
+
 def test_the_step_3_scale_counts_what_the_vllm_only_table_ranks():
     from modelroom.config import MachineConfig
     from modelroom.guided_context import Checked, fit_texts

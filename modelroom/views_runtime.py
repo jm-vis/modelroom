@@ -52,6 +52,13 @@ def vllm_shown(block: MachineRanking) -> bool:
     return any(is_vllm(entry.fit) for entry in shown_entries(block))
 
 
+def vllm_table(block: MachineRanking) -> bool:
+    """Whether `block` is drawn as vLLM's (F5, Codex r5-2): a vLLM row is shown, or the machine has
+    no Ollama at all (`runtimes.machine_runtime_keys`) -- so an empty block of a vLLM-only machine
+    carries no Ollama hint either. Never true for a machine without the `runtimes` field."""
+    return vllm_shown(block) or runtimes.OLLAMA.key not in runtimes.machine_runtime_keys(block.profile)
+
+
 def key_text(block: MachineRanking) -> list[str]:
     """The whole key under a table, for the Markdown file and the terminal alike: one runtime's
     only, never two side by side (F5, the views split a block of two runtimes into sections first,
@@ -153,5 +160,6 @@ __all__ = [
     "shown_entries",
     "unequal_cards_note",
     "vllm_shown",
+    "vllm_table",
     "vllm_pool_pieces",
 ]

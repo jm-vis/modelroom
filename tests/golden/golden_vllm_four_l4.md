@@ -7,7 +7,7 @@ Rendered at: 2026-09-30T08:05:00+00:00
 Base models / packages: 1 / 2
 Scenario: context 32k (entered), KV cache f16 (assumed), 10 requests
 Load: beyond 8 requests at once this fit says nothing about throughput: measure under load, or look at a serving stack (rule of thumb, not measured)
-Ranking rule: graphics memory before system memory, then every model that is not legacy before a legacy one, then the larger model (parameter count), then the least compression, then measured before unmeasured (a valid comparable measurement), then larger weights, then package identity; the first 10 rows, then every measured package the rule leaves out
+Ranking rule: graphics memory before system memory, then every model that is not legacy before a legacy one, then the larger model (parameter count), then the least compression, then measured before unmeasured (a valid comparable measurement), then larger weights, then package identity; the first 10 rows, then every measured package the rule leaves out; on a machine with both Ollama and vLLM rows each runtime is ranked on its own: Ollama's rows as above, then every ranked vLLM package in the order of this rule
 
 ## Areas
 

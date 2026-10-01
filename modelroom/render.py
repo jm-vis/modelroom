@@ -44,6 +44,7 @@ from .reserve import ram_reserve
 from .runtimes import RUNTIMES, MachineRuntimes, fit_for, visible_packages
 from .vllm_words import is_vllm, reason_sentence as vllm_reason_sentence, row_note as vllm_row_note
 from .ranking import (
+    BOTH_RUNTIMES_RULE,
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
     ModelFacts,
@@ -613,6 +614,9 @@ def build_render_document(
         for machine, machine_config in config.machines.items()
     ]
     ratings, rating_error = _collect_ratings(rating_source, _repos_with_rows(blocks))
+    rule = RANKING_RULE_PER_MODEL if per_model else RANKING_RULE
+    # F5 (Codex r5-1): the rule says the per-runtime selection wherever a machine ranks both.
+    rule += BOTH_RUNTIMES_RULE if any(len({entry.fit.runtime for entry in block.ranked}) > 1 for block in blocks) else ""
     return RenderDocument(
         schema_version=DOCUMENT_SCHEMA_VERSION,
         snapshot_run_at=snapshot.run_at,
@@ -620,7 +624,7 @@ def build_render_document(
         base_model_count=len(snapshot.base_models),
         package_count=len(visible_packages(snapshot.packages, shown)),
         scenario=scenario,
-        ranking_rule=RANKING_RULE_PER_MODEL if per_model else RANKING_RULE,
+        ranking_rule=rule,
         rating_unavailable=rating_error,
         ratings=ratings,
         areas=snapshot.areas,

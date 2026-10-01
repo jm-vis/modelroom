@@ -16,7 +16,7 @@ from typing import Mapping, Sequence
 from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
-from .views_runtime import RUNTIME_LABEL, key_text, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces, vllm_shown
+from .views_runtime import RUNTIME_LABEL, key_text, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces, vllm_shown, vllm_table
 from .views_sections import ALTERNATIVES, runtime_sections, section_title
 from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noqa: F401 -- moved (size guard, F5)
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
@@ -260,7 +260,7 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
     sections = [f"## Ranking: {block.machine}", "", headline, ""]
     parts = runtime_sections(block)
     # The system memory's reserve is Ollama's: a machine of vLLM rows alone does not name it (F5).
-    hint = "" if len(parts) == 1 and vllm_shown(block) else " ".join(reserve_hint_rows(block))
+    hint = "" if len(parts) == 1 and vllm_table(block) else " ".join(reserve_hint_rows(block))
     sections += [f"{hint[0].upper()}{hint[1:]}.", ""] if hint else []
     if len(parts) == 1:
         return sections + _machine_body(block, document, first, disk)
@@ -549,7 +549,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     lines += _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
     # A vLLM table (F5) keeps neither the system memory's reserve nor Ollama's advice to measure.
-    vllm = vllm_shown(block)
+    vllm = vllm_table(block)
     lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash) + ([] if vllm else reserve_hint_rows(block)))
     lines += _disk_lines(block, _disk(block, view), dash, _over(block, view))
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
@@ -602,7 +602,7 @@ def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
         else "ssh_inactive" if view.origins.get(block.machine) == "ssh"
         else "other"
     )
-    lines = _labeled(ROOM_LABEL, head_pieces(block, live, where), dot)
+    lines = _labeled(ROOM_LABEL, head_pieces(block, live, where, runtimes.machine_runtime_keys(block.profile)), dot)
     loaded = loaded_pieces(live)
     return lines + (_labeled(LOADED_LABEL, loaded, dot) if loaded else [])
 

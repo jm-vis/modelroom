@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Literal
 
 from .document import MachineRanking
+from .fit_vllm import NO_CARD_REASON, SHARED_MEMORY_REASON, VLLM_GPU_MEMORY_UTILIZATION, equal_size_group
 from .intro import LABEL_COLUMN
 from .reserve import old_default_hint
 from .room import UNCLEAR_REASON, LiveRoom, LoadedModel, disk_words, gb, graphics_words
@@ -34,18 +35,49 @@ ANOTHER_COMPUTER_DISK = "disk unknown on another computer"
 RENDER_DISK = "disk unknown (modelroom render reads no machine live)"
 # The graphics states whose cards the fit counts with a memory of their own (`fit._OWN_VRAM_STATES`).
 _OWN_CARD_STATES = ("measured", "entered", "multi_gpu")
+# A machine whose profile names no runtime reads as Ollama's alone (`runtimes.machine_runtime_keys`).
+_OLLAMA_ONLY = frozenset({"ollama"})
 
 
-def head_pieces(block: MachineRanking, live: LiveRoom | None, where: Where) -> list[str]:
-    """The pieces of the `room` line of one machine: budgets from the profile, then the disk."""
+def head_pieces(
+    block: MachineRanking, live: LiveRoom | None, where: Where, runtime_keys: frozenset[str] = _OLLAMA_ONLY
+) -> list[str]:
+    """The pieces of the `room` line of one machine: budgets from the profile, then the disk.
+
+    `runtime_keys` are the machine's runtimes (`runtimes.machine_runtime_keys`, F5, Codex r5-2):
+    Ollama's budgets and its disk only where Ollama is one of them -- named `for Ollama` beside vLLM,
+    `for models` alone, word for word as before -- and vLLM's pool where vLLM is. vLLM has no
+    system-memory fallback and its disk place is AP9-SV2-I's, so it adds neither.
+    """
     profile = block.profile
+    ollama, vllm = "ollama" in runtime_keys, "vllm" in runtime_keys and profile is not None
+    whom = "Ollama" if vllm else "models"
     if profile is None:
         pieces = ["graphics unknown", "memory unknown"]
     elif profile.gpu_state == "unified_memory":
-        pieces = [_shared_piece(block)]
+        pieces = [_shared_piece(block, whom)]
     else:
-        pieces = [_graphics_piece(block), _memory_piece(block)]
-    return [*pieces, _disk_piece(live, where, block.machine)]
+        pieces = [_graphics_piece(block, whom), _memory_piece(block, whom)]
+    pieces = (pieces if ollama else []) + ([_vllm_piece(block)] if vllm else [])
+    return [*pieces, *([_disk_piece(live, where, block.machine)] if ollama else [])]
+
+
+def _vllm_piece(block: MachineRanking) -> str:
+    """`graphics 82.8 GB for vLLM (4 x 22.5 GB cards, 0.92 of each)`: the most vLLM can take, its
+    share of each card of the largest equal group (`fit_vllm.equal_size_group`, F1); a smaller
+    card left out of the group is not counted. Its own reason where vLLM cannot run at all."""
+    profile = block.profile
+    if profile.gpu_state == "unified_memory":
+        return f"graphics: {SHARED_MEMORY_REASON}"
+    group = equal_size_group(profile)
+    if not group.cards:
+        return f"graphics: {NO_CARD_REASON}"
+    size = group.cards[0].vram_gib
+    pool = VLLM_GPU_MEMORY_UTILIZATION * sum(gpu.vram_gib for gpu in group.cards)
+    named = f"{size:.1f} GB card, {VLLM_GPU_MEMORY_UTILIZATION} of it" if len(group.cards) == 1 else (
+        f"{len(group.cards)} x {size:.1f} GB cards, {VLLM_GPU_MEMORY_UTILIZATION} of each"
+    )
+    return f"graphics {pool:.1f} GB for vLLM ({named})"
 
 
 def loaded_pieces(live: LiveRoom | None) -> list[str]:
@@ -74,12 +106,13 @@ def reserve_hint_rows(block: MachineRanking) -> list[str]:
     return [hint] if len(hint) <= NOTE_WIDTH else [f"{head};", tail]
 
 
-def _budget(value_gib: float) -> str:
-    """A budget as the head says it; one of 0 or less is said in words, never below zero (RM-2)."""
-    return f"{value_gib:.1f} GB for models" if value_gib > 0 else "nothing left for models"
+def _budget(value_gib: float, whom: str = "models") -> str:
+    """A budget as the head says it; one of 0 or less is said in words, never below zero (RM-2).
+    `whom` is `models`, or `Ollama` where vLLM stands beside it (F5)."""
+    return f"{value_gib:.1f} GB for {whom}" if value_gib > 0 else f"nothing left for {whom}"
 
 
-def _graphics_piece(block: MachineRanking) -> str:
+def _graphics_piece(block: MachineRanking, whom: str = "models") -> str:
     """`graphics 11.0 GB for models (12.0 GB card minus reserve)`, the cards counted or listed."""
     profile = block.profile
     if profile.gpu_state == "none" or (profile.gpu_state in _OWN_CARD_STATES and not profile.gpus):
@@ -87,7 +120,7 @@ def _graphics_piece(block: MachineRanking) -> str:
     if profile.gpu_state not in _OWN_CARD_STATES:
         return "graphics unknown"  # a state without a number: never `none`
     cards = [gpu.vram_gib for gpu in profile.gpus]
-    budget = _budget(sum(card - block.reserve_vram_gib for card in cards))
+    budget = _budget(sum(card - block.reserve_vram_gib for card in cards), whom)
     sizes = [f"{card:.1f}" for card in cards]
     if len(cards) == 1:
         named = f"{sizes[0]} GB card"
@@ -102,20 +135,20 @@ def _graphics_piece(block: MachineRanking) -> str:
     return piece
 
 
-def _memory_piece(block: MachineRanking) -> str:
+def _memory_piece(block: MachineRanking, whom: str = "models") -> str:
     """`memory 111.7 GB for models (127.7 GB minus reserve)`, or `memory unknown` (G1)."""
     ram = block.profile.ram_physical_gib
     if ram is None:
         return "memory unknown"
-    return f"memory {_budget(ram - block.reserve_ram_gib)} ({ram:.1f} GB minus reserve)"
+    return f"memory {_budget(ram - block.reserve_ram_gib, whom)} ({ram:.1f} GB minus reserve)"
 
 
-def _shared_piece(block: MachineRanking) -> str:
+def _shared_piece(block: MachineRanking, whom: str = "models") -> str:
     """Unified memory is one piece: `shared memory 95.0 GB for models (128.0 GB minus both reserves)`."""
     ram = block.profile.ram_physical_gib
     if ram is None:
         return "shared memory unknown"
-    budget = _budget(ram - block.reserve_ram_gib - block.reserve_vram_gib)
+    budget = _budget(ram - block.reserve_ram_gib - block.reserve_vram_gib, whom)
     return f"shared memory {budget} ({ram:.1f} GB minus both reserves)"
 
 
