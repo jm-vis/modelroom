@@ -384,6 +384,46 @@ def test_vllm_rows_set_aside_get_the_legend_beside_ranked_ollama_rows(where):
     assert "vLLM · acme AWQ" in terminal  # the `shown` line names the set-aside row as vLLM's
 
 
+def _gguf(size: int) -> Package:
+    return _gguf_package().model_copy(
+        update={"files": [PackageFile(name="Qwen3-8B-Q4_K_M.gguf", role="weights", size_bytes=size, digest="sha256:" + "1" * 64)]}
+    )
+
+
+@pytest.mark.parametrize("where", ["no_fit", "not_covered"])
+def test_a_machine_whose_only_rows_are_vllm_set_aside_still_gets_the_legend(where):
+    """Codex r3-1: no row is ranked at all, and the one row the tables show is vLLM's, under `No
+    fit` or `Not covered`. The key is owed to that row all the same -- in the Markdown file and in
+    the terminal, without the speed hint (no table with a speed column is shown)."""
+    tensor = _awq(20_000_000_000 if where == "no_fit" else 0)
+    document = _render(_profile(), [_qwen3_base(None)], [tensor])
+
+    block = document.machines[0]
+    assert block.ranked == [] and [entry.fit.runtime for entry in getattr(block, where)] == ["vllm"]
+    markdown, terminal = document_markdown(document), document_terminal(document)
+    for text in (markdown, terminal):
+        assert "vLLM's classes count requests at once instead: no fit below one" in text
+        assert "gpu_split: all cards together (Ollama)" in text
+        assert "vLLM · rows start with vllm serve; the others are pulled into Ollama" in text
+    assert any(line.startswith(" key ") for line in terminal.splitlines())
+    assert "Speed is measured, see its column." not in markdown + terminal
+
+
+@pytest.mark.parametrize("size", [300_000_000_000, 0], ids=["no_fit", "not_covered"])
+def test_an_ollama_machine_with_nothing_ranked_still_gets_no_key(size):
+    """The counter-proof of Codex r3-1: an Ollama row set aside, nothing ranked -- no key at all,
+    exactly as before AP9-SV2, on a machine with vLLM as on any other."""
+    from modelroom.screen import FIT_HINT
+
+    document = _render(_profile(), [_base_model()], [_gguf(size)])
+
+    block = document.machines[0]
+    assert block.ranked == [] and len(block.no_fit) + len(block.not_covered) == 1
+    markdown, terminal = document_markdown(document), document_terminal(document)
+    assert FIT_HINT[0] not in markdown and FIT_HINT[0] not in terminal
+    assert not any(line.startswith(" key ") for line in terminal.splitlines())
+
+
 def test_the_terminal_view_of_a_machine_with_vllm_stays_within_100_columns():
     """Sweep (Fix r2): the legend's vLLM sentences are pieces the terminal can wrap between; one
     sentence of 200 characters ran past the 100-column window the view is drawn for."""

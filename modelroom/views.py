@@ -16,7 +16,7 @@ from typing import Mapping, Sequence
 from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
-from .views_runtime import RUNTIME_LABEL, key_text, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces
+from .views_runtime import RUNTIME_LABEL, key_text, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces, vllm_shown
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
 from .disk_fit import DISK_LABEL, disk_words, entry_over_disk
@@ -284,7 +284,8 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
             _table(_SET_ASIDE_COLUMNS, [_set_aside_row(entry, document) for entry in items]),
             "",
         ]
-    return sections
+    # Nothing ranked, but a vLLM row set aside: its key still stands, under the tables (Codex r3-1).
+    return sections + ([" · ".join(key_text(block)), ""] if not block.ranked and vllm_shown(block) else [])
 
 
 def document_markdown(document: RenderDocument, disks: Mapping[str, Disk] | None = None) -> str:
@@ -577,8 +578,9 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
-    if block.ranked:
-        lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
+    if block.ranked or vllm_shown(block):  # a vLLM row set aside owes its key too (Codex r3-1)
+        speed = [SPEED_HINT] if block.ranked else []
+        lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + speed)
     disk = _disk(block, view)
     return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view))
 

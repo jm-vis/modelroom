@@ -45,6 +45,13 @@ def shown_entries(block: MachineRanking) -> list[RankedEntry | SetAsideEntry]:
     return [*block.ranked, *block.not_covered, *block.no_fit]
 
 
+def vllm_shown(block: MachineRanking) -> bool:
+    """Whether any row the table of `block` shows is vLLM's, ranked or set aside (Codex r3-1): such
+    a block owes its key even where nothing is ranked. An Ollama-only block answers `False`, so one
+    with nothing ranked keeps drawing no key at all, as before AP9-SV2."""
+    return any(is_vllm(entry.fit) for entry in shown_entries(block))
+
+
 def key_text(block: MachineRanking) -> list[str]:
     """The whole key under a machine's table, for the Markdown file and the terminal alike.
 
@@ -52,11 +59,10 @@ def key_text(block: MachineRanking) -> list[str]:
     to before AP9-SV2. Once one is, wherever it stands (`shown_entries`): Ollama's `gpu_split`
     piece scoped to Ollama, with vLLM's own mode and pool beside it (Codex r2-3), then
     `legend_lines` -- the share rule's scope, vLLM's class rule and every runtime's `key_text`."""
-    entries = shown_entries(block)
     pieces = key_pieces(block)
-    if any(is_vllm(entry.fit) for entry in entries):
+    if vllm_shown(block):
         pieces = key_pieces_with_vllm(pieces, GPU_SPLIT_HINT)
-    return pieces + legend_lines(entries)
+    return pieces + legend_lines(shown_entries(block))
 
 
 def legend_lines(entries: Sequence[RankedEntry | SetAsideEntry]) -> list[str]:
@@ -159,5 +165,6 @@ __all__ = [
     "runtime_line",
     "shown_entries",
     "unequal_cards_note",
+    "vllm_shown",
     "vllm_pool_pieces",
 ]
