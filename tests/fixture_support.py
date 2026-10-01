@@ -20,6 +20,7 @@ from modelroom.config import Configuration
 from modelroom.http import Response
 from modelroom.profile import PROFILE_SCHEMA_VERSION, CrossCheck, GpuAdapter, HardwareProfile, LlmfitCrosscheck
 from modelroom.state import atomic_write_json
+from modelroom.tensor_search import tensor_packagers, tensor_search_url
 
 # Moved to their own modules (AP9-UX2, size guard) and exported back, so every test's import stays.
 from fixture_http import FIXTURES, build_transport, envelope_response, html_response, json_response  # noqa: F401
@@ -469,6 +470,29 @@ def qwen35_4b_transport_mapping() -> dict[tuple[str, str], Response]:
     }
 
 
+def no_tensor_hits_mapping() -> dict[tuple[str, str], Response]:
+    """Fix round 0c: every tensor-search page (P1, `tensor_search.search_tensor_repos`) a run
+    with Qwen3.5-9B and/or the DeepSeek base model resolved could ask, answered with an empty
+    list. `_tensor_search_step` now asks whenever `runtimes.machine_has_vllm` says so -- the
+    bound profile's `runtimes`, *or* a vLLM server detected live in the very same run (fix round
+    0c's own point): a guided run with a live-serving vLLM fixture (`fixture_servers.vllm_servers`)
+    reaches this search even where its profile carries no stored `runtimes` at all, so every such
+    run needs these two accounts answered, not only the ones that set `runtimes` explicitly.
+    Empty answers keep every existing assertion about what a run writes unchanged.
+    """
+    empty = Response(status=200, headers={}, body=b"[]")
+    bases = {
+        "Qwen/Qwen3.5-9B": "Qwen3.5-9B",
+        DEEPSEEK_BASE: "DeepSeek-R1-0528-Qwen3-8B",
+        QWEN25_REPO: "Qwen2.5-0.5B-Instruct",
+    }
+    return {
+        ("GET", tensor_search_url(name, account)): empty
+        for base, name in bases.items()
+        for account in tensor_packagers(base)
+    }
+
+
 def guided_transport_mapping() -> dict[tuple[str, str], Response]:
     """Every request one whole guided run makes: the search, its age lookups and the fetch."""
     return {
@@ -476,6 +500,7 @@ def guided_transport_mapping() -> dict[tuple[str, str], Response]:
         **qwen35_transport_mapping(),
         **deepseek_transport_mapping(),
         **publisher_tree_mapping(),
+        **no_tensor_hits_mapping(),
     }
 
 

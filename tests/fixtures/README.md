@@ -427,6 +427,44 @@ repository lines (`tests/fixture_rows.py`), the fixed room of the laptop (`tests
 10,444 MiB graphics memory free, 44,236,955,648 bytes of disk free on `C:`), and the answers of
 `nvidia-smi --query-gpu=index,name,memory.free` in `tests/test_room.py`.
 
+## Tensor quantization labels (AP9-SV2-P)
+
+Recorded on **2026-10-01** by the builder of AP9-SV2-P from the public Hub, one anonymous `GET`
+each at the URLs `modelroom/hf.py` builds, and nothing else. Whole answers, verbatim; no host
+name, address or secret is in them. The repositories and revisions are the ones
+`ap9-sv2-bau-brief.md`'s "Extern belegt" table already documents (read before fetching, not
+guessed): every `sha` below matches that table's truncated value in full.
+
+- `hf_qwen3_8b_awq_config.json` -- `config.json` of `Qwen/Qwen3-8B-AWQ` at sha
+  `4da05a8edb55c6046cce958586c33b61da07bb79` (the sha of `hf_qwen3_8b_awq_model.json`, already
+  present since AP9-SV1): `quantization_config.quant_method = "awq"`, `bits = 4` -- the `AWQ`
+  case.
+- `hf_qwen3_8b_fp8_model.json`, `hf_qwen3_8b_fp8_tree.json`, `hf_qwen3_8b_fp8_config.json` --
+  `Qwen/Qwen3-8B-FP8` at sha `220b46e3b2180893580a4454f21f22d3ebb187d3`:
+  `quantization_config.quant_method = "fp8"` -- the plain (non-compressed-tensors) `FP8` case.
+- `hf_redhatai_qwen3_8b_fp8_dynamic_model.json`, `..._tree.json`, `..._config.json` --
+  `RedHatAI/Qwen3-8B-FP8-dynamic` at sha `05233ce1e0565b5fdc9cfa000ab840152ed30c70`:
+  `quantization_config.quant_method = "compressed-tensors"`, `format = "float-quantized"`,
+  `config_groups.group_0.weights` `num_bits = 8`, `type = "float"` -- the compressed-tensors
+  `FP8` case.
+- `hf_redhatai_qwen3_8b_w4a16_model.json`, `..._config.json` --
+  `RedHatAI/Qwen3-8B-quantized.w4a16` at sha `32527053243a382bc56e941c964fc516a5014d39`:
+  `quantization_config.quant_method = "compressed-tensors"`, `format = "pack-quantized"`,
+  `config_groups.group_0.weights` `num_bits = 4`, `type = "int"` -- the `W4A16` case. No tree
+  fixture: `test_tensor_quant.py` only needs the label, read from the config dict directly, and
+  `test_hf.py`'s wiring test already proves the fetch mechanics against the AWQ/FP8 trees above.
+- `hf_qwen25_7b_gptq_int4_model.json`, `hf_qwen25_7b_gptq_int4_config.json` --
+  `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` at sha `e9c932ac1893a49ae0fc497ad6e1e86e2e39af20`:
+  `quantization_config.quant_method = "gptq"`, `bits = 4` -- the `GPTQ-4` case (`GPTQ-8` is a
+  mutation of this same fixture in the test, not a separately recorded repo: no real `GPTQ-8`
+  Hugging Face repo was at hand).
+
+No fixture was recorded for the tensor *search* (P1, `filter=safetensors`): that page shape is
+new with this step and `tests/test_tensor_search.py` tests its own URL-building and
+budget/cap/relation logic directly, against hand-built hit objects, the same reasoning
+`test_hf.py`'s own module docstring already gives for a planted defect no real repo happens to
+have.
+
 ## Schema 2 and migration (AP9-K)
 
 All hand-written, fictitious machines and models (`acme/Nova-*`, `packager/*`); no real host

@@ -326,6 +326,7 @@ def fetch_with_config(
     transport: Transport | None = None,
     now: datetime | None = None,
     budget: int | RequestBudget = DEFAULT_REQUEST_BUDGET,
+    build_tensor: bool = False,
 ) -> int:
     """Run `fetch` against an already-loaded `Configuration` -- the programmatic entry point.
 
@@ -335,6 +336,11 @@ def fetch_with_config(
     caller that already has a `Configuration` -- e.g. `Configuration.from_dict` -- and a
     `Transport` (a `FixtureTransport` in tests, `UrllibTransport()` in production) calls this
     directly, with no argparse/CLI process involved.
+
+    `build_tensor` (AP9-SV2-P, fix round 0b, default `False`) is passed on to `run_fetch`
+    unchanged. Neither this function nor `_cmd_fetch` (a plain `modelroom fetch --config
+    --machine`, with no pointer/profile binding of its own) ever sets it to `True`: only the
+    guided mode's fetch step, which knows the folder's bound profile, does.
     """
     machine_config = config.machines.get(machine)
     if machine_config is None or not machine_config.writer:
@@ -366,12 +372,14 @@ def fetch_with_config(
         return 1
 
     try:
-        return _run_locked(config, active_transport, run_at, budget)
+        return _run_locked(config, active_transport, run_at, budget, build_tensor)
     finally:
         release_lock(handle)
 
 
-def _run_locked(config, transport: Transport, run_at: datetime, budget: int | RequestBudget) -> int:
+def _run_locked(
+    config, transport: Transport, run_at: datetime, budget: int | RequestBudget, build_tensor: bool = False
+) -> int:
     try:
         old_snapshot = read_snapshot(config)
     except (SchemaVersionError, UnreadableStateFileError) as exc:
@@ -384,7 +392,7 @@ def _run_locked(config, transport: Transport, run_at: datetime, budget: int | Re
         print(str(exc), file=sys.stderr)
         return 1
 
-    result = run_fetch(config, transport, run_at, old_snapshot, budget)
+    result = run_fetch(config, transport, run_at, old_snapshot, budget, build_tensor)
     write_snapshot(config, result.snapshot.model_dump(mode="json"))
     write_run_status(config, result.snapshot, result.request_used, result.request_budget)
 

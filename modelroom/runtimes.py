@@ -45,7 +45,7 @@ from .measurements import Scenario
 from .profile import HardwareProfile, RuntimeKey
 from .room import ollama_models_candidates
 from .screen import pull_command
-from .vllm_server import VLLM_BASE_URL
+from .vllm_server import VLLM_BASE_URL, ServedModel
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
@@ -338,6 +338,21 @@ def machine_runtime_keys(profile: HardwareProfile | None) -> frozenset[str]:
     return frozenset({"ollama"})
 
 
+def machine_has_vllm(profile: HardwareProfile | None, live: object) -> bool:
+    """Whether vLLM is present on this machine, in *this* run (P1: "`runtimes`, or detected
+    live") -- the one decision `guided_search._tensor_search_step` (the tensor search) and
+    `guided._fetch_step` (`build_tensor`) both make, through this function alone (fix round 0c:
+    two call sites once carried this same test separately, the SV2-L lesson against that).
+
+    `profile` is the folder's bound `HardwareProfile`, read exactly like `machine_runtime_keys`
+    already reads it. `live` is whatever a caller's own step-1 bookkeeping holds for `"vllm"`
+    (`GuidedRun.servers.found.get("vllm")`): only a real `ServedModel` answer counts as detected
+    -- a server that asked for a key, one whose answer could not be read, or nothing at all, does
+    not (E5, the edge-case table: "does not count as detected").
+    """
+    return "vllm" in machine_runtime_keys(profile) or isinstance(live, ServedModel)
+
+
 def accepting_on_machine(package: Package, profile: HardwareProfile | None) -> tuple[Runtime, ...]:
     """`accepting_runtimes`, narrowed to the runtimes `profile`'s machine actually has: a runtime
     that would accept `package` in general but that this machine never reported pairs with nothing
@@ -379,6 +394,7 @@ __all__ = [
     "accepting_runtimes",
     "fit_for",
     "local_servers",
+    "machine_has_vllm",
     "machine_runtime_keys",
     "runtime_of",
 ]

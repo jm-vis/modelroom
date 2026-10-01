@@ -44,6 +44,7 @@ def run_fetch(
     run_at: datetime,
     old_snapshot: Snapshot | None,
     budget: int | RequestBudget = DEFAULT_REQUEST_BUDGET,
+    build_tensor: bool = False,
 ) -> FetchResult:
     """Fetch every configured base model on both sources and merge the result against `old_snapshot`.
 
@@ -51,6 +52,12 @@ def run_fetch(
     `RequestBudget` the caller already spent on (e.g. its search): the run then books against
     that same count and stops where the shared budget ends. `request_used`/`request_budget` in
     the result are the shared budget's totals.
+
+    `build_tensor` (AP9-SV2-P, fix round 0b, default `False`) is passed on to every
+    `hf.fetch_hf_area` call unchanged: a tensor (safetensors) package resolves past
+    `unresolved`/`format` only when it is `True`, which the guided mode's fetch step sets only
+    for a machine whose bound profile has vLLM among its `runtimes`. A caller that never passes
+    it -- every plain `modelroom fetch` -- reads and writes exactly as before this step.
     """
     shared = budget if isinstance(budget, RequestBudget) else RequestBudget(budget)
     budgeted = BudgetedTransport(transport, shared)
@@ -97,7 +104,7 @@ def run_fetch(
                     area_outcomes.append(_budget_exhausted_hf_area(base_model, owner))
                     continue
                 area_outcomes.append(
-                    fetch_hf_area(redirecting, base_model, owner, targets, run_at, previous_by_key)
+                    fetch_hf_area(redirecting, base_model, owner, targets, run_at, previous_by_key, build_tensor)
                 )
 
             if base_model.ollama_base and base_model.ollama_tag:

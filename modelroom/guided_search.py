@@ -27,13 +27,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
-from .config import Configuration
+from .config import ConfigError, Configuration
 from .dialog import Choice
 from .guided_context import Checked, machine_checked
+from .guided_folder import CONFIG_NAME
 from .guided_models import ModelChoice, list_context, model_choices, unusable_counts
+from .runtimes import machine_has_vllm
 from .screen import number_word, repositories_note, searched_note, yes_no
 from .search import DEFAULT_PACKAGERS, SearchError, SearchOutcome, run_search
+from .search_apply import apply_tensor_repos, write_configuration
 from .state import write_search_log
+from .tensor_search import search_tensor_repos
 
 if TYPE_CHECKING:  # pragma: no cover -- the annotation only; no import at run time
     from .guided import GuidedRun
@@ -112,6 +116,7 @@ def search_step(run: GuidedRun, config: Configuration, results_dir: Path) -> Sea
         again = _did_you_mean(run, step.outcome.candidates)
         if again is not None:
             step = _searched(run, config, again, filtered, checked, context)
+    _tensor_search_step(run, config, results_dir, step, checked)
     _report(run, config, step)
     return step
 
@@ -161,6 +166,55 @@ def _searched(
         requests=config.guided.requests,
     )
     return SearchStep(outcome=outcome, models=models, checked=checked, context=context, filtered=filtered)
+
+
+def _tensor_search_step(
+    run: GuidedRun, config: Configuration, results_dir: Path, step: SearchStep, checked: Checked
+) -> None:
+    """P1: the vLLM tensor search, only when `runtimes.machine_has_vllm` says this run's machine
+    has vLLM -- the same one function `guided._fetch_step`'s `build_tensor` reads (fix round 0c:
+    neither place tests this on its own). A machine without vLLM asks no account here at all, so
+    an ordinary Ollama run spends no extra request and its goldens stay byte-identical.
+
+    Every base model this very search resolved (`step.outcome.hits`, not only the ones a person
+    later picks -- there is no later hook in this step to act on a choice from) is asked once per
+    `tensor_search.TENSOR_PACKAGERS` account; a repository found is written into that base
+    model's `repos` the same way a GGUF hit is (`search_apply.apply_tensor_repos`), so the next
+    fetch of this folder reads it through the ordinary `package_targets` mechanism -- no new
+    persisted form, the configuration schema is unchanged (P1).
+
+    The write happens here, under this step's own lock, rather than through step 2's later
+    `apply_hits` write-back (`guided.py`), which only ever applies to the base models a person
+    marks: a failure here is said on the screen and the run goes on, exactly like the search log
+    a few lines below.
+    """
+    if not machine_has_vllm(checked.profile, run.servers.found.get("vllm")):
+        return
+    bases = list(
+        dict.fromkeys(hit.resolved_base_model for hit in step.outcome.hits if hit.resolved_base_model is not None)
+    )
+    if not bases:
+        return
+    repos_by_base: dict[str, list[str]] = {}
+    for base in bases:
+        outcome = search_tensor_repos(run.transport, run.budget, base)
+        if outcome.repos:
+            repos_by_base[base] = list(outcome.repos)
+        note = outcome.note()
+        if note is not None:
+            run.screen.note(f"{base}: {note}")
+    if not repos_by_base:
+        return
+    target = results_dir / CONFIG_NAME
+    try:
+        expected_text = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        expected_text = None
+    try:
+        updated = apply_tensor_repos(config, repos_by_base, catalog=run.catalog)
+        write_configuration(target, updated, now=run.now, expected_text=expected_text)
+    except (ConfigError, OSError) as exc:
+        run.failed(f"the vLLM tensor repositories this search found were not written: {exc}")
 
 
 def _did_you_mean(run: GuidedRun, candidates: Sequence[str]) -> str | None:

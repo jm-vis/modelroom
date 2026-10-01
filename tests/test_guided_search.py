@@ -8,17 +8,33 @@ which account that was (decided 2026-09-25).
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+from modelroom.catalog import Catalog, load_catalog
+from modelroom.config import Configuration
+from modelroom.guided_context import Checked
+from modelroom.guided_folder import CONFIG_NAME
 from modelroom.guided_search import (
     DID_YOU_MEAN_KEY,
     KEEP_THE_WORD,
     KEEP_THE_WORD_LABEL,
     NO_WORD_ANSWER,
+    SearchStep,
+    _tensor_search_step,
     candidate_choices,
     no_gguf_clause,
     search_answer,
     search_notes,
     searched_sentence,
 )
+from modelroom.http import FixtureTransport, RequestBudget, Response
+from modelroom.search import SearchOutcome
+from modelroom.search_apply import write_configuration
 
 
 def _log(accounts: list[dict]) -> dict:
@@ -178,3 +194,170 @@ def test_the_candidates_are_a_list_with_none_of_these_last_and_the_first_under_t
 
 def test_the_key_of_that_question_is_the_one_the_answer_file_uses():
     assert DID_YOU_MEAN_KEY == "did_you_mean"
+
+
+# --- the vLLM tensor search of step 2 (AP9-SV2-P, P1) ----------------------------------------------
+
+
+@dataclass
+class _FakeScreen:
+    notes: list[str] = field(default_factory=list)
+
+    def note(self, line: str) -> None:
+        self.notes.append(line)
+
+
+@dataclass
+class _FakeRun:
+    transport: Any
+    budget: Any
+    catalog: Catalog
+    now: datetime = datetime(2026, 9, 30, 9, 0, 0, tzinfo=timezone.utc)
+    screen: _FakeScreen = field(default_factory=_FakeScreen)
+    problems: list[str] = field(default_factory=list)
+    # `runtimes.machine_has_vllm`'s other source (fix round 0c): a server detected serving in
+    # this very run's own step 1. Empty by default, like a run that never saw one.
+    servers: SimpleNamespace = field(default_factory=lambda: SimpleNamespace(found={}))
+
+    def failed(self, message: str) -> None:
+        self.problems.append(message)
+
+
+def _config(tmp_path: Path) -> Configuration:
+    config = Configuration.from_dict(
+        {
+            "schema_version": 3,
+            "families": [],
+            "packagers": [],
+            "publishers": [],
+            "machines": {},
+            "paths": {"state": str(tmp_path / "state"), "markdown": str(tmp_path / "docs" / "models.md")},
+        }
+    )
+    write_configuration(tmp_path / CONFIG_NAME, config, now=_FakeRun.now, expected_text=None)
+    return config
+
+
+def _step(hits: list) -> SearchStep:
+    outcome = SearchOutcome(query="nova", hits=hits, budget_used=0, budget_limit=150)
+    return SearchStep(outcome=outcome, models=[], checked=Checked(), context=8192, filtered=True)
+
+
+def test_no_vllm_machine_asks_no_tensor_search(tmp_path: Path):
+    """P1: a machine without vLLM (no `checked.profile`, or one whose `runtimes` do not name it)
+    costs no extra request at all -- an ordinary Ollama run and its goldens are unchanged."""
+    config = _config(tmp_path)
+    hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
+    step = _step([hit])
+
+    def _unreachable(method: str, url: str, headers=None):
+        raise AssertionError(f"no request should be made for a machine without vLLM: {method} {url}")
+
+    run = _FakeRun(transport=_unreachable, budget=None, catalog=load_catalog())
+
+    _tensor_search_step(run, config, tmp_path, step, Checked())
+
+    assert run.problems == []
+    assert run.screen.notes == []
+
+
+def test_a_vllm_machine_writes_the_tensor_repos_it_finds(tmp_path: Path):
+    """A machine whose profile names `vllm` among its `runtimes` is searched, once per distinct
+    resolved base model of this very search; a repository found lands in that base model's
+    `repos`, the same place a GGUF hit would (`search_apply.apply_tensor_repos`)."""
+    from modelroom.tensor_search import tensor_search_url
+
+    config = _config(tmp_path)
+    hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
+    step = _step([hit, hit])  # two hits of the same base model: still one search, not two
+
+    transport = FixtureTransport(
+        {
+            ("GET", tensor_search_url("Nova-7B", "acme")): _tensor_page(
+                [
+                    {
+                        "id": "RedHatAI/Nova-7B-FP8",
+                        "tags": ["base_model:acme/Nova-7B", "base_model:quantized:acme/Nova-7B"],
+                    }
+                ]
+            ),
+            ("GET", tensor_search_url("Nova-7B", "RedHatAI")): _tensor_page([]),
+        }
+    )
+    run = _FakeRun(transport=transport, budget=RequestBudget(50), catalog=load_catalog())
+    checked = Checked(profile=SimpleNamespace(runtimes=["ollama", "vllm"]))
+
+    _tensor_search_step(run, config, tmp_path, step, checked)
+
+    assert len(transport.calls) == 2  # one account each, never once per hit
+    assert run.problems == []
+    written = (tmp_path / CONFIG_NAME).read_text(encoding="utf-8")
+    assert "RedHatAI/Nova-7B-FP8" in written
+
+
+def test_a_live_detected_server_with_no_stored_runtimes_also_searches(tmp_path: Path):
+    """Fix round 0c: the second of P1's two sources ("runtimes, or detected live") -- a machine
+    whose profile names no `vllm` at all (or has none) still runs the tensor search when *this*
+    run's own step 1 found a vLLM server actually serving a model, through the one function
+    `runtimes.machine_has_vllm` (`test_runtimes.py` proves the function itself; this is the
+    red-first case the fix round asked for: no stored `runtimes` is the whole point)."""
+    from modelroom.tensor_search import tensor_search_url
+    from modelroom.vllm_server import ServedModel
+
+    config = _config(tmp_path)
+    hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
+    step = _step([hit])
+
+    transport = FixtureTransport(
+        {
+            ("GET", tensor_search_url("Nova-7B", "acme")): _tensor_page(
+                [
+                    {
+                        "id": "RedHatAI/Nova-7B-FP8",
+                        "tags": ["base_model:acme/Nova-7B", "base_model:quantized:acme/Nova-7B"],
+                    }
+                ]
+            ),
+            ("GET", tensor_search_url("Nova-7B", "RedHatAI")): _tensor_page([]),
+        }
+    )
+    run = _FakeRun(transport=transport, budget=RequestBudget(50), catalog=load_catalog())
+    run.servers.found["vllm"] = ServedModel(id="acme/Nova-7B", root="acme/Nova-7B", max_model_len=4096)
+    checked = Checked(profile=None)  # no bound profile at all, never mind a stored runtimes list
+
+    _tensor_search_step(run, config, tmp_path, step, checked)
+
+    assert len(transport.calls) == 2
+    written = (tmp_path / CONFIG_NAME).read_text(encoding="utf-8")
+    assert "RedHatAI/Nova-7B-FP8" in written
+
+
+def test_a_key_prompt_alone_does_not_count_as_detected():
+    """E5: a server that asks for a key is not counted as vLLM detected -- neither source then
+    says so, so the search asks nothing (red-first against the naive "any entry in `found`
+    means vLLM" reading)."""
+    config = Configuration.from_dict(
+        {
+            "schema_version": 3,
+            "families": [],
+            "packagers": [],
+            "publishers": [],
+            "machines": {},
+            "paths": {"state": "//x/state", "markdown": "//x/models.md"},
+        }
+    )
+    hit = SimpleNamespace(resolved_base_model="acme/Nova-7B")
+    step = _step([hit])
+
+    def _unreachable(method: str, url: str, headers=None):
+        raise AssertionError(f"no request should be made: {method} {url}")
+
+    run = _FakeRun(transport=_unreachable, budget=None, catalog=load_catalog())
+    run.servers.found["vllm"] = "asks for an API key"
+    checked = Checked(profile=None)
+
+    _tensor_search_step(run, config, Path("/does-not-matter"), step, checked)
+
+
+def _tensor_page(hits: list[dict]) -> Response:
+    return Response(status=200, headers={}, body=json.dumps(hits).encode("utf-8"))

@@ -10,6 +10,7 @@ test_provenance.py plants defects no single real repo happens to have.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 
 import pytest
@@ -1231,7 +1232,7 @@ QWEN3_AWQ_SHA = "4da05a8edb55c6046cce958586c33b61da07bb79"
 HF = "https://huggingface.co"
 
 
-def _tensor_area(repo: str, base: str, sha: str, fixture: str) -> list[Package]:
+def _tensor_area(repo: str, base: str, sha: str, fixture: str, *, build_tensor: bool = False) -> list[Package]:
     transport = build_transport(
         {
             ("GET", f"{HF}/api/models/{repo}"): json_response(f"{fixture}_model.json"),
@@ -1241,22 +1242,26 @@ def _tensor_area(repo: str, base: str, sha: str, fixture: str) -> list[Package]:
     base_model = BaseModelSpec(
         hf_repo=base, repo_aliases=[], publisher="Qwen", parameters_b=None, architecture=_unknown_architecture(base)
     )
-    outcome = fetch_hf_area(transport, base_model, owner="Qwen", targets=[repo], run_at=RUN_AT)
+    outcome = fetch_hf_area(transport, base_model, owner="Qwen", targets=[repo], run_at=RUN_AT, build_tensor=build_tensor)
     assert outcome.status == "complete", outcome.error
     return outcome.packages
 
 
-@pytest.mark.parametrize(
-    ("repo", "base", "sha", "fixture", "weights"),
-    [
-        ("Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen2.5-0.5B-Instruct", QWEN25_SHA, "hf_qwen25_05b_instruct", 988_097_824),
-        ("Qwen/Qwen3-8B-AWQ", "Qwen/Qwen3-8B", QWEN3_AWQ_SHA, "hf_qwen3_8b_awq", 4_853_922_024 + 1_244_659_840),
-    ],
-    ids=["one-file", "two-shards"],
-)
+_TENSOR_REPO_CASES = [
+    ("Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen2.5-0.5B-Instruct", QWEN25_SHA, "hf_qwen25_05b_instruct", 988_097_824),
+    ("Qwen/Qwen3-8B-AWQ", "Qwen/Qwen3-8B", QWEN3_AWQ_SHA, "hf_qwen3_8b_awq", 4_853_922_024 + 1_244_659_840),
+]
+
+
+@pytest.mark.parametrize(("repo", "base", "sha", "fixture", "weights"), _TENSOR_REPO_CASES, ids=["one-file", "two-shards"])
 def test_a_safetensors_repository_gives_one_complete_tensor_package(repo, base, sha, fixture, weights):
     """What a vLLM server serves is the `tensor` package of today: complete, the weights the sum of
-    the safetensors files, no quantization word, and `unresolved`/`format` (AP9-SV1, D)."""
+    the safetensors files, no quantization word, and `unresolved`/`format` (AP9-SV1, D).
+
+    Fix round 0b (AP9-SV2-P): `build_tensor` defaults to `False` here, same as every caller of
+    `fetch_hf_area` this project ships before the guided mode's fetch step sets it -- a tensor
+    group stays locked exactly as AP9-SV1 left it, on a machine without vLLM, whatever its tags
+    say (`test_a_safetensors_repository_resolves_when_build_tensor_is_true` below is the P3 case)."""
     packages = _tensor_area(repo, base, sha, fixture)
 
     assert len(packages) == 1
@@ -1265,6 +1270,22 @@ def test_a_safetensors_repository_gives_one_complete_tensor_package(repo, base, 
     assert sum(f.size_bytes for f in package.files if f.role in ("weights", "weights_shard")) == weights
     assert package.quantization is None
     assert (package.provenance, package.unresolved_reason) == ("unresolved", "format")
+
+
+@pytest.mark.parametrize(("repo", "base", "sha", "fixture", "weights"), _TENSOR_REPO_CASES, ids=["one-file", "two-shards"])
+def test_a_safetensors_repository_resolves_when_build_tensor_is_true(repo, base, sha, fixture, weights):
+    """AP9-SV2-P, P3, gated by fix round 0b's `build_tensor` (set only for a machine with vLLM,
+    P1): the `one-file` repo is its base model's own repository (AP9-UX2 P3), resolved without a
+    relation check at all; the `two-shards` repo (`Qwen/Qwen3-8B-AWQ`) is a real quantized build
+    whose tags and weight file stems both pass P3's tensor rule. `config.json` is not mapped in
+    this transport, so the quantization fetch fails gracefully and stays `None` (P2 is its own
+    test)."""
+    packages = _tensor_area(repo, base, sha, fixture, build_tensor=True)
+
+    assert len(packages) == 1
+    package = packages[0]
+    assert (package.quantization, package.quantization_source) == (None, None)
+    assert (package.provenance, package.unresolved_reason) == ("from_metadata", None)
 
 
 def test_the_served_models_config_has_no_head_dim_so_its_architecture_is_unknown():
@@ -1282,3 +1303,250 @@ def test_the_served_models_config_has_no_head_dim_so_its_architecture_is_unknown
 
     assert meta.architecture.kind == "unknown"
     assert meta.architecture.max_context == 32768
+
+
+# --- AP9-SV2-P, P2: a tensor package's quantization label, read from its own config.json --------
+
+
+def test_a_resolved_gguf_package_carries_quantization_source_filename():
+    """P2: the one line hf.py was missing since AP9-SV2-0 -- a GGUF package's `quantization`
+    came from its filename, so `quantization_source` says so (CONTRACTS.md, "Package")."""
+    packages = _fetch_gguf_area()
+    package = next(p for p in packages if p.quantization == "Q4_K_M")
+    assert package.quantization_source == "filename"
+
+
+def _fetch_gguf_area() -> list[Package]:
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/unsloth/Qwen3.5-9B-GGUF"): json_response("hf_unsloth_qwen35_9b_gguf_model.json"),
+            ("GET", f"{HF}/api/models/unsloth/Qwen3.5-9B-GGUF/tree/{UNSLOTH_SHA}?recursive=true"): json_response(
+                "hf_unsloth_qwen35_9b_gguf_tree.json"
+            ),
+        }
+    )
+    outcome = fetch_hf_area(
+        transport, _qwen35_9b(), owner="unsloth", targets=_targets(_qwen35_9b(), "unsloth"), run_at=RUN_AT
+    )
+    assert outcome.status == "complete", outcome.error
+    return outcome.packages
+
+
+def test_a_tensor_package_reads_its_awq_quantization_from_config_json():
+    """End to end: a real `config.json` (`Qwen/Qwen3-8B-AWQ`, extern belegt) wired through
+    `_assemble_packages` gives `AWQ`/`config`, the exact `tensor_quant.tensor_quant_label` pairing
+    (`test_tensor_quant.py` proves the parsing itself)."""
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{QWEN3_AWQ_REPO}"): json_response("hf_qwen3_8b_awq_model.json"),
+            ("GET", f"{HF}/api/models/{QWEN3_AWQ_REPO}/tree/{QWEN3_AWQ_SHA}?recursive=true"): json_response(
+                "hf_qwen3_8b_awq_tree.json"
+            ),
+            ("GET", f"{HF}/{QWEN3_AWQ_REPO}/resolve/{QWEN3_AWQ_SHA}/config.json"): json_response(
+                "hf_qwen3_8b_awq_config.json"
+            ),
+        }
+    )
+    base_model = BaseModelSpec(
+        hf_repo="Qwen/Qwen3-8B",
+        repo_aliases=[],
+        publisher="Qwen",
+        parameters_b=None,
+        architecture=_unknown_architecture("Qwen/Qwen3-8B"),
+    )
+
+    outcome = fetch_hf_area(
+        transport, base_model, owner="Qwen", targets=[QWEN3_AWQ_REPO], run_at=RUN_AT, build_tensor=True
+    )
+
+    assert outcome.status == "complete", outcome.error
+    assert len(outcome.packages) == 1
+    package = outcome.packages[0]
+    assert (package.quantization, package.quantization_source) == ("AWQ", "config")
+    assert package.provenance == "from_metadata"
+
+
+QWEN3_AWQ_REPO = "Qwen/Qwen3-8B-AWQ"
+
+
+def test_config_json_is_read_once_per_repo_with_two_tensor_groups():
+    """Codex r1-7: a repo with two weight-file stems (a main build and a draft/MTP model dropped
+    in the same repo, P3's own example) costs exactly one `config.json` request -- the label
+    applies to every tensor group of the repo."""
+    tree = [
+        {"type": "file", "path": "config.json", "size": 10, "oid": "a"},
+        {"type": "file", "path": "model.safetensors", "size": 1, "lfs": {"oid": "m"}},
+        {"type": "file", "path": "draft.safetensors", "size": 1, "lfs": {"oid": "d"}},
+    ]
+    sha = "1" * 40
+    repo = "acme/Nova-7B-FP8"
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            ("GET", f"{HF}/{repo}/resolve/{sha}/config.json"): Response(
+                status=200, headers={}, body=b'{"torch_dtype": "bfloat16"}'
+            ),
+        }
+    )
+    base_model = BaseModelSpec(
+        hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=None,
+        architecture=_unknown_architecture("acme/Nova-7B"),
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="acme", targets=[repo], run_at=RUN_AT, build_tensor=True)
+
+    assert outcome.status == "complete", outcome.error
+    assert len(outcome.packages) == 2
+    assert all(p.quantization == "BF16" and p.quantization_source == "config" for p in outcome.packages)
+    config_requests = [call for call in transport.calls if call[1].endswith("/config.json")]
+    assert len(config_requests) == 1
+
+
+def test_without_build_tensor_a_tensor_group_costs_no_request_and_stays_locked():
+    """Fix round 0b: the gate itself, proven red-first -- an Ollama-only fetch
+    (`build_tensor` at its default `False`) of a
+    publisher repo that genuinely has safetensors builds no tensor package at all: no
+    `config.json` request (not even mapped in this transport -- a `KeyError` would fail the test
+    if one were made), no safe-path check (an unsafe path would otherwise end the area
+    `incomplete`, and does not here), and the package stays `unresolved`/`format` exactly as
+    AP9-SV1 always left it. The counter-case (`build_tensor=True`) is
+    `test_an_unsafe_tree_path_makes_the_area_incomplete` and
+    `test_a_safetensors_repository_resolves_when_build_tensor_is_true` just above."""
+    sha = "5" * 40
+    repo = "acme/Nova-7B-FP8"
+    # The same unsafe path `test_an_unsafe_tree_path_makes_the_area_incomplete` ends an area over
+    # -- proving the safe-path check itself never runs without `build_tensor`, not merely that it
+    # happens to pass this one input.
+    tree = [{"type": "file", "path": "/etc/x.safetensors", "size": 1, "lfs": {"oid": "x"}}]
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            # Deliberately no config.json mapping: a request for it would raise KeyError.
+        }
+    )
+    base_model = BaseModelSpec(
+        hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=None,
+        architecture=_unknown_architecture("acme/Nova-7B"),
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="acme", targets=[repo], run_at=RUN_AT)
+
+    assert outcome.status == "complete", outcome.error
+    assert len(outcome.packages) == 1
+    package = outcome.packages[0]
+    assert package.format == "tensor"
+    assert (package.provenance, package.unresolved_reason) == ("unresolved", "format")
+    assert (package.quantization, package.quantization_source) == (None, None)
+    assert all(not call[1].endswith("/config.json") for call in transport.calls)
+
+
+def test_an_unsafe_tree_path_makes_the_area_incomplete():
+    """P2: every unsafe path form, and the repo is named in the error, never the path itself."""
+    unsafe_paths = [
+        "/etc/x.safetensors",
+        "../x.safetensors",
+        "a/../../x.json",
+        "..\\x.json",
+        "C:\\x.json",
+        "\\\\host\\share\\x.json",
+        "a:b.json",
+        "a/b/c/d/e.json",
+    ]
+    for unsafe in unsafe_paths:
+        sha = "2" * 40
+        repo = "acme/Nova-7B-FP8"
+        # A weight-shaped unsafe path (`.safetensors`) is the tensor group's own weight file; any
+        # other shape (here `.json`) is one of its start-file extras, so a companion safe weight
+        # file is added for a group to exist at all -- either way `_check_safe_tensor_paths` (P2)
+        # has to see it.
+        tree = [{"type": "file", "path": unsafe, "size": 1, "lfs": {"oid": "x"}}]
+        if not unsafe.endswith(".safetensors"):
+            tree.append({"type": "file", "path": "model.safetensors", "size": 1, "lfs": {"oid": "m"}})
+        transport = build_transport(
+            {
+                ("GET", f"{HF}/api/models/{repo}"): Response(
+                    status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+                ),
+                ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                    status=200, headers={}, body=json.dumps(tree).encode()
+                ),
+            }
+        )
+        base_model = BaseModelSpec(
+            hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=None,
+            architecture=_unknown_architecture("acme/Nova-7B"),
+        )
+
+        outcome = fetch_hf_area(transport, base_model, owner="acme", targets=[repo], run_at=RUN_AT, build_tensor=True)
+
+        assert outcome.status == "incomplete", unsafe
+        assert outcome.error == f"{repo}: unsafe file name", unsafe
+        assert unsafe not in outcome.error
+
+
+def test_a_config_json_over_64_kib_is_none_not_an_error():
+    sha = "3" * 40
+    repo = "acme/Nova-7B-FP8"
+    tree = [{"type": "file", "path": "model.safetensors", "size": 1, "lfs": {"oid": "m"}}]
+    huge = b'{"torch_dtype": "bfloat16", "padding": "' + b"x" * 70_000 + b'"}'
+    transport = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            ("GET", f"{HF}/{repo}/resolve/{sha}/config.json"): Response(status=200, headers={}, body=huge),
+        }
+    )
+    base_model = BaseModelSpec(
+        hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=None,
+        architecture=_unknown_architecture("acme/Nova-7B"),
+    )
+
+    outcome = fetch_hf_area(transport, base_model, owner="acme", targets=[repo], run_at=RUN_AT, build_tensor=True)
+
+    assert outcome.status == "complete", outcome.error
+    assert (outcome.packages[0].quantization, outcome.packages[0].quantization_source) == (None, None)
+
+
+def test_a_budget_exhausted_on_the_config_json_request_ends_the_area_incomplete():
+    sha = "4" * 40
+    repo = "acme/Nova-7B-FP8"
+    tree = [{"type": "file", "path": "model.safetensors", "size": 1, "lfs": {"oid": "m"}}]
+    inner = build_transport(
+        {
+            ("GET", f"{HF}/api/models/{repo}"): Response(
+                status=200, headers={}, body=('{"sha": "' + sha + '", "tags": []}').encode()
+            ),
+            ("GET", f"{HF}/api/models/{repo}/tree/{sha}?recursive=true"): Response(
+                status=200, headers={}, body=json.dumps(tree).encode()
+            ),
+            ("GET", f"{HF}/{repo}/resolve/{sha}/config.json"): Response(
+                status=200, headers={}, body=b'{"torch_dtype": "bfloat16"}'
+            ),
+        }
+    )
+    from modelroom.http import BudgetedTransport
+
+    budgeted = BudgetedTransport(inner, budget=2)  # model-info + tree spend the only two slots
+    base_model = BaseModelSpec(
+        hf_repo="acme/Nova-7B", repo_aliases=[], publisher="acme", parameters_b=None,
+        architecture=_unknown_architecture("acme/Nova-7B"),
+    )
+
+    outcome = fetch_hf_area(budgeted, base_model, owner="acme", targets=[repo], run_at=RUN_AT, build_tensor=True)
+
+    assert outcome.status == "incomplete"
+    assert outcome.error == "budget exhausted"

@@ -187,17 +187,145 @@ def test_real_unsloth_repo_ud_quant_file_stem_is_from_metadata():
     assert (provenance, reason) == ("from_metadata", None)
 
 
-# --- format gate takes priority over everything else -------------------------------------
+# --- format gate: locked for every non-gguf package except a Hugging Face tensor one -------
 
 
-def test_tensor_format_is_always_unresolved_format():
-    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B-F16.gguf", format_="tensor")
+def test_an_unknown_format_is_always_unresolved_format():
+    package = _hf_package(repo="packager/Nova-7B-GGUF", weight_filename="Nova-7B.bin", format_="unknown")
     base_model = _nova_base_model()
     approval = Approval(date=date(2026, 9, 1), content=package.revision, by="acme-ai-team")
     provenance, reason = decide_provenance(
         package, base_model, hf_tags=_quantized_tags(), approvals=[approval], hf_targets=_NOVA_TARGETS
     )
     assert (provenance, reason) == ("unresolved", "format")
+
+
+def test_an_ollama_mlx_package_stays_format():
+    """An Ollama `tensor` package (an MLX tag, noted 2026-09-28) is never a vLLM package: the
+    format lock's one exception (AP9-SV2-0/P, ADR 0014) is for a Hugging Face tensor package
+    only."""
+    package = Package(
+        source="ollama",
+        ollama_name="nova:7b-mlx-bf16",
+        manifest_digest=_OLLAMA_DIGEST_NEW,
+        base_model_hf_repo="acme/Nova-7B",
+        format="tensor",
+        files=[PackageFile(name="weights", role="weights", size_bytes=1, digest=None)],
+        complete=True,
+        quantization=None,
+        default_context=None,
+        provenance="unresolved",
+        unresolved_reason="format",
+        approval=None,
+        observed_at=_NOW,
+        last_seen=_NOW,
+        active=True,
+    )
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(package, base_model, hf_tags=None, approvals=[])
+    assert (provenance, reason) == ("unresolved", "format")
+
+
+# --- Hugging Face tensor packages (AP9-SV2-P, P3) -------------------------------------------
+
+
+_NOVA_TENSOR_TARGETS = (*_NOVA_TARGETS, "acme/Nova-7B")
+
+
+def _hf_tensor_package(
+    *, repo: str, weight_filenames: list[str], revision: str = _HF_REVISION_NEW, base_model_hf_repo: str = "acme/Nova-7B"
+) -> Package:
+    return Package(
+        source="huggingface",
+        repo=repo,
+        revision=revision,
+        base_model_hf_repo=base_model_hf_repo,
+        format="tensor",
+        files=[PackageFile(name=name, role="weights_shard", size_bytes=1, digest=None) for name in weight_filenames],
+        complete=True,
+        quantization=None,
+        quantization_source=None,
+        default_context=None,
+        provenance="unresolved",
+        unresolved_reason="format",
+        approval=None,
+        observed_at=_NOW,
+        last_seen=_NOW,
+        active=True,
+    )
+
+
+def test_the_publishers_own_repo_is_from_metadata():
+    """P3-2: the base model's own repository is its tensor package without a relation check --
+    its own tags name its *predecessor* (`finetune:...-Base`), which `check_relation` would read
+    as `derivative`, never `quantized`."""
+    package = _hf_tensor_package(repo="acme/Nova-7B", weight_filenames=["model.safetensors"])
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(
+        package,
+        base_model,
+        hf_tags=["base_model:finetune:acme/Nova-7B-Base"],
+        approvals=[],
+        hf_targets=_NOVA_TENSOR_TARGETS,
+    )
+    assert (provenance, reason) == ("from_metadata", None)
+
+
+def test_a_quantized_tensor_repo_is_from_metadata():
+    package = _hf_tensor_package(
+        repo="RedHatAI/Nova-7B-FP8", weight_filenames=["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
+    )
+    base_model = _nova_base_model()
+    targets = (*_NOVA_TENSOR_TARGETS, "RedHatAI/Nova-7B-FP8")
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=targets
+    )
+    assert (provenance, reason) == ("from_metadata", None)
+
+
+def test_a_finetune_tensor_repo_is_derivative():
+    package = _hf_tensor_package(repo="RedHatAI/Nova-7B-FP8", weight_filenames=["model.safetensors"])
+    base_model = _nova_base_model()
+    targets = (*_NOVA_TENSOR_TARGETS, "RedHatAI/Nova-7B-FP8")
+    provenance, reason = decide_provenance(
+        package,
+        base_model,
+        hf_tags=["base_model:acme/Nova-7B", "base_model:finetune:acme/Nova-7B"],
+        approvals=[],
+        hf_targets=targets,
+    )
+    assert (provenance, reason) == ("unresolved", "derivative")
+
+
+def test_an_odd_weight_file_name_is_file_stem():
+    """P3-4: no packager naming convention applies to a tensor repo -- a weight file is checked
+    only against the three fixed Transformers forms, never a prefix match against the base name."""
+    package = _hf_tensor_package(repo="RedHatAI/Nova-7B-FP8", weight_filenames=["Nova-7B-FP8.safetensors"])
+    base_model = _nova_base_model()
+    targets = (*_NOVA_TENSOR_TARGETS, "RedHatAI/Nova-7B-FP8")
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=targets
+    )
+    assert (provenance, reason) == ("unresolved", "file_stem")
+
+
+def test_a_sharded_tensor_repo_outside_the_target_set_is_repo_name():
+    package = _hf_tensor_package(repo="someone/Unrelated-Nova", weight_filenames=["model.safetensors"])
+    base_model = _nova_base_model()
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=_quantized_tags(), approvals=[], hf_targets=_NOVA_TENSOR_TARGETS
+    )
+    assert (provenance, reason) == ("unresolved", "repo_name")
+
+
+def test_a_tensor_repo_an_approval_still_matches_is_approved():
+    package = _hf_tensor_package(repo="RedHatAI/Nova-7B-FP8", weight_filenames=["model.safetensors"])
+    base_model = _nova_base_model()
+    approval = Approval(date=date(2026, 9, 1), content=package.revision, by="acme-ai-team")
+    provenance, reason = decide_provenance(
+        package, base_model, hf_tags=[], approvals=[approval], hf_targets=_NOVA_TENSOR_TARGETS
+    )
+    assert (provenance, reason) == ("approved", None)
 
 
 # --- alias repo names ----------------------------------------------------------------------

@@ -162,6 +162,77 @@ def test_machine_runtime_keys_reads_the_profiles_own_list_where_it_names_any():
     assert runtimes.machine_runtime_keys(_profile(runtimes=["vllm"])) == frozenset({"vllm"})
 
 
+# --- machine_has_vllm: the one decision both the tensor search and the fetch step read (fix
+# round 0c) -- "runtimes, or detected live" (P1), never tested separately at either call site ---
+
+
+def _served() -> "ServedModel":
+    from modelroom.vllm_server import ServedModel
+
+    return ServedModel(id="acme/Nova-7B", root="acme/Nova-7B", max_model_len=4096)
+
+
+@pytest.mark.parametrize(
+    ("live", "expected"),
+    [
+        (None, False),
+        ("asks for an API key", False),  # E5: a key prompt does not count as detected
+        (_served(), True),
+    ],
+    ids=["not-live", "key-prompt", "live-serving"],
+)
+def test_machine_has_vllm_without_a_profile_at_all(live, expected):
+    assert runtimes.machine_has_vllm(None, live) is expected
+
+
+@pytest.mark.parametrize(
+    ("runtimes_field", "live", "expected"),
+    [
+        ([], None, False),
+        ([], "asks for an API key", False),
+        ([], _served(), True),
+        (["vllm"], None, True),
+        (["vllm"], "asks for an API key", True),
+        (["vllm"], _served(), True),
+        (["ollama"], None, False),
+        (["ollama"], _served(), True),
+    ],
+    ids=[
+        "no-runtimes-not-live",
+        "no-runtimes-key-prompt",
+        "no-runtimes-live-serving",
+        "stored-vllm-not-live",
+        "stored-vllm-key-prompt",
+        "stored-vllm-live-serving",
+        "stored-ollama-only-not-live",
+        "stored-ollama-only-live-serving",
+    ],
+)
+def test_machine_has_vllm_every_combination_of_profile_and_live_detection(runtimes_field, live, expected):
+    """Profile yes/no (stored `runtimes` naming `vllm` or not) crossed with live yes/no/key-only:
+    `machine_has_vllm` is `True` exactly when either source says so, never when neither does."""
+    assert runtimes.machine_has_vllm(_profile(runtimes=runtimes_field), live) is expected
+
+
+def test_both_call_sites_read_the_one_function_not_their_own_logic():
+    """Fix round 0c (the SV2-L lesson against two separately-tested paths, "Codex-Tropfen"):
+    `guided._fetch_step` and `guided_search._tensor_search_step` each compute their gate with
+    exactly one call to `runtimes.machine_has_vllm`, patched here to prove neither one re-derives
+    the answer on its own -- a stub that always disagrees with the real function makes both sites
+    behave as the stub says, not as the real inputs would."""
+    import inspect
+
+    import modelroom.guided as guided_module
+    import modelroom.guided_search as guided_search_module
+
+    assert "machine_has_vllm(" in inspect.getsource(guided_module._fetch_step)
+    assert "machine_has_vllm(" in inspect.getsource(guided_search_module._tensor_search_step)
+    # Neither source reads `machine_runtime_keys` or `ServedModel` on its own any more -- the one
+    # function in `runtimes.py` is the only place either fact is read.
+    assert "machine_runtime_keys" not in inspect.getsource(guided_module)
+    assert "machine_runtime_keys" not in inspect.getsource(guided_search_module)
+
+
 def test_accepting_on_machine_narrows_to_the_machines_own_runtimes(monkeypatch):
     import types
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
-from .quantization import SIZE_TOKEN_RE, match_base_prefix, stem_basename
+from .quantization import SIZE_TOKEN_RE, match_base_prefix, normalize_file_stem, stem_basename
 from .relation import check_relation
 
 if TYPE_CHECKING:
@@ -43,7 +43,12 @@ def decide_provenance(
     package target set (`config.package_targets`), the same set the collision validator and
     the fetch use. An Ollama package ignores both.
     """
-    if package.format != "gguf":
+    # AP9-SV2-0/SV2-P (E8, ADR 0014): a Hugging Face tensor package is the one format besides
+    # `gguf` that may resolve further -- `Package`'s own invariant already allows it, this is the
+    # rule that decides it. Every other non-gguf package (an Ollama `tensor` package, an MLX tag
+    # included, and any `unknown` format) stays locked, same as before this step.
+    is_hf_tensor = package.format == "tensor" and package.source == "huggingface"
+    if package.format != "gguf" and not is_hf_tensor:
         return "unresolved", "format"
 
     current_content = package.revision if package.source == "huggingface" else package.manifest_digest
@@ -52,6 +57,8 @@ def decide_provenance(
             return "approved", None
 
     if package.source == "huggingface":
+        if is_hf_tensor:
+            return _decide_huggingface_tensor(package, base_model, hf_tags, hf_card_data, hf_targets)
         return _decide_huggingface(package, base_model, hf_tags, hf_card_data, hf_targets)
     return _decide_ollama(package, base_model)
 
@@ -100,6 +107,60 @@ def _decide_huggingface(
     for weight_file in weight_files:
         basename = stem_basename(weight_file.name)
         if match_base_prefix(basename, base_name) is None:
+            return "unresolved", "file_stem"
+
+    return "from_metadata", None
+
+
+# A Transformers repository's own weight file names, fixed by the library rather than by any
+# packager's naming convention (P3): a single file, or one of the two sharded index forms (the
+# shard suffix is not re-checked here -- `identity_stem`/`has_shard_suffix` already grouped the
+# file into this package by it, so only the un-sharded stem has to match one of these three).
+_TENSOR_WEIGHT_STEMS = frozenset({"model", "model.safetensors"})
+
+
+def _decide_huggingface_tensor(
+    package: "Package",
+    base_model: "BaseModelSpec",
+    hf_tags: object,
+    card_data: object,
+    targets: Sequence[str],
+) -> tuple[str, str | None]:
+    """Decide provenance for a Hugging Face **tensor** package (P3, AP9-SV2-P).
+
+    Three differences from the GGUF rule above:
+
+    1. **The publisher's own repository** (`package.repo == base_model.hf_repo`) resolves
+       `from_metadata` without a relation check at all: that repository *is* the base model, and
+       its own tags name its own predecessor (`Qwen/Qwen3-8B` carries
+       `base_model:finetune:Qwen/Qwen3-8B-Base`), which the relation check would read as
+       `derivative`, not `quantized`.
+    2. Every other tensor repository still needs the relation check (`quantized`), exactly like
+       a GGUF package.
+    3. **No file-stem check.** Transformers weight file names are fixed by the library, never by
+       a packager's naming convention: `model.safetensors`, or one of the two sharded index forms
+       (`model-0000N-of-0000M.safetensors`, `model.safetensors-0000N-of-0000M.safetensors`).
+       `identity_stem` already stripped the shard counter before grouping the files into this
+       package, so the check here is only against the three un-sharded stems; a weight file that
+       matches none of them is `("unresolved", "file_stem")`, same reason the GGUF rule uses for
+       the same kind of mismatch.
+    """
+    if package.repo == base_model.hf_repo:
+        return "from_metadata", None
+
+    if package.repo not in targets:
+        return "unresolved", "repo_name"
+
+    status, _reason = check_relation(hf_tags, card_data, base_model.hf_repo)
+    if status != "quantized":
+        return "unresolved", status
+
+    weight_files = [f for f in package.files if f.role in ("weights", "weights_shard")]
+    if not weight_files:
+        return "unresolved", "no_weights"
+
+    for weight_file in weight_files:
+        if normalize_file_stem(weight_file.name) not in _TENSOR_WEIGHT_STEMS:
             return "unresolved", "file_stem"
 
     return "from_metadata", None

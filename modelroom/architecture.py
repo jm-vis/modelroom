@@ -73,6 +73,9 @@ def architecture_from_hf_config(
     numeric = {name: layer_config.get(name) for name in ("num_hidden_layers", "num_key_value_heads", "head_dim")}
     layer_types = layer_config.get("layer_types")
     max_context = layer_config.get("max_position_embeddings") or config.get("max_position_embeddings")
+    # AP9-SV2-P: read independently of `kind`, same as `max_context` -- a tensor-parallel package
+    # may need the head count even when the rest of the shape could not be read (`kind == "unknown"`).
+    num_attention_heads = layer_config.get("num_attention_heads")
     kind = _kind(numeric, layer_types, layer_config, _is_moe_config(config, layer_config))
     fields: dict = {}
     if kind != "unknown":
@@ -81,7 +84,12 @@ def architecture_from_hf_config(
         fields.update({name: layer_config.get(name) for name in _LINEAR_CONFIG_FIELDS})
         fields["linear_state_bytes"] = _state_dtype_bytes(layer_config)
     return Architecture(
-        source_repo=source_repo, source_revision=source_revision, kind=kind, max_context=max_context, **fields
+        source_repo=source_repo,
+        source_revision=source_revision,
+        kind=kind,
+        max_context=max_context,
+        num_attention_heads=num_attention_heads,
+        **fields,
     )
 
 

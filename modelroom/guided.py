@@ -42,6 +42,7 @@ from .guided_context import USERS_KEY, USERS_QUESTION
 from .guided_context import context_step, machine_checked, snapshot_facts, snapshot_packages
 from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES
 from . import room as room_module
+from .runtimes import machine_has_vllm
 # The folder question moved to `guided_folder.py` (AP9-UX2 U1/U7); the names stay readable here.
 from .guided_folder import CONFIG_NAME, MARKDOWN_PATH, STATE_FOLDER  # noqa: F401
 from .guided_folder import QUESTIONS as FOLDER_QUESTIONS
@@ -636,7 +637,7 @@ def _packages_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     run.screen.blank()
     run.screen.head(2)
     config, chosen = _search_step(run, config_file, config)
-    _fetch_step(run, config)
+    _fetch_step(run, config, config_file.parent)
     if not chosen:
         return config, NOTHING_CHOSEN_SUMMARY, False
     # All three numbers about one thing -- the snapshot this folder now holds. `apply_hits` keeps
@@ -657,14 +658,22 @@ def context_default(config: Configuration) -> int:
 # --- the fetch of step 2, and step 5: the render --------------------------------------------------
 
 
-def _fetch_step(run: GuidedRun, config: Configuration) -> None:
+def _fetch_step(run: GuidedRun, config: Configuration, results_dir: Path) -> None:
+    """Step 2's fetch. `results_dir` (fix round 0b, AP9-SV2-P) is only to ask `machine_checked`
+    for the bound profile `runtimes.machine_has_vllm` reads; `build_tensor` is that one function's
+    verdict, passed into the fetch unchanged -- `False` (no vLLM either way) reads and writes
+    exactly as every fetch before this step did (fix round 0c: the same function decides this for
+    `guided_search._tensor_search_step`, never a second test of its own).
+    """
     from .cli import fetch_with_config
 
     if not config.families:
         run.screen.note("no base model is configured yet, so there is nothing to fetch")
         return
     name = _machine_key(run)
-    code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget)
+    checked = machine_checked(run.pointer_path, config, results_dir)
+    build_tensor = machine_has_vllm(checked.profile, run.servers.found.get("vllm"))
+    code = fetch_with_config(config, name, run.transport, run.now, budget=run.budget, build_tensor=build_tensor)
     if code != 0:
         run.failed(f"the fetch ended with exit {code}; the ranking uses what the snapshot holds")
 

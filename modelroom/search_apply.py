@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from .catalog import Catalog
 from .config import BaseModelConfig, ConfigError, Configuration, config_from_text
@@ -57,6 +57,39 @@ def apply_hits(config: Configuration, hits: Iterable[SearchHit], *, catalog: Cat
         name = ollama_by_base.get(base)
         if name is not None:
             base_entry["ollama_base"], _, base_entry["ollama_tag"] = name.partition(":")
+    return Configuration.from_dict(data)
+
+
+def apply_tensor_repos(
+    config: Configuration, repos_by_base: Mapping[str, Sequence[str]], *, catalog: Catalog
+) -> Configuration:
+    """`configuration + tensor hits -> new configuration`, pure, in `apply_hits`' own form
+    (AP9-SV2-P, P1): `repos_by_base` maps a base model's `hf_repo` to the tensor repositories
+    `tensor_search.search_tensor_repos` found for it.
+
+    Reuses the exact family/base-model lookup `apply_hits` uses, so a tensor repository lands in
+    the same `repos` list a GGUF hit would (`package_targets` then fetches it the ordinary way,
+    no schema change). A base model with no entry here yet is created the same way `apply_hits`
+    creates one for a resolved GGUF hit -- including listing its owner under `publishers`, which
+    `Configuration`'s own invariant requires of every base model's owner -- so the two write-backs
+    of one search (GGUF hits, then the tensor repositories of the models they resolved) end in
+    one consistent configuration regardless of which ran first. This is also what makes writing
+    safe *before* a person has picked anything (P1 asks for every base model the search resolved,
+    not only the ones later chosen): the base model this tensor search is about is already proven
+    real by the very resolution that named it.
+    """
+    data = config.model_dump(mode="json")
+    for base, repos in repos_by_base.items():
+        if not repos:
+            continue
+        publisher = base.split("/", 1)[0]
+        if publisher not in data["publishers"]:
+            data["publishers"] = [*data["publishers"], publisher]
+        family = _family_entry(data, base, catalog)
+        base_entry = _base_model_entry(family, base)
+        for repo in repos:
+            if repo not in base_entry["repos"]:
+                base_entry["repos"] = [*base_entry["repos"], repo]
     return Configuration.from_dict(data)
 
 
@@ -226,4 +259,4 @@ def _text_on_disk(target: Path) -> str | None:
         raise ConfigChangedError(f"{target}: changed by another run since it was read ({exc})") from exc
 
 
-__all__ = ["ConfigChangedError", "apply_hits", "family_name_for", "write_configuration"]
+__all__ = ["ConfigChangedError", "apply_hits", "apply_tensor_repos", "family_name_for", "write_configuration"]
