@@ -96,9 +96,9 @@
             "context": 32768,
             "context_assumed": false,
             "fit_class": "fits",
-            "kv_gib": 11.25,
+            "kv_gib": 45.0,
             "mode": "gpu_split",
-            "need_gib": 22.929746963083744,
+            "need_gib": 56.679746963083744,
             "pool_gib": 82.7632,
             "reason": null,
             "requests": 10,
@@ -120,7 +120,7 @@
             ],
             "origin": "computed",
             "subject": "package",
-            "text": "Fits into graphics memory spread over 4 cards: it needs about 22.9 GiB of the 82.8 GiB left after the reserve of 1.8 GiB on each card."
+            "text": "Fits into graphics memory spread over 4 cards: it needs about 56.7 GiB of the 82.8 GiB left after the reserve of 1.8 GiB on each card."
           },
           "package_context": null,
           "package_identity": [

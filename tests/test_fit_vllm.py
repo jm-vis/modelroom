@@ -256,16 +256,28 @@ def test_no_cards_at_all_has_an_empty_group():
 def test_the_tensor_parallel_worked_example_t4_and_t1():
     """The brief's own rechenbeispiel (F2): 4 x 22.49 GiB L4, `Qwen/Qwen3-8B-AWQ` (36 layers, 8 KV
     heads, head_dim 128), context 32768, 10 requests. `t = 4` (32 attention heads): 15 requests at
-    once, `fits`. For comparison, forcing `t = 1` (no head count): 3 at once, `tight`."""
+    once, `fits`. For comparison, forcing `t = 1` (no head count): 3 at once, `tight`.
+
+    `kv_gib`/`need_gib` (Codex r1-1): the KV need is the whole model's, over every one of the `t`
+    cards it is spread over -- 36864 B/token (147456 / 4) x 32768 x 10 requests, **times the 4
+    cards**: (36864 x 32768 x 10 x 4) / GiB = 45.00 GiB, not the 11.25 GiB of one card alone.
+    `need_gib` = weights (5.68) + 4 x 1.50 (6.00) + 45.00 = 56.68 GiB.
+    """
     profile = _profile_from("four_l4_server_vllm.json")
     package = _tensor_package()
 
     with_t4 = vllm_fit_as_fit(profile, package, _base_model(_architecture(32)), _SCENARIO_10, _MACHINE)
     assert (with_t4.cards, with_t4.at_once, with_t4.fit_class, with_t4.mode) == (4, 15, "fits", "gpu_split")
     assert with_t4.weights_gib == pytest.approx(5.679746963083744, abs=1e-9)
+    assert with_t4.kv_gib == pytest.approx(45.00, abs=5e-3)
+    assert with_t4.need_gib == pytest.approx(56.68, abs=5e-3)
+    assert with_t4.reason is None  # a real head count divides the card count: no excuse to give
 
     with_t1 = vllm_fit_as_fit(profile, package, _base_model(_architecture(None)), _SCENARIO_10, _MACHINE)
     assert (with_t1.cards, with_t1.at_once, with_t1.fit_class, with_t1.mode) == (1, 3, "tight", "gpu")
+    # Codex r1-2: the missing head count is not a guard failure (the fit still computes), but a
+    # reader must still be told why `t` stopped at one card.
+    assert with_t1.reason == NO_HEAD_COUNT_REASON
 
 
 def test_fewer_kv_heads_than_cards_replicates():
@@ -280,10 +292,12 @@ def test_fewer_kv_heads_than_cards_replicates():
     assert fit.cards == 4
     two_card_equivalent = _architecture(2, num_key_value_heads=2)
     as_if_t2 = vllm_fit_as_fit(profile, package, _base_model(two_card_equivalent), _SCENARIO_10, _MACHINE)
-    # The per-token KV cost (and so `kv_gib`, requests x context at that cost) is the same at
-    # `t = 4` as at `t = 2`: the divisor is `min(t, num_key_value_heads)`, capped at the head count,
-    # so a `t` above it replicates rather than splitting any further (Annahme A2).
-    assert fit.kv_gib == as_if_t2.kv_gib
+    # The per-card KV cost is the same at `t = 4` as at `t = 2`: the divisor is `min(t,
+    # num_key_value_heads)`, capped at the head count, so a `t` above it replicates rather than
+    # splitting any further (Assumption A2). `Fit.kv_gib` is the whole model's KV need, that
+    # per-card cost times every card the package is spread over (Codex r1-1) -- twice as much at
+    # `t = 4` as at `t = 2`, even though each card alone holds the same share.
+    assert fit.kv_gib == as_if_t2.kv_gib * 2
     # `t = 4` still spreads the weights and the runtime overhead over all 4 cards, so its pool and
     # its `at_once` are not the same as `t = 2`'s.
     assert fit.pool_gib == as_if_t2.pool_gib * 2

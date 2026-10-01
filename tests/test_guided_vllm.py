@@ -248,7 +248,9 @@ def test_step_4_reads_the_lines_of_the_brief_with_the_vllm_row_picked(tmp_path: 
         # overhead split per card, the KV budget doubles; the basis stays `size` (this fetch never
         # resolves the model's own architecture) so the per-token cost is not halved with it.
         "vLLM fit, computed: 2 cards of 22.49 GiB, 0.92 of each for vLLM",
-        "weights 0.92 GiB, runtime 3.00 GiB (2 cards, one recording), KV cache 11.25 GiB",
+        # Codex r1-1: the KV cache reported here is the whole model's, over both cards -- 11.25 GiB
+        # per card, doubled.
+        "weights 0.92 GiB, runtime 3.00 GiB (2 cards, one recording), KV cache 22.50 GiB",
         "33 requests of context 4k at once, from size: fits",
         "✓ Measurement     vLLM measured",
     ]

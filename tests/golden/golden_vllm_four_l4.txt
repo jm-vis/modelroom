@@ -7,7 +7,7 @@
  runtime   Ollama · vLLM (from its profile)
  #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
- 1    Qwen3-8B                vLLM · RedHatAI · AWQ  fits         –             22.9 GB   5.7 GB
+ 1    Qwen3-8B                vLLM · RedHatAI · AWQ  fits         –             56.7 GB   5.7 GB
  2    Qwen3-8B                unsloth · Q4_K_M       ample        –             50.7 GB   4.7 GB
  shown     2 of 2 packages
  memory    #2 fits into graphics memory, spread over the cards, budget 86.0 GB
@@ -25,5 +25,7 @@
            off the card, and for a fit from size the highest class is fits
            best: the least compression of the same model that fits
            modelroom rates no model family against another
+           The percentage rule above is Ollama's own.
+           vLLM's classes count requests at once instead: no fit below one, tight from one below the requests this ranking assumes, fits from that many below twice them, ample at twice them or more (architecture basis only).
            vLLM · rows start with vllm serve; the others are pulled into Ollama
            Speed is measured, see its column.

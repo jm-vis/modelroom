@@ -218,8 +218,16 @@ def vllm_fit_as_fit(
     group = equal_size_group(profile)
     guarded = _vllm_guard_reason(profile, package, base_model, scenario, group)
     if guarded is not None:
-        return _unknown_fit(guarded)
+        return _vllm_unknown_fit(guarded)
     return _vllm_formula(group, package, base_model, scenario)
+
+
+def _vllm_unknown_fit(reason: str) -> Fit:
+    """`fit.unknown_fit`, but carrying vLLM's own `Fit.runtime` (Codex r1-3): every guard path of
+    this module judges a package no runtime but vLLM would ever have been asked about, and the
+    default `runtime == "ollama"` of a plain `unknown_fit` would mislabel it -- a `not_covered`
+    row's JSON and packager cell must say `vllm`, the same as a ranked one's."""
+    return _unknown_fit(reason).model_copy(update={"runtime": "vllm"})
 
 
 def _vllm_guard_reason(
@@ -245,39 +253,51 @@ def _vllm_guard_reason(
 
 def _vllm_formula(group: CardGroup, package: Package, base_model: BaseModelSpec, scenario: Scenario) -> Fit:
     """F2's formula, over the cards `_vllm_guard_reason` already cleared (`group.cards` is not empty)."""
-    cards, _t_reason = tensor_parallel_size(len(group.cards), base_model.architecture.num_attention_heads)
-    chosen = sorted(group.cards, key=lambda gpu: gpu.index)[:cards]
-    card_gib = min(gpu.vram_gib for gpu in chosen)
+    cards, t_reason = tensor_parallel_size(len(group.cards), base_model.architecture.num_attention_heads)
+    card_gib = min(gpu.vram_gib for gpu in sorted(group.cards, key=lambda gpu: gpu.index)[:cards])
     weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
-
-    budget = VLLM_GPU_MEMORY_UTILIZATION * card_gib
-    available_kv_gib = budget - weights_gib / cards - VLLM_RUNTIME_OVERHEAD_GIB
-    available_kv_bytes = math.floor(max(available_kv_gib, 0.0) * GIB)
-    per_token, basis = _per_token_bytes(base_model.architecture, cards)
-    state = state_bytes(base_model.architecture) / cards if basis == "architecture" else 0.0
-    at_once = int(requests_at_once(available_kv_bytes, per_token, scenario.context_requested, state))
-
-    # `Fit.kv_gib`, like Ollama's own, is the KV cache the ranking's `requests` x `context` need --
-    # never the leftover budget above (which can be negative): the same forward computation as
-    # `fit._architecture_kv_gib`, so both runtimes' rows read the field the same way (ADR 0009).
-    kv_needed_gib = (per_token * scenario.context_requested + state) * scenario.requests / GIB
+    budget, at_once, basis, kv_gib = _vllm_budget(card_gib, weights_gib, cards, base_model.architecture, scenario)
     return Fit(
         fit_class=vllm_fit_class(at_once, scenario.requests, basis),
         mode="gpu" if cards == 1 else "gpu_split",
-        need_gib=weights_gib + cards * VLLM_RUNTIME_OVERHEAD_GIB + kv_needed_gib,
+        need_gib=weights_gib + cards * VLLM_RUNTIME_OVERHEAD_GIB + kv_gib,
         weights_gib=weights_gib,
-        kv_gib=kv_needed_gib,
+        kv_gib=kv_gib,
         pool_gib=cards * budget,
         reserve_gib=cards * (card_gib - budget),
         context=scenario.context_requested,
         context_assumed=False,
         basis=basis,
-        reason=None,
+        # Codex r1-2: the reason `t` stopped at one card (a missing head count) is not a guard
+        # failure -- the fit still computes, F1's own simplification -- but a reader must still be
+        # told: carried on every fit_class this formula reaches, ranked or not, `None` where `t`
+        # needed no excuse (a real head count, or more than one card was never on offer).
+        reason=t_reason,
         requests=scenario.requests,
         runtime="vllm",
         at_once=at_once,
         cards=cards,
     )
+
+
+def _vllm_budget(
+    card_gib: float, weights_gib: float, cards: int, architecture: Architecture, scenario: Scenario
+) -> tuple[float, int, str, float]:
+    """The budget, `at_once` and `kv_gib` of `_vllm_formula`'s own cards, split out to keep that
+    one function short. `at_once` is one card's own check (ADR 0008: tensor parallel is not
+    measured, only computed here) -- the available budget after this card's share of the weights
+    and the runtime overhead, against the per-card KV cost. `kv_gib` is `Fit`'s own field instead
+    (Codex r1-1): the whole model's KV need, that per-card cost times every card `cards` spreads
+    the package over -- never the leftover budget alone, which can be negative.
+    """
+    budget = VLLM_GPU_MEMORY_UTILIZATION * card_gib
+    available_kv_gib = budget - weights_gib / cards - VLLM_RUNTIME_OVERHEAD_GIB
+    available_kv_bytes = math.floor(max(available_kv_gib, 0.0) * GIB)
+    per_token, basis = _per_token_bytes(architecture, cards)
+    state = state_bytes(architecture) / cards if basis == "architecture" else 0.0
+    at_once = int(requests_at_once(available_kv_bytes, per_token, scenario.context_requested, state))
+    kv_needed_per_card_gib = (per_token * scenario.context_requested + state) * scenario.requests / GIB
+    return budget, at_once, basis, kv_needed_per_card_gib * cards
 
 
 __all__ = [

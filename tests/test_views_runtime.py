@@ -85,11 +85,20 @@ def test_legend_is_empty_for_an_ollama_only_table():
 
 
 def test_legend_names_vllm_once_even_with_several_of_its_rows():
+    """Codex r1-5: once a vLLM row is shown, the legend also says the percentage rule above is
+    Ollama's own and explains vLLM's classes by concurrent requests instead, before the one line
+    per runtime that carries a `key_text`."""
     entries = [_entry(1, fit=_fit(runtime="vllm")), _entry(2, fit=_fit(runtime="vllm")), _entry(3)]
 
     lines = legend_lines(entries)
 
-    assert lines == ["vLLM · rows start with vllm serve; the others are pulled into Ollama"]
+    assert lines == [
+        "The percentage rule above is Ollama's own.",
+        "vLLM's classes count requests at once instead: no fit below one, tight from one below the "
+        "requests this ranking assumes, fits from that many below twice them, ample at twice them or "
+        "more (architecture basis only).",
+        "vLLM · rows start with vllm serve; the others are pulled into Ollama",
+    ]
 
 
 # --- the runtime row under a machine's head: only where vLLM is there ------------------------------
@@ -145,11 +154,14 @@ def test_no_note_for_a_machine_of_one_card_size():
 
 
 def test_the_unequal_cards_note_names_the_group_and_what_was_left_out():
+    """Codex r1-4: this says what the machine *offers* (the equal-size group), never what one
+    package's row actually used -- `t` is chosen per package and can fall short of the group
+    (e.g. a head count that does not divide 3), so the wording says "can split over", not "uses"."""
     profile = _profile_from("mixed_cards_server.json")
 
     note = unequal_cards_note(profile)
 
-    assert note == "vLLM uses the 3 cards of 22.49 GB; 1 smaller card is left out"
+    assert note == "vLLM can split over the 3 cards of 22.49 GB; 1 smaller card is left out"
 
 
 # --- the memory line's own vLLM piece: never an Ollama gpu/gpu_split piece -------------------------

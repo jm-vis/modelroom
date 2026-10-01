@@ -23,6 +23,16 @@ RUNTIME_LABEL = "runtime"
 _PROFILE_ONLY = "(from its profile)"
 _INSTALLED_NOT_SERVING = "installed, not serving"
 _ANOTHER_MODEL = "another model"
+# F4 (Codex r1-5): `screen.FIT_SCALE_HINT`'s percentage rule ("ample: up to 60 % of the pool", ...)
+# is Ollama's own -- `fit_vllm.vllm_fit_class` never reads a percentage of a pool at all, only how
+# many requests fit at once. Named only once a vLLM row is shown, so an Ollama-only table's legend
+# stays byte-identical to before AP9-SV2 (`legend_lines` below).
+_OLLAMA_PERCENT_SCOPE = "The percentage rule above is Ollama's own."
+_VLLM_CLASS_RULE = (
+    "vLLM's classes count requests at once instead: no fit below one, tight from one below the "
+    "requests this ranking assumes, fits from that many below twice them, ample at twice them or "
+    "more (architecture basis only)."
+)
 
 
 def package_prefix(fit_runtime: str) -> str:
@@ -38,17 +48,25 @@ def packager_cell(entry: RankedEntry | SetAsideEntry) -> str:
 
 
 def legend_lines(entries: Sequence[RankedEntry]) -> list[str]:
-    """`words.key_text` of every runtime a shown row's `Fit.runtime` names, each at most once, in
-    table order -- empty where no row names a runtime that carries one (every Ollama-only table)."""
+    """Everything the legend carries beyond Ollama's own `screen.FIT_HINT`, once a vLLM row is
+    shown: first that the percentage rule above is Ollama's and what vLLM's classes count instead
+    (`_OLLAMA_PERCENT_SCOPE`, `_VLLM_CLASS_RULE`, Codex r1-5), then `words.key_text` of every
+    runtime a shown row's `Fit.runtime` names, each at most once, in table order. Empty where no
+    row names a runtime that carries one (every Ollama-only table) -- `key_pieces(block)` alone is
+    then exactly `screen.FIT_HINT` plus `PER_MODEL_PIECES`, byte-identical to before AP9-SV2."""
     seen: list[str] = []
-    lines: list[str] = []
+    key_texts: list[str] = []
+    has_vllm = False
     for entry in entries:
         runtime = runtimes.runtime_of(entry.fit.runtime)
+        has_vllm = has_vllm or runtime.key == runtimes.VLLM.key
         text = runtime.words.key_text
         if text is not None and runtime.key not in seen:
             seen.append(runtime.key)
-            lines.append(text)
-    return lines
+            key_texts.append(text)
+    if not has_vllm:
+        return key_texts
+    return [_OLLAMA_PERCENT_SCOPE, _VLLM_CLASS_RULE, *key_texts]
 
 
 def runtime_line(profile: HardwareProfile | None, live: object = None, served_matches_run: bool = False) -> str | None:
@@ -82,7 +100,13 @@ def _short_name(repo: str) -> str:
 
 def unequal_cards_note(profile: HardwareProfile | None) -> str | None:
     """The `runtime` row's own continuation line (F1, F4): named only where a card smaller than the
-    equal-size group was left out of it -- `None` for a machine of one size, or none at all."""
+    equal-size group was left out of it -- `None` for a machine of one size, or none at all.
+
+    Says what the machine *offers* (the equal-size group `equal_size_group` finds), never what one
+    package's row actually used: `t` is chosen per package (F1, a head count that does not divide
+    the group size stops short of it), so a row's own card count is `Fit.cards`, read from the
+    `memory` line's own vLLM piece (`vllm_pool_pieces`), not asserted here (Codex r1-4).
+    """
     if profile is None:
         return None
     group = equal_size_group(profile)
@@ -91,7 +115,10 @@ def unequal_cards_note(profile: HardwareProfile | None) -> str | None:
     size = group.cards[0].vram_gib
     cards_word = "card" if len(group.cards) == 1 else "cards"
     left_word = "card is" if group.left_out == 1 else "cards are"
-    return f"vLLM uses the {len(group.cards)} {cards_word} of {size:.2f} GB; {group.left_out} smaller {left_word} left out"
+    return (
+        f"vLLM can split over the {len(group.cards)} {cards_word} of {size:.2f} GB; "
+        f"{group.left_out} smaller {left_word} left out"
+    )
 
 
 def vllm_pool_pieces(entries: Sequence[RankedEntry], dash: str) -> list[str]:
