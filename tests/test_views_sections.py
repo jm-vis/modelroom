@@ -187,6 +187,72 @@ def test_one_row_per_model_for_ollama_and_every_vllm_row_and_the_rule_says_so():
     assert document.ranking_rule.startswith(RANKING_RULE_PER_MODEL) and "every ranked vLLM package" in document.ranking_rule
 
 
+@pytest.mark.parametrize("ollama_size", [300_000_000_000, 0], ids=["ollama_no_fit", "ollama_not_covered"])
+def test_ollama_set_aside_and_eleven_vllm_rows_the_rule_says_what_is_shown(ollama_size):
+    """Codex r6-1: Ollama's only package stands under `No fit` / `Not covered`, eleven vLLM packages
+    rank. The block still has rows of both runtimes, so it is drawn in sections, the vLLM section
+    is whole -- and the rule says so: one predicate decides all three (`runtimes.runtimes_among`)."""
+    from modelroom.ranking import BOTH_RUNTIMES_RULE
+
+    gguf = _gguf_package().model_copy(update={"files": [_gguf_package().files[0].model_copy(update={"size_bytes": ollama_size})]})
+    document = _render(_profile(), [_base_model()], [gguf, *(_awq_of(index) for index in range(11))])
+
+    block = document.machines[0]
+    assert [entry.fit.runtime for entry in block.ranked] == ["vllm"] * 11
+    assert [entry.fit.runtime for entry in [*block.no_fit, *block.not_covered]] == ["ollama"]
+    assert document.ranking_rule.endswith(BOTH_RUNTIMES_RULE)
+    assert ALTERNATIVES in document_markdown(document) and "Showing 11 of 11 ranked packages." in document_markdown(document)
+
+
+def test_a_vllm_only_machine_with_eleven_packages_follows_the_plain_rule():
+    """The counter-proof: one runtime, no sections -- the first ten rows, and the rule unchanged."""
+    from modelroom.ranking import RANKING_RULE
+
+    document = _render(_vllm_only_profile(), [_base_model()], [*(_awq_of(index) for index in range(11))])
+
+    assert len(document.machines[0].ranked) == 10 and document.machines[0].ranked_total == 11
+    assert document.ranking_rule == RANKING_RULE
+
+
+def _cards(count: int, sizes: tuple[float, ...] | None = None, runtimes_: tuple[str, ...] = ("vllm",)) -> HardwareProfile:
+    """The four-L4 vLLM-only profile cut to `count` equal cards (or the given `sizes`), synthetic."""
+    data = json.loads((FIXTURES / "profiles_v4" / "four_l4_server_vllm_only.json").read_text(encoding="utf-8"))
+    sizes = sizes or (22.49,) * count
+    data["gpus"] = [{**data["gpus"][0], "index": index, "vram_gib": size} for index, size in enumerate(sizes)]
+    data["vram_gib"] = round(sum(sizes), 2)
+    data["gpu_state"] = "multi_gpu" if len(sizes) > 1 else "measured"
+    data["llmfit_crosscheck"]["vram"] = {**data["llmfit_crosscheck"]["vram"], "own_gib": data["vram_gib"], "llmfit_gib": data["vram_gib"]}
+    data["runtimes"] = list(runtimes_)
+    return HardwareProfile.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "profile, said",
+    [
+        (lambda: _cards(4), "graphics up to 82.8 GB for vLLM (4 x 22.5 GB cards, 0.92 of each)"),
+        (lambda: _cards(3), "graphics up to 41.4 GB for vLLM (2 of 3 equal 22.5 GB cards, 0.92 of each)"),
+        (lambda: _cards(1), "graphics up to 20.7 GB for vLLM (22.5 GB card, 0.92 of it)"),
+        (lambda: _cards(4, (22.49, 22.49, 22.49, 11.0)), "graphics up to 41.4 GB for vLLM (2 of 3 equal 22.5 GB cards, 0.92 of each)"),
+    ],
+    ids=["four", "three", "one", "mixed"],
+)
+def test_the_vllm_head_says_the_largest_pool_tensor_parallel_can_use(profile, said):
+    """Codex r6-2: the head's vLLM pool is the most F1 can choose -- the largest power of two of
+    1, 2, 4, 8 up to the equal group, 0.92 of the smallest chosen card -- through `fit_vllm`'s own
+    choice, never the whole group summed (three cards gave 62.1 GB, two of them are usable)."""
+    document = _render(profile(), [_base_model()], [_tensor_package()])
+
+    room = next(line for line in document_terminal(document).splitlines() if line.startswith(" room"))
+    assert said in room
+
+
+def test_the_unequal_cards_line_names_the_usable_cards():
+    """Codex r6-2: three equal cards and a smaller one -- vLLM splits over at most two of the three."""
+    document = _render(_cards(4, (22.49, 22.49, 22.49, 11.0)), [_base_model()], [_tensor_package()])
+
+    assert "vLLM can split over at most 2 of the 3 cards of 22.49 GB; 1 smaller card is left out" in document_terminal(document)
+
+
 def test_an_ollama_only_document_keeps_its_rule_word_for_word():
     from modelroom.ranking import RANKING_RULE
 
@@ -211,7 +277,7 @@ def test_a_vllm_only_head_names_the_vllm_pool_and_nothing_of_ollama():
     terminal = _live(_vllm_only())
 
     room = next(line for line in terminal.splitlines() if line.startswith(" room"))
-    assert "graphics 82.8 GB for vLLM" in room
+    assert "graphics up to 82.8 GB for vLLM" in room
     assert "memory" not in room and "Ollama" not in terminal and "for models" not in terminal
 
 
@@ -233,7 +299,7 @@ def test_both_runtimes_name_each_budget_by_its_runtime():
     room = [line for line in terminal.splitlines()[:8]]
     head = " ".join(room)
     assert "graphics 86.0 GB for Ollama" in head and "memory 86.3 GB for Ollama" in head
-    assert "graphics 82.8 GB for vLLM" in head and "for models" not in head
+    assert "graphics up to 82.8 GB for vLLM" in head and "for models" not in head
 
 
 def test_the_step_3_scale_counts_what_the_vllm_only_table_ranks():

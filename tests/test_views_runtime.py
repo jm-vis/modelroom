@@ -175,7 +175,8 @@ def test_the_unequal_cards_note_names_the_group_and_what_was_left_out():
 
     note = unequal_cards_note(profile)
 
-    assert note == "vLLM can split over the 3 cards of 22.49 GB; 1 smaller card is left out"
+    # Codex r6-2: tensor parallel takes 1, 2, 4 or 8 cards, so at most two of the three (F1).
+    assert note == "vLLM can split over at most 2 of the 3 cards of 22.49 GB; 1 smaller card is left out"
 
 
 # --- the memory line's own vLLM piece: never an Ollama gpu/gpu_split piece -------------------------

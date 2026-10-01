@@ -17,7 +17,7 @@ from .document import MachineRanking, SetAsideEntry
 from .intro import LABEL_COLUMN
 from .runtimes import RUNTIMES, runtime_of
 from .screen import JOIN_WIDTH
-from .views_runtime import packager_cell, shown_entries
+from .views_runtime import block_runtimes, packager_cell
 
 ALTERNATIVES = "One section per runtime: alternatives on the same cards, not both at once."
 # What is left of the 100 characters for a labeled line's text (`views._NOTE_WIDTH`): the label's
@@ -40,8 +40,7 @@ def runtime_sections(block: MachineRanking) -> list[tuple[str, MachineRanking]]:
     numbers kept. Its `ranked_total` is exact: every part after the first lists all of its ranked
     packages (`render._ranked_entries`, `whole`), so the first part's total is the rest.
     """
-    entries = shown_entries(block)
-    keys = [runtime.key for runtime in RUNTIMES if any(entry.fit.runtime == runtime.key for entry in entries)]
+    keys = block_runtimes(block)  # the one predicate (Codex r6-1), as the ranking and the rule read it
     if len(keys) < 2:
         return [(keys[0] if keys else RUNTIMES[0].key, block)]
     parts = []

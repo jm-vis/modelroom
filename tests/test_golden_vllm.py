@@ -293,7 +293,7 @@ def test_an_unequal_cards_machine_describes_the_group_not_a_packages_own_usage()
         assert "graphics memory" not in entry.note.text and "after the reserve" not in entry.note.text
 
     terminal = document_terminal(document)
-    assert "vLLM can split over the 3 cards of 22.49 GB; 1 smaller card is left out" in terminal
+    assert "vLLM can split over at most 2 of the 3 cards of 22.49 GB; 1 smaller card is left out" in terminal
     assert "vLLM on 1 card:" in terminal and "vLLM on 2 cards:" in terminal
     # Codex r2-3, F5: the key may not claim `all cards together` for vLLM, which uses two of the
     # three equal cards here and never the smaller T4 -- a table of vLLM rows carries vLLM's key alone.

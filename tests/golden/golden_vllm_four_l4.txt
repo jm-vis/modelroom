@@ -3,7 +3,7 @@
  server · context L 32k
  room      graphics 86.0 GB for Ollama (4 x 22.5 GB cards minus reserve)
            memory 86.3 GB for Ollama (94.3 GB minus reserve)
-           graphics 82.8 GB for vLLM (4 x 22.5 GB cards, 0.92 of each)
+           graphics up to 82.8 GB for vLLM (4 x 22.5 GB cards, 0.92 of each)
            disk unknown (modelroom render reads no machine live)
  runtime   Ollama · vLLM (from its profile)
  One section per runtime: alternatives on the same cards, not both at once.

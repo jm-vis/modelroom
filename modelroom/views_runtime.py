@@ -14,7 +14,7 @@ from typing import Sequence
 
 from . import runtimes
 from .document import MachineRanking, RankedEntry, SetAsideEntry
-from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VLLM_RUNTIME_OVERHEAD_GIB, equal_size_group
+from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VLLM_RUNTIME_OVERHEAD_GIB, equal_size_group, largest_pool
 from .profile import HardwareProfile
 from .ranking_words import PER_MODEL_PIECES, key_pieces, per_model
 from .screen import ranks_text
@@ -43,6 +43,12 @@ def shown_entries(block: MachineRanking) -> list[RankedEntry | SetAsideEntry]:
     """Every row the table of `block` shows: ranked, `Not covered` and `No fit` alike (Codex r2-4).
     A word the key owes a row is owed wherever that row stands, not only among the ranked ones."""
     return [*block.ranked, *block.not_covered, *block.no_fit]
+
+
+def block_runtimes(block: MachineRanking) -> tuple[str, ...]:
+    """`runtimes.runtimes_among` over every row `block` shows (Codex r6-1): two or more is a block
+    drawn in sections (`views_sections`) whose rule names that (`render.build_render_document`)."""
+    return runtimes.runtimes_among(entry.fit for entry in shown_entries(block))
 
 
 def vllm_shown(block: MachineRanking) -> bool:
@@ -120,15 +126,15 @@ def unequal_cards_note(profile: HardwareProfile | None) -> str | None:
     if profile is None:
         return None
     group = equal_size_group(profile)
-    if not group.cards or group.left_out == 0:
+    pool = largest_pool(profile)
+    if pool is None or group.left_out == 0:
         return None
     size = group.cards[0].vram_gib
     cards_word = "card" if len(group.cards) == 1 else "cards"
     left_word = "card is" if group.left_out == 1 else "cards are"
-    return (
-        f"vLLM can split over the {len(group.cards)} {cards_word} of {size:.2f} GB; "
-        f"{group.left_out} smaller {left_word} left out"
-    )
+    # Codex r6-2: tensor parallel takes 1, 2, 4 or 8 cards (`fit_vllm.largest_pool`, F1's own choice).
+    usable = f"the {pool.group}" if pool.cards == pool.group else f"at most {pool.cards} of the {pool.group}"
+    return f"vLLM can split over {usable} {cards_word} of {size:.2f} GB; {group.left_out} smaller {left_word} left out"
 
 
 def vllm_pool_pieces(entries: Sequence[RankedEntry], dash: str) -> list[str]:
@@ -152,6 +158,7 @@ def vllm_pool_pieces(entries: Sequence[RankedEntry], dash: str) -> list[str]:
 
 __all__ = [
     "RUNTIME_LABEL",
+    "block_runtimes",
     "key_text",
     "package_prefix",
     "packager_cell",

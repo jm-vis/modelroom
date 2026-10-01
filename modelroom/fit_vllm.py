@@ -167,6 +167,39 @@ def tensor_parallel_size(group_size: int, num_attention_heads: int | None) -> tu
     return 1, None  # unreachable: 1 always divides and group_size is at least 1 here
 
 
+def largest_parallel_size(group_size: int) -> int:
+    """The most cards F1 can ever choose from an equal group of `group_size`, whatever the model:
+    the largest of `TENSOR_PARALLEL_SIZES` at most `group_size` (three cards give two)."""
+    return next((size for size in TENSOR_PARALLEL_SIZES if size <= group_size), 1)
+
+
+def chosen_cards(group: CardGroup, cards: int) -> tuple[GpuAdapter, ...]:
+    """The cards a tensor-parallel size of `cards` takes (F1): the first of the group by `index`."""
+    return tuple(sorted(group.cards, key=lambda gpu: gpu.index)[:cards])
+
+
+@dataclass(frozen=True)
+class VllmPool:
+    """The most vLLM can take of one machine (Codex r6-2): `cards` of its equal `group`, `card_gib`
+    the smallest of them, `pool_gib` 0.92 of each -- an upper bound, as `t` depends on the model."""
+
+    cards: int
+    group: int
+    card_gib: float
+    pool_gib: float
+
+
+def largest_pool(profile: HardwareProfile) -> VllmPool | None:
+    """`VllmPool` of `profile` through F1's own choice (`equal_size_group`, `largest_parallel_size`,
+    `chosen_cards`) -- what the machine's head says, never a sum of its own; `None` without a card."""
+    group = equal_size_group(profile)
+    if not group.cards:
+        return None
+    cards = largest_parallel_size(len(group.cards))
+    card_gib = min(gpu.vram_gib for gpu in chosen_cards(group, cards))
+    return VllmPool(cards, len(group.cards), card_gib, cards * VLLM_GPU_MEMORY_UTILIZATION * card_gib)
+
+
 def _per_token_bytes(architecture: Architecture | None, cards: int) -> tuple[float, str]:
     """The 16-bit KV cache of one token in bytes, split over `cards` (F2, Assumption A2): the whole
     model's own `kv_token_bytes` divided by `min(cards, num_key_value_heads)` -- fewer KV heads
@@ -255,7 +288,7 @@ def _vllm_guard_reason(
 def _vllm_formula(group: CardGroup, package: Package, base_model: BaseModelSpec, scenario: Scenario) -> Fit:
     """F2's formula, over the cards `_vllm_guard_reason` already cleared (`group.cards` is not empty)."""
     cards, t_reason = tensor_parallel_size(len(group.cards), base_model.architecture.num_attention_heads)
-    card_gib = min(gpu.vram_gib for gpu in sorted(group.cards, key=lambda gpu: gpu.index)[:cards])
+    card_gib = min(gpu.vram_gib for gpu in chosen_cards(group, cards))
     weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
     budget, at_once, basis, kv_gib = _vllm_budget(card_gib, weights_gib, cards, base_model.architecture, scenario)
     return Fit(
@@ -313,9 +346,13 @@ __all__ = [
     "ZERO_WEIGHT_REASON",
     "CardGroup",
     "VllmFit",
+    "VllmPool",
+    "chosen_cards",
     "equal_size_group",
     "kv_per_token_bytes",
     "largest_card",
+    "largest_parallel_size",
+    "largest_pool",
     "requests_at_once",
     "tensor_parallel_size",
     "vllm_fit",

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 
 from . import guided_vllm
 from .config import Configuration, MachineConfig
@@ -417,6 +417,16 @@ def _shown_with(package: Package, present: frozenset[str]) -> bool:
     return not claiming or any(key in present for key in claiming)
 
 
+def runtimes_among(fits: Iterable[Fit]) -> tuple[str, ...]:
+    """The runtimes whose rows `fits` are, in table order: the one answer to "does this machine
+    show the rows of two runtimes" (F5, Codex r6-1). Two or more means one section per runtime,
+    each ranked on its own and every one after the first whole (`render._rankings_by_runtime`), and
+    the rule says so (`render.build_render_document`); the views split by it too
+    (`views_sections.runtime_sections`). One or none: one block, as before."""
+    keys = {fit.runtime for fit in fits}
+    return tuple(runtime.key for runtime in RUNTIMES if runtime.key in keys)
+
+
 def accepting_on_machine(package: Package, profile: HardwareProfile | None) -> tuple[Runtime, ...]:
     """`accepting_runtimes`, narrowed to the runtimes `profile`'s machine actually has: a runtime
     that would accept `package` in general but that this machine never reported pairs with nothing
@@ -469,5 +479,6 @@ __all__ = [
     "machine_runtime_keys",
     "present_runtimes",
     "runtime_of",
+    "runtimes_among",
     "visible_packages",
 ]

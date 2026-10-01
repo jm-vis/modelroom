@@ -41,7 +41,8 @@ from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, Llmfit
 from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
-from .runtimes import RUNTIMES, MachineRuntimes, fit_for, visible_packages
+from .runtimes import MachineRuntimes, fit_for, runtimes_among, visible_packages
+from .views_runtime import block_runtimes
 from .vllm_words import is_vllm, reason_sentence as vllm_reason_sentence, row_note as vllm_row_note
 from .ranking import (
     BOTH_RUNTIMES_RULE,
@@ -517,7 +518,7 @@ def _rankings_by_runtime(
     (F5): the rows of two runtimes are alternatives on the same cards, never one list, so each is
     ranked on its own -- a machine of one runtime ranks exactly as before. The document keeps one
     block with continuous numbers (Ollama's rows first); the views split it into sections."""
-    keys = [runtime.key for runtime in RUNTIMES if any(fit.runtime == runtime.key for _package, fit in entries)]
+    keys = runtimes_among(fit for _package, fit in entries)  # the one predicate (Codex r6-1)
     if len(keys) < 2:
         return [rank_packages(entries, measurements, scenario, models=models)]
     return [rank_packages([e for e in entries if e[1].runtime == key], measurements, scenario, models=models) for key in keys]
@@ -616,7 +617,8 @@ def build_render_document(
     ratings, rating_error = _collect_ratings(rating_source, _repos_with_rows(blocks))
     rule = RANKING_RULE_PER_MODEL if per_model else RANKING_RULE
     # F5 (Codex r5-1): the rule says the per-runtime selection wherever a machine ranks both.
-    rule += BOTH_RUNTIMES_RULE if any(len({entry.fit.runtime for entry in block.ranked}) > 1 for block in blocks) else ""
+    # The same predicate as the sections and the whole vLLM ranking, over every row shown (Codex r6-1).
+    rule += BOTH_RUNTIMES_RULE if any(len(block_runtimes(block)) > 1 for block in blocks) else ""
     return RenderDocument(
         schema_version=DOCUMENT_SCHEMA_VERSION,
         snapshot_run_at=snapshot.run_at,

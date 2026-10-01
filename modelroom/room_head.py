@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Literal
 
 from .document import MachineRanking
-from .fit_vllm import NO_CARD_REASON, SHARED_MEMORY_REASON, VLLM_GPU_MEMORY_UTILIZATION, equal_size_group
+from .fit_vllm import NO_CARD_REASON, SHARED_MEMORY_REASON, VLLM_GPU_MEMORY_UTILIZATION, largest_pool
 from .intro import LABEL_COLUMN
 from .reserve import old_default_hint
 from .room import UNCLEAR_REASON, LiveRoom, LoadedModel, disk_words, gb, graphics_words
@@ -63,21 +63,23 @@ def head_pieces(
 
 
 def _vllm_piece(block: MachineRanking) -> str:
-    """`graphics 82.8 GB for vLLM (4 x 22.5 GB cards, 0.92 of each)`: the most vLLM can take, its
-    share of each card of the largest equal group (`fit_vllm.equal_size_group`, F1); a smaller
-    card left out of the group is not counted. Its own reason where vLLM cannot run at all."""
+    """`graphics up to 41.4 GB for vLLM (2 of 3 equal 22.5 GB cards, 0.92 of each)`: the most vLLM
+    can take (`fit_vllm.largest_pool`, F1's own card choice, Codex r6-2) -- an upper bound, since
+    each model's head count decides its own cards. Its own reason where vLLM cannot run at all."""
     profile = block.profile
     if profile.gpu_state == "unified_memory":
         return f"graphics: {SHARED_MEMORY_REASON}"
-    group = equal_size_group(profile)
-    if not group.cards:
+    pool = largest_pool(profile)
+    if pool is None:
         return f"graphics: {NO_CARD_REASON}"
-    size = group.cards[0].vram_gib
-    pool = VLLM_GPU_MEMORY_UTILIZATION * sum(gpu.vram_gib for gpu in group.cards)
-    named = f"{size:.1f} GB card, {VLLM_GPU_MEMORY_UTILIZATION} of it" if len(group.cards) == 1 else (
-        f"{len(group.cards)} x {size:.1f} GB cards, {VLLM_GPU_MEMORY_UTILIZATION} of each"
-    )
-    return f"graphics {pool:.1f} GB for vLLM ({named})"
+    share, size = VLLM_GPU_MEMORY_UTILIZATION, f"{pool.card_gib:.1f} GB"
+    if pool.cards == 1:
+        named = f"{size} card, {share} of it" if pool.group == 1 else f"1 of {pool.group} equal {size} cards, {share} of it"
+    elif pool.cards == pool.group:
+        named = f"{pool.cards} x {size} cards, {share} of each"
+    else:
+        named = f"{pool.cards} of {pool.group} equal {size} cards, {share} of each"
+    return f"graphics up to {pool.pool_gib:.1f} GB for vLLM ({named})"
 
 
 def loaded_pieces(live: LiveRoom | None) -> list[str]:
