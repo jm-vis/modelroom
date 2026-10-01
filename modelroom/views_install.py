@@ -1,17 +1,28 @@
 """The `install` line under a machine's table: the one line a reader copies to get a package.
 
 Moved out of `views.py` (size guard, AP9-RM U11) and extended there: where the free disk of the
-machine was read, the line takes the best row that also fits it (`disk_fit.best_on_disk`) and says
-under it which rows were passed over, and where no row fits it says so in red instead of offering a
-command. `views.py` re-exports `INSTALL_LABEL` and `install_target`.
+machine was read, the line takes the best row that also fits it and says under it which rows were
+passed over, and where no row fits it says so in red instead of offering a command. `views.py`
+re-exports `INSTALL_LABEL` and `install_target`.
+
+The line offers the very row the pull of step 5 would: it is built from the rows of the pull list
+(`pull_choice.block_rows`, one per runtime of the machine that accepts a row's package, each with
+its own holding and its own name) by the one rule both read (`pull_choice.offered`). Its command is
+that row's runtime's (`Runtime.command`); where no row is offered, the lock of the row that ended
+the search says why (`has no command`, `no package fits`). For Ollama the command is
+`ollama pull <name>`, as before.
 """
 
 from __future__ import annotations
 
-from .disk_fit import best_on_disk, known, none_fits_words, skipped_words
+from typing import Mapping, Sequence
+
+from . import runtimes
+from .contracts import Package
+from .disk_fit import known, none_fits_words, skipped_words
 from .document import MachineRanking, RankedEntry
 from .intro import label_line
-from .pull_choice import entry_pull_name
+from .pull_choice import NOT_UNIQUE, Offered, block_rows, offered, rank_over
 from .room import Disk
 from .screen import Line, install_pull_line
 
@@ -23,21 +34,58 @@ OTHER_INSTALL_NOTE = "run it on that computer; this run pulls only onto this one
 OTHER_INSTALL_NOTE_WITH_LIST = "run it on that computer, or choose a package for it below"
 NOT_UNIQUE_INSTALL = "has no command: its pull name is not unique"
 
+Held = Mapping[str, frozenset] | None
 
-def install_target(block: MachineRanking, install_for: str | None, disk: Disk | None = None) -> tuple[RankedEntry, str] | None:
-    """The first row of the machine this run is on that also fits its disk, and its local Ollama name.
 
-    Only for that machine: the local Ollama name of a package is about the machine that would
-    install it. A package with no such name has none. Without a free disk that was read the first
-    row is the one, as before AP9-RM U11. The pull of step 5 lets the user choose another row (U6).
+def install_offer(
+    block: MachineRanking,
+    disk: Disk | None = None,
+    packages: Sequence[Package] = (),
+    held: Held = None,
+    ambiguous: frozenset[str] = frozenset(),
+) -> Offered:
+    """`pull_choice.offered` over this block's pull rows, every rank, past the rows that do not fit
+    the disk: the row the install line offers, or why there is none."""
+    rows = block_rows(block, ambiguous, disk=disk, packages=packages, held=held)
+    return offered(rows, [entry.rank for entry in block.ranked], rank_over(block, rows, disk))
+
+
+def over_ranks_on_machine(block: MachineRanking, disk: Disk | None, packages: Sequence[Package] = (), held: Held = None) -> list[int]:
+    """The ranks of the shown rows whose download fits the disk for no runtime of the machine, each
+    with its own holding (`pull_choice.rank_over`): the rows the table marks and the `disk` line
+    names; `disk_fit.over_ranks` on a machine with Ollama alone."""
+    return rank_over(block, block_rows(block, disk=disk, packages=packages, held=held), disk)
+
+
+def install_choice(
+    block: MachineRanking,
+    install_for: str | None,
+    disk: Disk | None = None,
+    packages: Sequence[Package] = (),
+    held: Held = None,
+) -> tuple[RankedEntry, "runtimes.Runtime", str] | None:
+    """The row of the machine this run is on that the install line offers (`install_offer`, no
+    name counted as shared), its runtime and its install name; `None` where none is offered.
+
+    Only for that machine: the install name of a package is about the machine that would install
+    it. Without a free disk that was read the first row is the one, as before AP9-RM U11. The pull
+    of step 5 lets the user choose another row (U6).
     """
     if install_for is None or block.machine != install_for or not block.ranked:
         return None
-    entry, _skipped = best_on_disk(block.ranked, disk)
-    if entry is None:
+    row = install_offer(block, disk, packages, held).row
+    if row is None or row.name is None:
         return None
-    name = entry_pull_name(entry)
-    return None if name is None else (entry, name)
+    entry = next(entry for entry in block.ranked if entry.rank == row.rank)
+    return entry, runtimes.runtime_of(row.runtime), row.name
+
+
+def install_target(
+    block: MachineRanking, install_for: str | None, disk: Disk | None = None, packages: Sequence[Package] = ()
+) -> tuple[RankedEntry, str] | None:
+    """`install_choice` without the runtime: the row and its install name."""
+    chosen = install_choice(block, install_for, disk, packages)
+    return None if chosen is None else (chosen[0], chosen[2])
 
 
 def install_lines(
@@ -47,6 +95,8 @@ def install_lines(
     disk: Disk | None,
     dash: str,
     pull_other_machines: frozenset[str] = frozenset(),
+    packages: Sequence[Package] = (),
+    held: Held = None,
 ) -> list[Line]:
     """The install line of a block, behind a blank line; nothing where a row has no local name.
 
@@ -55,25 +105,29 @@ def install_lines(
     under the table it went under (test round, 2026-09-25). A pull name more than one package
     answers to has a note instead (U4); another machine of a guided run gets its command with the
     machine named, and the reminder that this run pulls only here (U3). The disk of this machine
-    moves the line to the best row that fits it, or turns it into the red `no package fits` (U11).
+    moves the line to the best row that fits it, or turns it into the red `no package fits` (U11);
+    `held` is what each runtime but Ollama holds itself (`guided_install.other_runtimes_held`).
     """
-    own = install_for is not None and block.machine == install_for
-    read = known(disk) if own else None
-    entry, skipped = best_on_disk(block.ranked, read)
-    if own and block.ranked and entry is None:
-        return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
-    target = install_target(block, block.machine if install_for is not None else None, read)
-    if target is None:
+    if install_for is None or not block.ranked:
         return []
-    entry, name = target
-    if name in ambiguous:
-        return [[], label_line(INSTALL_LABEL, [("class:note", f"#{entry.rank} {NOT_UNIQUE_INSTALL}")])]
+    own = block.machine == install_for
+    read = known(disk) if own else None
+    offer = install_offer(block, read, packages, held, ambiguous)
+    if own and offer.all_over:
+        return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
+    if offer.row is None:
+        stop = offer.stop
+        note = f"#{stop.rank} {NOT_UNIQUE_INSTALL}" if stop is not None and stop.locked == NOT_UNIQUE else None
+        return [] if note is None else [[], label_line(INSTALL_LABEL, [("class:note", note)])]
+    row, runtime = offer.row, runtimes.runtime_of(offer.row.runtime)
+    command = runtime.command(str(row.name))
     if own:
         # The one line of this view that may pass 100 characters: it is a command to copy, and a
         # command that was cut is worse than a line that wraps (second-model round, 2026-09-24).
-        lines = [[], label_line(INSTALL_LABEL, install_pull_line(entry.rank, name))]
+        lines = [[], label_line(INSTALL_LABEL, install_pull_line(row.rank, str(row.name), command=command))]
+        skipped = list(offer.skipped)
         return lines + ([label_line("", [("class:note", skipped_words(skipped, dash))])] if skipped else [])
-    other = [("class:note", f"#{entry.rank} on {block.label}"), ("", "  "), ("class:command", f"ollama pull {name}")]
+    other = [("class:note", f"#{row.rank} on {block.label}"), ("", "  "), ("class:command", command)]
     note = OTHER_INSTALL_NOTE_WITH_LIST if block.machine in pull_other_machines else OTHER_INSTALL_NOTE
     return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", note)])]
 
@@ -83,6 +137,9 @@ __all__ = [
     "NOT_UNIQUE_INSTALL",
     "OTHER_INSTALL_NOTE",
     "OTHER_INSTALL_NOTE_WITH_LIST",
+    "install_choice",
     "install_lines",
+    "install_offer",
     "install_target",
+    "over_ranks_on_machine",
 ]

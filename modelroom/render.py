@@ -3,10 +3,12 @@
 `build_render_document(...) -> document.RenderDocument` is the pure builder: it takes an
 already-loaded `Configuration`, `Snapshot`, one `MachineProfile` per configured machine, that
 profile's measurement records, the ranking `Scenario` and `rendered_at`, computes every fit
-(`fit.compute_fit_v2`) and every ranking (`ranking.rank_packages`), and returns the one object
-the three writers read: `document_markdown`, `document_json`, `document_terminal`. No I/O
-anywhere in this module -- `modelroom/cli.py::render_with_config` owns the lock, the
-schema-version gates, reading the files and the atomic writes.
+(`runtimes.fit_for`, AP9-SV2-L: the runtime a package's table row belongs to judges it --
+`fit.compute_fit_v2` unconditionally today, since Ollama is still the only runtime that ever
+accepts one) and every ranking (`ranking.rank_packages`), and returns the one object the three
+writers read: `document_markdown`, `document_json`, `document_terminal`. No I/O anywhere in this
+module -- `modelroom/cli.py::render_with_config` owns the lock, the schema-version gates, reading
+the files and the atomic writes.
 
 `machine_profile` is the other pure decision here: which profile a `[machines.<name>]` entry is
 rendered from, given the profile files found in the results folder. See CONTRACTS.md,
@@ -30,7 +32,7 @@ from .document import (
     RenderDocument,
     SetAsideEntry,
 )
-from .fit import GIB, compute_fit_v2
+from .fit import GIB
 from .guided_contracts import Note
 from .importer import ProfileScan
 from .measurements import MeasurementRecord, Scenario
@@ -38,6 +40,7 @@ from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, Llmfit
 from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
+from .runtimes import fit_for
 from .ranking import (
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
@@ -452,7 +455,7 @@ def _machine_block(
             machine=machine, status=found.status, label=found.label, reason=found.reason, **reserves
         )
     entries = [
-        (package, compute_fit_v2(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config))
+        (package, fit_for(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config))
         for package in packages
     ]
     ranking = rank_packages(entries, measurements, scenario, models=models)

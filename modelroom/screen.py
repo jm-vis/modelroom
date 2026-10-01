@@ -554,16 +554,23 @@ def _safe_pull_name(name: str | None) -> str | None:
     return name if name is not None and PULL_NAME_RE.fullmatch(name) is not None else None
 
 
-def install_pull_line(rank: int, name: str, where: str = "") -> Line:
+def pull_command(name: str) -> str:
+    """Ollama's install command for a name it pulls by: `ollama pull <name>` (`runtimes.OLLAMA.command`)."""
+    return f"ollama pull {name}"
+
+
+def install_pull_line(rank: int, name: str, where: str = "", command: str | None = None) -> Line:
     """The line a reader copies to get the first package of their own machine.
 
     The rank is a side remark and the command is the thing: `to install #1: ollama pull …` read as
     one sentence and the command went under in it (test round, 2026-09-25). So the rank is gray, the
     command is drawn as a command, and two spaces keep them apart. `where` is a `PullTarget`'s own
-    machine name (FR-B1, B5): `#3 on gpu1  ollama pull …`.
+    machine name (FR-B1, B5): `#3 on gpu1  ollama pull …`. `command` is the command of the runtime
+    the row belongs to (`Runtime.command`); without it the line is Ollama's, `pull_command(name)`.
     """
     place = f" on {where}" if where else ""
-    return [("class:note", f"#{rank}{place}"), ("", "  "), ("class:command", f"ollama pull {name}")]
+    said = pull_command(name) if command is None else command
+    return [("class:note", f"#{rank}{place}"), ("", "  "), ("class:command", said)]
 
 
 def install_local_note(rank: int, dot: str = "·", where: str = "") -> Line:
@@ -687,6 +694,7 @@ __all__ = [
     "install_local_note",
     "install_name",
     "install_pull_line",
+    "pull_command",
     "pull_progress_text",
     "pull_question",
     "pulled_line",

@@ -37,6 +37,7 @@ from .pull_choice import LOCAL_ALREADY, NONE_VALUE, QUESTION as CHOICE_QUESTION
 from .pull_choice import PullRow, default_row, package_of, pull_rows, weights_bytes_of
 from .quantization import package_identity_key
 from .room import Disk, free_disk, gb, pull_need_bytes
+from .runtimes import OLLAMA, runtime_of
 from .screen import PULL_CANCELED as CANCELED_LINE
 from .screen import Screen
 from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
@@ -73,6 +74,8 @@ class FirstRow:
     weights_gib: float | None
     package: Package | None = None
     weights_bytes: float | None = None
+    # The install line of the row's runtime (`Runtime.command`); `None` is Ollama's, `ollama pull <name>`.
+    command: str | None = None
 
     @property
     def needed_bytes(self) -> float | None:
@@ -154,24 +157,49 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     """The list of the rows shown, the command of the choice, the disk, the question; a fault is `run.failed`."""
     if context is None or not reachable:
         return
-    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot)
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, packages=context.packages)
     if not any(row.name is not None for row in rows):
         return
     run.screen.blank()
-    # What the daemon holds is read before the lock of the disk (U11c, Codex r3-1): a package held
+    # What each runtime holds is read before the lock of the disk (U11c): a package held
     # already needs no disk, so it stays a choice and its note -- in the table as in this list.
-    held = held_identities(run, [package for package in (package_of(row, context.packages) for row in rows) if package])
-    disk = None if context.disk is None else replace(context.disk, held=context.disk.held | held)
-    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk)
-    locals_ = {row.rank for row in rows if row.locked is None and row.identity in held}
+    held = held_by_runtime(run, rows, context.packages)
+    # The disk carries what the Ollama daemon holds and counts for Ollama's rows alone; each other
+    # runtime's rows count only what that runtime holds (`pull_choice.runtime_disk`).
+    ollama = held.get(OLLAMA.key, frozenset())
+    disk = None if context.disk is None else replace(context.disk, held=context.disk.held | ollama)
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk, context.packages, held)
+    locals_ = {(row.runtime, row.identity) for row in rows if row.locked is None and row.identity in held[row.runtime]}
     row = _choose(run, rows, locals_)
     if row is None:
         return
     package = package_of(row, context.packages)
     if package is None:
         return
-    first = FirstRow(row.rank, str(row.name), row.weights_gib, package, weights_bytes_of(package))
-    pull_chosen(run, first, local=row.rank in locals_)
+    command = runtime_of(row.runtime).command(str(row.name))
+    first = FirstRow(row.rank, str(row.name), row.weights_gib, package, weights_bytes_of(package), command)
+    pull_chosen(run, first, local=(row.runtime, row.identity) in locals_)
+
+
+def held_by_runtime(
+    run: "GuidedRun", rows: Sequence[PullRow], packages: Sequence[Package]
+) -> dict[str, frozenset[tuple[str, str, str]]]:
+    """By runtime key, the identities of the rows' packages that runtime provably holds: each read
+    by that runtime's own `on_disk`, over its own rows only -- one runtime's inventory never makes
+    another runtime's row "local already" or frees it from the disk check."""
+    held: dict[str, frozenset[tuple[str, str, str]]] = {}
+    for key in dict.fromkeys(row.runtime for row in rows):
+        own = [package for package in (package_of(row, packages) for row in rows if row.runtime == key) if package]
+        held[key] = runtime_of(key).on_disk(run, own)
+    return held
+
+
+def other_runtimes_held(run: "GuidedRun", context: PullContext) -> dict[str, frozenset[tuple[str, str, str]]]:
+    """What each runtime but Ollama holds of this machine's rows, by its own `on_disk` -- for the
+    install line under the table (`views.RunView.held`). Ollama's own holding is the disk read
+    before the render (`Disk.held`) already, so its daemon is not asked again here."""
+    rows = pull_rows(context.document, context.machine, packages=context.packages)
+    return held_by_runtime(run, [row for row in rows if row.runtime != OLLAMA.key], context.packages)
 
 
 def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: bool | None = None) -> None:
@@ -185,7 +213,7 @@ def pull_chosen(target: "PullTarget | GuidedRun", first: FirstRow, *, local: boo
     if _is_local(target, first) if local is None else local:
         target.screen.write(label_line(INSTALL_LABEL, install_local_note(first.rank, target.screen.glyphs.dot, target.where)))
         return
-    target.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name, target.where)))
+    target.screen.write(label_line(INSTALL_LABEL, install_pull_line(first.rank, first.name, target.where, first.command)))
     if not _disk_allows(target, first):
         return
     question = pull_question(first.rank, first.weights_gib, first.name, target.where)
@@ -217,7 +245,7 @@ def _disk_allows(target: PullTarget, first: FirstRow) -> bool:
     return False
 
 
-def _choose(run: "GuidedRun", rows: Sequence[PullRow], locals_: set[int]) -> PullRow | None:
+def _choose(run: "GuidedRun", rows: Sequence[PullRow], locals_: set[tuple[str, tuple[str, str, str]]]) -> PullRow | None:
     """The row the user chose from the list, or `None` for `none`. An answer file without the key takes
     `#1` where it has a pull name of its own, else nothing (the behavior before U6)."""
     try:
@@ -229,12 +257,14 @@ def _choose(run: "GuidedRun", rows: Sequence[PullRow], locals_: set[int]) -> Pul
     return chosen
 
 
-def pull_choices(rows: Sequence[PullRow], locals_: set[int]) -> list[Choice]:
+def pull_choices(rows: Sequence[PullRow], locals_: set[tuple[str, tuple[str, str, str]]]) -> list[Choice]:
     """The entries of the pull list: one per row, then `none`. A row too large for the free disk is red,
     says what it needs in place of its name and cannot be taken; the pointer starts on the first row
-    that can, else on `none` (AP9-RM U11)."""
+    that can, else on `none` (AP9-RM U11). `locals_` holds `(runtime, identity)` of every row its own
+    runtime holds already: "local already" is a fact of one runtime's inventory, not of the package."""
     choices = [
-        Choice(row.value, _row_words(row, row.rank in locals_), disabled=row.locked, warn=row.over_disk) for row in rows
+        Choice(row.value, _row_words(row, (row.runtime, row.identity) in locals_), disabled=row.locked, warn=row.over_disk)
+        for row in rows
     ]
     return choices + [Choice(NONE_VALUE, NONE_WORDS)]
 
@@ -249,9 +279,8 @@ def _row_words(row: PullRow, local: bool) -> str:
 def _holds(target: "PullTarget", installed: Sequence[InstalledModel] | None, package: Package | None, show=None) -> bool:
     """Whether the daemon's inventory provably holds `package` (the load test's digest rule).
 
-    `held_identities` always passes its own `show`, so this never reads `target.daemon` there --
-    a plain `GuidedRun` (its only caller) satisfies it all the same, since the attribute is named
-    the same on both.
+    `ollama_held` always passes its own `show`, so this never reads `target.daemon` there -- a
+    plain `GuidedRun` satisfies it all the same, since the attribute is named the same on both.
     """
     if installed is None or package is None:
         return False
@@ -259,20 +288,26 @@ def _holds(target: "PullTarget", installed: Sequence[InstalledModel] | None, pac
     return bool(installed_candidates([package], list(installed), look).candidates)
 
 
-def held_identities(run: "GuidedRun", packages: Sequence[Package]) -> frozenset[tuple[str, str, str]]:
-    """The identities of those `packages` the daemon provably holds (`_holds`, one look at `/api/tags`
-    and at most one `/api/show` per name); empty where the inventory cannot be read (U11c)."""
-    installed, _reason = installed_models(run.daemon, run.now)
+def ollama_held(target: "PullTarget | GuidedRun", packages: Sequence[Package]) -> frozenset[tuple[str, str, str]]:
+    """`runtimes.OLLAMA.on_disk`: the identities of those `packages` the daemon provably holds (one
+    look at `/api/tags` and at most one `/api/show` per name); empty where the inventory cannot be
+    read (U11c). `target` is anything with the daemon and the clock (`daemon`, `now`)."""
+    installed, _reason = installed_models(target.daemon, target.now)
     if installed is None:
         return frozenset()
     seen: dict[str, tuple[str | None, str | None]] = {}
 
     def show(name: str) -> tuple[str | None, str | None]:
         if name not in seen:
-            seen[name] = weight_digest(run.daemon, name)
+            seen[name] = weight_digest(target.daemon, name)
         return seen[name]
 
-    return frozenset(package_identity_key(package) for package in packages if _holds(run, installed, package, show))
+    return frozenset(package_identity_key(package) for package in packages if _holds(target, installed, package, show))
+
+
+def held_identities(run: "GuidedRun", packages: Sequence[Package]) -> frozenset[tuple[str, str, str]]:
+    """What the Ollama daemon provably holds of `packages`, read through the table (`OLLAMA.on_disk`)."""
+    return OLLAMA.on_disk(run, packages)
 
 
 def _is_local(target: "PullTarget", first: FirstRow) -> bool:
@@ -281,9 +316,10 @@ def _is_local(target: "PullTarget", first: FirstRow) -> bool:
     A registry package by its manifest digest, a `hf.co/…` name by its name **and** the digest of
     its weight file (`/api/show`). A name the daemon lists without that proof is asked like a
     missing one: the pull brings the registry's build of that name, which for Ollama is an update.
+    Read through the table (`OLLAMA.on_disk`); the inventory is read even without a package.
     """
-    installed, _reason = installed_models(target.daemon, target.now)
-    return _holds(target, installed, first.package)
+    packages = [first.package] if first.package is not None else []
+    return first.package is not None and package_identity_key(first.package) in OLLAMA.on_disk(target, packages)
 
 
 def _wants_pull(target: "PullTarget", question: str) -> bool:

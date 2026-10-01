@@ -50,7 +50,7 @@ from .guided_folder import known_config as _known_config
 from .guided_folder import last_elsewhere
 from .guided_folder import looks_like_results_folder as _looks_like_results_folder
 from .guided_folder import remember_folder as _remember_folder
-from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, pull_step
+from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, other_runtimes_held, pull_step
 from .pull_other import KEY as PULL_OTHER_KEY, QUESTION as PULL_OTHER_QUESTION
 from .pull_other import eligible_other_machines, pull_other_step
 from .pull_choice import ambiguous_names, run_packages
@@ -714,7 +714,8 @@ def _render_step(
     # A3 (AP9-FR): the other machines `pull_other_step` will list a row for, after this table --
     # computed once, here, so the note under a table and the list that may follow never disagree.
     other_machines = eligible_other_machines(document, here, context.ambiguous)
-    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines, ssh_active=run.ssh_active)
+    view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines,
+                   ssh_active=run.ssh_active, packages=context.packages, held=other_runtimes_held(run, context))
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 

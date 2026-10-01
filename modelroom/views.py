@@ -11,9 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
-from .contracts import Area, Fit, Rating
+from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
@@ -23,7 +23,7 @@ from .ranking_words import EACH_MACHINE_SENTENCE, key_pieces, several_ranked, sh
 from .render import format_header_line
 from .room import Disk, LiveRoom
 from .room_head import LOADED_LABEL, ROOM_LABEL, head_pieces, loaded_pieces, reserve_hint_rows
-from .views_install import INSTALL_LABEL, install_lines, install_target  # noqa: F401 -- `install_target` is re-exported
+from .views_install import INSTALL_LABEL, install_lines, install_target, over_ranks_on_machine  # noqa: F401 -- `install_target` is re-exported
 from .result_card import _DASH, _folder_is_empty, _model_name, context_fact, context_short, empty_card
 from .result_card import relative_path, result_card
 from .scenario_text import document_scenario, load_hint, never_measured, scenario_line, unused_measurements
@@ -548,6 +548,8 @@ class RunView:
     origins: Mapping[str, str] = field(default_factory=dict)
     pull_other_machines: frozenset[str] = frozenset()
     ssh_active: str | None = None  # FR-B1, B5: the `room` line names this one by its alias
+    packages: Sequence[Package] = ()  # the run's packages: the install line's runtime (`views_install`)
+    held: Mapping[str, frozenset] = field(default_factory=dict)  # what each runtime but Ollama holds itself
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -560,14 +562,15 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     lines += _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
     lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash) + reserve_hint_rows(block))
-    lines += _disk_lines(block, _disk(block, view), dash)
+    lines += _disk_lines(block, _disk(block, view), dash, _over(block, view))
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
         lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
-    return lines + install_lines(block, view.install_for, view.ambiguous, _disk(block, view), dash, view.pull_other_machines)
+    disk = _disk(block, view)
+    return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view))
 
 
 def _disk(block: MachineRanking, view: RunView) -> Disk | None:
@@ -576,10 +579,21 @@ def _disk(block: MachineRanking, view: RunView) -> Disk | None:
     return None if live is None else live.disk
 
 
-def _disk_lines(block: MachineRanking, disk: Disk | None, dash: str) -> list[Line]:
+def _held(block: MachineRanking, view: RunView) -> Mapping[str, frozenset] | None:
+    """What each runtime but Ollama holds, for the machine this run is on only (`RunView.held`)."""
+    return view.held if block.machine == view.install_for else None
+
+
+def _over(block: MachineRanking, view: RunView) -> list[int]:
+    """The ranks of the rows no runtime of the machine can take within the free disk, each runtime
+    with its own holding (`views_install.over_ranks_on_machine`)."""
+    return over_ranks_on_machine(block, _disk(block, view), view.packages, _held(block, view))
+
+
+def _disk_lines(block: MachineRanking, disk: Disk | None, dash: str, over: list[int] | None = None) -> list[Line]:
     """The red `disk` line under `memory` (U11): the rows whose download does not fit the free disk,
     broken before what to do where it passes the width."""
-    text = disk_words(block, disk, dash, glyphs().cross)
+    text = disk_words(block, disk, dash, glyphs().cross, over)
     if text is None:
         return []
     head, sep, tail = text.partition(" -- ")
@@ -615,10 +629,10 @@ def _terminal_ranking(
     else:
         lines.append([("", _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))])
         lines.append([("", _terminal_rule())])
-        disk = _disk(block, view)
+        over_ranks = set(_over(block, view))
         for entry in block.ranked:
             # A download larger than the free disk: ` ×` behind it, and the whole row on the house red (U11).
-            over = entry_over_disk(entry, disk)
+            over = entry.rank in over_ranks
             download = f"{entry.weights_gib:.1f} GB" + (f" {glyphs().cross}" if over else "")
             cells = [str(entry.rank), _model_name(entry), _package_cell(entry), fit_word(entry.fit.fit_class, entry.fit.mode)]
             cells += [_terminal_speed(entry, dash), f"{entry.fit.need_gib:.1f} GB", download]
