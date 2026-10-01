@@ -93,6 +93,19 @@ def runtime_names(profile: HardwareProfile | None, live: object = None) -> str |
     return " · ".join(runtime.name for runtime in runtimes.RUNTIMES if runtime.key in present)
 
 
+def runtime_set_line(profile: HardwareProfile | None, live: object = None) -> str | None:
+    """The `runtime` row as `views` draws it today (Codex r8): the runtimes of the machine
+    (`runtime_names`, profile plus live detection -- the set alone) and the profile's own words.
+    The live states (`runtime_line`, `_vllm_state`) wait for AP9-SV2-I/R and are not called."""
+    names = runtime_names(profile, live)
+    if names is None:
+        return None
+    # `(from its profile)` only where the profile alone names every runtime of the set: one known
+    # only from this run's live reading drops it -- the set stands alone, no state word (Fix r8).
+    from_profile = runtimes.present_runtimes(profile, live) == runtimes.present_runtimes(profile, None)
+    return f"{names} {_PROFILE_ONLY}" if from_profile else names
+
+
 def runtime_line(profile: HardwareProfile | None, live: object = None, served_matches_run: bool = False) -> str | None:
     """The `runtime` row under a machine's head (F4, F5): `None` where the machine has no vLLM at
     all, else its runtimes (`runtime_names`) and vLLM's state.
@@ -172,6 +185,7 @@ __all__ = [
     "packager_cell",
     "runtime_line",
     "runtime_names",
+    "runtime_set_line",
     "shown_entries",
     "unequal_cards_note",
     "vllm_shown",

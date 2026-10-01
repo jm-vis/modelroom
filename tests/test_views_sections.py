@@ -345,6 +345,48 @@ def test_an_old_profile_with_vllm_detected_live_reads_as_one_that_remembers_it(p
     assert old_markdown == remembered_markdown
 
 
+_STATE_WORDS = ("serving", "installed, not serving")
+
+
+def test_a_live_reading_names_no_state_even_for_a_package_past_the_first_ten():
+    """Codex r8-1: the live reading decides the runtime set alone -- no state words
+    (AP9-SV2-I/R's). Eleven vLLM packages, the served one is the eleventh and not shown: the
+    `runtime` row still says only what a remembered vLLM says, never `serving another model`."""
+    from modelroom.vllm_server import ServedModel
+
+    packages = [_awq_of(index) for index in range(11)]
+    live = {"server": ServedModel(id="acme10/Qwen3-8B-AWQ", root="acme10/Qwen3-8B-AWQ", max_model_len=32768)}
+    document = _render(_vllm_only_profile(), [_base_model()], packages, live_vllm=live)
+    assert len(document.machines[0].ranked) == 10
+
+    _markdown, terminal = _views(document, live)
+    assert "runtime   vLLM (from its profile)" in terminal
+    assert not any(words in terminal for words in _STATE_WORDS)
+
+
+@pytest.mark.parametrize("live", ["asks for an API key", "the model list did not read"], ids=["key", "error"])
+def test_a_key_prompt_or_a_read_error_is_never_installed_not_serving(live):
+    """Codex r8-2: a remembered vLLM and a live answer that is no served model -- nothing about
+    whether a server runs can be read from that, so the row stays as the profile says it."""
+    document = _render(_profile(), [_base_model()], [_gguf_package(), _awq_of(0)], live_vllm={"server": live})
+
+    _markdown, terminal = _views(document, {"server": live})
+    assert "runtime   Ollama · vLLM (from its profile)" in terminal
+    assert not any(words in terminal for words in _STATE_WORDS)
+
+
+def test_a_runtime_known_only_live_drops_the_profile_words():
+    """Fix r8: `(from its profile)` only where every runtime named came from the profile. An old
+    profile and vLLM detected live: the set alone, no `profile`, no state word."""
+    live = {"server": _served()}
+    _markdown, terminal = _views(_render(_profile_without_field(), [_base_model()], [_gguf_package(), _awq_of(0)], live_vllm=live), live)
+
+    row = next(line for line in terminal.splitlines() if line.startswith(" runtime"))
+    assert row == " runtime   Ollama · vLLM"
+    _markdown, remembered = _views(_render(_profile(), [_base_model()], [_gguf_package(), _awq_of(0)]))
+    assert " runtime   Ollama · vLLM (from its profile)" in remembered.splitlines()
+
+
 def test_an_old_profile_without_live_vllm_keeps_its_head_word_for_word():
     """The counter-proof: no live reading, no vLLM -- the head says `for models`, as before AP9-SV2."""
     _markdown, terminal = _views(_render(_profile_without_field(), [_base_model()], [_gguf_package(), _awq_of(0)]))

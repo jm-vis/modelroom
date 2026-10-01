@@ -16,7 +16,7 @@ from typing import Mapping, Sequence
 from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
-from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_line, shown_entries, unequal_cards_note
+from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_set_line, unequal_cards_note
 from .views_runtime import vllm_pool_pieces, vllm_shown, vllm_table
 from .views_sections import ALTERNATIVES, runtime_sections, section_title
 from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noqa: F401 -- moved (size guard, F5)
@@ -619,12 +619,11 @@ def _runtime_lines(block: MachineRanking, view: RunView) -> list[Line]:
     Ollama-only table draws exactly what it drew before AP9-SV2.
 
     The runtime set is the render's own (`RunView.live_vllm`, Codex r7): a vLLM this run detected
-    live on an old profile is named here as its rows and its head name it. A served model counts as
-    this run's where one of the block's rows is its repository; `modelroom render` reads no server.
+    live on an old profile is named here as its rows and its head name it. The live reading decides
+    that set and nothing else (Codex r8): no state words -- `serving`, `installed, not
+    serving` are AP9-SV2-I/R's (`views_runtime.runtime_line`, not called here).
     """
-    live = view.live_vllm.get(block.machine)
-    repos = {entry.package_identity[1] for entry in shown_entries(block)}
-    text = runtime_line(block.profile, live, served_matches_run=getattr(live, "root", None) in repos)
+    text = runtime_set_line(block.profile, view.live_vllm.get(block.machine))
     if text is None:
         return []
     texts = [text]
