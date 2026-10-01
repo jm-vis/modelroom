@@ -455,25 +455,31 @@ def test_the_document_counts_a_tensor_package_once_any_shown_machine_has_vllm():
     assert package_identity_key(_tensor_package()) not in seen_on["workstation"]
 
 
-def test_a_resolved_tensor_package_is_ranked_on_a_machine_with_vllm():
+def test_a_resolved_tensor_package_ranks_on_a_machine_with_vllm():
     """The counter-proof: the same package, the same machine, only `runtimes` now names `vllm` --
-    the tensor package reaches eligibility (it still ranks or is set aside like any other
-    package from here; no runtime of AP9-SV2-L accepts it yet, so it is `not covered`, not a
-    table row -- that wiring is AP9-SV2-F's)."""
+    the tensor package reaches eligibility and, since AP9-SV2-F, is judged by a real fit
+    (`fit_vllm.vllm_fit_as_fit`, through `VLLM.accepts`/`VLLM.fit`) and takes its place in the
+    ranking like any GGUF row, carrying `Fit.runtime == "vllm"`. A single 11.94 GiB card and no
+    known head count (`tensor_parallel_size`'s own `t = 1`) gives it `ample` ahead of the GGUF
+    row's `fits` here (ADR 0009: graphics memory first, then the least compression that fits)."""
     gguf = _hf_package()
     profile_with_vllm = _profile()
     profile_with_vllm = profile_with_vllm.model_copy(update={"runtimes": ["ollama", "vllm"]})
 
     document = _document([gguf, _tensor_package()], profiles={"workstation": _ready(profile_with_vllm)})
 
-    identities = {tuple(entry.package_identity) for entry in document.machines[0].not_covered}
-    assert package_identity_key(_tensor_package()) in identities
+    ranked = {tuple(entry.package_identity): entry for entry in document.machines[0].ranked}
+    tensor_identity = package_identity_key(_tensor_package())
+    assert tensor_identity in ranked
+    assert ranked[tensor_identity].fit.runtime == "vllm" and ranked[tensor_identity].fit.fit_class == "ample"
+    assert document.machines[0].not_covered == [] and document.machines[0].no_fit == []
 
 
 def test_a_tensor_package_is_visible_through_live_detection_alone():
     """`runtimes.machine_has_vllm`'s other source: `live_vllm`, keyed by machine, needs no stored
     `runtimes` at all -- only `build_render_document` reads it (`render_with_config`/the guided
-    mode's own render step thread it through unchanged)."""
+    mode's own render step thread it through unchanged). AP9-SV2-F: visible also means judged by a
+    real fit now, so the package ranks (as in the counter-proof above), not just `not_covered`."""
     from modelroom.vllm_server import ServedModel
 
     gguf = _hf_package()
@@ -488,8 +494,10 @@ def test_a_tensor_package_is_visible_through_live_detection_alone():
         live_vllm={"workstation": ServedModel(id="acme/Nova-8B", root="acme/Nova-8B", max_model_len=4096)},
     )
 
-    identities = {tuple(entry.package_identity) for entry in document.machines[0].not_covered}
-    assert package_identity_key(_tensor_package()) in identities
+    ranked = {tuple(entry.package_identity): entry for entry in document.machines[0].ranked}
+    tensor_identity = package_identity_key(_tensor_package())
+    assert tensor_identity in ranked
+    assert ranked[tensor_identity].fit.runtime == "vllm"
 
 
 def test_live_vllm_of_another_machine_does_not_leak_into_this_ones_table():

@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .config import Configuration
-from .contracts import Package, SchemaVersionError
+from .contracts import Fit, Package, SchemaVersionError
 from .dialog import Choice
-from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VllmFit, largest_card, vllm_fit
+from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VLLM_RUNTIME_OVERHEAD_GIB
 from .guided_context import machine_checked
 from .guided_loadtest import local_measure_target
 from .intro import Fact
@@ -46,10 +46,11 @@ NOT_A_PACKAGE = "no package of this folder"
 NOT_MEASURED = "not measured in this run"
 REVISION_LINE = "revision unknown (not stated)"
 NOTHING_WRITTEN_LINE = "identity stated by the server; not ranked, nothing written"
-# Why there is no fit: `guided_context.machine_checked` found no profile the fit may compute for
-# (not bound, blocked, or named by no machine of the configuration), or one without a card.
+# Why there is no fit: `guided_context.machine_checked` found no profile the fit may compute for at
+# all (not bound, blocked, or named by no machine of the configuration). A profile that is bound but
+# cannot serve this package (no card, shared memory, ...) says why through `fit.reason` instead
+# (AP9-SV2-F: `runtimes.fit_for`'s own guards, the same words a render's own row would carry).
 NO_PROFILE_REASON = "this machine has no profile in this folder a fit may compute for"
-NO_CARD_REASON = "the profile of this machine names no graphics card"
 # What is left of 100 columns for the note of a card row (`views.result_card`).
 CARD_NOTE_WIDTH = 65
 # A note line holds 100 columns minus the screen's leading blank and the note's own indent.
@@ -64,12 +65,14 @@ class VllmOutcome:
     """What step 4 found for the vLLM server: the package, the measurement, the fit, or why not.
 
     `counts` says whether its number counts for this run (AP9-UX E): the served `root` is a model of
-    this run and the server runs this run's context.
+    this run and the server runs this run's context. `fit` is fit contract v1's own `Fit` (AP9-SV2-F,
+    `runtimes.fit_for`), not a vLLM-only shape any more: the number step 4 shows is the very one a
+    render of this folder would compute for the same row (one calculation, one truth).
     """
 
     package_reason: str | None = None
     measurement: VllmMeasurement | None = None
-    fit: VllmFit | None = None
+    fit: Fit | None = None
     fit_reason: str | None = None
     counts: bool = True
 
@@ -151,8 +154,16 @@ def run_models(run: "GuidedRun", snapshot) -> tuple[str, ...]:
 
 
 def not_counting_reason(served: ServedModel, models: tuple[str, ...], context: int, matched: Package | str) -> str | None:
-    """The first reason, in order, why the number will not count or has no fit; `None` where it counts with a fit."""
-    if served.root not in models:
+    """The first reason, in order, why the number will not count or has no fit; `None` where it counts with a fit.
+
+    AP9-SV2-F (F2, matching step 4 against the base model): compared against the run's chosen
+    models first through `matched` -- its `base_model_hf_repo` where the server's statement resolved
+    to exactly one package of this folder, `served.root` itself otherwise (no package, or more than
+    one revision, named no base model of its own). A served `Qwen/Qwen3-8B-AWQ` of a chosen
+    `Qwen/Qwen3-8B` counts here, even though `served.root` itself names neither.
+    """
+    effective = matched.base_model_hf_repo if isinstance(matched, Package) else served.root
+    if effective not in models:
         return f"{_OTHER_MODEL}{_name(served.root)}, this run chose {names_words([_name(model) for model in models])}"
     if served.max_model_len != context:
         return _OTHER_CONTEXT.format(server=context_tokens_text(served.max_model_len), run=context_tokens_text(context))
@@ -266,35 +277,43 @@ def measurement_lines(measurement: VllmMeasurement, dash: str) -> list[str]:
 
 def _fit(
     run: "GuidedRun", config: Configuration, results_dir: Path, package: Package, base_models: list, scenario: Scenario
-) -> tuple[VllmFit | None, str | None]:
-    """The fit on the largest card of the profile this machine is bound to, or the reason there is none."""
+) -> tuple[Fit | None, str | None]:
+    """The fit of the profile this machine is bound to, through the one calculation every row of a
+    render uses (`runtimes.fit_for`, AP9-SV2-F, one calculation and one truth) -- step 4 never
+    computes a vLLM fit of its own any more, so its number and a render's own row can never
+    disagree. `None` with the reason where no profile is bound here at all (nothing to compute
+    against) or where `runtimes.fit_for` itself judges the package `unknown` (F1's own guards: no
+    graphics card, shared memory, an incomplete package, a context beyond the model's window)."""
+    from .runtimes import fit_for  # deferred: runtimes.py imports this module at load time (a cycle)
+
     checked = machine_checked(run.pointer_path, config, results_dir)
-    card = largest_card(checked.profile) if checked.profile is not None else None
-    if card is None:
-        reason = NO_CARD_REASON if checked.profile is not None else NO_PROFILE_REASON
+    if checked.profile is None or checked.machine_config is None:
+        reason = NO_PROFILE_REASON
         run.screen.note(f"no vLLM fit: {reason}")
         return None, reason
     base = next((spec for spec in base_models if spec.hf_repo == package.base_model_hf_repo), None)
-    weights = sum(file.size_bytes for file in package.files if file.role in ("weights", "weights_shard"))
-    fit = vllm_fit(
-        card,
-        weights,
-        context=scenario.context_requested,
-        requests=scenario.requests,
-        architecture=base.architecture if base is not None else None,
-    )
+    if base is None:
+        run.screen.note(f"no vLLM fit: {NO_PROFILE_REASON}")
+        return None, NO_PROFILE_REASON
+    fit = fit_for(checked.profile, package, base, scenario, checked.machine_config)
+    if fit.fit_class == "unknown":
+        run.screen.note(f"no vLLM fit: {fit.reason}")
+        return None, fit.reason
     for line in fit_lines(fit):
         run.screen.note(line)
     return fit, None
 
 
-def fit_lines(fit: VllmFit) -> list[str]:
-    """The three notes of a vLLM fit: the card, the three parts of its budget, and the requests it holds."""
+def fit_lines(fit: Fit) -> list[str]:
+    """The three notes of a vLLM fit: the cards, the three parts of its budget, and the requests it
+    holds -- `fit.cards` is `t` (F1), so a single card reads exactly as SV1's own line did."""
+    card_gib = (fit.pool_gib + fit.reserve_gib) / fit.cards
+    cards_word = "card" if fit.cards == 1 else "cards"
     basis = ", from size" if fit.basis == "size" else ""
     return [
-        f"vLLM fit, computed: one card of {fit.card_gib:.2f} GiB, {VLLM_GPU_MEMORY_UTILIZATION} of it for vLLM",
-        f"weights {fit.weights_gib:.2f} GiB, runtime {fit.runtime_gib:.2f} GiB (one recording), "
-        f"KV cache {fit.kv_gib:.2f} GiB",
+        f"vLLM fit, computed: {fit.cards} {cards_word} of {card_gib:.2f} GiB, {VLLM_GPU_MEMORY_UTILIZATION} of each for vLLM",
+        f"weights {fit.weights_gib:.2f} GiB, runtime {fit.cards * VLLM_RUNTIME_OVERHEAD_GIB:.2f} GiB "
+        f"({fit.cards} {cards_word}, one recording), KV cache {fit.kv_gib:.2f} GiB",
         f"{requests_words(fit.at_once)} of context {context_tokens_text(fit.context)} at once{basis}: "
         f"{fit.fit_class.replace('_', ' ')}",
     ]

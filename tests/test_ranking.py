@@ -312,6 +312,60 @@ def test_latest_and_unknown_age_rank_by_size_alone():
     assert _bases(ranking) == [NOVA_BIG, "acme/Nova-7B"]
 
 
+def _vllm_package(quant: str, n: int, *, base: str = NOVA_BIG, size: int = 5_000_000_000) -> Package:
+    """A Hugging Face tensor package (AP9-SV2-F): `_package` builds GGUF; this is vLLM's own shape."""
+    payload = copy.deepcopy(EXAMPLES["Package"])
+    payload.update(
+        repo=f"RedHatAI/{base.split('/')[1]}-{quant}",
+        base_model_hf_repo=base,
+        format="tensor",
+        files=[{"name": "model.safetensors", "role": "weights", "size_bytes": size, "digest": _digest(n)}],
+        quantization=quant,
+        quantization_source="config",
+    )
+    return Package.model_validate(payload)
+
+
+def _vllm_fit(fit_class: str) -> Fit:
+    payload = copy.deepcopy(EXAMPLES["Fit"])
+    payload.update(fit_class=fit_class, context=8192, context_assumed=False, mode="gpu_split", runtime="vllm", cards=4, at_once=20)
+    return Fit.model_validate(payload)
+
+
+def test_vllm_rows_rank_by_adr_0009_between_gguf_rows():
+    """AP9-SV2-F: a vLLM row's `Fit.runtime` plays no part in ADR 0009's rule -- graphics memory,
+    size, then the least compression that fits orders a Hugging Face tensor row exactly like a
+    GGUF one of the same model: FP8 (least compressed of the three) before AWQ before Q4_K_M."""
+    fp8 = _vllm_package("FP8", 500)
+    awq = _vllm_package("AWQ", 501)
+    q4 = _of(NOVA_BIG, "Q4_K_M", 502)  # a GGUF row of the very same base model
+
+    ranking = rank_packages(
+        [(fp8, _vllm_fit("ample")), (awq, _vllm_fit("ample")), (q4, _fit("ample"))], [], default_scenario(), models=FACTS
+    )
+
+    assert [(r.package.format, r.package.quantization, r.fit.runtime) for r in ranking.ranked] == [
+        ("tensor", "FP8", "vllm"),
+        ("tensor", "AWQ", "vllm"),
+        ("gguf", "Q4_K_M", "ollama"),
+    ]
+
+
+def test_the_runtime_only_breaks_a_tie_of_an_otherwise_identical_package_identity():
+    """`ranking.py`'s last key, extended for AP9-SV2-F: two rows of the very same package identity
+    differ only by which runtime's row they are -- the runtime key alone decides their order, a
+    case today's one-runtime-per-format world never produces outside this direct test."""
+    from modelroom.ranking import _sort_key
+
+    package = q4 = _of(NOVA_BIG, "Q4_K_M", 510)
+    facts = FACTS[NOVA_BIG]
+    ollama_key = _sort_key(package, _fit("ample"), None, facts)
+    vllm_key = _sort_key(package, _vllm_fit("ample"), None, facts)
+
+    assert ollama_key[:-1] == vllm_key[:-1]  # every earlier step of the rule agrees
+    assert ollama_key[-1] < vllm_key[-1]  # "ollama" sorts before "vllm", alphabetically, as a tie-break only
+
+
 def test_the_best_package_of_a_model_is_the_first_under_the_whole_key():
     on_card, in_ram = _of(NOVA_BIG, "Q4_K_M", 190), _of(NOVA_BIG, "Q8_0", 191)
     other = _of(NOVA_SMALL, "Q8_0", 192)

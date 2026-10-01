@@ -28,12 +28,27 @@ import math
 from dataclasses import dataclass
 
 from .architecture import kv_token_bytes, state_bytes
-from .contracts import Architecture
+from .contracts import Architecture, BaseModelSpec, Fit, Package
 from .fit import GIB, KV_PER_TOKEN_SIZE_BASIS
-from .profile import HardwareProfile
+from .fit import unknown_fit as _unknown_fit
+from .measurements import Scenario
+from .profile import GpuAdapter, HardwareProfile, fit_block_reason
 
 VLLM_GPU_MEMORY_UTILIZATION = 0.92
 VLLM_RUNTIME_OVERHEAD_GIB = 1.50
+
+# F1: the largest power of two of 1, 2, 4, 8 modelroom will ever ask vLLM to split a model's
+# weights over -- a simplification of this package, not a limit vLLM itself has.
+TENSOR_PARALLEL_SIZES: tuple[int, ...] = (8, 4, 2, 1)
+# Cards within 1 % of the largest are "the same size" for the grouping that chooses `t` (F1).
+EQUAL_CARD_TOLERANCE = 0.01
+
+NO_HEAD_COUNT_REASON = "tensor parallel needs the model's head count; computed on one card"
+NO_CARD_REASON = "vLLM needs a graphics card"
+SHARED_MEMORY_REASON = "vLLM does not run on shared memory"
+INCOMPLETE_PACKAGE_REASON = "only a complete package is judged"
+ZERO_WEIGHT_REASON = "a weight file has no size"
+_WEIGHT_ROLES = ("weights", "weights_shard")
 
 
 @dataclass(frozen=True)
@@ -115,13 +130,174 @@ def largest_card(profile: HardwareProfile) -> float | None:
     return max(sizes) if sizes else None
 
 
+# --- AP9-SV2-F: tensor parallel over several cards, as a `Fit` (`vllm_fit_as_fit`) -----------------
+
+
+@dataclass(frozen=True)
+class CardGroup:
+    """The cards tensor parallel may split a model over (F1): the equal-size group, in profile
+    order, and how many smaller cards of the same profile were left out of it."""
+
+    cards: tuple[GpuAdapter, ...]
+    left_out: int
+
+
+def equal_size_group(profile: HardwareProfile) -> CardGroup:
+    """The cards of `profile` within 1 % of the largest (F1): the group tensor parallel splits a
+    model over. Unequal cards outside it are left out, not mixed in."""
+    sizes = [gpu.vram_gib for gpu in profile.gpus]
+    if not sizes:
+        return CardGroup((), 0)
+    largest = max(sizes)
+    group = tuple(gpu for gpu in profile.gpus if largest - gpu.vram_gib <= largest * EQUAL_CARD_TOLERANCE)
+    return CardGroup(group, len(profile.gpus) - len(group))
+
+
+def tensor_parallel_size(group_size: int, num_attention_heads: int | None) -> tuple[int, str | None]:
+    """`t` (F1): the largest power of two of `TENSOR_PARALLEL_SIZES` that is at most `group_size`
+    cards and divides `num_attention_heads` evenly. `1` with `NO_HEAD_COUNT_REASON` where the head
+    count is unknown -- the one case `t` itself carries a reason; a computed `t` above one needs
+    none. `group_size` is assumed at least 1 (a caller with no card never reaches this)."""
+    if num_attention_heads is None:
+        return 1, NO_HEAD_COUNT_REASON
+    for size in TENSOR_PARALLEL_SIZES:
+        if size <= group_size and num_attention_heads % size == 0:
+            return size, None
+    return 1, None  # unreachable: 1 always divides and group_size is at least 1 here
+
+
+def _per_token_bytes(architecture: Architecture | None, cards: int) -> tuple[float, str]:
+    """The 16-bit KV cache of one token in bytes, split over `cards` (F2, Assumption A2): the whole
+    model's own `kv_token_bytes` divided by `min(cards, num_key_value_heads)` -- fewer KV heads
+    than cards means the heads replicate rather than split any further. The size basis carries no
+    head count to split by, so it stays `cards`-independent, as SV1 already had it."""
+    per_token = kv_token_bytes(architecture) if architecture is not None else None
+    if per_token is None:
+        return float(KV_PER_TOKEN_SIZE_BASIS), "size"
+    divisor = min(cards, architecture.num_key_value_heads)
+    return per_token / divisor, "architecture"
+
+
+def _package_guard(package: Package) -> str | None:
+    """Fit v1's own two guards before any formula runs (`fit.py:141-145`/`:226-231`), in the same
+    wording: no complete set of weight files is no size to compute with, whatever the runtime."""
+    if not package.complete:
+        return INCOMPLETE_PACKAGE_REASON
+    if any(f.size_bytes == 0 for f in package.files if f.role in _WEIGHT_ROLES):
+        return ZERO_WEIGHT_REASON
+    return None
+
+
+def _tokens_text(context: int) -> str:
+    """A window as a reader keeps it: `32k` in whole thousands, else the number (`fit._tokens_text`)."""
+    return f"{context // 1024}k" if context % 1024 == 0 else f"{context} tokens"
+
+
+def vllm_fit_as_fit(
+    profile: HardwareProfile,
+    package: Package,
+    base_model: BaseModelSpec,
+    scenario: Scenario,
+    machine_config: object,
+) -> Fit:
+    """vLLM's fit (F1, F2) in fit contract v1's own `Fit` shape, so the rank, the document and the
+    table read it exactly as they read an Ollama row -- this is `runtimes.VLLM.fit`, the one place
+    this is called from (`runtimes.fit_for`, in turn read by `render._machine_block` and, through
+    it, `guided_vllm._fit`: one calculation, one truth).
+
+    Guarded the same way fit v1 itself is guarded, in the same order and the same words: a blocked
+    profile (`profile.fit_block_reason`, mirroring `fit.compute_fit_v2`'s own first check), an
+    incomplete package or a weight file of size 0 (`fit.py:141-145`), a known context window
+    smaller than the scenario's (`fit.py:226-231`) -- `unknown_fit` either way, so a reader of the
+    ranked document cannot tell a vLLM package's guard from a GGUF one's. Then the graphics gate
+    (F1): unified memory never runs vLLM, and a machine with no card at all gets no row -- both
+    `not_covered` (fit class `unknown`), never `no_fit`. `machine_config` is read by every other
+    runtime's `fit` (the configured VRAM reserve); vLLM's own 0.92 share already is that reserve,
+    so this one carries the parameter only to keep `runtimes.Runtime.fit`'s one shape.
+    """
+    group = equal_size_group(profile)
+    guarded = _vllm_guard_reason(profile, package, base_model, scenario, group)
+    if guarded is not None:
+        return _unknown_fit(guarded)
+    return _vllm_formula(group, package, base_model, scenario)
+
+
+def _vllm_guard_reason(
+    profile: HardwareProfile, package: Package, base_model: BaseModelSpec, scenario: Scenario, group: CardGroup
+) -> str | None:
+    """The reason none of F2's formula runs, or `None` where it may (the guard chain of
+    `vllm_fit_as_fit`'s own docstring, split out to keep the one function short)."""
+    blocked = fit_block_reason(profile)
+    if blocked is not None:
+        return blocked
+    guard = _package_guard(package)
+    if guard is not None:
+        return guard
+    window = base_model.architecture.max_context
+    if window is not None and window < scenario.context_requested:
+        return f"context beyond the window of this model ({_tokens_text(window)})"
+    if profile.gpu_state == "unified_memory":
+        return SHARED_MEMORY_REASON
+    if not group.cards:
+        return NO_CARD_REASON
+    return None
+
+
+def _vllm_formula(group: CardGroup, package: Package, base_model: BaseModelSpec, scenario: Scenario) -> Fit:
+    """F2's formula, over the cards `_vllm_guard_reason` already cleared (`group.cards` is not empty)."""
+    cards, _t_reason = tensor_parallel_size(len(group.cards), base_model.architecture.num_attention_heads)
+    chosen = sorted(group.cards, key=lambda gpu: gpu.index)[:cards]
+    card_gib = min(gpu.vram_gib for gpu in chosen)
+    weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
+
+    budget = VLLM_GPU_MEMORY_UTILIZATION * card_gib
+    available_kv_gib = budget - weights_gib / cards - VLLM_RUNTIME_OVERHEAD_GIB
+    available_kv_bytes = math.floor(max(available_kv_gib, 0.0) * GIB)
+    per_token, basis = _per_token_bytes(base_model.architecture, cards)
+    state = state_bytes(base_model.architecture) / cards if basis == "architecture" else 0.0
+    at_once = int(requests_at_once(available_kv_bytes, per_token, scenario.context_requested, state))
+
+    # `Fit.kv_gib`, like Ollama's own, is the KV cache the ranking's `requests` x `context` need --
+    # never the leftover budget above (which can be negative): the same forward computation as
+    # `fit._architecture_kv_gib`, so both runtimes' rows read the field the same way (ADR 0009).
+    kv_needed_gib = (per_token * scenario.context_requested + state) * scenario.requests / GIB
+    return Fit(
+        fit_class=vllm_fit_class(at_once, scenario.requests, basis),
+        mode="gpu" if cards == 1 else "gpu_split",
+        need_gib=weights_gib + cards * VLLM_RUNTIME_OVERHEAD_GIB + kv_needed_gib,
+        weights_gib=weights_gib,
+        kv_gib=kv_needed_gib,
+        pool_gib=cards * budget,
+        reserve_gib=cards * (card_gib - budget),
+        context=scenario.context_requested,
+        context_assumed=False,
+        basis=basis,
+        reason=None,
+        requests=scenario.requests,
+        runtime="vllm",
+        at_once=at_once,
+        cards=cards,
+    )
+
+
 __all__ = [
+    "EQUAL_CARD_TOLERANCE",
+    "INCOMPLETE_PACKAGE_REASON",
+    "NO_CARD_REASON",
+    "NO_HEAD_COUNT_REASON",
+    "SHARED_MEMORY_REASON",
+    "TENSOR_PARALLEL_SIZES",
     "VLLM_GPU_MEMORY_UTILIZATION",
     "VLLM_RUNTIME_OVERHEAD_GIB",
+    "ZERO_WEIGHT_REASON",
+    "CardGroup",
     "VllmFit",
+    "equal_size_group",
     "kv_per_token_bytes",
     "largest_card",
     "requests_at_once",
+    "tensor_parallel_size",
     "vllm_fit",
+    "vllm_fit_as_fit",
     "vllm_fit_class",
 ]

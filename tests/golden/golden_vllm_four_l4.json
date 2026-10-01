@@ -1,0 +1,208 @@
+{
+  "areas": [
+    {
+      "base_model_hf_repo": "Qwen/Qwen3-8B",
+      "error": null,
+      "last_success": "2026-09-30T08:00:00Z",
+      "packager": "unsloth",
+      "source": "huggingface",
+      "status": "complete"
+    },
+    {
+      "base_model_hf_repo": "Qwen/Qwen3-8B",
+      "error": null,
+      "last_success": "2026-09-30T08:00:00Z",
+      "packager": "RedHatAI",
+      "source": "huggingface",
+      "status": "complete"
+    }
+  ],
+  "base_model_count": 1,
+  "machines": [
+    {
+      "label": "server",
+      "machine": "server",
+      "no_fit": [],
+      "not_covered": [],
+      "profile": {
+        "display_name": "server",
+        "gpu_name": "NVIDIA L4",
+        "gpu_state": "multi_gpu",
+        "gpus": [
+          {
+            "index": 0,
+            "name": "NVIDIA L4",
+            "vram_gib": 22.49,
+            "vram_source": "nvidia-smi"
+          },
+          {
+            "index": 1,
+            "name": "NVIDIA L4",
+            "vram_gib": 22.49,
+            "vram_source": "nvidia-smi"
+          },
+          {
+            "index": 2,
+            "name": "NVIDIA L4",
+            "vram_gib": 22.49,
+            "vram_source": "nvidia-smi"
+          },
+          {
+            "index": 3,
+            "name": "NVIDIA L4",
+            "vram_gib": 22.49,
+            "vram_source": "nvidia-smi"
+          }
+        ],
+        "llmfit_crosscheck": {
+          "ram_physical": {
+            "llmfit_gib": 94.29,
+            "own_gib": 94.29,
+            "status": "confirmed"
+          },
+          "vram": {
+            "llmfit_gib": 89.96,
+            "own_gib": 89.96,
+            "status": "confirmed"
+          }
+        },
+        "llmfit_version": "1.1.16",
+        "machine_class": "unknown",
+        "machine_class_source": "unknown",
+        "origin": "measured",
+        "os_fingerprint": "c3d4e5f607182940",
+        "os_fingerprint_source": "linux_machine_id",
+        "profile_id": "4c7e19a2b5d8f037",
+        "ram_limit_gib": null,
+        "ram_limit_scope": "none",
+        "ram_physical_gib": 94.29,
+        "ram_physical_source": "os",
+        "recorded_at": "2026-09-28T09:14:03Z",
+        "runtimes": [
+          "ollama",
+          "vllm"
+        ],
+        "schema_version": 4,
+        "vram_gib": 89.96,
+        "vram_source": "nvidia-smi"
+      },
+      "ranked": [
+        {
+          "base_model_hf_repo": "Qwen/Qwen3-8B",
+          "fit": {
+            "at_once": 15,
+            "basis": "architecture",
+            "cards": 4,
+            "context": 32768,
+            "context_assumed": false,
+            "fit_class": "fits",
+            "kv_gib": 11.25,
+            "mode": "gpu_split",
+            "need_gib": 22.929746963083744,
+            "pool_gib": 82.7632,
+            "reason": null,
+            "requests": 10,
+            "reserve_gib": 7.196799999999996,
+            "runtime": "vllm",
+            "weights_gib": 5.679746963083744
+          },
+          "format": "tensor",
+          "measurement_group": 1,
+          "measurement_id": null,
+          "note": {
+            "code": "spread_over_graphics_cards",
+            "facts": [
+              "fit.mode",
+              "fit.need_gib",
+              "fit.pool_gib",
+              "fit.reserve_gib",
+              "profile.gpus"
+            ],
+            "origin": "computed",
+            "subject": "package",
+            "text": "Fits into graphics memory spread over 4 cards: it needs about 22.9 GiB of the 82.8 GiB left after the reserve of 1.8 GiB on each card."
+          },
+          "package_context": null,
+          "package_identity": [
+            "huggingface",
+            "RedHatAI/Qwen3-8B-quantized.w4a16",
+            "model.safetensors"
+          ],
+          "packager": "RedHatAI",
+          "provenance": "from_metadata",
+          "quantization": "AWQ",
+          "rank": 1,
+          "speed_tps": null,
+          "weights_gib": 5.679746963083744
+        },
+        {
+          "base_model_hf_repo": "Qwen/Qwen3-8B",
+          "fit": {
+            "basis": "architecture",
+            "context": 32768,
+            "context_assumed": false,
+            "fit_class": "ample",
+            "kv_gib": 45.0,
+            "mode": "gpu_split",
+            "need_gib": 50.650738859176634,
+            "pool_gib": 85.96,
+            "reason": null,
+            "requests": 10,
+            "reserve_gib": 4.0,
+            "weights_gib": 4.68248987197876
+          },
+          "format": "gguf",
+          "measurement_group": 1,
+          "measurement_id": null,
+          "note": {
+            "code": "spread_over_graphics_cards",
+            "facts": [
+              "fit.mode",
+              "fit.need_gib",
+              "fit.pool_gib",
+              "fit.reserve_gib",
+              "profile.gpus"
+            ],
+            "origin": "computed",
+            "subject": "package",
+            "text": "Fits into graphics memory spread over 4 cards: it needs about 50.7 GiB of the 86.0 GiB left after the reserve of 1.0 GiB on each card."
+          },
+          "package_context": null,
+          "package_identity": [
+            "huggingface",
+            "unsloth/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf"
+          ],
+          "packager": "unsloth",
+          "provenance": "from_metadata",
+          "quantization": "Q4_K_M",
+          "rank": 2,
+          "speed_tps": null,
+          "weights_gib": 4.68248987197876
+        }
+      ],
+      "ranked_total": 2,
+      "reason": null,
+      "reserve_ram_gib": 8.0,
+      "reserve_ram_origin": "entered",
+      "reserve_vram_gib": 1.0,
+      "status": "ranked"
+    }
+  ],
+  "package_count": 2,
+  "ranking_rule": "graphics memory before system memory, then every model that is not legacy before a legacy one, then the larger model (parameter count), then the least compression, then measured before unmeasured (a valid comparable measurement), then larger weights, then package identity; the first 10 rows, then every measured package the rule leaves out",
+  "rating_unavailable": null,
+  "ratings": {},
+  "rendered_at": "2026-09-30T08:05:00Z",
+  "requests_origin": null,
+  "scenario": {
+    "context_origin": "entered",
+    "context_requested": 32768,
+    "kv_type": "f16",
+    "kv_type_assumed": true,
+    "requests": 10
+  },
+  "schema_version": 3,
+  "snapshot_run_at": "2026-09-30T08:00:00Z",
+  "users": null
+}

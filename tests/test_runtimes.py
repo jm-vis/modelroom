@@ -79,12 +79,22 @@ def test_each_runtimes_server_is_local_servers_own_entry():
     assert runtimes.VLLM.server is by_key["vllm"]
 
 
-@pytest.mark.parametrize("field", ["detect", "fit", "install_name", "command", "model_place", "on_disk"])
+@pytest.mark.parametrize("field", ["detect", "command", "model_place", "on_disk"])
 def test_every_vllm_field_not_built_yet_fails_loudly_if_called(field):
-    """`VLLM.accepts` refuses every package (below), so none of these runs; a call still fails
-    loudly, naming the package that builds it, rather than guessing quietly."""
+    """AP9-SV2-F: `VLLM.accepts` claims a real package now (below), so `fit` and `install_name` are
+    built and no longer here (`fit_vllm.vllm_fit_as_fit`; `install_name` is `None` on purpose, its
+    own update below) -- every field still unbuilt fails loudly, naming the package that builds it,
+    rather than guessing quietly."""
     with pytest.raises(NotImplementedError, match="AP9-SV2-"):
         getattr(runtimes.VLLM, field)()
+
+
+def test_vllm_install_name_is_none_not_a_loud_failure():
+    """AP9-SV2-F: unlike every other not-yet field, `install_name` is reachable the moment `accepts`
+    claims a real package (`pull_choice.pull_collisions`, over every package a runtime accepts,
+    whatever the machine) -- `None` is a genuine value of its own type ("no safe pull name"),
+    so a vLLM row is simply never offered to pull until AP9-SV2-I gives it a real one."""
+    assert runtimes.VLLM.install_name(_package(format="tensor")) is None
 
 
 # --- accepts: which packages a runtime claims ------------------------------------------------------
@@ -102,19 +112,26 @@ def test_ollama_refuses_a_tensor_package_from_hugging_face():
     assert runtimes.OLLAMA.accepts(_package(format="tensor")) is False
 
 
-def test_vllm_accepts_nothing_yet():
-    """No Tensor package claims a row before the Tensor package class and vLLM's fit exist --
-    `accepts` is `lambda package: False`, on purpose, whatever the package."""
-    assert runtimes.VLLM.accepts(_package(format="tensor")) is False
+def test_vllm_accepts_a_hugging_face_tensor_package():
+    """AP9-SV2-F: the Tensor package class and vLLM's fit now exist -- `accepts` claims exactly the
+    Hugging Face tensor packages SV2-P's search finds, the same predicate visibility already used."""
+    assert runtimes.VLLM.accepts(_package(format="tensor")) is True
+
+
+def test_vllm_refuses_a_gguf_package_and_an_ollama_tensor_package():
+    """GGUF over vLLM stays unoffered (experimental, Brief "Nicht hier"), and an Ollama-packed
+    tensor (MLX) build is not a Hugging Face one -- `VLLM.accepts` claims neither."""
     assert runtimes.VLLM.accepts(_package(format="gguf")) is False
+    mlx = _ollama_package(format="tensor", quantization=None, provenance="unresolved", unresolved_reason="format")
+    assert runtimes.VLLM.accepts(mlx) is False
 
 
 def test_accepting_runtimes_names_ollama_alone_for_a_gguf_package():
     assert [runtime.key for runtime in runtimes.accepting_runtimes(_package(format="gguf"))] == ["ollama"]
 
 
-def test_accepting_runtimes_is_empty_for_a_tensor_package():
-    assert runtimes.accepting_runtimes(_package(format="tensor")) == ()
+def test_accepting_runtimes_names_vllm_alone_for_a_hugging_face_tensor_package():
+    assert [runtime.key for runtime in runtimes.accepting_runtimes(_package(format="tensor"))] == ["vllm"]
 
 
 def test_accepting_runtimes_grows_with_a_second_runtime_monkeypatched_in(monkeypatch):
@@ -139,8 +156,12 @@ def test_fit_for_a_gguf_package_matches_compute_fit_v2_directly():
 def test_fit_for_a_package_no_runtime_accepts_falls_back_to_compute_fit_v2():
     """Render judged every package before the table too -- `compute_fit_v2`'s own `unknown` result
     for a non-gguf package (`fit._package_reason`) -- so the fallback here must say the very same,
-    byte for byte, not a new `not_covered` reason of its own."""
-    package, profile, base_model, scenario = _package(format="tensor"), _profile(), _base_model(), _scenario()
+    byte for byte, not a new `not_covered` reason of its own. AP9-SV2-F: a Hugging Face tensor
+    package is vLLM's now (`accepts`), so the package of "no runtime accepts" here is one of no
+    runtime's own format instead -- `"unknown"`, which `OLLAMA.accepts` refuses (not `"gguf"`, not
+    `source == "ollama"`) and `VLLM.accepts` refuses too (not `"tensor"`)."""
+    package = _package(format="unknown", provenance="unresolved", unresolved_reason="format")
+    profile, base_model, scenario = _profile(), _base_model(), _scenario()
 
     assert runtimes.fit_for(profile, package, base_model, scenario, MACHINE) == compute_fit_v2(
         profile, package, base_model, scenario, MACHINE

@@ -1,0 +1,59 @@
+{
+  "schema_version": 4,
+  "profile_id": "4c7e19a2b5d8f037",
+  "display_name": "server",
+  "os_fingerprint": "c3d4e5f607182940",
+  "os_fingerprint_source": "linux_machine_id",
+  "origin": "measured",
+  "recorded_at": "2026-09-28T09:14:03Z",
+  "ram_physical_gib": 94.29,
+  "ram_physical_source": "os",
+  "ram_limit_gib": null,
+  "ram_limit_scope": "none",
+  "vram_gib": 89.96,
+  "vram_source": "nvidia-smi",
+  "gpu_state": "multi_gpu",
+  "gpu_name": "NVIDIA L4",
+  "gpus": [
+    {
+      "index": 0,
+      "name": "NVIDIA L4",
+      "vram_gib": 22.49,
+      "vram_source": "nvidia-smi"
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA L4",
+      "vram_gib": 22.49,
+      "vram_source": "nvidia-smi"
+    },
+    {
+      "index": 2,
+      "name": "NVIDIA L4",
+      "vram_gib": 22.49,
+      "vram_source": "nvidia-smi"
+    },
+    {
+      "index": 3,
+      "name": "NVIDIA L4",
+      "vram_gib": 22.49,
+      "vram_source": "nvidia-smi"
+    }
+  ],
+  "machine_class": "unknown",
+  "machine_class_source": "unknown",
+  "llmfit_crosscheck": {
+    "ram_physical": {
+      "status": "confirmed",
+      "own_gib": 94.29,
+      "llmfit_gib": 94.29
+    },
+    "vram": {
+      "status": "confirmed",
+      "own_gib": 89.96,
+      "llmfit_gib": 89.96
+    }
+  },
+  "llmfit_version": "1.1.16",
+  "runtimes": ["ollama", "vllm"]
+}

@@ -13,8 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
+from .views_runtime import RUNTIME_LABEL, legend_lines, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
 from .disk_fit import DISK_LABEL, disk_words, entry_over_disk
@@ -199,7 +201,7 @@ def _ranked_row(entry: RankedEntry, document: RenderDocument, disk: Disk | None 
         str(entry.rank),
         _cell(entry.base_model_hf_repo),
         _stars(document.ratings.get(entry.base_model_hf_repo)),
-        _cell(entry.packager),
+        _cell(packager_cell(entry)),
         _cell(entry.quantization),
         _cell(entry.format),
         f"{entry.weights_gib:.2f}",
@@ -220,7 +222,7 @@ def _set_aside_row(entry: SetAsideEntry, document: RenderDocument) -> list[str]:
     return [
         _cell(entry.base_model_hf_repo),
         _stars(document.ratings.get(entry.base_model_hf_repo)),
-        _cell(entry.packager),
+        _cell(packager_cell(entry)),
         _cell(entry.quantization),
         _cell(entry.format),
         f"{entry.weights_gib:.2f}",
@@ -266,7 +268,7 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
             "",
             *([f"{over}.", ""] if over else []),
             *([_cell(" · ".join(repos)), ""] if repos else []),
-            " · ".join(key_pieces(block)),
+            " · ".join(key_pieces(block) + legend_lines(block.ranked)),
             "",
             SPEED_HINT,
             "",
@@ -429,9 +431,10 @@ def _named(names: list[str], room: int) -> str:
 
 
 def _package_cell(entry: RankedEntry) -> str:
-    """`packager · quant`, cut to its column with `…` rather than ending mid-word."""
+    """`<prefix>packager · quant`, cut to its column with `…` rather than ending mid-word (F4:
+    the runtime's own `words.package_prefix`, empty for Ollama)."""
     width = dict(_TERMINAL_COLUMNS)["Package"]
-    text = f"{entry.packager} {glyphs().dot} {entry.quantization}"
+    text = f"{packager_cell(entry)} {glyphs().dot} {entry.quantization}"
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
@@ -479,8 +482,13 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
     reserve. Unified memory computes in mode `gpu` too, but it is no graphics memory of its own:
     those rows say `shared memory` (decided 2026-09-25).
     """
+    # vLLM's rows share `Fit.mode`'s own words (`gpu`/`gpu_split`) with Ollama's, but not its
+    # accounting (a reserved share of each card, not Ollama's single VRAM reserve): they never join
+    # an Ollama piece, and form their own below instead (F4, `views_runtime.vllm_pool_pieces`).
+    ollama_entries = [entry for entry in block.ranked if entry.fit.runtime != runtimes.VLLM.key]
+    vllm_entries = [entry for entry in block.ranked if entry.fit.runtime == runtimes.VLLM.key]
     by_mode: dict[str, list[RankedEntry]] = {}
-    for entry in block.ranked:
+    for entry in ollama_entries:
         by_mode.setdefault(str(entry.fit.mode), []).append(entry)
     shared = block.profile is not None and block.profile.gpu_state == "unified_memory"
     pieces = []
@@ -502,6 +510,7 @@ def _pool_pieces(block: MachineRanking, dash: str) -> list[str]:
         # A statement longer than the room breaks before its bracket, never inside a word.
         head, bracket, rest = text.partition(" (")
         pieces += [head, f"({rest}"] if len(text) > _NOTE_WIDTH and bracket else [text]
+    pieces += vllm_pool_pieces(vllm_entries, dash)
     return pieces
 
 
@@ -568,7 +577,8 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked:
-        lines += _labeled_rows(KEY_LABEL, joined(key_pieces(block), dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
+        key_text = key_pieces(block) + legend_lines(block.ranked)
+        lines += _labeled_rows(KEY_LABEL, joined(key_text, dot=dot, width=_NOTE_WIDTH, indent=0) + [SPEED_HINT])
     disk = _disk(block, view)
     return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view))
 
@@ -617,11 +627,30 @@ def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
     return lines + (_labeled(LOADED_LABEL, loaded, dot) if loaded else [])
 
 
+def _runtime_lines(block: MachineRanking) -> list[Line]:
+    """The `runtime` row under a machine's head (F4): `None`/`[]` for a machine without vLLM, so an
+    Ollama-only table draws exactly what it drew before AP9-SV2.
+
+    `live` is not threaded through `RunView` yet (`runtimes.VLLM.detect` is AP9-SV2-I/R's own), so
+    this reads the machine's remembered profile alone -- the one source `modelroom render` ever
+    has, and still correct, if not live, for a guided run on that same machine (F3).
+    """
+    text = runtime_line(block.profile)
+    if text is None:
+        return []
+    texts = [text]
+    note = unequal_cards_note(block.profile)
+    if note is not None:
+        texts.append(note)
+    return _labeled_rows(RUNTIME_LABEL, texts)
+
+
 def _terminal_ranking(
     block: MachineRanking, scenario: Scenario, dash: str, dot: str, view: RunView, several: bool = False
 ) -> list[Line]:
     origin = view.origins.get(block.machine)
     lines: list[Line] = [[("", _block_head(block, scenario, dot, origin))], *_room_lines(block, view, dot)]
+    lines += _runtime_lines(block)
     if block.reason is not None:
         lines.append([("", block.reason)])
     if not block.ranked:

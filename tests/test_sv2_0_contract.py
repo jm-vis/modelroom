@@ -322,3 +322,42 @@ def test_an_unknown_runtime_key_is_rejected():
     outside `RuntimeKey` (`"ollama" | "vllm"`), which is the rule this test exists to check."""
     with pytest.raises(ValidationError):
         HardwareProfile.model_validate(_profile_payload(runtimes=["lmstudio"]))
+
+
+# --- Fit.runtime / at_once / cards (AP9-SV2-F): additive, excluded at the Ollama default ----------
+
+
+def test_fit_defaults_are_not_written():
+    """Red before AP9-SV2-F: `runtime`, `at_once` and `cards` did not exist on `Fit` at all.
+
+    An Ollama `Fit` (the only kind fit contract v1 ever produced before this sub-package) carries
+    the three fields at their defaults (`"ollama"`, `0`, `1`) and writes none of them -- a render a
+    reader never looks past Ollama with stays byte-identical to 0.1.0's document (ADR 0011's own
+    precedent, the same rule `HardwareProfile.runtimes` follows above)."""
+    payload = json.loads(json.dumps(EXAMPLES["Fit"]))
+    fit = Fit.model_validate(payload)
+
+    assert (fit.runtime, fit.at_once, fit.cards) == ("ollama", 0, 1)
+    dumped = fit.model_dump(mode="json")
+    assert "runtime" not in dumped and "at_once" not in dumped and "cards" not in dumped
+
+
+def test_a_vllm_fit_writes_its_own_runtime_at_once_and_cards():
+    """Red before AP9-SV2-F: the payload below was `extra="forbid"`'s rejection at `a1ca1a2`'s
+    `Fit` (no such fields); now a non-default value of any of the three is written."""
+    payload = json.loads(json.dumps(EXAMPLES["Fit"]))
+    payload.update(runtime="vllm", at_once=15, cards=4)
+    fit = Fit.model_validate(payload)
+
+    dumped = fit.model_dump(mode="json")
+    assert (dumped["runtime"], dumped["at_once"], dumped["cards"]) == ("vllm", 15, 4)
+
+
+def test_an_unknown_fit_runtime_is_rejected():
+    """`Fit.runtime` is checked against `profile.RuntimeKey` at validation time (a deferred import,
+    `contracts_fit.py`'s own docstring): a value outside it is refused the same way `runtimes`
+    refuses `"lmstudio"` above, not silently accepted as a third kind of row."""
+    payload = json.loads(json.dumps(EXAMPLES["Fit"]))
+    payload.update(runtime="lmstudio")
+    with pytest.raises(ValidationError):
+        Fit.model_validate(payload)

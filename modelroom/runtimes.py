@@ -39,6 +39,7 @@ from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package
 from .dialog import Choice
 from .fit import compute_fit_v2
+from .fit_vllm import vllm_fit_as_fit
 from .guided_loadtest import NO_CANDIDATE_LINE, NO_INSTALLED_LINE, installed_note, measure_ollama, ollama_offer, ollama_rows
 from .intro import Fact, daemon_fact
 from .measurements import Scenario
@@ -294,12 +295,23 @@ VLLM = Runtime(
     ),
     detect=_not_built_yet("detect", "AP9-SV2-I/AP9-SV2-R"),
     hello_field="vllm",
-    # No Tensor package claims a row before the Tensor package class and vLLM's fit exist: the
-    # pairing of a package with every runtime that accepts it is built, nothing exercises it for
-    # vLLM until then.
-    accepts=lambda package: False,
-    fit=_not_built_yet("fit", "AP9-SV2-F"),
-    install_name=_not_built_yet("install_name", "AP9-SV2-I"),
+    # AP9-SV2-F: the Tensor package class and vLLM's fit now exist, so vLLM claims exactly the
+    # Hugging Face tensor packages SV2-P's search finds -- the same predicate `shown_only_with`
+    # below already used for visibility (`_huggingface_tensor`), one definition for both questions.
+    # GGUF over vLLM stays unoffered (experimental, out of scope by design): `_huggingface_tensor`
+    # never claims `format == "gguf"`, whatever the package's source.
+    accepts=_huggingface_tensor,
+    fit=vllm_fit_as_fit,
+    # `install_name` returns `None` (a genuine, documented value of its own type: "no safe pull
+    # name") rather than `_not_built_yet`'s loud failure -- unlike every other not-yet field, this
+    # one is now reachable the moment `accepts` claims a real package: `pull_choice.pull_collisions`
+    # and `.ambiguous_names` call `runtime.install_name(package)` over *every* package a runtime of
+    # `RUNTIMES` accepts, independent of which machine (or whether any machine at all) has vLLM --
+    # the comment at `pull_choice.py:93` ("today only Ollama ever accepts a package") no longer
+    # holds once this row's `accepts` is real. SV2-I gives this its own pull name and the `vllm
+    # serve` install line; until then a vLLM row is simply never offered to pull (deliberately out
+    # of scope by design: modelroom does not start vLLM itself).
+    install_name=lambda package: None,
     command=_not_built_yet("command", "AP9-SV2-I"),
     model_place=_not_built_yet("model_place", "AP9-SV2-I"),
     on_disk=_not_built_yet("on_disk", "AP9-SV2-I"),
@@ -412,11 +424,16 @@ def fit_for(
 ) -> Fit:
     """The fit of the first runtime that accepts `package`, or fit contract v1 unchanged where
     none does -- every package a render judges today, GGUF or not, gets exactly one fit
-    (CONTRACTS.md, "Fit contract v1"). Equivalent to calling `compute_fit_v2` unconditionally, as
-    `render.py` did before AP9-SV2-L: `OLLAMA.fit` **is** `compute_fit_v2`, and a package no
-    runtime accepts falls back to it here the same way `compute_fit_v2` already judges it
-    `unknown` on its own (`fit._package_reason`). Not machine-scoped, and one fit per package: a
-    second row of the ranked table for a second runtime, with its own fit, comes with `Fit.runtime`.
+    (CONTRACTS.md, "Fit contract v1"). `OLLAMA.fit` **is** `compute_fit_v2` (equivalent to calling
+    it unconditionally, as `render.py` did before AP9-SV2-L); `VLLM.fit` **is**
+    `fit_vllm.vllm_fit_as_fit` (AP9-SV2-F) for the Hugging Face tensor packages `VLLM.accepts`
+    claims. A package no runtime accepts falls back to `OLLAMA.fit` here the same way
+    `compute_fit_v2` already judges it `unknown` on its own (`fit._package_reason`). Not
+    machine-scoped, and one fit per package: a second row of the ranked table for a second
+    runtime, with its own fit, comes with `Fit.runtime`. The one caller outside `render.py` is
+    `guided_context.fit_texts` (AP9-SV2-F), the step-3 scale, through `fit.count_fitting`'s
+    `fit_function` parameter -- so the scale and the finished ranking never disagree about which
+    runtime judges a package.
     """
     accepting = accepting_runtimes(package)
     runtime = accepting[0] if accepting else OLLAMA

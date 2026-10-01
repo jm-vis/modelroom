@@ -243,9 +243,13 @@ def test_step_4_reads_the_lines_of_the_brief_with_the_vllm_row_picked(tmp_path: 
         "measured vLLM: <n> tok/s total (<n>–<n>), context 4k",
         "per request: <n> tok/s (<n>–<n>)",
         "identity stated by the server; not ranked, nothing written",
-        "vLLM fit, computed: one card of 22.49 GiB, 0.92 of it for vLLM",
-        "weights 0.92 GiB, runtime 1.50 GiB (one recording), KV cache 18.27 GiB",
-        "32 requests of context 4k at once, from size: fits",
+        # AP9-SV2-F: the two equal L4 cards of this profile now carry tensor parallel (`t = 2`,
+        # `Qwen/Qwen2.5-0.5B-Instruct`'s 14 attention heads divide by 2) -- weights and the runtime
+        # overhead split per card, the KV budget doubles; the basis stays `size` (this fetch never
+        # resolves the model's own architecture) so the per-token cost is not halved with it.
+        "vLLM fit, computed: 2 cards of 22.49 GiB, 0.92 of each for vLLM",
+        "weights 0.92 GiB, runtime 3.00 GiB (2 cards, one recording), KV cache 11.25 GiB",
+        "33 requests of context 4k at once, from size: fits",
         "✓ Measurement     vLLM measured",
     ]
 
@@ -256,7 +260,8 @@ def test_the_start_screen_names_the_served_model_and_the_card_its_speed(tmp_path
     assert f"server    vLLM                    context 4096, serves (stated) {QWEN25_REPO}" in [line.strip() for line in lines]
     card = _card(lines)
     assert " server    vLLM                    <n> tok/s total, 20 requests at once, counts for this run" in card
-    assert "                                   identity stated · fit: 32 at once, fits" in card
+    # AP9-SV2-F: tensor parallel over the two equal cards (`t = 2`, see the step-4 assertion above).
+    assert "                                   identity stated · fit: 33 at once, fits" in card
     labels = [line.split()[0] for line in card if line[1:2].strip() and not line.startswith(" ──")]
     assert labels[labels.index("speed") : labels.index("result") + 1] == ["speed", "server", "result"]
 
@@ -331,7 +336,8 @@ def test_an_answer_file_without_the_load_test_answer_measures_nothing(tmp_path: 
     assert [call[1] for call in servers["vllm"].calls] == [MODELS_PATH]
     card = _card(lines)
     assert " server    vLLM                    not measured in this run" in card
-    assert "                                   identity stated · fit: 32 at once, fits" in card
+    # AP9-SV2-F: tensor parallel over the two equal cards (`t = 2`).
+    assert "                                   identity stated · fit: 33 at once, fits" in card
 
 
 def test_without_a_bound_profile_the_server_is_not_offered(tmp_path: Path):
@@ -586,6 +592,39 @@ def test_the_reason_a_number_will_not_count_stands_before_the_question():
     assert lines[1].startswith("Nova-Nova-") and lines[1].endswith(", this run chose Qwen3.5-9B")
 
 
+def test_a_served_awq_of_the_chosen_base_counts():
+    """F2 ("Zuordnung in Schritt 4 über das Basismodell", Codex r1-5): the server states an AWQ
+    build of the chosen base model -- `served.root` itself names neither, but `matched` (a resolved
+    package of this folder) carries the base model's own `base_model_hf_repo`, and that is what is
+    compared against the run's chosen models, not the served repository."""
+    from modelroom.contracts import Package, PackageFile
+    from modelroom.guided_vllm import not_counting_reason
+
+    served = ServedModel(id="Qwen/Qwen3-8B-AWQ", root="Qwen/Qwen3-8B-AWQ", max_model_len=4096)
+    matched = Package(
+        source="huggingface", repo="Qwen/Qwen3-8B-AWQ", revision="a" * 40,
+        base_model_hf_repo="Qwen/Qwen3-8B", format="tensor",
+        files=[PackageFile(name="model.safetensors", role="weights", size_bytes=1, digest=None)],
+        complete=True, quantization="AWQ", quantization_source="config", default_context=None,
+        provenance="from_metadata", unresolved_reason=None, approval=None,
+        observed_at="2026-09-22T09:00:00Z", last_seen="2026-09-22T09:00:00Z", active=True,
+    )
+
+    assert not_counting_reason(served, ("Qwen/Qwen3-8B",), 4096, matched) is None
+
+
+def test_a_served_foreign_model_does_not_count():
+    """The counter-proof: `matched` is a string (no package of this folder names the served root),
+    so the comparison falls back to `served.root` -- a model the run never chose."""
+    from modelroom.guided_vllm import not_counting_reason
+
+    served = ServedModel(id="acme/Other-1B", root="acme/Other-1B", max_model_len=4096)
+
+    reason = not_counting_reason(served, ("Qwen/Qwen3-8B",), 4096, "no package of this folder comes from acme/Other-1B")
+
+    assert reason == "the number will not count: the server serves Other-1B, this run chose Qwen3-8B"
+
+
 def test_the_balance_never_says_measured_when_nothing_counts(tmp_path: Path):
     code, lines = _run(tmp_path, {**ANSWERS, "context": "8192"})
 
@@ -616,7 +655,7 @@ def test_a_measurement_with_a_problem_is_never_measured_in_the_balance(tmp_path:
 
 
 def test_one_request_is_singular(tmp_path: Path):
-    from modelroom.fit_vllm import VllmFit
+    from modelroom.contracts import Fit
     from modelroom.guided_vllm import fit_lines, vllm_rows, VllmOffer
     from modelroom.scenario_text import requests_words
 
@@ -632,9 +671,12 @@ def test_one_request_is_singular(tmp_path: Path):
     from modelroom import guided_context
 
     assert requests_words is guided_context.requests_words  # one definition (Diff-Review N5)
-    fit = VllmFit(
-        card_gib=22.49, weights_gib=1.0, runtime_gib=1.5, kv_gib=10.0, context=4096, requests=1, at_once=1,
-        fit_class="tight", basis="size", budget_gib=20.7, kv_tokens=4096,
+    # AP9-SV2-F: `fit_lines` takes fit contract v1's own `Fit` now (`pool_gib`/`reserve_gib`/`cards`
+    # stand in for `VllmFit`'s `card_gib`/`budget_gib`: `card_gib == (pool_gib + reserve_gib) / cards`).
+    fit = Fit(
+        fit_class="tight", mode="gpu", need_gib=12.5, weights_gib=1.0, kv_gib=10.0, pool_gib=20.7,
+        reserve_gib=1.79, context=4096, context_assumed=False, basis="size", reason=None, requests=1,
+        runtime="vllm", at_once=1, cards=1,
     )
     assert fit_lines(fit)[2].startswith("1 request of context 4k at once")
 
@@ -642,7 +684,10 @@ def test_one_request_is_singular(tmp_path: Path):
 @pytest.mark.parametrize(
     "case, said, identity",
     [
-        ("counts", "counts for this run", "identity stated · fit: 32 at once, fits"),
+        # AP9-SV2-F: tensor parallel over the two equal cards of this profile (`t = 2`); "other
+        # context" (8192) still reads 16 -- its old single-card number, by coincidence of the
+        # halved context against the doubled card count, not because nothing changed.
+        ("counts", "counts for this run", "identity stated · fit: 33 at once, fits"),
         ("other context", "not counted", "identity stated · fit: 16 at once, tight"),
         ("no package", "counts, no fit", "identity stated · no package of this folder"),
     ],

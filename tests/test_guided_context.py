@@ -197,6 +197,87 @@ def test_a_package_whose_base_model_is_unknown_is_not_counted():
     assert count_fitting(_profile(), MACHINE, PACKAGES, {}, 4096) == 0
 
 
+# --- AP9-SV2-F Fix r0b: the scale reads the same fit as the finished ranking, runtime included -----
+#
+# Before this fix `count_fitting` always called `compute_fit_v2` directly: a Hugging Face tensor
+# package is never `format == "gguf"`, so it came back `unknown` and never counted, even on a
+# machine that has vLLM -- a second, poorer decision than the one the ranking itself makes
+# (`runtimes.fit_for`). `guided_context.fit_texts` now passes that very function to
+# `count_fitting`'s `fit_function` parameter, so the two can never disagree again.
+
+
+def _vllm_profile() -> HardwareProfile:
+    """Four equal 22.49 GiB L4 cards, `runtimes: ["ollama", "vllm"]` (AP9-SV2-F's own fixture)."""
+    import json
+
+    data = json.loads((Path(__file__).parent / "fixtures" / "profiles_v4" / "four_l4_server_vllm.json").read_text(encoding="utf-8"))
+    return HardwareProfile.model_validate(data)
+
+
+def _fitting_by_hand_runtime_aware(packages: list[Package], base_models: dict, context: int) -> int:
+    """`_fitting_by_hand`'s own match, but through `runtimes.fit_for` -- the function a render's own
+    row reads, not `compute_fit_v2` alone (which a Hugging Face tensor package never passes)."""
+    from modelroom.runtimes import fit_for
+
+    scenario = context_scenario(context)
+    fits = [(package, fit_for(_vllm_profile(), package, base_models[package.base_model_hf_repo], scenario, MACHINE)) for package in packages]
+    return len(rank_packages(fits, [], scenario).ranked)
+
+
+def test_the_scale_counts_a_fitting_tensor_package_on_a_vllm_machine():
+    package = _tensor_package()  # acme/Nova-8B, 5 GiB BF16 (the module's own tensor fixture)
+    base_models = {"acme/Nova-8B": _base_model(repo="acme/Nova-8B")}
+    checked = _checked(_vllm_profile())
+
+    texts = fit_texts([package], base_models, checked, [32768])
+
+    assert texts[32768] == "all 1 package fit"
+
+
+def test_the_scale_and_the_finished_ranking_agree_on_a_vllm_machine():
+    """The one claim this fix exists for: scale and ranking read the very same number, for the
+    very same input, on a machine with vLLM -- the way `test_every_line_says_how_many_packages_fit_
+    and_agrees_with_the_fit_itself` already proves it for an Ollama-only one."""
+    from modelroom.runtimes import fit_for
+
+    packages = [_tensor_package(), PACKAGES[0]]
+    base_models = {**BY_REPO, "acme/Nova-8B": _base_model(repo="acme/Nova-8B")}
+    checked = _checked(_vllm_profile())
+    contexts = [level.tokens for level in LEVELS]
+
+    texts = fit_texts(packages, base_models, checked, contexts)
+
+    for context in contexts:
+        fitting = _fitting_by_hand_runtime_aware(packages, base_models, context)
+        assert count_fitting(_vllm_profile(), MACHINE, packages, base_models, context, fit_function=fit_for) == fitting
+        if fitting == len(packages):
+            assert texts[context] == "all 2 packages fit"
+        elif fitting == 0:
+            assert texts[context] == "none of 2 packages fits"
+        else:
+            assert texts[context] == f"{fitting} of 2 packages fit"
+
+
+def test_an_ollama_only_machine_still_counts_exactly_as_before():
+    """The counter-proof: a machine without vLLM (`_profile()`, no `runtimes` at all) reads the
+    very same numbers it always did -- `count_fitting`'s default `fit_function` is still
+    `compute_fit_v2`, unchanged, and `fit_texts` only ever reaches a Hugging Face tensor package
+    through `runtimes.visible_packages`, which hides it here in the first place."""
+    contexts = [level.tokens for level in LEVELS]
+
+    texts = fit_texts(PACKAGES, BY_REPO, _checked(_profile()), contexts)
+
+    for context in contexts:
+        fitting = _fitting_by_hand(context)
+        assert count_fitting(_profile(), MACHINE, PACKAGES, BY_REPO, context) == fitting
+        if fitting == len(PACKAGES):
+            assert texts[context] == "all 3 packages fit"
+        elif fitting == 0:
+            assert texts[context] == "none of 3 packages fits"
+        else:
+            assert texts[context] == f"{fitting} of 3 packages fit"
+
+
 # --- which machine the scale is about ---------------------------------------------------------------
 
 

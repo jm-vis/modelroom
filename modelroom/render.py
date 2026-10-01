@@ -4,8 +4,9 @@
 already-loaded `Configuration`, `Snapshot`, one `MachineProfile` per configured machine, that
 profile's measurement records, the ranking `Scenario` and `rendered_at`, computes every fit
 (`runtimes.fit_for`, AP9-SV2-L: the runtime a package's table row belongs to judges it --
-`fit.compute_fit_v2` unconditionally today, since Ollama is still the only runtime that ever
-accepts one) and every ranking (`ranking.rank_packages`), and returns the one object the three
+`fit.compute_fit_v2` for a GGUF or Ollama-library package, `fit_vllm.vllm_fit_as_fit` for a
+Hugging Face tensor one, AP9-SV2-F) and every ranking (`ranking.rank_packages`), and returns the
+one object the three
 writers read: `document_markdown`, `document_json`, `document_terminal`. No I/O anywhere in this
 module -- `modelroom/cli.py::render_with_config` owns the lock, the schema-version gates, reading
 the files and the atomic writes.

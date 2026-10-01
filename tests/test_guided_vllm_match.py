@@ -11,19 +11,22 @@ this mapping. Here the configuration is the one `guided._new_configuration` writ
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 from modelroom.catalog import load_catalog
 from modelroom.config import Configuration
 from modelroom.fetch import run_fetch
-from modelroom.fit_vllm import vllm_fit
+from modelroom.fit_vllm import vllm_fit_as_fit
 from modelroom.guided_contracts import SearchHit
 from modelroom.guided_vllm import match_served
+from modelroom.measurements import Scenario
+from modelroom.profile import HardwareProfile
 from modelroom.search_apply import apply_hits
 from modelroom.vllm_server import ServedModel
 
-from fixture_support import QWEN35_4B_REPO, build_transport, packager_probes, qwen35_4b_transport_mapping
+from fixture_support import FIXTURES, QWEN35_4B_REPO, build_transport, packager_probes, qwen35_4b_transport_mapping
 
 RUN_AT = datetime(2026, 9, 28, 12, 0, 0, tzinfo=timezone.utc)
 SHARDS = (5_329_398_688, 3_990_429_408)  # the two safetensors shards of the public tree
@@ -69,13 +72,19 @@ def test_the_served_model_is_found_through_the_guided_configuration(tmp_path: Pa
     assert weights == sum(SHARDS)
     base = next(spec for spec in snapshot.base_models if spec.hf_repo == QWEN35_4B_REPO)
     assert base.architecture.kind == "hybrid_linear"
-    # The fit through its integration point `guided_vllm._fit` (Codex r1 m9): the profile this folder
-    # binds this machine to is the recorded L4 server, its largest card 22.49 GiB.
+    # The fit through its integration point `guided_vllm._fit` (Codex r1 m9), now `runtimes.fit_for`
+    # itself (AP9-SV2-F, "eine Rechnung, eine Wahrheit"): the profile this folder binds this machine
+    # to is the recorded L4 server, two equal 22.49 GiB cards; the base model's 16 attention heads
+    # divide evenly by 2, so tensor parallel spreads the package over both (`t = 2`).
     fit, reason, notes = _guided_fit(tmp_path.resolve(), config, matched, snapshot.base_models)
-    assert reason is None and fit.basis == "architecture" and fit.card_gib == L4_CARD_GIB
-    assert fit == vllm_fit(L4_CARD_GIB, weights, context=32768, requests=1, architecture=base.architecture)
-    kv_bytes = int(fit.kv_gib * 1024**3)
-    assert fit.at_once == kv_bytes // (32_768 * 32_768 + 52_690_944)
+    assert reason is None and fit.basis == "architecture" and fit.cards == 2
+    profile = HardwareProfile.model_validate(
+        json.loads((FIXTURES / "profiles_v4" / "two_l4_server.json").read_text(encoding="utf-8"))
+    )
+    scenario = Scenario(context_requested=32768, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=1)
+    # The very function `runtimes.fit_for` calls for this row: one calculation, one truth, so a
+    # render of this same folder could never compute anything else for it.
+    assert fit == vllm_fit_as_fit(profile, matched, base, scenario, config.machines["workstation"])
     assert any(f"{fit.at_once} requests of context 32k at once" in note for note in notes)
 
 

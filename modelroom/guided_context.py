@@ -7,10 +7,13 @@ each with its number of tokens, roughly how many words that is, an example of wh
 for, and how many of the packages of this results folder still fit
 the machine being checked. The last column is the whole point of the scale: it is the fit of
 fit contract v1, computed by `fit.count_fitting` over the packages the fetch of this same run
-recorded, against the profile the pointer file binds this machine to for this folder. A level
-the base models cannot even hold is grayed out.
+recorded, against the profile the pointer file binds this machine to for this folder -- through
+`runtimes.fit_for` (AP9-SV2-F, `fit_texts`'s own `fit_function`), the one function a render's own
+row reads, so the scale never disagrees with the finished ranking about which runtime judges a
+package. A level the base models cannot even hold is grayed out.
 
-Everything the scale knows comes from somewhere else: the formula from `modelroom/fit.py`, the
+Everything the scale knows comes from somewhere else: the formula from `modelroom/fit.py` and
+`modelroom/fit_vllm.py` (through `modelroom/runtimes.py`), the
 "it fits" predicate from `modelroom/ranking.py`, the packages from the snapshot, the reserves
 from `[machines.<name>]`. It is read when the question is asked, like every other list of this
 dialog; the write that follows reads the configuration again on its own.
@@ -344,8 +347,15 @@ def fit_texts(
 ) -> dict[int, str]:
     """The last column, one text per context: `all N packages fit`, `k of N`, `none of N`.
 
-    Computed for the requests of the head count, so the scale and the ranking of the run agree.
+    Computed for the requests of the head count, so the scale and the ranking of the run agree --
+    through `runtimes.fit_for` (AP9-SV2-F), the one function a render's own row reads, not
+    `fit.compute_fit_v2` on its own: a Hugging Face tensor package counts here exactly as the
+    finished ranking would judge it. `packages` already is the set `runtimes.visible_packages`
+    shows for this machine (`snapshot_packages`'s own filter through `render._eligible_packages`),
+    so the scale and the ranking read the same packages too, not only the same formula.
     """
+    from .runtimes import fit_for  # deferred: runtimes.py imports guided_vllm.py, which imports this module (a cycle)
+
     if checked.profile is None or checked.machine_config is None:
         return {}
     total = len(packages)
@@ -353,7 +363,9 @@ def fit_texts(
         return {context: NO_PACKAGES for context in contexts}
     texts = {}
     for context in contexts:
-        fitting = count_fitting(checked.profile, checked.machine_config, packages, base_models, context, requests)
+        fitting = count_fitting(
+            checked.profile, checked.machine_config, packages, base_models, context, requests, fit_function=fit_for
+        )
         texts[context] = _fit_text(fitting, total)
     return texts
 
@@ -366,9 +378,11 @@ def context_cap(base_models: list[BaseModelSpec]) -> tuple[int, str] | None:
 
     A level is grayed out only beyond the window of **every** model of this run (AP9-UX H): one
     model with a 32k window no longer locks XL and XXL for one with 256k -- a package beyond its own
-    model's window is `not covered` in the fit itself (`fit.compute_fit_v2`). A window nobody knows
-    is no reason to gray out a level: `Architecture.max_context` is read from the publisher
-    repository, which not every base model publishes.
+    model's window is `not covered` in the fit itself (`fit.compute_fit_v2` for a GGUF or
+    Ollama-library package, `fit_vllm.vllm_fit_as_fit` for a Hugging Face tensor one, AP9-SV2-F --
+    both apply the same guard). A window nobody knows is no reason to gray out a level:
+    `Architecture.max_context` is read from the publisher repository, which not every base model
+    publishes.
     """
     if not base_models:
         return None

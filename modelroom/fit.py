@@ -23,6 +23,7 @@ graphics cards are tried one card first, then all of them together (`gpu_split`,
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from .architecture import kv_token_bytes, state_bytes
 from .config import MachineConfig
@@ -30,6 +31,10 @@ from .contracts import Architecture, BaseModelSpec, Fit, HardwareSnapshot, Packa
 from .measurements import Scenario
 from .profile import HardwareProfile, fit_block_reason
 from .reserve import ram_reserve
+
+# The shape of a runtime's own fit function (`compute_fit_v2`, `runtimes.fit_for`, `runtimes.Runtime.fit`):
+# one package judged against one profile, base model, scenario and machine config.
+FitFunction = Callable[[HardwareProfile, Package, BaseModelSpec, Scenario, MachineConfig], Fit]
 
 GIB = 1024**3
 
@@ -185,14 +190,23 @@ def count_fitting(
     base_models: dict[str, BaseModelSpec],
     context: int,
     requests: int = 1,
+    *,
+    fit_function: FitFunction = compute_fit_v2,
 ) -> int:
     """How many of `packages` the ranking would rank on `profile` at `context` and `requests`.
 
     The one question the size scale of the guided mode asks, six times over -- once per level --
     so that each line can say how many packages still fit. Nothing new is computed here: the fit
-    is `compute_fit_v2`'s, unchanged, with a 16-bit KV cache per request, and "fits" is the
+    is `fit_function`'s (`compute_fit_v2` by default -- Ollama's own formula, unchanged for every
+    caller that does not name another), with a 16-bit KV cache per request, and "fits" is the
     ranking rule's own predicate, asked by handing the fits to `ranking.rank_packages` with no
-    measurements. So the scale and the ranking of the same folder can never disagree. A package
+    measurements. So the scale and the ranking of the same folder can never disagree -- but only
+    when both read the same fit: AP9-SV2-F's `guided_context.fit_texts` passes `runtimes.fit_for`
+    instead, the one function a render's own row reads, so a Hugging Face tensor package counts
+    here exactly as the finished ranking would judge it, on a machine that has vLLM or not.
+    `fit.py` never imports `runtimes.py` itself (that module imports `compute_fit_v2` from here,
+    so the reverse at module load time would be a cycle) -- the caller supplies the function
+    instead, never a second copy of the decision which runtime judges which package. A package
     whose base model is not in `base_models` is not counted (the snapshot itself refuses one).
     """
     from .ranking import rank_packages  # imported here: the rule reads a fit, so it is the later layer
@@ -201,7 +215,7 @@ def count_fitting(
         context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=requests
     )
     entries = [
-        (package, compute_fit_v2(profile, package, base_models[package.base_model_hf_repo], scenario, machine_config))
+        (package, fit_function(profile, package, base_models[package.base_model_hf_repo], scenario, machine_config))
         for package in packages
         if package.base_model_hf_repo in base_models
     ]

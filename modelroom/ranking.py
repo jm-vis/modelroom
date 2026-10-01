@@ -207,7 +207,15 @@ def _compression_key(quantization: str | None, weights: int) -> tuple:
 
 
 def _sort_key(package: Package, fit: Fit, measurement: MeasurementRecord | None, facts: ModelFacts) -> tuple:
-    """The seven steps of ADR 0009, in order; the speed of a measurement is no part of it."""
+    """The seven steps of ADR 0009, in order; the speed of a measurement is no part of it.
+
+    AP9-SV2-F ("Paket x Laufzeit", `runtimes.RUNTIMES`): the final tie-break is the package's
+    identity *and* the runtime of this row (`fit.runtime`), never a second ranking rule -- ADR 0009
+    stays exactly what it was. Today one package pairs with at most one runtime (a GGUF package
+    with Ollama, a Hugging Face tensor package with vLLM; `runtimes.accepting_runtimes`), so the
+    identity alone already breaks every tie; the runtime key matters once a later runtime (LM
+    Studio, AP9-LS) pairs a GGUF package with a second row of its own.
+    """
     weights = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES)
     size = facts.parameters_b
     return (
@@ -217,7 +225,7 @@ def _sort_key(package: Package, fit: Fit, measurement: MeasurementRecord | None,
         _compression_key(package.quantization, weights),
         0 if measurement is not None else 1,
         -weights,
-        package_identity_key(package),
+        (package_identity_key(package), fit.runtime),
     )
 
 

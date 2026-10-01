@@ -1,0 +1,29 @@
+ ── Step 5 of 5  Results ────────────────────────────────────────────────
+
+ server · context L 32k
+ room      graphics 86.0 GB for models (4 x 22.5 GB cards minus reserve)
+           memory 86.3 GB for models (94.3 GB minus reserve)
+           disk unknown (modelroom render reads no machine live)
+ runtime   Ollama · vLLM (from its profile)
+ #    Model                   Package                Fit          Speed         Memory    Download
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+ 1    Qwen3-8B                vLLM · RedHatAI · AWQ  fits         –             22.9 GB   5.7 GB
+ 2    Qwen3-8B                unsloth · Q4_K_M       ample        –             50.7 GB   4.7 GB
+ shown     2 of 2 packages
+ memory    #2 fits into graphics memory, spread over the cards, budget 86.0 GB
+           (cards minus the reserve on each, from the profile)
+           #1 vLLM on 4 cards: 0.92 of each, runtime 1.50 GB per card (one recording)
+           memory reserve 8.0 GB is set in modelroom.toml;
+           computed from this machine it would be 16.0 GB
+ speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
+ key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
+           fits: up to 85 % · tight: up to 98 % · no fit: more
+           the pool is what the mode names, minus its reserve (per card) · gpu: one card
+           gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
+           system memory keeps a quarter as reserve, 2 to 16 GB, unless modelroom.toml sets it
+           one memory shared by system and card counts as gpu, a quarter kept, no upper limit
+           off the card, and for a fit from size the highest class is fits
+           best: the least compression of the same model that fits
+           modelroom rates no model family against another
+           vLLM · rows start with vllm serve; the others are pulled into Ollama
+           Speed is measured, see its column.
