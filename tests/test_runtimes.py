@@ -417,62 +417,98 @@ def test_what_another_runtime_holds_itself_frees_its_row_in_the_install_line_as_
     assert (first.value, first.disabled, first.label.endswith("local already")) == ("third acme/nova:Q4_K_M", None, True)
 
 
-# --- the install line and the pull of step 5 agree, whatever runtimes, holdings and disk -----------
+# --- the install line and the pull of step 5 agree, whatever runtimes, holdings, disk and names -----
 
 
-@pytest.mark.parametrize("disk_gib", [100, 1], ids=["big-disk", "small-disk"])
-@pytest.mark.parametrize("holder", [None, "ollama", "third"], ids=["held-by-none", "held-by-ollama", "held-by-third"])
-@pytest.mark.parametrize(
-    "machine", [["ollama"], ["third"], ["ollama", "third"], ["third", "ollama"]], ids=["ollama", "third", "ollama+third", "third+ollama"]
-)
-def test_the_install_line_and_the_pull_step_offer_the_same_row(tmp_path, monkeypatch, machine, holder, disk_gib):
-    """One package, the machine's runtimes, who holds it, how much disk is free. The row offered is
-    the first runtime of the machine, in table order (Ollama before the third, whatever order the
-    profile names them in), whose download fits the disk or which holds the package itself; it is
-    local where that runtime holds it. The install line under the table (`terminal_blocks`) and the
-    pull of step 5 with an answer file without `pull_package` (`pull_step`) say the same: the same
-    command, or "local already" in the pull, or no package at all."""
+MACHINES = {"ollama": ["ollama"], "third": ["third"], "ollama+third": ["ollama", "third"], "third+ollama": ["third", "ollama"]}
+NAMES = ("unique", "shared", "missing")
+
+
+def _agreement_cases():
+    """Machine x holder x disk x the name of each runtime the machine has -- the name of a runtime
+    the machine does not have changes nothing, so it stays `unique` there (pruned)."""
+    cases = []
+    for label, machine in MACHINES.items():
+        for holder in (None, "ollama", "third"):
+            for disk_gib in (100, 1):
+                for ollama_name in NAMES if "ollama" in machine else ("unique",):
+                    for third_name in NAMES if "third" in machine else ("unique",):
+                        case_id = f"{label}-held-by-{holder or 'none'}-{'big' if disk_gib == 100 else 'small'}-disk"
+                        case_id += f"-ollama-{ollama_name}-third-{third_name}"
+                        cases.append(pytest.param(machine, holder, disk_gib, ollama_name, third_name, id=case_id))
+    return cases
+
+
+def _expected(machine, holder, disk_gib, names):
+    """The rule, written out: per runtime of the machine, in table order (Ollama before the third,
+    whatever order the profile names them in), the download fits where the disk is big or the
+    runtime holds the package itself. None fits: no package fits. Else the first that fits and has
+    a name of its own is offered; where every one that fits has none, the first of them says why."""
+    keys = [key for key in ("ollama", "third") if key in machine]
+    fitting = [key for key in keys if disk_gib == 100 or holder == key]
+    if not fitting:
+        return "no package fits", None
+    free = next((key for key in fitting if names[key] == "unique"), None)
+    return ("offer", free) if free is not None else ("stop", names[fitting[0]])
+
+
+@pytest.mark.parametrize("machine, holder, disk_gib, ollama_name, third_name", _agreement_cases())
+def test_the_install_line_and_the_pull_step_offer_the_same_row(tmp_path, monkeypatch, machine, holder, disk_gib, ollama_name, third_name):
+    """One package; the machine's runtimes, who holds the package, how much disk is free, and
+    whether each runtime's install name is its own, shared with another package (a collision) or
+    missing. The install line under the table (`terminal_blocks`) and the pull of step 5 with an
+    answer file without `pull_package` (`pull_step`) offer the same row -- the same command, or
+    "local already" in the pull -- or the same nothing: `no package fits`, `has no command` for a
+    shared name, no line at all for a missing one, and no pull."""
     import dataclasses
 
     from modelroom.guided_install import PullContext, other_runtimes_held, pull_step
-    from modelroom.pull_choice import ambiguous_names
     from modelroom.quantization import package_identity_key
     from modelroom.room import GIB, Disk, LiveRoom
     from modelroom.screen import plain
     from modelroom.views import RunView, terminal_blocks
+    from modelroom.views_install import NOT_UNIQUE_INSTALL
 
     from fixture_rows import document, package
     from test_pull_choice import _Recording, _run
 
     q4 = package("unsloth/Nova-7B-GGUF", "Nova-7B-Q4_K_M.gguf", "Q4_K_M")
+    name = "hf.co/unsloth/Nova-7B-GGUF:Q4_K_M"
+    names = {"ollama": ollama_name, "third": third_name}
     holds = frozenset({package_identity_key(q4)})
     own = {key: holds if holder == key else frozenset() for key in ("ollama", "third")}
-    ollama = dataclasses.replace(runtimes.OLLAMA, on_disk=lambda target, packages: own["ollama"])
-    third = _third(install_name=runtimes.OLLAMA.install_name, on_disk=lambda target, packages: own["third"])
+
+    def install_name(key):
+        return (lambda package_: None) if names[key] == "missing" else runtimes.OLLAMA.install_name
+
+    ollama = dataclasses.replace(runtimes.OLLAMA, install_name=install_name("ollama"), on_disk=lambda target, packages: own["ollama"])
+    third = _third(install_name=install_name("third"), on_disk=lambda target, packages: own["third"])
     monkeypatch.setattr(runtimes, "RUNTIMES", (ollama, runtimes.VLLM, third))
     doc = _on_machine(document([q4]), machine)
-    # The disk read before the render carries what the Ollama daemon held (`guided.py`).
-    disk = Disk(int(disk_gib * GIB), "C:", held=own["ollama"])
-
-    name = "hf.co/unsloth/Nova-7B-GGUF:Q4_K_M"
-    command = {"ollama": f"ollama pull {name}", "third": f"third get {name}"}
-    fits = [key for key in ("ollama", "third") if key in machine and (disk_gib == 100 or holder == key)]
-    offered = fits[0] if fits else None
+    disk = Disk(int(disk_gib * GIB), "C:", held=own["ollama"])  # the disk read before the render: Ollama's holding
+    # A name shared with another package: the collision `pull_collisions` would report for it.
+    ambiguous = frozenset({name} if ollama_name == "shared" else set()) | frozenset({f"third {name}"} if third_name == "shared" else set())
 
     run, lines = _run(tmp_path, _Recording({"pull": False}))
-    context = PullContext(doc, "workstation", [q4], ambiguous_names([q4]), disk)
-    view = RunView(
-        install_for="workstation", live={"workstation": LiveRoom(disk=disk)}, packages=[q4], held=other_runtimes_held(run, context)
-    )
-    table = [plain(line).strip() for line in terminal_blocks(doc, "workstation", view=view)]
+    context = PullContext(doc, "workstation", [q4], ambiguous, disk)
+    held = other_runtimes_held(run, context)
+    view = RunView(install_for="workstation", ambiguous=ambiguous, live={"workstation": LiveRoom(disk=disk)}, packages=[q4], held=held)
+    installs = [plain(line).strip() for line in terminal_blocks(doc, "workstation", view=view)]
+    installs = [line for line in installs if line.startswith("install")]
     pull_step(run, context, True)
     pulled = [line.strip() for line in lines if line.strip().startswith("install")]
 
-    installs = [line for line in table if line.startswith("install")]
-    if offered is None:
-        assert len(installs) == 1 and installs[0].startswith("install   no package fits")
-        assert pulled == []
-    else:
-        assert installs == [f"install   #1  {command[offered]}"]
+    kind, what = _expected(machine, holder, disk_gib, names)
+    command = {"ollama": f"ollama pull {name}", "third": f"third get {name}"}
+    if kind == "offer":
+        assert installs == [f"install   #1  {command[what]}"]
         local = "install   #1 is local already · say Yes in step 4 to measure it"
-        assert pulled == [local if holder == offered else f"install   #1  {command[offered]}"]
+        assert pulled == [local if holder == what else f"install   #1  {command[what]}"]
+    else:
+        assert pulled == []
+        if kind == "no package fits":
+            assert len(installs) == 1 and installs[0].startswith("install   no package fits")
+        elif what == "shared":
+            assert installs == [f"install   #1 {NOT_UNIQUE_INSTALL}"]
+        else:
+            assert installs == []

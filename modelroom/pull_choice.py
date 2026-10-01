@@ -186,6 +186,9 @@ class PullRow:
     # Locked because its download is larger than the free disk (AP9-RM U11): `locked` says how much.
     over_disk: bool = False
     runtime: str = "ollama"
+    # Whether its download needs more than the free disk as its runtime sees it, whatever lock its
+    # name has: the disk decides before the name which row is offered (`offered`).
+    too_big: bool = False
 
     @property
     def value(self) -> str:
@@ -222,38 +225,103 @@ def pull_rows(
     packages: Sequence[Package] = (),
     held: Mapping[str, frozenset] | None = None,
 ) -> list[PullRow]:
-    """One row per shown table row of `machine`, in table order (regular and appended measured rows),
+    """`block_rows` of `machine`'s block of `document`; none where it has no block."""
+    block = next((block for block in document.machines if block.machine == machine), None)
+    return [] if block is None else block_rows(block, ambiguous, dot, disk, packages, held)
+
+
+def block_rows(
+    block: MachineRanking,
+    ambiguous: frozenset[str] = frozenset(),
+    dot: str = "·",
+    disk: Disk | None = None,
+    packages: Sequence[Package] = (),
+    held: Mapping[str, frozenset] | None = None,
+) -> list[PullRow]:
+    """One row per shown table row of the block, in table order (regular and appended measured rows),
     and, where `packages` names its package, one per runtime of this machine that accepts it
     (`row_names`) -- a known package no runtime of the machine accepts gets no row. Without
     `packages` (`pull_other.py`) each row stays the one Ollama row it always was.
 
     With the free disk of this machine a row whose download does not fit it is locked with how much
     it needs (AP9-RM U11); a lock of its name comes first. A package the row's runtime holds needs
-    no disk and is never locked for it (U11c): `held` names, by runtime key, what each runtime
-    holds, and replaces `disk.held` for that runtime's rows; without it `disk.held` counts for
-    Ollama's rows alone (`runtime_disk`).
+    no disk and is never locked for it (U11c): `disk.held` is what the Ollama daemon holds and
+    counts for Ollama's rows alone, `held` names by runtime key what each other runtime holds
+    itself (`runtime_disk`).
     """
-    block = next((block for block in document.machines if block.machine == machine), None)
-    if block is None:
-        return []
     by_identity = {package_identity_key(package): package for package in packages}
     rows = []
     for entry in block.ranked:
         package = by_identity.get(tuple(entry.package_identity))
         cell = f"{entry.packager} {dot} {entry.quantization}"
         for key, name in row_names(entry, package, block.profile):
-            own = runtime_disk(key, disk) if held is None or disk is None else replace(disk, held=held.get(key, frozenset()))
+            own = runtime_disk(key, disk, held)
+            too_big = entry_over_disk(entry, own)  # a package held already is never over (U11c)
             locked = NO_PULL_NAME if name is None else NOT_UNIQUE if runtime_value(name, key) in ambiguous else None
-            over = locked is None and entry_over_disk(entry, own)  # a package held already is never over (U11c)
+            over = locked is None and too_big
             locked = too_big_words(entry.weights_gib, own) if over else locked
-            rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, tuple(entry.package_identity), over, key))
+            identity = tuple(entry.package_identity)
+            rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, identity, over, key, too_big))
     return rows
 
 
+@dataclass(frozen=True)
+class Offered:
+    """Which row of a pull list is offered (`offered`): `row`; else `stop`, the first row of the
+    rank that ended the search whose name locks it (`NO_PULL_NAME`, `NOT_UNIQUE`); `skipped` the
+    ranks passed over because no row of theirs fits the disk; `all_over` where that is every rank."""
+
+    row: PullRow | None
+    skipped: tuple[int, ...] = ()
+    stop: PullRow | None = None
+    all_over: bool = False
+
+
+def offered(
+    rows: Sequence[PullRow], ranks: Sequence[int] = (), over: Sequence[int] = (), *, past_disk: bool = True
+) -> Offered:
+    """The one rule both the install line under the table and the pull of step 5 offer a row by.
+
+    Rank by rank (`ranks`, the shown rows in table order; the ranks of `rows` where not given): a
+    rank none of whose rows fits the disk is passed over (`past_disk`, the install line) or ends
+    the search (`#1` alone, an answer file without `pull_package`); otherwise the first of its rows
+    that fits the disk and whose name is its own (`locked is None`) is offered -- every runtime of
+    the machine, table order, each with its own holding (`block_rows`). Where every row of the rank
+    that fits is locked by its name, nothing is offered and that row says why (`stop`). A rank with
+    no row at all (a package no runtime of the machine accepts) ends the search with nothing,
+    unless it is in `over` (its download is over the disk, judged as Ollama's: `rank_over`).
+    """
+    ranks = list(ranks) or list(dict.fromkeys(row.rank for row in rows))
+    skipped: list[int] = []
+    for rank in ranks:
+        group = [row for row in rows if row.rank == rank]
+        fitting = [row for row in group if not row.too_big]
+        if not fitting and (group or rank in over):
+            if not past_disk:
+                return Offered(None, tuple(skipped))
+            skipped.append(rank)
+            continue
+        free = next((row for row in fitting if row.locked is None), None)
+        return Offered(free, tuple(skipped), None if free is not None or not fitting else fitting[0])
+    return Offered(None, tuple(skipped), all_over=bool(ranks) and len(skipped) == len(ranks))
+
+
+def rank_over(block: MachineRanking, rows: Sequence[PullRow], disk: Disk | None) -> list[int]:
+    """The ranks of the shown rows whose download fits the disk for no runtime of the machine: every
+    row of theirs is `too_big`, or -- a row with no runtime at all -- judged as Ollama's."""
+    over = []
+    for entry in block.ranked:
+        group = [row for row in rows if row.rank == entry.rank]
+        if all(row.too_big for row in group) if group else entry_over_disk(entry, runtime_disk(runtimes.OLLAMA.key, disk)):
+            over.append(entry.rank)
+    return over
+
+
 def default_row(rows: Sequence[PullRow]) -> PullRow | None:
-    """The row an answer file without `pull_package` takes: `#1`, where it has a unique name -- of
-    the rows of `#1` (one per runtime of the machine, table order) the first that is not locked."""
-    return next((row for row in rows if row.rank == 1 and row.locked is None), None)
+    """The row an answer file without `pull_package` takes: `#1`, where it has a unique name and fits
+    the disk -- `offered` over `#1` alone, so of its rows (one per runtime of the machine) the first
+    the install line would offer too."""
+    return offered(rows, [1], past_disk=False).row
 
 
 def package_of(row: PullRow, packages: Sequence[Package]) -> Package | None:
@@ -296,15 +364,19 @@ __all__ = [
     "PULL_NAME_RE",
     "QUESTION",
     "PullRow",
+    "Offered",
     "ambiguous_names",
+    "block_rows",
     "collision_pieces",
     "default_row",
     "entry_pull_name",
     "has_named_row",
     "package_of",
+    "offered",
     "package_pull_name",
     "pull_collisions",
     "pull_rows",
+    "rank_over",
     "repo_lines",
     "row_names",
     "runtime_disk",

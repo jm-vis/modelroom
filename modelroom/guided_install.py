@@ -21,7 +21,7 @@ import json
 import shutil
 import sys
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Sequence, TextIO
 
@@ -164,13 +164,11 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     # What each runtime holds is read before the lock of the disk (U11c): a package held
     # already needs no disk, so it stays a choice and its note -- in the table as in this list.
     held = held_by_runtime(run, rows, context.packages)
-    # The disk read before the render carries what the Ollama daemon held then (`guided.py`): it
-    # counts for Ollama's rows alone, each other runtime's rows count only what that runtime holds.
-    before = context.disk.held if context.disk is not None else frozenset()
-    on_disk = {key: ids | before if key == OLLAMA.key else ids for key, ids in held.items()}
-    rows = pull_rows(
-        context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, context.disk, context.packages, on_disk
-    )
+    # The disk carries what the Ollama daemon holds and counts for Ollama's rows alone; each other
+    # runtime's rows count only what that runtime holds (`pull_choice.runtime_disk`).
+    ollama = held.get(OLLAMA.key, frozenset())
+    disk = None if context.disk is None else replace(context.disk, held=context.disk.held | ollama)
+    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk, context.packages, held)
     locals_ = {(row.runtime, row.identity) for row in rows if row.locked is None and row.identity in held[row.runtime]}
     row = _choose(run, rows, locals_)
     if row is None:
