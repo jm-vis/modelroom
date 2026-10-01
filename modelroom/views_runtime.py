@@ -10,7 +10,7 @@ output stays byte-identical to before AP9-SV2 (CONTRACTS.md, "Fit for vLLM").
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from . import runtimes
 from .document import MachineRanking, RankedEntry, SetAsideEntry
@@ -58,11 +58,18 @@ def vllm_shown(block: MachineRanking) -> bool:
     return any(is_vllm(entry.fit) for entry in shown_entries(block))
 
 
-def vllm_table(block: MachineRanking) -> bool:
+def machine_runtimes(block: MachineRanking, live_vllm: Mapping[str, object] | None = None) -> frozenset[str]:
+    """The runtimes of `block`'s machine in this view: `runtimes.present_runtimes` of its profile and
+    this run's own live vLLM reading for it (`live_vllm`, by machine; none in `modelroom render`) --
+    the very set its packages were chosen by (`render.build_render_document`, Codex r7)."""
+    return runtimes.present_runtimes(block.profile, (live_vllm or {}).get(block.machine))
+
+
+def vllm_table(block: MachineRanking, live_vllm: Mapping[str, object] | None = None) -> bool:
     """Whether `block` is drawn as vLLM's (F5, Codex r5-2): a vLLM row is shown, or the machine has
-    no Ollama at all (`runtimes.machine_runtime_keys`) -- so an empty block of a vLLM-only machine
-    carries no Ollama hint either. Never true for a machine without the `runtimes` field."""
-    return vllm_shown(block) or runtimes.OLLAMA.key not in runtimes.machine_runtime_keys(block.profile)
+    no Ollama at all (`machine_runtimes`) -- so an empty block of a vLLM-only machine carries no
+    Ollama hint either. Never true for a machine without the `runtimes` field."""
+    return vllm_shown(block) or runtimes.OLLAMA.key not in machine_runtimes(block, live_vllm)
 
 
 def key_text(block: MachineRanking) -> list[str]:
@@ -160,6 +167,7 @@ __all__ = [
     "RUNTIME_LABEL",
     "block_runtimes",
     "key_text",
+    "machine_runtimes",
     "package_prefix",
     "packager_cell",
     "runtime_line",

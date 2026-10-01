@@ -358,27 +358,27 @@ def accepting_runtimes(package: Package) -> tuple[Runtime, ...]:
     return tuple(runtime for runtime in RUNTIMES if runtime.accepts(package))
 
 
-def machine_runtime_keys(profile: HardwareProfile | None) -> frozenset[str]:
-    """Which runtimes one machine's profile says it has: `profile.runtimes` (AP9-SV2-0) where it
-    names any, else Ollama alone -- every profile before that field existed, and every machine
-    whose last measurement recorded nothing there, is read as Ollama's own default.
-    """
-    if profile is not None and profile.runtimes:
-        return frozenset(profile.runtimes)
-    return frozenset({"ollama"})
-
-
 def present_runtimes(profile: HardwareProfile | None, live: object) -> frozenset[str]:
-    """The runtimes one machine has in *this* run (P1: "`runtimes`, or detected live").
+    """The runtimes one machine has in *this* run (P1: "`runtimes`, or detected live") -- the one
+    function every reader of a machine's runtime set calls (Codex r7): which packages it shows
+    (`visible_packages`), its head and empty state (`views`), step 1's `runtime` line.
 
-    `profile` is that machine's `HardwareProfile`, read by `machine_runtime_keys`. `live` is
+    `profile.runtimes` (AP9-SV2-0) where it names any, else Ollama alone -- every profile before
+    that field existed, and every machine whose last measurement recorded nothing there. `live` is
     whatever a caller's own step-1 bookkeeping holds for `"vllm"` on that machine
     (`GuidedRun.servers.found.get("vllm")` for the machine the run is on, nothing for any other):
     only a real `ServedModel` answer counts as detected -- a server that asked for a key, one whose
     answer could not be read, or nothing at all, does not (E5: "does not count as detected").
     """
-    keys = machine_runtime_keys(profile)
+    keys = frozenset(profile.runtimes) if profile is not None and profile.runtimes else frozenset({"ollama"})
     return keys | {"vllm"} if isinstance(live, ServedModel) else keys
+
+
+def machine_runtime_keys(profile: HardwareProfile | None) -> frozenset[str]:
+    """`present_runtimes` without a live reading: no logic of its own (Codex r7), for a reader that
+    has none -- a machine of `modelroom render`, or a question live detection cannot change (it only
+    ever adds vLLM, so Ollama's membership is the same either way)."""
+    return present_runtimes(profile, None)
 
 
 def machine_has_vllm(profile: HardwareProfile | None, live: object) -> bool:

@@ -16,7 +16,8 @@ from typing import Mapping, Sequence
 from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
-from .views_runtime import RUNTIME_LABEL, key_text, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces, vllm_shown, vllm_table
+from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_line, shown_entries, unequal_cards_note
+from .views_runtime import vllm_pool_pieces, vllm_shown, vllm_table
 from .views_sections import ALTERNATIVES, runtime_sections, section_title
 from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noqa: F401 -- moved (size guard, F5)
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
@@ -250,7 +251,9 @@ def _summary_lines(document: RenderDocument) -> list[str]:
     return lines
 
 
-def _machine_sections(block: MachineRanking, document: RenderDocument, first: bool = False, disk: Disk | None = None) -> list[str]:
+def _machine_sections(
+    block: MachineRanking, document: RenderDocument, first: bool = False, disk: Disk | None = None, live_vllm=None
+) -> list[str]:
     """One machine's sections: its ranking, then what was set aside, each as its own heading; the
     reserve hint of 0.1.0 and, for the `first` of several, that each table is its machine's (AP9-RM);
     with the free disk of a guided run, ` ×` behind a download too large for it and the `disk` line (U11)."""
@@ -260,7 +263,7 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
     sections = [f"## Ranking: {block.machine}", "", headline, ""]
     parts = runtime_sections(block)
     # The system memory's reserve is Ollama's: a machine of vLLM rows alone does not name it (F5).
-    hint = "" if len(parts) == 1 and vllm_table(block) else " ".join(reserve_hint_rows(block))
+    hint = "" if len(parts) == 1 and vllm_table(block, live_vllm) else " ".join(reserve_hint_rows(block))
     sections += [f"{hint[0].upper()}{hint[1:]}.", ""] if hint else []
     if len(parts) == 1:
         return sections + _machine_body(block, document, first, disk)
@@ -307,9 +310,12 @@ def _machine_body(
     return sections + ([" · ".join(key_text(block)), ""] if not block.ranked and vllm_shown(block) else [])
 
 
-def document_markdown(document: RenderDocument, disks: Mapping[str, Disk] | None = None) -> str:
+def document_markdown(
+    document: RenderDocument, disks: Mapping[str, Disk] | None = None, live_vllm: Mapping[str, object] | None = None
+) -> str:
     """The Markdown view of `document`: the same numbers the JSON and the terminal view show; `disks`
-    is the free disk a guided run read, per machine name (U11), and marks nothing where it is `None`."""
+    is the free disk a guided run read, per machine name (U11), and marks nothing where it is `None`;
+    `live_vllm` the vLLM reading the render chose its packages by (Codex r7, `machine_runtimes`)."""
     sections = [
         format_header_line(document.snapshot_run_at, document.rendered_at),
         "",
@@ -333,7 +339,7 @@ def document_markdown(document: RenderDocument, disks: Mapping[str, Disk] | None
         sections += ["## Graphics adapters", "", _table(ADAPTER_COLUMNS, adapters), "", ADAPTER_HINT, ""]
     first = next((block.machine for block in document.machines if block.ranked), None) if several_ranked(document) else None
     for block in document.machines:
-        sections += _machine_sections(block, document, block.machine == first, (disks or {}).get(block.machine))
+        sections += _machine_sections(block, document, block.machine == first, (disks or {}).get(block.machine), live_vllm)
     return "\n".join(sections)
 
 
@@ -537,6 +543,7 @@ class RunView:
     ssh_active: str | None = None  # FR-B1, B5: the `room` line names this one by its alias
     packages: Sequence[Package] = ()  # the run's packages: the install line's runtime (`views_install`)
     held: Mapping[str, frozenset] = field(default_factory=dict)  # what each runtime but Ollama holds itself
+    live_vllm: Mapping[str, object] = field(default_factory=dict)  # the render's own vLLM reading (Codex r7)
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -549,7 +556,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     lines += _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
     # A vLLM table (F5) keeps neither the system memory's reserve nor Ollama's advice to measure.
-    vllm = vllm_table(block)
+    vllm = vllm_table(block, view.live_vllm)
     lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash) + ([] if vllm else reserve_hint_rows(block)))
     lines += _disk_lines(block, _disk(block, view), dash, _over(block, view))
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
@@ -602,20 +609,22 @@ def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
         else "ssh_inactive" if view.origins.get(block.machine) == "ssh"
         else "other"
     )
-    lines = _labeled(ROOM_LABEL, head_pieces(block, live, where, runtimes.machine_runtime_keys(block.profile)), dot)
+    lines = _labeled(ROOM_LABEL, head_pieces(block, live, where, machine_runtimes(block, view.live_vllm)), dot)
     loaded = loaded_pieces(live)
     return lines + (_labeled(LOADED_LABEL, loaded, dot) if loaded else [])
 
 
-def _runtime_lines(block: MachineRanking) -> list[Line]:
+def _runtime_lines(block: MachineRanking, view: RunView) -> list[Line]:
     """The `runtime` row under a machine's head (F4): `None`/`[]` for a machine without vLLM, so an
     Ollama-only table draws exactly what it drew before AP9-SV2.
 
-    `live` is not threaded through `RunView` yet (`runtimes.VLLM.detect` is AP9-SV2-I/R's own), so
-    this reads the machine's remembered profile alone -- the one source `modelroom render` ever
-    has, and still correct, if not live, for a guided run on that same machine (F3).
+    The runtime set is the render's own (`RunView.live_vllm`, Codex r7): a vLLM this run detected
+    live on an old profile is named here as its rows and its head name it. A served model counts as
+    this run's where one of the block's rows is its repository; `modelroom render` reads no server.
     """
-    text = runtime_line(block.profile)
+    live = view.live_vllm.get(block.machine)
+    repos = {entry.package_identity[1] for entry in shown_entries(block)}
+    text = runtime_line(block.profile, live, served_matches_run=getattr(live, "root", None) in repos)
     if text is None:
         return []
     texts = [text]
@@ -630,7 +639,7 @@ def _terminal_ranking(
 ) -> list[Line]:
     origin = view.origins.get(block.machine)
     lines: list[Line] = [[("", _block_head(block, scenario, dot, origin))], *_room_lines(block, view, dot)]
-    lines += _runtime_lines(block)
+    lines += _runtime_lines(block, view)
     if block.reason is not None:
         lines.append([("", block.reason)])
     parts = runtime_sections(block)  # F5: one section per runtime where rows of two are shown

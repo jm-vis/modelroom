@@ -704,7 +704,8 @@ def _shown_render_result(
     # under a table and the list that may follow never disagree.
     other_machines = eligible_other_machines(document, here, context.ambiguous)
     view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines,
-                   ssh_active=run.ssh_active, packages=context.packages, held=other_runtimes_held(run, context))
+                   ssh_active=run.ssh_active, packages=context.packages, held=other_runtimes_held(run, context),
+                   live_vllm={here: run.servers.found.get("vllm")})  # the render's own runtime set (Codex r7)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 

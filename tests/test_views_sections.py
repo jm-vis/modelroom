@@ -302,6 +302,57 @@ def test_both_runtimes_name_each_budget_by_its_runtime():
     assert "graphics up to 82.8 GB for vLLM" in head and "for models" not in head
 
 
+# --- Fix r7 (Codex r7 on 5687ed7): one runtime set, profile plus live detection, for everything -------
+
+def _served():
+    from modelroom.vllm_server import ServedModel
+
+    return ServedModel(id="acme00/Qwen3-8B-AWQ", root="acme00/Qwen3-8B-AWQ", max_model_len=32768)
+
+
+def _views(document, live_vllm=None):
+    """The Markdown file and the terminal blocks of `document` as a guided run draws them, with this
+    run's own live vLLM reading per machine (`live_vllm`) where one was taken."""
+    from modelroom.screen import plain
+    from modelroom.views import RunView, terminal_blocks
+
+    view = RunView(install_for="server", live_vllm=live_vllm or {})
+    terminal = "\n".join(plain(line) for line in terminal_blocks(document, view=view))
+    return document_markdown(document, live_vllm=live_vllm), terminal
+
+
+def _room(terminal: str) -> list[str]:
+    lines = terminal.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.startswith(" room"))
+    end = next(index for index in range(start + 1, len(lines)) if not lines[index].startswith("           "))
+    return lines[start:end]
+
+
+@pytest.mark.parametrize("packages", [lambda: [_gguf_package(), _awq_of(0)], lambda: []], ids=["rows", "empty"])
+def test_an_old_profile_with_vllm_detected_live_reads_as_one_that_remembers_it(packages):
+    """Codex r7: an old profile (no `runtimes` field) on a machine whose vLLM this run detected
+    live shows the vLLM rows (`visible_packages`) -- and its head, its sections and its empty
+    state read the very same runtime set (`runtimes.present_runtimes`), exactly as a profile that
+    remembers `["ollama", "vllm"]` does without any live reading."""
+    live = {"server": _served()}
+    old = _render(_profile_without_field(), [_base_model()], packages(), live_vllm=live)
+    remembered = _render(_profile(), [_base_model()], packages())
+
+    old_markdown, old_terminal = _views(old, live)
+    remembered_markdown, remembered_terminal = _views(remembered)
+    assert _room(old_terminal) == _room(remembered_terminal)
+    assert any("for vLLM" in line for line in _room(old_terminal)) and not any("for models" in line for line in _room(old_terminal))
+    assert old_markdown == remembered_markdown
+
+
+def test_an_old_profile_without_live_vllm_keeps_its_head_word_for_word():
+    """The counter-proof: no live reading, no vLLM -- the head says `for models`, as before AP9-SV2."""
+    _markdown, terminal = _views(_render(_profile_without_field(), [_base_model()], [_gguf_package(), _awq_of(0)]))
+
+    room = _room(terminal)
+    assert room[0].startswith(" room      graphics 86.0 GB for models") and not any("vLLM" in line for line in room)
+
+
 def test_the_step_3_scale_counts_what_the_vllm_only_table_ranks():
     from modelroom.config import MachineConfig
     from modelroom.guided_context import Checked, fit_texts

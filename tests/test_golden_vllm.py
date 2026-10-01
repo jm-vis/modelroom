@@ -145,7 +145,8 @@ def test_the_tensor_row_carries_the_runtime_and_the_gguf_row_does_not():
 
 
 def _render(
-    profile: HardwareProfile, base_models: list[BaseModelSpec], packages: list[Package], *, context: int = 32768, requests: int = 10
+    profile: HardwareProfile, base_models: list[BaseModelSpec], packages: list[Package], *, context: int = 32768, requests: int = 10,
+    live_vllm: dict | None = None,
 ):
     """A full `RenderDocument` for `profile`, not through the golden scenario's own fixed helpers --
     every Fix r1 test below builds its own minimal snapshot, so one test's packages can never leak
@@ -171,7 +172,7 @@ def _render(
     snapshot = Snapshot(schema_version=2, run_at=SNAPSHOT_RUN_AT, areas=areas, base_models=base_models, packages=packages)
     profiles = {machine: MachineProfile(status="ranked", label=profile.display_name, profile=profile, reason=None)}
     scenario = Scenario(context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=requests)
-    return build_render_document(config, snapshot, profiles, {}, scenario, RENDERED_AT)
+    return build_render_document(config, snapshot, profiles, {}, scenario, RENDERED_AT, live_vllm=live_vllm)
 
 
 def _architecture_without_heads(repo: str) -> Architecture:

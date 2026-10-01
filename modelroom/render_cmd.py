@@ -236,7 +236,7 @@ def _render_locked(
         print(f"{json_path}: the JSON view could not be written ({exc}); nothing else written", file=sys.stderr)
         return 1
     try:
-        atomic_write_text(config.paths.markdown, document_markdown(document, disks))
+        atomic_write_text(config.paths.markdown, document_markdown(document, disks, live_vllm))
     except OSError as exc:
         print(
             f"{config.paths.markdown}: the Markdown view could not be written ({exc}); "
