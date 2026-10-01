@@ -17,7 +17,7 @@ from modelroom.guided_contracts import Note
 from modelroom.profile import HardwareProfile
 from modelroom.views_runtime import (
     RUNTIME_LABEL,
-    legend_lines,
+    key_text,
     package_prefix,
     packager_cell,
     runtime_line,
@@ -67,39 +67,47 @@ def test_ollama_carries_no_prefix():
     assert package_prefix("ollama") == ""
 
 
-def test_vllm_carries_its_own_prefix():
-    assert package_prefix("vllm") == "vLLM · "
+def test_vllm_carries_no_prefix_either():
+    """F5: a vLLM row stands in its own section or on a machine of vLLM alone, which names the
+    runtime already -- the `vLLM · ` prefix is gone."""
+    assert package_prefix("vllm") == ""
 
 
-def test_packager_cell_is_the_prefix_and_the_packager():
+def test_packager_cell_is_the_packager():
     entry = _entry(packager="RedHatAI", fit=_fit(runtime="vllm"))
-    assert packager_cell(entry) == "vLLM · RedHatAI"
+    assert packager_cell(entry) == "RedHatAI"
     assert packager_cell(_entry(packager="unsloth")) == "unsloth"
 
 
-# --- the legend: one extra line per runtime that carries one, each at most once -------------------
+# --- the key: one runtime's own, never two side by side (F5) -------------------------------------
 
 
-def test_legend_is_empty_for_an_ollama_only_table():
-    assert legend_lines([_entry()]) == []
+def _block(*entries: RankedEntry):
+    from modelroom.document import MachineRanking
+
+    profile = _profile_from("four_l4_server_vllm.json")
+    return MachineRanking(
+        machine="server", status="ranked", label="server", profile=profile, reserve_ram_gib=8.0, reserve_vram_gib=1.0,
+        ranked=list(entries), ranked_total=len(entries),
+    )
 
 
-def test_legend_names_vllm_once_even_with_several_of_its_rows():
-    """Codex r1-5: once a vLLM row is shown, the legend also says the percentage rule above is
-    Ollama's own and explains vLLM's classes by concurrent requests instead, before the one line
-    per runtime that carries a `key_text`."""
-    entries = [_entry(1, fit=_fit(runtime="vllm")), _entry(2, fit=_fit(runtime="vllm")), _entry(3)]
+def test_an_ollama_table_keeps_ollamas_key_word_for_word():
+    from modelroom.ranking_words import key_pieces
 
-    lines = legend_lines(entries)
+    block = _block(_entry())
+    assert key_text(block) == key_pieces(block)
 
-    assert lines == [
-        "the percentages above are Ollama's own",
-        "vLLM's classes count requests at once instead: no fit below one",
-        "tight from one up to below the requests this ranking assumes",
-        "fits from that many up to below twice them",
-        "ample at twice them or more (architecture basis only)",
-        "vLLM · rows start with vllm serve; the others are pulled into Ollama",
-    ]
+
+def test_a_vllm_table_has_vllms_key_alone_and_no_start_command():
+    from modelroom.screen import FIT_HINT
+    from modelroom.vllm_words import FIT_HINT as VLLM_FIT_HINT
+
+    pieces = key_text(_block(_entry(1, fit=_fit(runtime="vllm")), _entry(2, fit=_fit(runtime="vllm"))))
+
+    assert pieces == list(VLLM_FIT_HINT)
+    assert not set(pieces) & set(FIT_HINT[:5]) and not any("vllm serve" in piece for piece in pieces)
+    assert all(len(piece) <= 89 for piece in pieces)  # the terminal wraps between pieces, never inside
 
 
 # --- the runtime row under a machine's head: only where vLLM is there ------------------------------
@@ -133,6 +141,11 @@ def test_a_server_that_answered_without_serving_a_model_reads_installed_not_serv
     """E5: a key prompt or another non-`ServedModel` answer does not count as detected live, but it
     still proves vLLM is there when the profile already remembered it -- `installed, not serving`."""
     assert runtime_line(_with_vllm(v2_profile()), "asks for an API key") == "Ollama · vLLM installed, not serving"
+
+
+def test_a_machine_with_vllm_alone_names_vllm_alone():
+    """F5: the runtimes the profile names, in table order -- no Ollama where the profile has none."""
+    assert runtime_line(v2_profile().model_copy(update={"runtimes": ["vllm"]})) == "vLLM (from its profile)"
 
 
 def test_a_truthy_live_value_with_no_remembered_profile_is_still_not_shown():
@@ -193,27 +206,16 @@ def test_runtime_label_is_eight_wide_like_every_other_label():
     assert RUNTIME_LABEL == "runtime" and len(RUNTIME_LABEL) <= LABEL_WIDTH
 
 
-# --- the terminal table's own package cell: the prefix counts toward the cut ------------------------
+# --- the terminal table's own package cell ------------------------------------------------------------
 
 
-def test_the_package_cell_carries_the_prefix_and_cuts_with_ellipsis():
-    """`views._package_cell`: the prefix is part of the 21-wide `Package` column, not added after
-    the cut -- a long packager name of a vLLM row is cut shorter than the same name would be on an
-    Ollama row, because `"vLLM · "` already took some of the room."""
+def test_the_package_cell_cuts_with_ellipsis_the_same_for_both_runtimes():
+    """`views._package_cell`: without a prefix (F5) a vLLM row's cell is cut exactly as an Ollama one's."""
     from modelroom.views import _package_cell
 
     long_name = "RedHatAI-very-long-account-name"
-    ollama_row = _entry(packager=long_name, quantization="Q4_K_M")
-    vllm_row = _entry(packager=long_name, quantization="Q4_K_M", fit=_fit(runtime="vllm"))
-
-    ollama_cell = _package_cell(ollama_row)
-    vllm_cell = _package_cell(vllm_row)
+    ollama_cell = _package_cell(_entry(packager=long_name, quantization="Q4_K_M"))
+    vllm_cell = _package_cell(_entry(packager=long_name, quantization="Q4_K_M", fit=_fit(runtime="vllm")))
 
     assert len(ollama_cell) == 21 and ollama_cell.endswith("…")
-    assert len(vllm_cell) == 21 and vllm_cell.endswith("…")
-    assert vllm_cell.startswith("vLLM · ")
-    # The same column width, but the prefix eats into it: less of `long_name` survives uncut.
-    ollama_name_shown = ollama_cell.rstrip("…")
-    vllm_name_shown = vllm_cell.removeprefix("vLLM · ").rstrip("…")
-    assert len(vllm_name_shown) < len(ollama_name_shown)
-    assert long_name.startswith(vllm_name_shown) and long_name.startswith(ollama_name_shown)
+    assert vllm_cell == ollama_cell

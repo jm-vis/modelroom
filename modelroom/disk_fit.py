@@ -48,8 +48,9 @@ def over_disk(weights_gib: float, disk: Disk | None, identity: Sequence[str] | N
 
 def entry_over_disk(entry: RankedEntry, disk: Disk | None) -> bool:
     """`over_disk` of a shown row, by its download and its package: the one test of the table, the
-    `disk` line, the install line and the pull list."""
-    return over_disk(entry.weights_gib, disk, entry.package_identity)
+    `disk` line, the install line and the pull list. The disk read is the one where Ollama keeps
+    its models, so a vLLM row is never judged against it (F5; vLLM's own place is AP9-SV2-I's)."""
+    return entry.fit.runtime == "ollama" and over_disk(entry.weights_gib, disk, entry.package_identity)
 
 
 def over_ranks(block: MachineRanking, disk: Disk | None) -> list[int]:

@@ -17,6 +17,8 @@ from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .views_runtime import RUNTIME_LABEL, key_text, packager_cell, runtime_line, unequal_cards_note, vllm_pool_pieces, vllm_shown
+from .views_sections import ALTERNATIVES, runtime_sections, section_title
+from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noqa: F401 -- moved (size guard, F5)
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
 from .disk_fit import DISK_LABEL, disk_words, entry_over_disk
@@ -252,13 +254,30 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
     """One machine's sections: its ranking, then what was set aside, each as its own heading; the
     reserve hint of 0.1.0 and, for the `first` of several, that each table is its machine's (AP9-RM);
     with the free disk of a guided run, ` ×` behind a download too large for it and the `disk` line (U11)."""
-    over = disk_words(block, disk, "–", "×")
     headline = f"{block.label} -- {block.status}{_deviation(block)}"
     if block.reason is not None:
         headline = f"{headline}: {_cell(block.reason)}"
     sections = [f"## Ranking: {block.machine}", "", headline, ""]
-    hint = " ".join(reserve_hint_rows(block))
+    parts = runtime_sections(block)
+    # The system memory's reserve is Ollama's: a machine of vLLM rows alone does not name it (F5).
+    hint = "" if len(parts) == 1 and vllm_shown(block) else " ".join(reserve_hint_rows(block))
     sections += [f"{hint[0].upper()}{hint[1:]}.", ""] if hint else []
+    if len(parts) == 1:
+        return sections + _machine_body(block, document, first, disk)
+    sections += [ALTERNATIVES, ""]  # F5: one section per runtime, each drawn as a machine of one
+    for index, (key, part) in enumerate(parts):
+        sections += [f"### {section_title(key)}", ""]
+        sections += _machine_body(part, document, first and index == 0, disk, "####", f" {section_title(key)}")
+    return sections
+
+
+def _machine_body(
+    block: MachineRanking, document: RenderDocument, first: bool, disk: Disk | None, level: str = "##", where: str = ""
+) -> list[str]:
+    """What `_machine_sections` draws under a machine's head: the ranked table and its key, then the
+    tables set aside; `level`/`where` are a section's heading level and words (F5)."""
+    over = disk_words(block, disk, "–", "×")
+    sections: list[str] = []
     if block.ranked:
         repos = repo_lines(block)
         sections += [
@@ -274,12 +293,12 @@ def _machine_sections(block: MachineRanking, document: RenderDocument, first: bo
             "",
         ]
     else:
-        sections += ["No package of the configured base models is ranked on this machine.", ""]
+        sections += [f"No package of the configured base models is ranked{where} on this machine.", ""]
     for heading, items in (("Not covered", block.not_covered), (NO_FIT.capitalize(), block.no_fit)):
         if not items:
             continue
         sections += [
-            f"## {heading}: {block.machine}",
+            f"{level} {heading}: {block.machine}",
             "",
             _table(_SET_ASIDE_COLUMNS, [_set_aside_row(entry, document) for entry in items]),
             "",
@@ -355,8 +374,6 @@ REPO_LABEL = "repo"
 # What is left of the 100 characters for the text of a labeled line: the label's own column, and
 # the one space every line of this screen carries.
 _NOTE_WIDTH = JOIN_WIDTH - LABEL_COLUMN - len(_INDENT)
-# How many of the packages behind one reason are named before the rest is a number.
-_NAMED_PER_REASON = 3
 # What a group of ranked packages says about the memory it runs in, plural and singular. The words
 # come from the fields of `Fit` alone -- the pool, the mode and the rank -- and never from parsing
 # the note's own sentence back apart (decided 2026-09-24).
@@ -389,47 +406,6 @@ def _terminal_rule() -> str:
     """The line under the table head, as wide as the columns are."""
     width = sum(width for _name, width in _TERMINAL_COLUMNS) + 2 * (len(_TERMINAL_COLUMNS) - 1)
     return glyphs().rule * width
-
-
-def _set_aside_pieces(word: str, entries: list[SetAsideEntry]) -> list[str]:
-    """One piece per reason: how many packages it covers, and up to three of their names.
-
-    41 lines of `not covered`, one per package, said the same thing 41 times and pushed the
-    ranking itself off the screen (hand test, 2026-09-24); since 2026-09-24 they stand behind the
-    `shown` count as pieces of one line. The reason is named only where the list has more than
-    one -- with a single reason the word (`no fit`, `not covered`) already says it, and the
-    reason itself is in the Markdown file, which has room for it. The word `package` is the
-    `shown` piece's own (`10 of 23 packages`), so a piece behind it is the count and the reason.
-    """
-    grouped: dict[str, list[str]] = {}
-    for entry in entries:
-        # The runtime's prefix as in every packager cell (F4): `vLLM · acme AWQ`, nothing for Ollama.
-        grouped.setdefault(entry.reason, []).append(f"{packager_cell(entry)} {entry.quantization}")
-    pieces = []
-    for reason, names in sorted(grouped.items()):
-        count = str(len(names))
-        label = f"{word}, {reason}" if len(grouped) > 1 else word
-        pieces.append(f"{count} {label}{_named(names, _NOTE_WIDTH - len(count) - len(label) - 1)}")
-    return pieces
-
-
-def _named(names: list[str], room: int) -> str:
-    """Up to three of `names` in brackets, and fewer where the room is not there.
-
-    The names are the evidence behind a count, so they are what gives way: three packages of an
-    account with a long name made a piece of 137 characters, and `joined` leaves an over-long piece
-    whole (measured in the second-model round of 2026-09-24). The count and the reason never give
-    way, and nothing is cut mid-name -- a name ends where the next one would have begun.
-
-    `room` is measured against everything this adds: the space in front, both brackets -- three
-    characters, not two. With two the line came to 101 (second-model round, 2026-09-25).
-    """
-    for shown in range(min(_NAMED_PER_REASON, len(names)), 0, -1):
-        rest = len(names) - shown
-        listed = ", ".join(names[:shown]) + (f" and {rest} more" if rest > 0 else "")
-        if len(listed) + 3 <= room:
-            return f" ({listed})"
-    return ""
 
 
 def _package_cell(entry: RankedEntry) -> str:
@@ -572,12 +548,14 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     shown += collision_pieces(block, view.ambiguous)
     lines += _labeled(SHOWN_LABEL, shown, dot)
     # One pool, one line: two statements about two memories joined by a `·` read as one.
-    lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash) + reserve_hint_rows(block))
+    # A vLLM table (F5) keeps neither the system memory's reserve nor Ollama's advice to measure.
+    vllm = vllm_shown(block)
+    lines += _labeled_rows(MEMORY_LABEL, _pool_pieces(block, dash) + ([] if vllm else reserve_hint_rows(block)))
     lines += _disk_lines(block, _disk(block, view), dash, _over(block, view))
     from_size = [entry.rank for entry in block.ranked if entry.fit.basis == "size"]
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
-    lines += _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
+    lines += [] if vllm else _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
     if block.ranked or vllm_shown(block):  # a vLLM row set aside owes its key too (Codex r3-1)
         speed = [SPEED_HINT] if block.ranked else []
         lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + speed)
@@ -655,8 +633,19 @@ def _terminal_ranking(
     lines += _runtime_lines(block)
     if block.reason is not None:
         lines.append([("", block.reason)])
+    parts = runtime_sections(block)  # F5: one section per runtime where rows of two are shown
+    lines += [[("", ALTERNATIVES)]] if len(parts) > 1 else []
+    for key, part in parts:
+        title = section_title(key) if len(parts) > 1 else ""
+        lines += ([[("", title)]] if title else []) + _terminal_body(part, dash, dot, view, several, f" {title}" if title else "")
+    return lines
+
+
+def _terminal_body(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool, where: str = "") -> list[Line]:
+    """One table and the lines under it: a machine's, or one runtime section's (F5, `where`)."""
+    lines: list[Line] = []
     if not block.ranked:
-        lines.append([("", "no package of the configured base models is ranked here")])
+        lines.append([("", f"no package of the configured base models is ranked{where} here")])
     else:
         lines.append([("", _terminal_row([name for name, _width in _TERMINAL_COLUMNS]))])
         lines.append([("", _terminal_rule())])

@@ -6,8 +6,8 @@ by another rule: how many requests of the ranking's context its cards hold at on
 (`fit_vllm.vllm_fit_class`), on the cards tensor parallel chose for it (`Fit.cards`, F1). Every text
 that explains a fit row therefore decides on `Fit.runtime` first and, for vLLM, reads its own
 quantities -- `at_once`, `requests`, `cards`, `reason` -- through this one module: the row note of
-the document (`render`), the key under a table (`views_runtime`) and the lines of step 4
-(`guided_vllm`). An Ollama row never reaches it, so every Ollama output stays byte-identical.
+the document (`render`), the key under a table of vLLM rows (`views_runtime`, F5) and the lines of
+step 4 (`guided_vllm`). An Ollama row never reaches it, so every Ollama output stays byte-identical.
 
 Imports neither `runtimes` nor `render`: `runtimes` imports `guided_vllm`, which reads this module.
 """
@@ -15,26 +15,26 @@ Imports neither `runtimes` nor `render`: `runtimes` imports `guided_vllm`, which
 from __future__ import annotations
 
 from .contracts import Fit
-from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION
+from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VLLM_RUNTIME_OVERHEAD_GIB
+from .screen import BEST_HINT
 
 VLLM_RUNTIME = "vllm"  # `runtimes.VLLM.key`, spelled here to keep this module free of that import
 
-# The key under a table that shows a vLLM row (F4): the share rule above it is Ollama's own, and
-# vLLM's classes follow requests at once instead -- one short piece each, so the terminal can wrap
-# between them inside its 100 columns (`screen.joined`).
-PERCENT_SCOPE = "the percentages above are Ollama's own"
-CLASS_RULE = (
-    "vLLM's classes count requests at once instead: no fit below one",
-    "tight from one up to below the requests this ranking assumes",
-    "fits from that many up to below twice them",
-    "ample at twice them or more (architecture basis only)",
+# The key under a table of vLLM rows alone (F5: a machine with vLLM only, or the vLLM section of a
+# machine with both runtimes) -- vLLM's own classes and pool, in place of Ollama's `screen.FIT_HINT`,
+# never beside it. One short piece each, so the terminal wraps between them in its 100 columns.
+FIT_HINT = (
+    "Fit is memory only: how many requests of this context the cards hold at once",
+    "ample: twice the requests this ranking assumes or more",
+    "fits: that many, below twice them",
+    "tight: at least one, fewer than them",
+    "no fit: not one",
+    f"the pool is {VLLM_GPU_MEMORY_UTILIZATION} of each card vLLM uses, {VLLM_RUNTIME_OVERHEAD_GIB:.2f} GB of it its runtime",
+    "gpu: one card",
+    "gpu_split: 2, 4 or 8 equal cards of the largest size, as the head count allows",
+    "for a fit from size the highest class is fits",
+    *BEST_HINT,
 )
-# Ollama spreads a `gpu_split` package over every card of the machine; vLLM only over the `t` cards
-# F1 chose (the first of the equal-size group), which a row's note (Markdown) and the `memory` line
-# (terminal) name. `SPLIT_SCOPE` marks Ollama's own piece where both stand under one table.
-SPLIT_SCOPE = " (Ollama)"
-SPLIT_PIECE = "vLLM gpu_split: only the cards its row names, the first of the largest equal size"
-POOL_PIECE = f"vLLM's pool: {VLLM_GPU_MEMORY_UTILIZATION} of each of those cards"
 _SHARE = f"({VLLM_GPU_MEMORY_UTILIZATION} of each card)"
 _FACTS = ["fit.runtime", "fit.at_once", "fit.requests", "fit.cards", "fit.need_gib", "fit.pool_gib"]
 
@@ -97,26 +97,12 @@ def reason_sentence(fit: Fit) -> tuple[str, list[str]]:
     return f" {fit.reason[:1].upper()}{fit.reason[1:]}.", ["fit.reason"]
 
 
-def key_pieces_with_vllm(pieces: list[str], gpu_split_piece: str) -> list[str]:
-    """Ollama's key `pieces` for a table that also shows a vLLM row: its `gpu_split` piece scoped to
-    Ollama, vLLM's own mode and pool pieces right behind it (Codex r2-3)."""
-    scoped: list[str] = []
-    for piece in pieces:
-        scoped += [f"{piece}{SPLIT_SCOPE}", SPLIT_PIECE, POOL_PIECE] if piece == gpu_split_piece else [piece]
-    return scoped
-
-
 __all__ = [
-    "CLASS_RULE",
-    "PERCENT_SCOPE",
-    "POOL_PIECE",
-    "SPLIT_PIECE",
-    "SPLIT_SCOPE",
+    "FIT_HINT",
     "VLLM_RUNTIME",
     "card_gib",
     "cards_words",
     "is_vllm",
-    "key_pieces_with_vllm",
     "reason_sentence",
     "requests_count",
     "row_note",

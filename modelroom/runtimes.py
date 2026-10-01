@@ -89,8 +89,9 @@ class Runtime:
     `shown_only_with` names the packages that are this runtime's alone to serve, so an output
     shows them only for a machine that has it (F3, `visible_packages`). It is not `accepts`:
     `accepts` says what a runtime loads and pairs a package with rows, and a package two runtimes
-    load is still everyone's to see. Ollama claims nothing (its packages are always shown); vLLM
-    claims the Hugging Face tensor package.
+    load is still everyone's to see. vLLM claims the Hugging Face tensor package, Ollama every
+    other one (F5): a machine whose profile names vLLM alone shows no Ollama row at all, while a
+    profile without the field still reads as Ollama's (`machine_runtime_keys`) and shows them all.
     """
 
     key: RuntimeKey
@@ -130,6 +131,11 @@ def _ollama_accepts(package: Package) -> bool:
 def _huggingface_tensor(package: Package) -> bool:
     """A Hugging Face tensor (safetensors) package: what only vLLM serves among the table's rows."""
     return package.source == "huggingface" and package.format == "tensor"
+
+
+def _not_huggingface_tensor(package: Package) -> bool:
+    """Every package but a Hugging Face tensor one: Ollama's to show (F5, `Runtime.shown_only_with`)."""
+    return not _huggingface_tensor(package)
 
 
 def _ollama_install_name(package: Package) -> str | None:
@@ -278,6 +284,7 @@ OLLAMA = Runtime(
     model_place=ollama_models_candidates,
     on_disk=_ollama_on_disk,
     words=RuntimeWords(package_prefix="", key_text=None, question="Which package should be pulled into Ollama?"),
+    shown_only_with=_not_huggingface_tensor,
 )
 
 VLLM = Runtime(
@@ -315,11 +322,9 @@ VLLM = Runtime(
     command=_not_built_yet("command", "AP9-SV2-I"),
     model_place=_not_built_yet("model_place", "AP9-SV2-I"),
     on_disk=_not_built_yet("on_disk", "AP9-SV2-I"),
-    words=RuntimeWords(
-        package_prefix="vLLM · ",
-        key_text="vLLM · rows start with vllm serve; the others are pulled into Ollama",
-        question="Which package should be installed?",
-    ),
+    # F5: no prefix and no key line -- a vLLM row stands in a section or on a machine that names
+    # its runtime already, and no start command is promised before AP9-SV2-I builds one.
+    words=RuntimeWords(package_prefix="", key_text=None, question="Which package should be installed?"),
     shown_only_with=_huggingface_tensor,
 )
 
@@ -392,16 +397,18 @@ def any_has_vllm(machines: Sequence[MachineRuntimes]) -> bool:
 
 
 def visible_packages(packages: Sequence[Package], machines: Sequence[MachineRuntimes]) -> list[Package]:
-    """The one visibility rule (F3): the `packages` an output for `machines` may show or count.
+    """The one visibility rule (F3, F5): the `packages` an output for `machines` may show or count.
 
     Read from the table, never from a package's format: a package one or more rows claim
     (`Runtime.shown_only_with`) is visible only when at least one of `machines` has one of those
-    runtimes; a package no row claims -- every Ollama package, a tensor (MLX) build of the Ollama
-    library included, and every GGUF -- is always visible. One machine for its own table or scale,
-    every shown machine for a document-wide number or summary. The snapshot itself is never
-    filtered: it keeps the raw facts.
+    runtimes -- a Hugging Face tensor package needs vLLM, every other package (GGUF, the Ollama
+    library) needs Ollama, which every profile without the `runtimes` field has
+    (`machine_runtime_keys`). No machines at all reads as such a profile: Ollama's alone. One
+    machine for its own table or scale, every shown machine for a document-wide number or summary.
+    The snapshot itself is never filtered: it keeps the raw facts.
     """
     present = frozenset().union(*(present_runtimes(profile, live) for profile, live in machines))
+    present = present if machines else machine_runtime_keys(None)
     return [package for package in packages if _shown_with(package, present)]
 
 

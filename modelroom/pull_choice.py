@@ -252,6 +252,8 @@ def block_rows(
     by_identity = {package_identity_key(package): package for package in packages}
     rows = []
     for entry in block.ranked:
+        if entry.fit.runtime != runtimes.OLLAMA.key:
+            continue  # F5: the pull offers Ollama's rows alone until AP9-SV2-I builds vLLM's start line
         package = by_identity.get(tuple(entry.package_identity))
         cell = f"{entry.packager} {dot} {entry.quantization}"
         for key, name in row_names(entry, package, block.profile):

@@ -41,7 +41,7 @@ from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, Llmfit
 from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
-from .runtimes import MachineRuntimes, fit_for, visible_packages
+from .runtimes import RUNTIMES, MachineRuntimes, fit_for, visible_packages
 from .vllm_words import is_vllm, reason_sentence as vllm_reason_sentence, row_note as vllm_row_note
 from .ranking import (
     RANKING_RULE,
@@ -424,11 +424,15 @@ def _with_rule_sentence(note: Note, row: ShownRow, per_model: bool) -> Note:
 
 
 def _ranked_entries(
-    ranking: Ranking, shared_memory: bool = False, cards: int = 1, per_model: bool = False
+    ranking: Ranking, shared_memory: bool = False, cards: int = 1, per_model: bool = False, start: int = 1, whole: bool = False
 ) -> list[RankedEntry]:
-    """The rows of one machine (`ranking.shown_rows`); `rank` is the number of the row shown."""
+    """The rows of one machine (`ranking.shown_rows`); `rank` is the number of the row shown,
+    counted on from `start`. `whole`: every ranked package, no cut and no rule sentence (F5, the
+    sections after the first, so their count stays exact: `views_sections.runtime_sections`)."""
     entries = []
-    for number, row in enumerate(shown_rows(ranking, per_model), start=1):
+    rows = [ShownRow(ranked, "rule", ranked.rank, len(ranking.ranked)) for ranked in ranking.ranked] if whole else None
+    per_model = per_model and not whole
+    for number, row in enumerate(rows if rows is not None else shown_rows(ranking, per_model), start=start):
         ranked = row.ranked
         note = _with_rule_sentence(_row_note(ranked, shared_memory, cards), row, per_model)
         entries.append(
@@ -486,19 +490,36 @@ def _machine_block(
         (package, fit_for(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config))
         for package in packages
     ]
-    ranking = rank_packages(entries, measurements, scenario, models=models)
     shared = found.profile.gpu_state == "unified_memory"  # one memory, both reserves taken from it
+    ranked: list[RankedEntry] = []
+    rankings = _rankings_by_runtime(entries, measurements, scenario, models)
+    for index, ranking in enumerate(rankings):
+        cards = len(found.profile.gpus)
+        ranked += _ranked_entries(ranking, shared, cards, per_model, start=len(ranked) + 1, whole=index > 0)
     return MachineRanking(
         machine=machine,
         status="ranked",
         label=found.label,
         profile=found.profile,
-        ranked=_ranked_entries(ranking, shared_memory=shared, cards=len(found.profile.gpus), per_model=per_model),
-        ranked_total=len(ranking.ranked),
-        not_covered=_set_aside_entries(ranking.not_covered, covered=False),
-        no_fit=_set_aside_entries(ranking.no_fit, covered=True, shared_memory=shared),
+        ranked=ranked,
+        ranked_total=sum(len(ranking.ranked) for ranking in rankings),
+        not_covered=[entry for ranking in rankings for entry in _set_aside_entries(ranking.not_covered, covered=False)],
+        no_fit=[entry for ranking in rankings for entry in _set_aside_entries(ranking.no_fit, True, shared)],
         **reserves,
     )
+
+
+def _rankings_by_runtime(
+    entries: list[tuple[Package, Fit]], measurements: list[MeasurementRecord], scenario: Scenario, models
+) -> list[Ranking]:
+    """One ranking per runtime whose fits are among `entries`, in the order of `runtimes.RUNTIMES`
+    (F5): the rows of two runtimes are alternatives on the same cards, never one list, so each is
+    ranked on its own -- a machine of one runtime ranks exactly as before. The document keeps one
+    block with continuous numbers (Ollama's rows first); the views split it into sections."""
+    keys = [runtime.key for runtime in RUNTIMES if any(fit.runtime == runtime.key for _package, fit in entries)]
+    if len(keys) < 2:
+        return [rank_packages(entries, measurements, scenario, models=models)]
+    return [rank_packages([e for e in entries if e[1].runtime == key], measurements, scenario, models=models) for key in keys]
 
 
 def _repos_with_rows(blocks: list[MachineRanking]) -> list[str]:

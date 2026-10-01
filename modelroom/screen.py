@@ -57,13 +57,10 @@ FIT_SCALE_HINT = (
     f"tight: up to {round(TIGHT_RATIO * 100)} %",
     "no fit: more",
 )
-# Ollama's own spread over every card; a table that also shows vLLM rows scopes it so
-# (`vllm_words.key_pieces_with_vllm`, AP9-SV2-F).
-GPU_SPLIT_HINT = "gpu_split: all cards together"
 FIT_POOL_HINT = (
     "the pool is what the mode names, minus its reserve (per card)",
     "gpu: one card",
-    GPU_SPLIT_HINT,
+    "gpu_split: all cards together",
     f"cpu_gpu, cpu{RAM_SUFFIX}: the system memory",
     # The reserve of the system memory, from the constants of `reserve.py` (AP9-RM, ADR 0012).
     f"system memory keeps {share_words()} as reserve, {RAM_RESERVE_MIN_GIB:g} to "
@@ -668,7 +665,6 @@ __all__ = [
     "DEFAULT_PULLED_HINT",
     "FIT_HINT",
     "FIT_SCALE_HINT",
-    "GPU_SPLIT_HINT",
     "HEAD_WIDTH",
     "JOIN_WIDTH",
     "MEASURE_HINT",

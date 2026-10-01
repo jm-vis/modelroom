@@ -16,10 +16,10 @@ from . import runtimes
 from .document import MachineRanking, RankedEntry, SetAsideEntry
 from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, VLLM_RUNTIME_OVERHEAD_GIB, equal_size_group
 from .profile import HardwareProfile
-from .ranking_words import key_pieces
-from .screen import GPU_SPLIT_HINT, ranks_text
+from .ranking_words import PER_MODEL_PIECES, key_pieces, per_model
+from .screen import ranks_text
 from .vllm_server import ServedModel
-from .vllm_words import CLASS_RULE, PERCENT_SCOPE, is_vllm, key_pieces_with_vllm
+from .vllm_words import FIT_HINT as VLLM_FIT_HINT, is_vllm
 
 RUNTIME_LABEL = "runtime"
 _PROFILE_ONLY = "(from its profile)"
@@ -53,41 +53,29 @@ def vllm_shown(block: MachineRanking) -> bool:
 
 
 def key_text(block: MachineRanking) -> list[str]:
-    """The whole key under a machine's table, for the Markdown file and the terminal alike.
-
-    Ollama's own (`ranking_words.key_pieces`) where no row the table shows is vLLM's -- byte-identical
-    to before AP9-SV2. Once one is, wherever it stands (`shown_entries`): Ollama's `gpu_split`
-    piece scoped to Ollama, with vLLM's own mode and pool beside it (Codex r2-3), then
-    `legend_lines` -- the share rule's scope, vLLM's class rule and every runtime's `key_text`."""
-    pieces = key_pieces(block)
-    if vllm_shown(block):
-        pieces = key_pieces_with_vllm(pieces, GPU_SPLIT_HINT)
-    return pieces + legend_lines(shown_entries(block))
+    """The whole key under a table, for the Markdown file and the terminal alike: one runtime's
+    only, never two side by side (F5, the views split a block of two runtimes into sections first,
+    `views_sections.runtime_sections`). Ollama's own (`ranking_words.key_pieces`) for an Ollama
+    table -- byte-identical to before AP9-SV2; vLLM's own (`vllm_words.FIT_HINT`) for a table of
+    vLLM rows, wherever they stand (`shown_entries`, Codex r2-4/r3-1)."""
+    if not vllm_shown(block):
+        return key_pieces(block)
+    return [*VLLM_FIT_HINT, *(PER_MODEL_PIECES if per_model(block) else ())]
 
 
-def legend_lines(entries: Sequence[RankedEntry | SetAsideEntry]) -> list[str]:
-    """Everything the legend carries beyond Ollama's own `screen.FIT_HINT`, once a vLLM row is
-    shown: first that the percentage rule above is Ollama's and what vLLM's classes count instead
-    (`vllm_words.PERCENT_SCOPE`, `vllm_words.CLASS_RULE`, Codex r1-5: `fit_vllm.vllm_fit_class`
-    reads requests at once, never a share of a pool), then `words.key_text` of every runtime a
-    shown row's `Fit.runtime` names, each at most once, in table order. Empty where no row names a
-    runtime that carries one (every Ollama-only table)."""
-    seen: list[str] = []
-    key_texts: list[str] = []
-    for entry in entries:
-        runtime = runtimes.runtime_of(entry.fit.runtime)
-        text = runtime.words.key_text
-        if text is not None and runtime.key not in seen:
-            seen.append(runtime.key)
-            key_texts.append(text)
-    if not any(is_vllm(entry.fit) for entry in entries):
-        return key_texts
-    return [PERCENT_SCOPE, *CLASS_RULE, *key_texts]
+def runtime_names(profile: HardwareProfile | None, live: object = None) -> str | None:
+    """`Ollama · vLLM` or `vLLM`: the runtimes of a machine in table order, where vLLM is among
+    them (`runtimes.present_runtimes`, the one source); `None` for a machine without vLLM, which
+    says nothing new (F5: step 1 and the `runtime` row alike)."""
+    present = runtimes.present_runtimes(profile, live)
+    if runtimes.VLLM.key not in present:
+        return None
+    return " · ".join(runtime.name for runtime in runtimes.RUNTIMES if runtime.key in present)
 
 
 def runtime_line(profile: HardwareProfile | None, live: object = None, served_matches_run: bool = False) -> str | None:
-    """The `runtime` row under a machine's head (F4): `None` where the machine has no vLLM at all
-    (`runtimes.present_runtimes`), else `Ollama · vLLM <state>`.
+    """The `runtime` row under a machine's head (F4, F5): `None` where the machine has no vLLM at
+    all, else its runtimes (`runtime_names`) and vLLM's state.
 
     `live` is this run's own step-1 reading for this machine (`runtimes.present_runtimes`'s own
     parameter) -- a `ServedModel` says `serving <name>` (`served_matches_run` decides whether that
@@ -96,9 +84,8 @@ def runtime_line(profile: HardwareProfile | None, live: object = None, served_ma
     render`, or a machine this run never talked to) falls back to the profile alone, which is the
     only source `modelroom render` ever has.
     """
-    if runtimes.VLLM.key not in runtimes.present_runtimes(profile, live):
-        return None
-    return f"{runtimes.OLLAMA.name} · {runtimes.VLLM.name} {_vllm_state(live, served_matches_run)}"
+    names = runtime_names(profile, live)
+    return None if names is None else f"{names} {_vllm_state(live, served_matches_run)}"
 
 
 def _vllm_state(live: object, served_matches_run: bool = False) -> str:
@@ -159,10 +146,10 @@ def vllm_pool_pieces(entries: Sequence[RankedEntry], dash: str) -> list[str]:
 __all__ = [
     "RUNTIME_LABEL",
     "key_text",
-    "legend_lines",
     "package_prefix",
     "packager_cell",
     "runtime_line",
+    "runtime_names",
     "shown_entries",
     "unequal_cards_note",
     "vllm_shown",

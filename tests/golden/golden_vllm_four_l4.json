@@ -90,6 +90,51 @@
         {
           "base_model_hf_repo": "Qwen/Qwen3-8B",
           "fit": {
+            "basis": "architecture",
+            "context": 32768,
+            "context_assumed": false,
+            "fit_class": "ample",
+            "kv_gib": 45.0,
+            "mode": "gpu_split",
+            "need_gib": 50.650738859176634,
+            "pool_gib": 85.96,
+            "reason": null,
+            "requests": 10,
+            "reserve_gib": 4.0,
+            "weights_gib": 4.68248987197876
+          },
+          "format": "gguf",
+          "measurement_group": 1,
+          "measurement_id": null,
+          "note": {
+            "code": "spread_over_graphics_cards",
+            "facts": [
+              "fit.mode",
+              "fit.need_gib",
+              "fit.pool_gib",
+              "fit.reserve_gib",
+              "profile.gpus"
+            ],
+            "origin": "computed",
+            "subject": "package",
+            "text": "Fits into graphics memory spread over 4 cards: it needs about 50.7 GiB of the 86.0 GiB left after the reserve of 1.0 GiB on each card."
+          },
+          "package_context": null,
+          "package_identity": [
+            "huggingface",
+            "unsloth/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf"
+          ],
+          "packager": "unsloth",
+          "provenance": "from_metadata",
+          "quantization": "Q4_K_M",
+          "rank": 1,
+          "speed_tps": null,
+          "weights_gib": 4.68248987197876
+        },
+        {
+          "base_model_hf_repo": "Qwen/Qwen3-8B",
+          "fit": {
             "at_once": 15,
             "basis": "architecture",
             "cards": 4,
@@ -132,54 +177,9 @@
           "packager": "RedHatAI",
           "provenance": "from_metadata",
           "quantization": "AWQ",
-          "rank": 1,
-          "speed_tps": null,
-          "weights_gib": 5.679746963083744
-        },
-        {
-          "base_model_hf_repo": "Qwen/Qwen3-8B",
-          "fit": {
-            "basis": "architecture",
-            "context": 32768,
-            "context_assumed": false,
-            "fit_class": "ample",
-            "kv_gib": 45.0,
-            "mode": "gpu_split",
-            "need_gib": 50.650738859176634,
-            "pool_gib": 85.96,
-            "reason": null,
-            "requests": 10,
-            "reserve_gib": 4.0,
-            "weights_gib": 4.68248987197876
-          },
-          "format": "gguf",
-          "measurement_group": 1,
-          "measurement_id": null,
-          "note": {
-            "code": "spread_over_graphics_cards",
-            "facts": [
-              "fit.mode",
-              "fit.need_gib",
-              "fit.pool_gib",
-              "fit.reserve_gib",
-              "profile.gpus"
-            ],
-            "origin": "computed",
-            "subject": "package",
-            "text": "Fits into graphics memory spread over 4 cards: it needs about 50.7 GiB of the 86.0 GiB left after the reserve of 1.0 GiB on each card."
-          },
-          "package_context": null,
-          "package_identity": [
-            "huggingface",
-            "unsloth/Qwen3-8B-GGUF",
-            "Qwen3-8B-Q4_K_M.gguf"
-          ],
-          "packager": "unsloth",
-          "provenance": "from_metadata",
-          "quantization": "Q4_K_M",
           "rank": 2,
           "speed_tps": null,
-          "weights_gib": 4.68248987197876
+          "weights_gib": 5.679746963083744
         }
       ],
       "ranked_total": 2,

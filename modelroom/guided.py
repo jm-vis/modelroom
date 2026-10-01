@@ -88,6 +88,7 @@ from .search_apply import apply_tensor_repos
 from .selection import NO_MACHINE_CHOSEN, NO_MODEL_CHOSEN, RunSelection, machine_origins, narrow_config
 from .state import LockHeldError, write_search_log
 from .views import RunView, context_short, show_nothing, show_result
+from .views_runtime import runtime_names
 
 # How this machine is measured, as `_clone_mode` answers it: the takeover rule as it stands, a new
 # profile ("a clone"), or the bound profile written again under its own id ("the same machine").
@@ -419,6 +420,9 @@ def _measured(run: GuidedRun, config: Configuration, results_dir: Path, *, again
     profile = _bound_profile(run, scan_profiles(config.paths.hardware_dir), results_dir)
     if profile is not None:
         run.screen.note(measured_note(profile, again=again))
+        names = runtime_names(profile, run.servers.found.get("vllm"))  # F5: only where vLLM is there
+        if names is not None:
+            run.screen.note(f"runtime  {names}")
 
 
 def _record_profile(

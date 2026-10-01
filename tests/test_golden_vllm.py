@@ -4,8 +4,8 @@ Every other golden file of this repository (`tests/golden/guided-screen*.txt`) i
 machine without vLLM, so none of them changes a byte for this sub-package (CONTRACTS.md, "Fit for
 vLLM"). This machine -- four equal 22.49 GiB L4 cards, `profiles_v4/four_l4_server_vllm.json` --
 is new, and only here: one GGUF row and one Hugging Face tensor row of the very same base model,
-so the Markdown table, the terminal view and the JSON document all show the runtime prefix, the
-`runtime` row, the legend's extra line and the `memory` line's own vLLM piece together.
+so the Markdown file and the terminal view show one section per runtime (F5) -- each with its own
+table, `memory` line and key -- under the machine's `runtime` row; the JSON stays one block.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from modelroom.contracts import Architecture, BaseModelSpec, Package, PackageFil
 from modelroom.measurements import Scenario
 from modelroom.profile import HardwareProfile
 from modelroom.render import MachineProfile, build_render_document, document_json
+from modelroom.screen import FIT_HINT
 from modelroom.views import document_markdown, document_terminal
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -28,8 +29,9 @@ GOLDEN = Path(__file__).parent / "golden"
 SNAPSHOT_RUN_AT = datetime(2026, 9, 30, 8, 0, 0, tzinfo=timezone.utc)
 RENDERED_AT = datetime(2026, 9, 30, 8, 5, 0, tzinfo=timezone.utc)
 BASE_REPO = "Qwen/Qwen3-8B"
-# Fix r2 (Codex r2-3): what the legend says vLLM's `gpu_split` is, beside Ollama's "all cards together".
-VLLM_SPLIT_PIECE = "vLLM gpu_split: only the cards its row names, the first of the largest equal size"
+# F5: what vLLM's own key says its `gpu_split` is (never Ollama's "all cards together"), and its start.
+VLLM_SPLIT_PIECE = "gpu_split: 2, 4 or 8 equal cards of the largest size, as the head count allows"
+VLLM_KEY_START = "Fit is memory only: how many requests of this context the cards hold at once"
 
 
 def _profile() -> HardwareProfile:
@@ -238,13 +240,14 @@ def test_a_not_covered_vllm_row_carries_its_runtime_in_json_and_the_packager_cel
     entry = document.machines[0].not_covered[0]
     assert entry.fit.fit_class == "unknown" and entry.fit.reason == ZERO_WEIGHT_REASON
     assert entry.fit.runtime == "vllm"
-    assert packager_cell(entry) == "vLLM · acme"
+    assert packager_cell(entry) == "acme"  # F5: no prefix, the machine's vLLM key says whose row it is
 
     dumped = document_json(document)
     not_covered = dumped["machines"][0]["not_covered"][0]
     assert not_covered["fit"]["runtime"] == "vllm"
     markdown = document_markdown(document)
-    assert "vLLM · acme" in markdown
+    assert "| acme |" in markdown
+    assert VLLM_KEY_START in markdown and FIT_HINT[0] not in markdown
 
 
 def test_an_unequal_cards_machine_describes_the_group_not_a_packages_own_usage():
@@ -292,13 +295,12 @@ def test_an_unequal_cards_machine_describes_the_group_not_a_packages_own_usage()
     terminal = document_terminal(document)
     assert "vLLM can split over the 3 cards of 22.49 GB; 1 smaller card is left out" in terminal
     assert "vLLM on 1 card:" in terminal and "vLLM on 2 cards:" in terminal
-    # Codex r2-3: the legend's own mode words may not claim `all cards together` for vLLM, which
-    # uses two of the three equal cards here and never the smaller T4.
+    # Codex r2-3, F5: the key may not claim `all cards together` for vLLM, which uses two of the
+    # three equal cards here and never the smaller T4 -- a table of vLLM rows carries vLLM's key alone.
     markdown = document_markdown(document)
     for text in (markdown, terminal):
-        assert "gpu_split: all cards together (Ollama)" in text
         assert VLLM_SPLIT_PIECE in text
-        assert "gpu_split: all cards together ·" not in text.replace("\n", " ")
+        assert "gpu_split: all cards together" not in text
 
 
 # --- Fix r2 (Codex r2 on 8d05e92): every text that explains a row reads `Fit.runtime` ---------------
@@ -349,27 +351,24 @@ def test_every_vllm_class_explains_its_row_by_requests_at_once(fit_class):
     assert listed["note"]["text"] == entry.note.text and listed["fit"].get("at_once", 0) == entry.fit.at_once
     terminal = document_terminal(document)
     if fit_class == "no_fit":
-        assert "1 no fit (vLLM · acme AWQ)" in terminal
+        assert "1 no fit (acme AWQ)" in terminal
     else:
-        row = next(line for line in terminal.splitlines() if "vLLM · acme · AWQ" in line)
+        row = next(line for line in terminal.splitlines() if "acme · AWQ" in line)
         assert f" {fit_class} " in row
 
 
 def test_an_ollama_only_table_on_a_vllm_machine_keeps_its_own_key():
     """The counter-proof: a machine with vLLM that shows no vLLM row keeps Ollama's key, word for word."""
-    from modelroom.screen import FIT_HINT
-
     document = _render(_profile(), [_base_model()], [_gguf_package()])
 
     assert " · ".join(FIT_HINT) in document_markdown(document)
-    assert "(Ollama)" not in document_markdown(document) and "vLLM's" not in document_terminal(document)
+    assert VLLM_KEY_START not in document_markdown(document) + document_terminal(document)
 
 
 @pytest.mark.parametrize("where", ["no_fit", "not_covered"])
 def test_vllm_rows_set_aside_get_the_legend_beside_ranked_ollama_rows(where):
-    """Codex r2-4: the legend reads every row the table shows, not the ranked ones alone. Ollama
-    ranks here, and the one vLLM row stands under `No fit` or `Not covered` -- the reader still
-    needs vLLM's own class rule, its prefix and its mode words, in the Markdown and the terminal."""
+    """Codex r2-4, F5: Ollama ranks here, and the one vLLM row stands under `No fit` or `Not
+    covered` -- it gets the vLLM section with vLLM's own key, in the Markdown and the terminal."""
     tensor = _awq(20_000_000_000 if where == "no_fit" else 0)
     document = _render(_profile(), [_qwen3_base(None)], [_gguf_package(), tensor])
 
@@ -377,11 +376,10 @@ def test_vllm_rows_set_aside_get_the_legend_beside_ranked_ollama_rows(where):
     assert {entry.fit.runtime for entry in block.ranked} == {"ollama"}
     assert [entry.fit.runtime for entry in getattr(block, where)] == ["vllm"]
     terminal = document_terminal(document)
-    for text in (document_markdown(document), terminal):
-        assert "vLLM's classes count requests at once instead: no fit below one" in text
-        assert "gpu_split: all cards together (Ollama)" in text
-        assert "vLLM · rows start with vllm serve; the others are pulled into Ollama" in text
-    assert "vLLM · acme AWQ" in terminal  # the `shown` line names the set-aside row as vLLM's
+    for text, heading in ((document_markdown(document), "### with vLLM"), (terminal, " with vLLM")):
+        vllm = text.index(heading)
+        assert VLLM_KEY_START in text[vllm:] and FIT_HINT[0] in text[:vllm]
+    assert "acme AWQ" in terminal.split("\n with vLLM\n")[1]  # the `shown` line of the vLLM section
 
 
 def _gguf(size: int) -> Package:
@@ -402,9 +400,7 @@ def test_a_machine_whose_only_rows_are_vllm_set_aside_still_gets_the_legend(wher
     assert block.ranked == [] and [entry.fit.runtime for entry in getattr(block, where)] == ["vllm"]
     markdown, terminal = document_markdown(document), document_terminal(document)
     for text in (markdown, terminal):
-        assert "vLLM's classes count requests at once instead: no fit below one" in text
-        assert "gpu_split: all cards together (Ollama)" in text
-        assert "vLLM · rows start with vllm serve; the others are pulled into Ollama" in text
+        assert VLLM_KEY_START in text and FIT_HINT[0] not in text
     assert any(line.startswith(" key ") for line in terminal.splitlines())
     assert "Speed is measured, see its column." not in markdown + terminal
 
@@ -413,8 +409,6 @@ def test_a_machine_whose_only_rows_are_vllm_set_aside_still_gets_the_legend(wher
 def test_an_ollama_machine_with_nothing_ranked_still_gets_no_key(size):
     """The counter-proof of Codex r3-1: an Ollama row set aside, nothing ranked -- no key at all,
     exactly as before AP9-SV2, on a machine with vLLM as on any other."""
-    from modelroom.screen import FIT_HINT
-
     document = _render(_profile(), [_base_model()], [_gguf(size)])
 
     block = document.machines[0]

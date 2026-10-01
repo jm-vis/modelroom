@@ -32,13 +32,28 @@ server -- ranked
 
 Memory reserve 8.0 GB is set in modelroom.toml; computed from this machine it would be 16.0 GB.
 
-Showing 2 of 2 ranked packages.
+One section per runtime: alternatives on the same cards, not both at once.
+
+### with Ollama
+
+Showing 1 of 1 ranked packages.
 
 | # | Base model | Stars | Packager | Quant | Format | Weights GiB (computed) | Fit (computed) | Need GiB (computed) | Pool GiB (computed) | Package context | Measured group | Speed tok/s (measured) | Provenance | Note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | Qwen/Qwen3-8B | – | vLLM · RedHatAI | AWQ | tensor | 5.68 | fits (gpu_split) | 56.68 | 82.76 | unknown | 1 | – | from_metadata | vLLM holds 15 requests at once on 4 cards of 22.5 GiB; the 10 requests need about 56.7 GiB of the 82.8 GiB it takes (0.92 of each card). |
-| 2 | Qwen/Qwen3-8B | – | unsloth | Q4_K_M | gguf | 4.68 | ample (gpu_split) | 50.65 | 85.96 | unknown | 1 | – | from_metadata | Fits into graphics memory spread over 4 cards: it needs about 50.7 GiB of the 86.0 GiB left after the reserve of 1.0 GiB on each card. |
+| 1 | Qwen/Qwen3-8B | – | unsloth | Q4_K_M | gguf | 4.68 | ample (gpu_split) | 50.65 | 85.96 | unknown | 1 | – | from_metadata | Fits into graphics memory spread over 4 cards: it needs about 50.7 GiB of the 86.0 GiB left after the reserve of 1.0 GiB on each card. |
 
-Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · fits: up to 85 % · tight: up to 98 % · no fit: more · the pool is what the mode names, minus its reserve (per card) · gpu: one card · gpu_split: all cards together (Ollama) · vLLM gpu_split: only the cards its row names, the first of the largest equal size · vLLM's pool: 0.92 of each of those cards · cpu_gpu, cpu (RAM): the system memory · system memory keeps a quarter as reserve, 2 to 16 GB, unless modelroom.toml sets it · one memory shared by system and card counts as gpu, a quarter kept, no upper limit · off the card, and for a fit from size the highest class is fits · best: the least compression of the same model that fits · modelroom rates no model family against another · the percentages above are Ollama's own · vLLM's classes count requests at once instead: no fit below one · tight from one up to below the requests this ranking assumes · fits from that many up to below twice them · ample at twice them or more (architecture basis only) · vLLM · rows start with vllm serve; the others are pulled into Ollama
+Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · fits: up to 85 % · tight: up to 98 % · no fit: more · the pool is what the mode names, minus its reserve (per card) · gpu: one card · gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory · system memory keeps a quarter as reserve, 2 to 16 GB, unless modelroom.toml sets it · one memory shared by system and card counts as gpu, a quarter kept, no upper limit · off the card, and for a fit from size the highest class is fits · best: the least compression of the same model that fits · modelroom rates no model family against another
+
+Speed is measured, see its column.
+
+### with vLLM
+
+Showing 1 of 1 ranked packages.
+
+| # | Base model | Stars | Packager | Quant | Format | Weights GiB (computed) | Fit (computed) | Need GiB (computed) | Pool GiB (computed) | Package context | Measured group | Speed tok/s (measured) | Provenance | Note |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2 | Qwen/Qwen3-8B | – | RedHatAI | AWQ | tensor | 5.68 | fits (gpu_split) | 56.68 | 82.76 | unknown | 1 | – | from_metadata | vLLM holds 15 requests at once on 4 cards of 22.5 GiB; the 10 requests need about 56.7 GiB of the 82.8 GiB it takes (0.92 of each card). |
+
+Fit is memory only: how many requests of this context the cards hold at once · ample: twice the requests this ranking assumes or more · fits: that many, below twice them · tight: at least one, fewer than them · no fit: not one · the pool is 0.92 of each card vLLM uses, 1.50 GB of it its runtime · gpu: one card · gpu_split: 2, 4 or 8 equal cards of the largest size, as the head count allows · for a fit from size the highest class is fits · best: the least compression of the same model that fits · modelroom rates no model family against another
 
 Speed is measured, see its column.

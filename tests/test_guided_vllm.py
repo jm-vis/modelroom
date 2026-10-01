@@ -576,6 +576,20 @@ def _fresh(tmp_path: Path, answers: dict, *, daemon=None, servers=None) -> tuple
     return code, lines, asker
 
 
+@pytest.mark.parametrize("servers, said", [("vllm", "runtime  Ollama · vLLM"), ("offline", None)])
+def test_step_1_names_the_runtimes_after_the_measurement_only_with_vllm(tmp_path: Path, servers, said):
+    """F5: after this machine measured itself, step 1 names its runtimes -- only where vLLM is
+    among them (here: detected live); a machine of Ollama alone gets no new line."""
+    the_servers = vllm_servers() if servers == "vllm" else offline_servers()
+    _code, lines, _asker = _fresh(tmp_path, {**FRESH, "load_test": False}, servers=the_servers)
+
+    step = _step(lines, 1)
+    runtime = [line for line in step if line.startswith("runtime")]
+    assert runtime == ([said] if said else [])
+    if said:
+        assert step.index(said) == next(index for index, line in enumerate(step) if line.startswith("measured")) + 1
+
+
 def test_step_four_asks_one_question_for_every_server(tmp_path: Path):
     from fixture_support import DEEPSEEK_OLLAMA_NAME, loadtest_daemon
 
