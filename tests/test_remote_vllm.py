@@ -26,12 +26,7 @@ import pytest
 
 from fixture_room import fixed_room
 from fixture_ssh import FakeSsh, FaultSsh
-from fixture_support import (
-    VLLM_UNREACHABLE,
-    json_response,
-    qwen25_tensor_package,
-    vllm_servers,
-)
+from fixture_support import VLLM_UNREACHABLE, qwen25_tensor_package
 from modelroom.contracts import Approval, PackageFile
 from modelroom.daemon import FixtureDaemon
 from modelroom.dialog import FileAsker
@@ -44,7 +39,7 @@ from modelroom.ssh import ProcessOutcome, SshError
 from modelroom.vllm_server import CHAT_PATH, METRICS_PATH, MODELS_PATH, FixtureVllmServer
 
 from test_golden_vllm import FIXTURES, _base_model, _gguf_package, _profile
-from test_install_vllm import DOCKER, EXPRESSION, RELATIVE_NOTE, REPO as AWQ_REPO, REVISION as AWQ_REVISION, SERVE
+from test_install_vllm import DOCKER, EXPRESSION, RELATIVE_NOTE, REPO as AWQ_REPO, SERVE
 from test_install_vllm import _package as _awq_package
 
 NOW = datetime(2026, 10, 2, 8, 0, 0, tzinfo=timezone.utc)
@@ -249,7 +244,7 @@ def test_hello_names_the_vllm_state_on_the_server(tmp_path, state, vllm, which):
 
 def test_an_old_hello_without_vllm_reads_absent():
     """R1: an older counterpart sends no `vllm`, no `model_disk` and no `runtimes`: they read as not there."""
-    from modelroom.remote_client import hello, profile, room
+    from modelroom.remote_client import hello, room
 
     old_hello = b'{"protocol":1,"result":{"version":"0.2.0","system":"linux","ollama":"reachable","agent_forwarded":false,"os_fingerprint":"none"}}'
     assert hello("gpu1", FaultSsh(ProcessOutcome(0), lines=(old_hello,)), ssh_path="ssh")["vllm"] == "absent"
