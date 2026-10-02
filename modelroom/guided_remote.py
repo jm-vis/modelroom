@@ -24,6 +24,7 @@ from .config import Configuration
 from .dialog import AnswerMissingError, Choice
 from .guided_remote_bind import KEY_ALIAS, KEY_CLASS, KEY_CLONE
 from .guided_remote_bind import QUESTIONS as _BIND_QUESTIONS
+from .guided_remote_vllm import remember_hello, with_model_disk
 from .guided_remote_bind import (
     _ask_alias,
     _ask_class,
@@ -103,6 +104,7 @@ def ssh_step(run: "GuidedRun", config_file: Path, config: Configuration, scan: P
     except SshError as exc:
         run.failed(str(exc))
         return config, set(), None
+    remember_hello(run, alias, info)  # its vLLM, live in this run (AP9-SV2-R, R3 step 1)
     profile_id = _resolve_profile_id(run, scan, alias)
     if _identity_changed(scan.profiles.get(profile_id), info["os_fingerprint"]) and _ask_clone(run, alias) == "new":
         profile_id = _fresh_id(run, scan)
@@ -152,6 +154,7 @@ def verify_active(run: "GuidedRun", config: Configuration, config_file: Path, sc
     except SshError as exc:
         run.failed(str(exc))
         return False
+    remember_hello(run, alias, info)  # its vLLM, live in this run (AP9-SV2-R, R3 step 1)
     known = scan.profiles.get(profile_id)
     if not _identity_changed(known, info["os_fingerprint"]):
         return True
@@ -210,7 +213,7 @@ def read_room(run: "GuidedRun", alias: str, document: "RenderDocument") -> LiveR
         return LiveRoom(disk=Disk(None, alias, f"{alias} not reached"))
     disk_info = result["disk"]
     reason = _UNCLEAR if disk_info["unclear"] else None
-    disk = Disk(disk_info["free_bytes"], alias, reason)
+    disk = with_model_disk(run, alias, Disk(disk_info["free_bytes"], alias, reason), result.get("model_disk"))  # vLLM's place (R3 step 5)
     graphics = result.get("graphics_free_mib")
     return LiveRoom(disk=disk, graphics_free_mib=tuple(graphics) if graphics else None)
 

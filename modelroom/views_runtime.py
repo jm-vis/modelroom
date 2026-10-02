@@ -106,6 +106,18 @@ def runtime_set_line(profile: HardwareProfile | None, live: object = None) -> st
     return f"{names} {_PROFILE_ONLY}" if from_profile else names
 
 
+def runtime_row(block: MachineRanking, live: object, ssh_active: str | None, packages: Sequence = (), dot: str = "·") -> str | None:
+    """The text of the `runtime` row under a machine's head: `runtime_set_line` as before, except for the
+    active computer over SSH whose vLLM was read live (AP9-SV2-R, R3): its state and, where it serves a
+    package of this run, that package's name -- built from this computer's own package, never the server's --
+    then `· on gpu1` (`runtime  Ollama · vLLM serving Qwen3-8B-AWQ · on gpu1`)."""
+    if block.machine != ssh_active or live is None:
+        return runtime_set_line(block.profile, live)
+    matches = isinstance(live, ServedModel) and bool(live.root) and any(package.repo == live.root for package in packages)
+    text = runtime_line(block.profile, live, matches)
+    return None if text is None else f"{text} {dot} on {block.label}"
+
+
 def runtime_line(profile: HardwareProfile | None, live: object = None, served_matches_run: bool = False) -> str | None:
     """The `runtime` row under a machine's head (F4, F5): `None` where the machine has no vLLM at
     all, else its runtimes (`runtime_names`) and vLLM's state.
@@ -185,6 +197,7 @@ __all__ = [
     "packager_cell",
     "runtime_line",
     "runtime_names",
+    "runtime_row",
     "runtime_set_line",
     "shown_entries",
     "unequal_cards_note",

@@ -99,6 +99,7 @@ def install_lines(
     packages: Sequence[Package] = (),
     held: Held = None,
     live_vllm: object = None,
+    over_ssh: bool = False,
 ) -> list[Line]:
     """The install line of a block, behind a blank line; nothing where a row has no local name.
 
@@ -113,13 +114,18 @@ def install_lines(
     A vLLM row (AP9-SV2-I) is two commands and what to do with them (`install_vllm.install_block_lines`),
     nothing to pull; `live_vllm` is what this machine's local server states it serves, so another
     model there adds the stop line.
+
+    `over_ssh` (AP9-SV2-R, R3): the block is the active computer over SSH, whose own free disk was read
+    there (`guided_remote.read_room`) -- it takes the disk rule like this machine's, the best row that also
+    fits it, with its command naming the computer.
     """
     if install_for is None or not block.ranked:
         return []
     own = block.machine == install_for
-    read = known(block_place(block, disk)) if own else None
-    offer = install_offer(block, disk if own else None, packages, held, ambiguous)
-    if own and offer.all_over:
+    reads = own or over_ssh
+    read = known(block_place(block, disk)) if reads else None
+    offer = install_offer(block, disk if reads else None, packages, held, ambiguous)
+    if reads and offer.all_over:
         return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
     if offer.row is None:
         stop = offer.stop
@@ -129,7 +135,7 @@ def install_lines(
         return [] if note is None else [[], label_line(INSTALL_LABEL, [("class:note", note)])]
     row, runtime = offer.row, runtimes.runtime_of(offer.row.runtime)
     if runtime.key == runtimes.VLLM.key:
-        return _vllm_lines(block, row, own, disk, packages, held, live_vllm, offer.skipped, dash)
+        return _vllm_lines(block, row, own, disk, packages, held, live_vllm, offer.skipped if reads else (), dash)
     command = runtime.command(str(row.name))
     if own:
         # The one line of this view that may pass 100 characters: it is a command to copy, and a
@@ -149,12 +155,15 @@ def _vllm_lines(
     """The install block of a vLLM row under a table: this machine's with its notes (on disk already,
     another model served), another machine's with the machine named and no promise about this run."""
     entry = next(entry for entry in block.ranked if entry.rank == row.rank)
-    vllm = disk.vllm if own and disk is not None else None
+    vllm = disk.vllm if disk is not None else None  # another computer's too, where its disk was read (over SSH)
     relative = vllm is not None and vllm.relative
     install = vllm_install(package_of(row, packages), entry.fit, block.profile, relative_cache=relative)
-    if not own:
-        return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, where=block.label)]
     there = row.identity in (held or {}).get(runtimes.VLLM.key, frozenset()) or (vllm is not None and row.identity in vllm.held)
+    if not own:
+        lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=block.label)
+        if skipped:
+            lines.append(label_line("", [("class:note", skipped_words(list(skipped), dash))]))
+        return [[], *lines]
     lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=live_vllm, on_disk=there)
     if skipped:
         lines.append(label_line("", [("class:note", skipped_words(list(skipped), dash))]))

@@ -71,10 +71,14 @@ def _disk_pieces(live: LiveRoom | None, where: Where, machine: str, ollama: bool
     disk = live.disk if live is not None else None
     own = disk.vllm if vllm and disk is not None else None
     if own is None or not own.known:
+        if not ollama and where == "ssh":  # a server that did not say where vLLM keeps its models (AP9-SV2-R, R1)
+            return [f"disk unknown on {machine}"]
         return [_disk_piece(live, where, machine)] if ollama else []
     if not ollama:
         return [vllm_disk_words(own)]
-    if disk.known and disk.drive == own.drive:
+    # Over SSH the server says itself whether both places are on one drive (`Disk.same_place`).
+    same = own.same_place if own.same_place is not None else disk.drive == own.drive
+    if disk.known and same:
         return [shared_disk_words(disk)]
     return [_disk_piece(live, where, machine), vllm_disk_words(own)]
 

@@ -2677,8 +2677,10 @@ and keeps the ones whose state is `serving` or `installed` (`absent` and `asks_k
 `serving` where the daemon answers, `installed` where `ollama` is in the `PATH`; vLLM through `detect_vllm`:
 Linux only). The probes are the run's own: its daemon, its server transports, the `room`'s platform, home,
 `PATH` and file test -- never a Docker call. An empty list is not written; a machine measured before this
-reads as "Ollama only" as ever. A machine reached over SSH (`remote profile`, `hello.system`) does not
-write the field yet.
+reads as "Ollama only" as ever. A machine reached over SSH writes the field too (AP9-SV2-R, R1): the
+`profile` operation of `modelroom remote` reads the runtimes **at the server** (Ollama where its daemon
+answers or `ollama` is in the `PATH`, vLLM through `detect_vllm` on the server's own platform, so a Windows or
+macOS server never lists it) and puts them in the profile it sends, literals only.
 
 `RuntimeKey` (`modelroom/profile.py`) names only `"ollama"` and `"vllm"` today; a later runtime
 (LM Studio, AP9-LS) is a new value in the same list, additive again -- never a plug-in, "Laufzeit
@@ -3190,7 +3192,9 @@ closed (EOF); nothing about the request ever reaches argv. The counterpart (`mod
 remote_server.py`) reads at most `MAX_INPUT_BYTES`, 1 MiB, of it -- the same bound for every op this
 module answers (`hello`, `profile`, `room`, `daemon`, and `candidates`/`measure`, FR-B2, "Load test
 on the server" below; a `candidates`/`measure` request carries the run's own packages, so a very
-large snapshot can reach this bound before it reaches Ollama's own limits) -- writes JSON lines to
+large snapshot can reach this bound before it reaches Ollama's own limits; `vllm` and `vllm-measure`,
+AP9-SV2-R, read up to 16 MiB, `remote_server.input_limit`, for their requests carry packages too, though
+only as short references) -- writes JSON lines to
 stdout and nothing to the disk of the machine it runs on (Ollama's own pull writes and the load
 test's own generate calls excepted), and exits `0` whether or not the call itself succeeded -- a
 fault is an `error` line, never a process exit code; exit codes 127/2/255 are read by the caller
@@ -3209,8 +3213,9 @@ handed on at once, never collected. On `hello` alone, an envelope whose `protoco
 other than `1` gets its own sentence naming the number (`modelroom on <alias> speaks protocol <n>;
 this one speaks 1; update the older one`).
 
-**Error codes.** An `error` line carries one of five codes, never free text of the server; any
-other value is a form fault. Each has one fixed sentence at the laptop (`ssh.ERROR_SENTENCES`):
+**Error codes.** An `error` line carries one of eight codes (the last three are AP9-SV2-R's), never
+free text of the server; any other value is a form fault. Each has one fixed sentence at the laptop
+(`ssh.ERROR_SENTENCES`):
 
 | code | the server sends it when | sentence at the laptop |
 |---|---|---|
@@ -3219,6 +3224,9 @@ other value is a form fault. Each has one fixed sentence at the laptop (`ssh.ERR
 | `ollama_unreachable` | the server's own Ollama does not answer a `daemon`, `candidates` or `measure` call | `Ollama does not answer on <alias>` |
 | `too_large` | the request is over `MAX_INPUT_BYTES` (1 MiB) | `the request to <alias> was larger than modelroom there reads` |
 | `internal` | any other fault while the server answers (its text is dropped) | `modelroom on <alias> failed on its own side before it could answer` |
+| `vllm_unreachable` | `vllm-measure`: the server's own vLLM does not answer on `127.0.0.1:8000` | `vLLM does not answer on <alias>` |
+| `vllm_asks_key` | `vllm-measure`: the server's vLLM asks for an API key (a `401`) | `the vLLM server on <alias> asks for an API key; modelroom reads an open server only` |
+| `other_model` | `vllm-measure`: the server serves another model than the package asked about, or no single model | `vLLM on <alias> serves another model now` |
 
 **How a call ends without a terminal line.** Once stdout has ended, the laptop waits for the
 process to exit within what is left of the time limit and reads stderr to its end, so the exit
@@ -3234,16 +3242,18 @@ pull, any other `255` is `<alias> could not be reached over SSH; try ssh <alias>
 why`, anything else `the connection to <alias> ended before the answer`.
 
 **Ops (FR-B1: `hello`, `profile`, `room`, `daemon`; FR-B2: `candidates`, `measure`, "Load test on the
-server" below):**
+server" below; AP9-SV2-R: `vllm`, `vllm-measure`, "vLLM at a server over SSH" below):**
 
 | op | request | `result` |
 |---|---|---|
-| `hello` | `{}` | `{"version": "X.Y.Z"\|null, "system": "linux"\|"win32"\|"darwin", "ollama": "reachable"\|"unreachable", "agent_forwarded": bool, "os_fingerprint": "<salted>"\|"none"}` |
+| `hello` | `{}` | `{"version": "X.Y.Z"\|null, "system": "linux"\|"win32"\|"darwin", "ollama": "reachable"\|"unreachable", "agent_forwarded": bool, "os_fingerprint": "<salted>"\|"none", "vllm": "serving"\|"installed"\|"absent"\|"asks_key"}` -- `vllm` optional, `absent` where an older server sends none |
 | `profile` | `{"profile_id": "<16 hex>", "machine_class": null\|"laptop"\|"workstation"\|"server"}` | `{"export": <ExportObject v1>}`, `display_name` the placeholder `"remote"`, `measurements` empty, `Probes.hostname` never called |
-| `room` | `{"cards": [[index, name], ...]}` | `{"disk": {"known": bool, "free_bytes": int\|null, "unclear": bool}, "graphics_free_mib": [..]\|null}` -- no drive, no path |
+| `room` | `{"cards": [[index, name], ...]}` | `{"disk": {"known": bool, "free_bytes": int\|null, "unclear": bool}, "graphics_free_mib": [..]\|null, "model_disk": {"known": bool, "free_bytes": int\|null, "same_as_ollama": bool, "relative": bool}}` -- no drive, no path; `model_disk` (vLLM's place) optional, not there on an older server |
 | `daemon` | `{"method", "path", "body"}` | short calls: `{"status": int, "body": <JSON>\|null}`; `POST /api/pull` also emits `progress` lines and ends with `{"status": int, "done": bool}` |
 | `candidates` | `{"packages": [<Package>, ...]}` | `{"candidates": [{"package_identity": [source, repo\|name, stem\|tag]}, ...], "set_aside": int}` |
 | `measure` | `{"package_identity": [...], "packages": [<Package>, ...], "scenario": <Scenario>, "profile_id": "<16 hex>"}` | `progress` `{"stage": "warmup"\|"run", "number": int, "of": int}`, `result` `{"record": <MeasurementRecord>}` |
+| `vllm` | `{"packages": [<PackageRef>, ...]}` | `{"state": "serving"\|"installed"\|"absent"\|"asks_key", "served": null\|{"package": <index>\|null, "context": int}, "missing_bytes": [int\|null, ...]}` |
+| `vllm-measure` | `{"packages": [<PackageRef>, ...], "package": <index>, "scenario": {"context_requested": int, "requests": int}}` | `progress` `{"stage": "warmup"\|"batch", "number": int, "of": int}`, `result` `{"measurement": {"requests", "ranking_requests", "context", "total_tps", "total_min", "total_max", "request_tps", "request_min", "request_max", "problem": <code>\|null}}` |
 
 `daemon` is checked against `daemon.ALLOWED_CALLS` on the server, a pull name additionally against
 `pull_choice.PULL_NAME_RE` (`call_refused` for either); a pull's Ollama status line is kept only where it is one of
@@ -3297,11 +3307,12 @@ thread) and pipe are then left behind rather than closed under a blocked read.
 **Time limits** (seconds, from the ssh process's own start; a limit reached kills the process):
 `hello`/`room` 30, `profile` 180, `daemon` short calls 30, `POST /api/generate` 660, `POST
 /api/pull` no total limit but 60 s **per line**, `candidates` 60 (one list plus one `/api/show` per
-candidate), `measure` no total limit but 660 s **per line** (between two progress lines lies a whole
+candidate), `vllm` 30 (AP9-SV2-R: one `/v1/models` and the `stat` calls of the cache), `vllm-measure` no
+total limit but 660 s **per line** (a warm-up or a batch between two progress lines), `measure` no total limit but 660 s **per line** (between two progress lines lies a whole
 `generate`, B1's own table; a pull or a measurement that keeps sending lines is not caught by this, a
 truly silent connection is). **Answer limits:** every line at most 1 MiB (pull lines 64 KiB); the
-whole answer at most 64 KiB (`hello`/`room`), 4 MiB (`profile`), 16 MiB (`daemon` short calls and
-`/api/generate`), 4 MiB (`candidates`) -- `measure` has no total limit, only its 1 MiB per-line one
+whole answer at most 64 KiB (`hello`/`room`/`vllm`), 4 MiB (`profile`), 16 MiB (`daemon` short calls and
+`/api/generate`), 4 MiB (`candidates`) -- `measure` and `vllm-measure` have no total limit, only their 1 MiB per-line one
 (a `MeasurementRecord` fits well inside it), like a pull's own per-line rule. Either limit reached:
 `<alias> answered with more than modelroom reads`, the process killed.
 
@@ -3494,6 +3505,78 @@ two progress lines).
 all: neither question is asked. Several stored SSH targets: only the one active target's own
 candidates are ever fetched or measured (`guided_remote.resolve_active`, unchanged) -- the other
 stored profiles are ranked without a connection, as B4 already has it.
+
+### vLLM at a server over SSH (AP9-SV2-R)
+
+`modelroom remote` reads and measures the **server's own** vLLM: against `127.0.0.1:8000` there, with the same
+three calls as a local run (`vllm_server.py`: `GET /v1/models`, `GET /metrics`, `POST /v1/chat/completions`) and
+nothing else. No port is forwarded, no tunnel is built, nothing connects from the laptop to that port, and nothing
+is started or loaded. It is FR unchanged -- the fixed `ssh` call, the envelope `{"protocol": 1, ...}`, one active
+SSH computer per run, the sink of "Neutral names" -- plus three optional fields and two operations
+(`modelroom/remote_vllm.py` at the laptop, `remote_server.vllm_result`/`vllm_measure_result` at the server).
+
+**The three fields (R1), all optional, a missing one reads as "not there".** `hello.vllm` is the vLLM entry's own
+`runtimes.detect_vllm` at the server (A3), on the server's own platform: `serving`, `installed`, `absent` or
+`asks_key`; a Windows or macOS server is `absent` whatever else is on it. `profile.export.profile.runtimes` is
+what that server has (see "Hardware profile"). `room.model_disk` is where vLLM keeps its models there
+(`hf_cache.hf_cache_candidates`): `{"known", "free_bytes", "same_as_ollama", "relative"}` -- numbers and flags, **no
+drive and no path**; `relative` says that the effective cache variable is a relative path, and `same_as_ollama` that
+both places are on one drive (`Disk.same_place`: the table then says `disk 812.4 GB free on gpu1 (Ollama and vLLM
+models)`, else two pieces). An older server sends none of them (`absent`, nothing, `disk unknown on gpu1` for vLLM's
+place).
+
+**`PackageRef` (R2, Codex r1-1, r1-2).** Over SSH goes **never a whole `Package`** (its `approval.by` is a person's
+name) and never a whole `Scenario`: `remote_vllm.package_ref(package)` is `{"repo", "revision", "files": [{"name",
+"size_bytes"}, ...]}` with exactly the start files (`tensor_quant.start_files`), built from checked values -- the
+repo against the Hub's name rule (and ASCII), the revision 40 lower-case hex digits, every file name against
+`SAFE_REPO_PATH_RE`; a package that does not pass is not sent. The packages of a request are the active, complete
+Hugging Face tensor packages of the run (`remote_vllm.sendable`), and every index an answer names is a position in
+that list. `extra="forbid"` on both sides, and the server checks every field **again before it touches the cache**:
+a violation is `bad_request`, with no `stat` and no `realpath` made.
+
+**`vllm`.** `state` as `hello` says it; `served` only for a server that answers with one model, `{"package": <index of
+the one package of the request whose repo is the model's `root`>|null, "context": <max_model_len>}` -- `null` for none,
+and for a repository named twice (one repo at two revisions: the server states no revision). **The model's own name
+-- `id`, `root`, a local path, a free `--served-model-name` -- never leaves the server**: only that index does, and this
+computer shows only names it builds from its own package. `missing_bytes` holds one entry per package, in the request's
+order: what `hf_cache.missing_bytes(ref, cache)` says -- the **one** function both ends read, so the rules of I3 stay
+in one place (`hf_cache._inspect`). It is `0` **only** where every start file is there with its declared size, the sum
+of the missing ones otherwise, and `null` where nobody can say -- an unsafe name, a link that leaves the repo's folder,
+an unreadable cache, or a missing start file that declares size 0 (which would otherwise add nothing to the sum). It
+is a number or `null`, never a file name or a path. The laptop checks the list against what it sent
+(`remote_vllm._checked_state`): as many entries as packages, each `null` or between `0` and the sum of that package's
+start files, `served` only where `state` is `serving`, an index only of a package sent -- else the form fault
+`<alias> answered in a form this modelroom does not read`. `0` is `on disk already` and needs no disk; `n > 0` goes into
+the disk rule (U11) as `n` plus the margin; `null` as the whole download.
+
+**`vllm-measure`.** First a look at what the server serves now: no answer is `vllm_unreachable`, a `401`
+`vllm_asks_key`, any model but `packages[package]` (or no single model) `other_model`. Then one warm-up request and three
+batches of `min(requests, 64)` at once (`loadtest_vllm.run_vllm_load_test`, SV1's protocol, unchanged), with a `progress`
+line after the warm-up (`{"stage": "warmup", "number": 1, "of": 1}`) and after each batch (`{"stage": "batch", "number":
+n, "of": 3}`) -- numbers only. The result is numbers and **one code** of the fixed set `invalid_status`, `invalid_finish`,
+`invalid_tokens`, `other_context`, `other_requests`, `foreign_load`, `foreign_tokens`, `server_gone`: the laptop builds the
+words itself (`loadtest_vllm.PROBLEM_WORDS`, SV1's sentences with the numbers it knows -- the context and the requests it
+asked for and the ones the server reports). An unknown code is a form fault; speeds come all together and only without an
+`invalid_*` code or `server_gone`. The laptop requires the requests the server states to be the ones asked for. The
+measurement stays in memory (E3): the step's note, the card (`identity stated by the server; not ranked, nothing written`),
+no file on either side.
+
+**What the server never does.** It writes nothing (the cache is only `stat`ed, never read), stores no measurement,
+starts nothing, and sends no text of its own. Its answers carry no name, no path and no host name.
+
+**The guided run (R3).** `hello.vllm` of the active computer goes into the runtimes it has *live* in this run
+(`guided_remote_vllm.live_map`, F3): `serving` and `installed` count, `asks_key` and `absent` do not (E5). The `runtime`
+row of its table reads `runtime  Ollama · vLLM serving Qwen3-8B-AWQ · on gpu1`, the model name from this run's own
+package (`vLLM serving another model` where it serves none of them). Step 4 asks `vllm` for the run's tensor packages
+and offers `vLLM server on gpu1  context 32k  10 requests at once  <package name>` in the same list as that computer's
+Ollama candidates (`load_test_remote_packages`, value `vllm`); a model that is no package of the run is the one note
+`the vLLM server on gpu1 serves a model that is no package of this run`, a server asking for a key
+`the vLLM server on gpu1 asks for an API key; modelroom reads an open server only`. Step 5 turns `room.model_disk` and
+`missing_bytes` into the disk rule of that computer's vLLM rows (I2): its table marks rows over the free disk, the
+`install` line takes the best row that also fits it, and the list of `pull_other` locks the others. Choosing a vLLM row
+there prints the two commands of I1, built from the profile the server sent, with `#<rank> on gpu1` in the label and the
+cache only as the shell expression (a relative cache variable at the server leaves the Docker line out with its note); it
+starts nothing over SSH, asks no yes/no question and pulls nothing (GF question F1 a).
 
 ### Migration to schema 2
 

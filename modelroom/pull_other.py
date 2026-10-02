@@ -20,7 +20,7 @@ most, the same as the guided run's own pull (GF question 6).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 from .contracts import Package
 from .dialog import AnswerMissingError, Choice
@@ -28,6 +28,7 @@ from .document import RenderDocument
 from .install_vllm import install_block_lines, vllm_install
 from .intro import label_line
 from .pull_choice import NONE_VALUE, PullRow, has_named_row, package_of, pull_rows, weights_bytes_of
+from .room import Disk
 from .runtimes import VLLM
 from .views_install import INSTALL_LABEL
 
@@ -56,15 +57,18 @@ class OtherRow:
 
 
 def other_rows(
-    document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·", packages: Sequence[Package] = ()
+    document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·", packages: Sequence[Package] = (),
+    disks: Mapping[str, Disk] | None = None,
 ) -> list[OtherRow]:
     """Every shown row of every chosen machine but `machine`, in document order, each machine's own
     rows in table order. `packages` are the run's: a vLLM row is built from its package (revision),
-    so without them its row is locked `no safe command`."""
+    so without them its row is locked `no safe command`. `disks` (AP9-SV2-R, R3) are the free disks read
+    over SSH, by machine: a row of such a machine whose download does not fit is locked like a row of this one (U11)."""
     rows: list[OtherRow] = []
     for block in document.machines:
         if block.machine != machine:
-            rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot, packages=packages)]
+            disk = (disks or {}).get(block.machine)
+            rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot, disk, packages)]
     return rows
 
 
@@ -105,7 +109,7 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
         return
     if not eligible_other_machines(context.document, context.machine, context.ambiguous):
         return
-    rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, context.packages)
+    rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, context.packages, _ssh_disks(run))
     choices = pull_other_choices(rows)
     try:
         value = run.asker.select(KEY, QUESTION, choices)
@@ -118,7 +122,8 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
     if chosen.row.runtime == VLLM.key:
         # modelroom starts no vLLM, here or over SSH: the row is handed over like one for a computer it
         # cannot reach, with both commands and no `modelroom pull` (that command is Ollama's alone).
-        for line in vllm_handover_lines(context, chosen.machine, chosen.row):
+        disk = _ssh_disks(run).get(chosen.machine)
+        for line in vllm_handover_lines(context, chosen.machine, chosen.row, disk.vllm if disk is not None else None):
             run.screen.write(line)
         return
     if chosen.machine == run.ssh_active:
@@ -133,13 +138,24 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
         run.screen.write(line)
 
 
-def vllm_handover_lines(context: "PullContext", machine: str, row: PullRow) -> list:
+def _ssh_disks(run: "GuidedRun") -> dict[str, Disk]:
+    """The disk of the active computer over SSH as step 5 last read it (`guided_remote.read_room`), if it did."""
+    alias = getattr(run, "ssh_active", None)
+    disk = getattr(getattr(run, "remote_vllm", {}).get(alias), "disk", None) if alias is not None else None
+    return {alias: disk} if disk is not None else {}
+
+
+def vllm_handover_lines(context: "PullContext", machine: str, row: PullRow, vllm_disk: "Disk | None" = None) -> list:
     """The handover of a vLLM row (A3, AP9-SV2-I): both install lines with the machine named, what to do
-    there, and no `modelroom pull` line (`install_vllm.install_block_lines`)."""
+    there, and no `modelroom pull` line (`install_vllm.install_block_lines`). `vllm_disk` is where vLLM keeps
+    its models on a computer whose disk was read over SSH (AP9-SV2-R, R3): a relative cache variable there
+    leaves the Docker line out, a package whose start files are all there says so."""
     block = next(block for block in context.document.machines if block.machine == machine)
     entry = next(entry for entry in block.ranked if entry.rank == row.rank)
-    install = vllm_install(package_of(row, context.packages), entry.fit, block.profile)
-    return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, where=machine)]
+    relative = vllm_disk is not None and vllm_disk.relative
+    install = vllm_install(package_of(row, context.packages), entry.fit, block.profile, relative_cache=relative)
+    there = vllm_disk is not None and row.identity in vllm_disk.held
+    return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=machine)]
 
 
 def handover_lines(machine: str, row: PullRow, weights_bytes: float) -> list:

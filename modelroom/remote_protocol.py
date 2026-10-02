@@ -1,5 +1,5 @@
 """Strict request/result shapes of the remote protocol v1 (AP9-FR, FR-B1, Codex r1 finding 4),
-read by both ends: `modelroom/ssh.py`/`remote_client.py` validate an answer against these before
+read by both ends: `modelroom/ssh.py`/`remote_client.py`/`remote_vllm.py` validate an answer against these before
 anything reads a field of it; `modelroom/remote_server.py` validates a request the same way before
 it ever touches the machine. Every model is `extra="forbid"`: an added field on either side is a
 form fault, never a silently accepted extra. Nothing here does I/O.
@@ -15,18 +15,32 @@ import re
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator, model_validator
 
-from .contracts import PROFILE_ID_RE, Package
+from .contracts import PROFILE_ID_RE, Package, _HF_REPO_RE
 from .measurements import ExportObject, MeasurementRecord, Scenario
 from .profile import MACHINE_CLASSES
 from .ssh_process import Limits
+from .tensor_quant import is_safe_repo_path
 
 PROTOCOL_VERSION = 1
-# The five codes an `error` line may carry (B2), nothing else; the laptop has one sentence for each
-# (`ssh.ERROR_SENTENCES`), the server one constant for each (`remote_server.ERROR_*`).
-ERROR_CODES = ("bad_request", "call_refused", "ollama_unreachable", "too_large", "internal")
+# The eight codes an `error` line may carry (B2; AP9-SV2-R added the last three), nothing else; the
+# laptop has one sentence for each (`ssh.ERROR_SENTENCES`), the server one constant for each
+# (`remote_server.ERROR_*`).
+ERROR_CODES = (
+    "bad_request", "call_refused", "ollama_unreachable", "too_large", "internal",
+    "vllm_unreachable", "vllm_asks_key", "other_model",
+)
 SYSTEMS = ("linux", "win32", "darwin")
+# What a server says of the vLLM runtime (`runtimes.detect_vllm`, AP9-SV2-R R1), and the fixed set of
+# reasons a vLLM measurement may carry in place of the SV1 sentences (R2): the laptop builds its own words.
+VLLM_STATES = ("serving", "installed", "absent", "asks_key")
+VLLM_PROBLEMS = (
+    "invalid_status", "invalid_finish", "invalid_tokens", "other_context", "other_requests",
+    "foreign_load", "foreign_tokens", "server_gone",
+)
+VLLM_MAX_PACKAGES = 4096
+VLLM_MAX_FILES = 4096
 
 
 @dataclass(frozen=True)
@@ -47,11 +61,16 @@ OP_BUDGETS: dict[str, OpBudget] = {
     "daemon_pull": OpBudget(None, 60.0, Limits(64 * 1024, None)),
     "candidates": OpBudget(60.0, None, Limits(_MIB, 4 * _MIB)),
     "measure": OpBudget(None, 660.0, Limits(_MIB, None)),
+    # AP9-SV2-R (R2): `vllm` reads the server's own vLLM and cache (30 s in all), `vllm-measure` runs
+    # one warm-up and three batches there (no total limit, 660 s between two lines as `measure` has).
+    "vllm": OpBudget(30.0, None, Limits(_MIB, 64 * 1024)),
+    "vllm_measure": OpBudget(None, 660.0, Limits(_MIB, None)),
 }
 # The op name that reaches the wire (`modelroom remote <op>`) for each budget key above.
 WIRE_OP: dict[str, str] = {
     "hello": "hello", "room": "room", "profile": "profile", "candidates": "candidates", "measure": "measure",
     "daemon_short": "daemon", "daemon_generate": "daemon", "daemon_pull": "daemon",
+    "vllm": "vllm", "vllm_measure": "vllm-measure",
 }
 _DIGEST_STAGE_RE = re.compile(r"^pulling [0-9a-f]{64}$")
 PULL_STAGES = ("pulling manifest", "verifying sha256 digest", "writing manifest", "success", "working")
@@ -115,6 +134,59 @@ class MeasureRequest(_Strict):
     profile_id: StrictStr = Field(pattern=PROFILE_ID_RE.pattern)
 
 
+class VllmRefFile(_Strict):
+    """One start file of a package as a server is sent it (AP9-SV2-R, R2): a safe relative name and the
+    size the package declares. `extra="forbid"`: nothing else of a file crosses."""
+
+    name: StrictStr
+    size_bytes: StrictInt = Field(ge=0)
+
+    @field_validator("name")
+    @classmethod
+    def _safe_name(cls, value: str) -> str:
+        if not is_safe_repo_path(value):
+            raise ValueError("an unsafe file name")
+        return value
+
+
+class VllmPackageRef(_Strict):
+    """The short form of a package a vLLM operation is sent (AP9-SV2-R, R2, Codex r1-1, r1-2): its repo,
+    its 40-hex revision and exactly its start files -- never a whole `Package` (`approval.by` is a person's
+    name), never a scenario. Every field is checked again at the server before any file is touched."""
+
+    repo: StrictStr
+    revision: StrictStr = Field(pattern=r"^[0-9a-f]{40}$")
+    files: list[VllmRefFile] = Field(min_length=1, max_length=VLLM_MAX_FILES)
+
+    @field_validator("repo")
+    @classmethod
+    def _hub_repo(cls, value: str) -> str:
+        if not value.isascii() or not _HF_REPO_RE.fullmatch(value):
+            raise ValueError("not a Hugging Face repository name")
+        return value
+
+
+class VllmRequest(_Strict):
+    packages: list[VllmPackageRef] = Field(max_length=VLLM_MAX_PACKAGES)
+
+
+class VllmScenarioRequest(_Strict):
+    context_requested: StrictInt = Field(ge=1, le=2**31 - 1)
+    requests: StrictInt = Field(ge=1, le=1024)
+
+
+class VllmMeasureRequest(_Strict):
+    packages: list[VllmPackageRef] = Field(max_length=VLLM_MAX_PACKAGES)
+    package: StrictInt = Field(ge=0)
+    scenario: VllmScenarioRequest
+
+    @model_validator(mode="after")
+    def _index_in_range(self) -> "VllmMeasureRequest":
+        if self.package >= len(self.packages):
+            raise ValueError("package is no index of packages")
+        return self
+
+
 REQUEST_MODELS: dict[str, type[_Strict]] = {
     "hello": HelloRequest,
     "profile": ProfileRequest,
@@ -122,6 +194,8 @@ REQUEST_MODELS: dict[str, type[_Strict]] = {
     "daemon": DaemonRequest,
     "candidates": CandidatesRequest,
     "measure": MeasureRequest,
+    "vllm": VllmRequest,
+    "vllm-measure": VllmMeasureRequest,
 }
 
 
@@ -136,6 +210,8 @@ class HelloResult(_Strict):
     ollama: Literal["reachable", "unreachable"]
     agent_forwarded: StrictBool
     os_fingerprint: StrictStr = Field(pattern=r"^(?:[0-9a-f]{16}|none)$")
+    # AP9-SV2-R (R1): optional, an older server sends none and reads as `absent`.
+    vllm: Literal["serving", "installed", "absent", "asks_key"] = "absent"
 
 
 class ProfileResult(_Strict):
@@ -148,9 +224,20 @@ class DiskResult(_Strict):
     unclear: StrictBool
 
 
+class ModelDiskResult(_Strict):
+    """Where vLLM keeps its models on the server, as numbers only (AP9-SV2-R, R1): no drive, no path."""
+
+    known: StrictBool
+    free_bytes: StrictInt | None = Field(default=None, ge=0)
+    same_as_ollama: StrictBool
+    relative: StrictBool
+
+
 class RoomResult(_Strict):
     disk: DiskResult
     graphics_free_mib: list[float] | None = None
+    # AP9-SV2-R (R1): optional, an older server sends none (`disk unknown on <alias>` for vLLM's place).
+    model_disk: ModelDiskResult | None = None
 
 
 class DaemonShortResult(_Strict):
@@ -201,6 +288,71 @@ class MeasureResult(_Strict):
     record: MeasurementRecord
 
 
+class VllmServed(_Strict):
+    """Which package of the request the server's vLLM serves, by **index**, and its context: the model's
+    own name (`id`, `root`) never leaves the server (AP9-SV2-R, R2)."""
+
+    package: StrictInt | None = Field(ge=0)
+    context: StrictInt = Field(ge=1)
+
+
+class VllmResult(_Strict):
+    state: Literal["serving", "installed", "absent", "asks_key"]
+    served: VllmServed | None = None
+    # One entry per package of the request, in its order: the bytes still to fetch, `0` only for a package
+    # whose start files are all there, `null` where nobody can say. The range is checked at the laptop.
+    missing_bytes: list[Annotated[StrictInt, Field(ge=0)] | None]
+
+
+class VllmMeasureProgress(_Strict):
+    stage: Literal["warmup", "batch"]
+    number: StrictInt = Field(ge=1)
+    of: StrictInt = Field(ge=1)
+
+
+_SPEED = Annotated[float, Field(gt=0, strict=True, allow_inf_nan=False)]
+_SPEED_FIELDS = ("total_tps", "total_min", "total_max", "request_tps", "request_min", "request_max")
+
+
+class VllmMeasurementWire(_Strict):
+    """What one vLLM load test at the server found (AP9-SV2-R, R2): numbers and one code -- never a name,
+    never a sentence. The laptop builds the sentence of `problem` itself (`loadtest_vllm.PROBLEM_WORDS`)."""
+
+    requests: StrictInt = Field(ge=1, le=64)
+    ranking_requests: StrictInt = Field(ge=1, le=1024)
+    context: StrictInt = Field(ge=1)
+    total_tps: _SPEED | None = None
+    total_min: _SPEED | None = None
+    total_max: _SPEED | None = None
+    request_tps: _SPEED | None = None
+    request_min: _SPEED | None = None
+    request_max: _SPEED | None = None
+    problem: Literal[
+        "invalid_status", "invalid_finish", "invalid_tokens", "other_context", "other_requests",
+        "foreign_load", "foreign_tokens", "server_gone",
+    ] | None = None
+
+    @model_validator(mode="after")
+    def _speeds_are_all_or_none(self) -> "VllmMeasurementWire":
+        values = [getattr(self, name) for name in _SPEED_FIELDS]
+        if any(value is None for value in values) and any(value is not None for value in values):
+            raise ValueError("the speeds come all together or not at all")
+        no_speed = self.problem == "server_gone" or (self.problem is not None and self.problem.startswith("invalid"))
+        if no_speed and values[0] is not None:
+            raise ValueError("an invalid measurement has no speed")
+        if not no_speed and values[0] is None:
+            raise ValueError("a measurement that is not invalid has its speeds")
+        if values[0] is not None and not (
+            self.total_min <= self.total_tps <= self.total_max and self.request_min <= self.request_tps <= self.request_max
+        ):
+            raise ValueError("a mean lies inside its range")
+        return self
+
+
+class VllmMeasureResult(_Strict):
+    measurement: VllmMeasurementWire
+
+
 RESULT_MODELS: dict[str, type[_Strict]] = {
     "hello": HelloResult,
     "profile": ProfileResult,
@@ -210,12 +362,15 @@ RESULT_MODELS: dict[str, type[_Strict]] = {
     "daemon_pull": DaemonPullResult,
     "candidates": CandidatesResult,
     "measure": MeasureResult,
+    "vllm": VllmResult,
+    "vllm_measure": VllmMeasureResult,
 }
-# `daemon_pull`/`measure` are the only ops with a `progress` line at all; every other budget key
-# never carries one, so a `progress` field there is already a form fault.
+# `daemon_pull`/`measure`/`vllm_measure` are the only ops with a `progress` line at all; every other
+# budget key never carries one, so a `progress` field there is already a form fault.
 PROGRESS_MODELS: dict[str, tuple[type[_Strict], ...]] = {
     "daemon_pull": (PullProgress, PullErrorProgress),
     "measure": (MeasureProgress,),
+    "vllm_measure": (VllmMeasureProgress,),
 }
 
 
@@ -275,6 +430,10 @@ __all__ = [
     "REQUEST_MODELS",
     "RESULT_MODELS",
     "SYSTEMS",
+    "VLLM_MAX_FILES",
+    "VLLM_MAX_PACKAGES",
+    "VLLM_PROBLEMS",
+    "VLLM_STATES",
     "CandidatesRequest",
     "CandidatesResult",
     "DaemonPullResult",
@@ -286,6 +445,7 @@ __all__ = [
     "MeasureProgress",
     "MeasureRequest",
     "MeasureResult",
+    "ModelDiskResult",
     "PackageIdentity",
     "ProfileRequest",
     "ProfileResult",
@@ -293,6 +453,16 @@ __all__ = [
     "PullProgress",
     "RoomRequest",
     "RoomResult",
+    "VllmMeasureProgress",
+    "VllmMeasureRequest",
+    "VllmMeasureResult",
+    "VllmMeasurementWire",
+    "VllmPackageRef",
+    "VllmRefFile",
+    "VllmRequest",
+    "VllmResult",
+    "VllmScenarioRequest",
+    "VllmServed",
     "validate_progress",
     "validate_request",
     "validate_result",

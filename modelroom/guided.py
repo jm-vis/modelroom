@@ -46,6 +46,7 @@ from .guided_folder import last_elsewhere
 from .guided_folder import looks_like_results_folder as _looks_like_results_folder
 from .guided_folder import remember_folder as _remember_folder
 from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_identities, other_runtimes_held, pull_step
+from .guided_remote_vllm import live_map as remote_live_map
 from .pull_other import KEY as PULL_OTHER_KEY, QUESTION as PULL_OTHER_QUESTION
 from .pull_other import eligible_other_machines, pull_other_step
 from .pull_choice import ambiguous_names, run_packages
@@ -161,6 +162,9 @@ class GuidedRun:
     # without one -- every other chosen SSH profile is ranked without a connection (`pull_other.py`).
     ssh: "ssh_module.SshRunner" = field(default_factory=lambda: ssh_module.default_ssh())
     ssh_active: str | None = None
+    # What the active computer over SSH said of its vLLM and what step 4 and 5 found there
+    # (`remote_vllm.RemoteVllm`, by alias; AP9-SV2-R). In memory only, never written.
+    remote_vllm: dict = field(default_factory=dict)
 
     def failed(self, message: str) -> None:
         """Say it once and remember it: the run continues, its exit code does not stay `0`."""
@@ -682,7 +686,8 @@ def _render_step(
     if daemon_reachable:  # a package the daemon holds already needs no disk and is never marked (U11c)
         disk = replace(disk, held=held_identities(run, packages))
     code = render_with_config(
-        config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk}, live_vllm={here: live}
+        config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk},
+        live_vllm={here: live, **remote_live_map(run)},
     )
     if not written:
         shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only
@@ -712,7 +717,7 @@ def _shown_render_result(
     other_machines = eligible_other_machines(document, here, context.ambiguous)
     view = RunView(ambiguous=context.ambiguous, live=live, origins=chosen.origins, pull_other_machines=other_machines,
                    ssh_active=run.ssh_active, packages=context.packages, held=other_runtimes_held(run, context),
-                   live_vllm={here: run.servers.found.get("vllm")})  # the render's own runtime set (Codex r7)
+                   live_vllm={here: run.servers.found.get("vllm"), **remote_live_map(run)})  # the render's own runtime set (Codex r7)
     show_result(run.screen, document, facts, config, config_file.parent, run.now, here, card_facts(run), view)
     return code, context
 

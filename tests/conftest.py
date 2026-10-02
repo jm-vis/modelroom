@@ -65,6 +65,20 @@ def _no_real_local_servers(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(cli, "default_transports", lambda: {}, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_server_vllm(monkeypatch: pytest.MonkeyPatch):
+    """`modelroom remote` reads the vLLM of the computer it runs on (AP9-SV2-R); a `ServerContext` a test builds
+    without a `vllm=` meets silence, never the vLLM server of the person running the suite."""
+    from modelroom import remote_server
+    from modelroom.vllm_server import FixtureVllmServer
+
+    monkeypatch.setattr(
+        remote_server, "default_vllm",
+        lambda: FixtureVllmServer({}, unreachable="http://127.0.0.1:8000/v1/models: the vLLM server did not answer (refused)"),
+        raising=False,
+    )
+
+
 class _UnusedSsh:
     """The default `GuidedRun.ssh` of every test that never touches FR-B1 at all: a loud failure
     the moment anything tries to use it, instead of a silent real connection (FR-B1, "Teststrategie

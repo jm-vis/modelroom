@@ -21,6 +21,9 @@ from .config import Configuration
 from .contracts import Package
 from .dialog import AnswerMissingError, Choice, columns
 from .guided_loadtest import NOTHING_MEASURED, _CANDIDATE_WIDTHS, _GIB, _UNKNOWN, _measurement_note, _record_problem
+from .guided_remote_vllm import ROW as VLLM_ROW
+from .guided_remote_vllm import measure as measure_vllm
+from .guided_remote_vllm import row_words, vllm_offer, vllm_row
 from .loadtest import store_measurement
 from .measurements import MeasurementExistsError, MeasurementRecord, Scenario
 from .neutral import NeutralError, neutral_record
@@ -117,7 +120,7 @@ def _ask_remote(run: "GuidedRun", alias: str, rows: list[Choice]) -> list[str]:
         return []
     list_question = QUESTIONS[KEY_REMOTE_PACKAGES].format(alias=alias)
     picked = run.asker.checkbox(KEY_REMOTE_PACKAGES, list_question, rows)
-    run.screen.answer(list_question, names_words(list(picked), "nothing"))
+    run.screen.answer(list_question, names_words([row_words(alias, value) for value in picked], "nothing"))
     return list(picked)
 
 
@@ -180,18 +183,22 @@ def remote_load_test(run: "GuidedRun", config: Configuration, scenario: Scenario
     `None` where nothing was asked or nothing was picked (no active target, no candidate, `no`, or
     an empty pick), a summary line otherwise."""
     offer = remote_offer(run, config)
-    if offer.alias is None or not offer.identities:
+    vllm = vllm_offer(run, config, scenario)  # AP9-SV2-R, R3 step 4: the server's own vLLM, one row in the same list
+    alias = offer.alias if offer.alias is not None else run.ssh_active
+    rows = _remote_rows(offer) + ([vllm_row(vllm)] if vllm is not None else [])
+    if alias is None or not rows:
         return None
-    rows = _remote_rows(offer)
-    if not rows:
-        return None
-    picked = _ask_remote(run, offer.alias, rows)
+    picked = _ask_remote(run, alias, rows)
     if not picked:
         return None
     chosen = [identity for identity in offer.identities if (package := _package_of(identity, offer.packages)) is not None and _shown_name(package) in picked]
     one_request = scenario.model_copy(update={"requests": 1})
     measured = sum(_measure_one(run, config, offer, identity, one_request) for identity in chosen)
-    return f"{measured} of {len(chosen)} measured on {offer.alias}"
+    total = len(chosen)
+    if vllm is not None and VLLM_ROW in picked:  # the whole scenario: n requests at once (SV1), not one
+        total += 1
+        measured += measure_vllm(run, vllm, scenario) is not None
+    return f"{measured} of {total} measured on {alias}"
 
 
 def combine_measured(run: "GuidedRun", config: Configuration, scenario: Scenario, local_measured: str) -> str:

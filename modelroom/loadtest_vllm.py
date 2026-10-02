@@ -39,6 +39,36 @@ GENERATED = "vllm:generation_tokens_total"
 _METRIC_LINE = re.compile(r"^(vllm:[a-z_]+)(?:\{[^}]*\})?\s+(\S+)$")
 
 Clock = Callable[[], int]
+# AP9-SV2-R (R2): called after the warm-up (`"warmup", 1, 1`) and after each batch (`"batch", n, 3`).
+Progress = Callable[[str, int, int], None]
+
+
+class Reason(str):
+    """A reason as the words the screen shows, and the code of the fixed set a server sends over SSH
+    (`remote_protocol.VLLM_PROBLEMS`): the words are SV1's own, the code says which rule it was."""
+
+    code: str
+
+    def __new__(cls, text: str, code: str) -> "Reason":
+        reason = super().__new__(cls, text)
+        reason.code = code
+        return reason
+
+
+# The words a laptop builds from a code a server sent (R2): SV1's sentences, with the numbers it knows
+# itself (the context and the requests it asked for, the context and the requests the server reports).
+# What only the server read (a batch number, a status, a count of tokens) is not in them.
+PROBLEM_WORDS = {
+    "invalid_status": "a request did not answer with status 200",
+    "invalid_finish": f"a request did not end with finish_reason {FINISH_REASON}",
+    "invalid_tokens": f"a request did not carry {MAX_TOKENS} tokens within the context",
+    "other_context": "context {context}, the ranking's {requested}",
+    "other_requests": "{requests} requests measured, the ranking assumes {ranking}",
+    "foreign_load": "the server was not idle before or after a batch",
+    "foreign_tokens": f"a batch generated other than its requests x {MAX_TOKENS} tokens",
+    "server_gone": "the server stopped answering during the measurement",
+}
+INVALID_CODES = ("invalid_status", "invalid_finish", "invalid_tokens")
 
 
 def chat_body(model_id: str, index: int) -> dict:
@@ -98,6 +128,12 @@ class VllmMeasurement:
     request_max: float | None = None
 
     @property
+    def problem_code(self) -> str | None:
+        """The code of the rule `problem` is about (`remote_protocol.VLLM_PROBLEMS`), or `None`."""
+        reason = self.validity_reason if self.validity != "valid" else None if self.comparable else self.comparable_reason
+        return getattr(reason, "code", None)
+
+    @property
     def problem(self) -> str | None:
         """`invalid (<reason>)` or `not comparable (<reason>)`, else `None`."""
         if self.validity != "valid":
@@ -108,12 +144,21 @@ class VllmMeasurement:
 
 
 def run_vllm_load_test(
-    server: VllmServer, served: ServedModel, scenario: Scenario, clock: Clock = time.perf_counter_ns
+    server: VllmServer, served: ServedModel, scenario: Scenario, clock: Clock = time.perf_counter_ns,
+    progress: Progress | None = None,
 ) -> VllmMeasurement:
-    """One warm-up, then three batches of n requests at once; `LoadTestError` when the server goes."""
+    """One warm-up, then three batches of n requests at once; `LoadTestError` when the server goes.
+
+    `progress` (a server answering over SSH, AP9-SV2-R) is told when the warm-up and each batch is done."""
     n = min(scenario.requests, MAX_REQUESTS)
     _call(server, "POST", CHAT_PATH, chat_body(served.id, 0))
-    batches = [_batch(server, served.id, n, clock) for _ in range(BATCHES)]
+    if progress is not None:
+        progress("warmup", 1, 1)
+    batches = []
+    for number in range(1, BATCHES + 1):
+        batches.append(_batch(server, served.id, n, clock))
+        if progress is not None:
+            progress("batch", number, BATCHES)
     return _measurement(batches, served, scenario, n)
 
 
@@ -208,49 +253,49 @@ def invalid_reason(batches: list[Batch], max_model_len: int) -> str | None:
         for answer in batch.answers:
             reason = _answer_problem(answer, max_model_len)
             if reason is not None:
-                return f"batch {number}: {reason}"
+                return Reason(f"batch {number}: {reason}", reason.code)
         if batch.wall_ns <= 0:
-            return f"batch {number}: no measurable wall time"
+            return Reason(f"batch {number}: no measurable wall time", "invalid_tokens")
     return None
 
 
-def _answer_problem(answer: Answer, max_model_len: int) -> str | None:
+def _answer_problem(answer: Answer, max_model_len: int) -> Reason | None:
     if answer.status != 200:
-        return f"status {answer.status}"
+        return Reason(f"status {answer.status}", "invalid_status")
     if answer.finish_reason != FINISH_REASON:
-        return f"finish_reason {answer.finish_reason}"
+        return Reason(f"finish_reason {answer.finish_reason}", "invalid_finish")
     if answer.completion_tokens != MAX_TOKENS:
-        return f"{answer.completion_tokens} tokens, not {MAX_TOKENS}"
+        return Reason(f"{answer.completion_tokens} tokens, not {MAX_TOKENS}", "invalid_tokens")
     if not isinstance(answer.prompt_tokens, int) or answer.prompt_tokens + MAX_TOKENS > max_model_len:
-        return f"prompt {answer.prompt_tokens} + {MAX_TOKENS} tokens beyond context {max_model_len}"
+        return Reason(f"prompt {answer.prompt_tokens} + {MAX_TOKENS} tokens beyond context {max_model_len}", "invalid_tokens")
     if answer.ns <= 0:
-        return "a request with no measurable time"
+        return Reason("a request with no measurable time", "invalid_tokens")
     return None
 
 
 def not_comparable_reason(batches: list[Batch], served: ServedModel, scenario: Scenario, n: int) -> str | None:
     """The first rule that fails: n requests, an idle server, n x 128 generated, the context."""
     if n != scenario.requests:
-        return f"{n} requests measured, the ranking assumes {scenario.requests}"
+        return Reason(f"{n} requests measured, the ranking assumes {scenario.requests}", "other_requests")
     for number, batch in enumerate(batches, start=1):
         reason = _batch_state(batch, n)
         if reason is not None:
-            return f"batch {number}: {reason}"
+            return Reason(f"batch {number}: {reason}", reason.code)
     if served.max_model_len != scenario.context_requested:
-        return f"context {served.max_model_len}, the ranking's {scenario.context_requested}"
+        return Reason(f"context {served.max_model_len}, the ranking's {scenario.context_requested}", "other_context")
     return None
 
 
-def _batch_state(batch: Batch, n: int) -> str | None:
+def _batch_state(batch: Batch, n: int) -> Reason | None:
     for when, page in (("before", batch.before), ("after", batch.after)):
         missing = [name for name in (RUNNING, WAITING, GENERATED) if name not in page]
         if missing:
-            return f"the metrics {when} it name no {missing[0]}"
+            return Reason(f"the metrics {when} it name no {missing[0]}", "foreign_load")
         if page[RUNNING] or page[WAITING]:
-            return f"{page[RUNNING]:.0f} running, {page[WAITING]:.0f} waiting {when} it"
+            return Reason(f"{page[RUNNING]:.0f} running, {page[WAITING]:.0f} waiting {when} it", "foreign_load")
     delta = batch.after[GENERATED] - batch.before[GENERATED]
     if delta != n * MAX_TOKENS:
-        return f"{delta:.0f} tokens generated, {n * MAX_TOKENS} expected"
+        return Reason(f"{delta:.0f} tokens generated, {n * MAX_TOKENS} expected", "foreign_tokens")
     return None
 
 
@@ -270,9 +315,12 @@ def _speeds(batches: list[Batch]) -> dict[str, float | None]:
 
 __all__ = [
     "BATCHES",
+    "INVALID_CODES",
     "MAX_REQUESTS",
     "MAX_TOKENS",
+    "PROBLEM_WORDS",
     "PROMPT",
+    "Reason",
     "VllmMeasurement",
     "chat_body",
     "invalid_reason",

@@ -20,6 +20,12 @@ already has; `candidates`/`measure` (FR-B2) run stage 1's digest rule and the lo
 the server, never with this machine's own installed name -- `candidates_result`/`measure_result`
 below. `main()` is the one entry point the CLI (`cli_remote.py`) and the in-process fake ssh of the
 test suite both call.
+
+AP9-SV2-R adds `vllm` and `vllm-measure`: the server reads and measures its **own** vLLM on
+`127.0.0.1:8000` with the same three calls as a local run (`vllm_server.py`), tells which package of the
+request it serves by **index** (never the model's own name, `id` or `root`), and counts the bytes a
+package still has to fetch with the very function this computer's disk rule reads
+(`hf_cache.missing_bytes`). It starts nothing and writes nothing.
 """
 
 from __future__ import annotations
@@ -30,13 +36,16 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable
 
-from . import remote_protocol
+from . import hf_cache, remote_protocol
 from .contracts import Package
 from .daemon import ALLOWED_CALLS, Daemon, DaemonError, LocalDaemon
+from .hf_cache import CacheProbes
 from .llmfit import read_llmfit_reference
-from .loadtest import installed_candidates, installed_models, run_load_test, weight_digest
+from .loadtest import LoadTestError, installed_candidates, installed_models, run_load_test, weight_digest
+from .loadtest_vllm import INVALID_CODES, run_vllm_load_test
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware, read_os_identity
 from .measurements import EXPORT_SCHEMA_VERSION, ExportObject, Scenario, shipped_protocol
 from .neutral import neutral_record, neutral_version
@@ -46,10 +55,14 @@ from .quantization import package_identity_key
 from . import room as room_module
 from .room import RoomProbes, free_disk, free_vram_mib
 from .room import UNCLEAR_REASON as _UNCLEAR
+from .runtimes import detect_vllm
+from .vllm_server import LocalVllmServer, ServedModelsError, VllmKeyError, VllmServerError, read_vllm_models
 
 MAX_INPUT_BYTES = 1 * 1024 * 1024
+# The packages a vLLM operation is sent are short references, yet a snapshot can name many (AP9-SV2-R, R2).
+VLLM_MAX_INPUT_BYTES = 16 * 1024 * 1024
 PROTOCOL_VERSION = 1
-OPS = ("hello", "profile", "room", "daemon", "candidates", "measure")
+OPS = ("hello", "profile", "room", "daemon", "candidates", "measure", "vllm", "vllm-measure")
 # The 0.1.0 default (`config.LlmfitConfig.min_version`): the server has no configuration to read one
 # from, so the profile op uses the same floor a fresh configuration would.
 _DEFAULT_LLMFIT_MIN_VERSION = "1.1.16"
@@ -60,6 +73,9 @@ ERROR_CALL_REFUSED = "call_refused"
 ERROR_OLLAMA_UNREACHABLE = "ollama_unreachable"
 ERROR_TOO_LARGE = "too_large"
 ERROR_INTERNAL = "internal"
+ERROR_VLLM_UNREACHABLE = "vllm_unreachable"
+ERROR_VLLM_ASKS_KEY = "vllm_asks_key"
+ERROR_OTHER_MODEL = "other_model"
 
 Write = Callable[[bytes], None]
 
@@ -72,6 +88,14 @@ class RemoteRequestError(Exception):
         self.code = code
 
 
+def default_vllm() -> Any:
+    """This server's own vLLM transport: `127.0.0.1:8000`, the three calls of `vllm_server.py`. Never inside
+    the test suite (`tests/conftest.py` puts a silent one in its place): no test may reach a real server."""
+    if "pytest" in sys.modules:
+        raise RuntimeError("the real vLLM transport was reached from a test; pass vllm= or use the conftest fixture")
+    return LocalVllmServer()
+
+
 @dataclass(frozen=True)
 class ServerContext:
     """Everything one call reads from the machine it runs on, injectable for a test."""
@@ -81,6 +105,11 @@ class ServerContext:
     daemon: Daemon = field(default_factory=LocalDaemon)
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     environ: dict = field(default_factory=lambda: dict(os.environ))
+    # AP9-SV2-R: the vLLM transport, the cache's own probes (`stat`, `realpath`) and the file test of
+    # `detect_vllm` (`~/.local/bin/vllm`); each a seam for a test and the real machine otherwise.
+    vllm: Any = field(default_factory=lambda: default_vllm())
+    cache: CacheProbes = field(default_factory=CacheProbes)
+    is_file: Callable[[Path], bool] = lambda path: path.is_file()
 
 
 def _envelope(**fields: object) -> bytes:
@@ -99,12 +128,17 @@ def _progress(payload: dict) -> bytes:
     return _envelope(progress=payload)
 
 
-def read_request(stdin: bytes) -> dict:
+def input_limit(op: str) -> int:
+    """The most bytes of stdin `op` reads: 1 MiB, 16 MiB for the two vLLM operations (a request carries packages)."""
+    return VLLM_MAX_INPUT_BYTES if op in ("vllm", "vllm-measure") else MAX_INPUT_BYTES
+
+
+def read_request(stdin: bytes, limit: int = MAX_INPUT_BYTES) -> dict:
     """The one JSON object of the call, or `RemoteRequestError` (`too_large`/`bad_request`).
-    `stdin` is expected already bounded to at most `MAX_INPUT_BYTES + 1` by the caller
-    (`cli_remote.run_remote` reads no more than that) -- checked again here regardless, so this
-    function is safe to call with an unbounded buffer too (every test that builds one by hand)."""
-    if len(stdin) > MAX_INPUT_BYTES:
+    `stdin` is expected already bounded to at most `limit + 1` by the caller (`cli_remote.run_remote`
+    reads no more than that) -- checked again here regardless, so this function is safe to call with
+    an unbounded buffer too (every test that builds one by hand)."""
+    if len(stdin) > limit:
         raise RemoteRequestError(ERROR_TOO_LARGE)
     try:
         payload = json.loads(stdin.decode("utf-8"))
@@ -131,7 +165,17 @@ def hello_result(context: ServerContext) -> dict:
         "ollama": "reachable" if _ollama_reachable(context.daemon) else "unreachable",
         "agent_forwarded": bool(context.environ.get("SSH_AUTH_SOCK")),
         "os_fingerprint": fingerprint,
+        "vllm": vllm_state(context),
     }
+
+
+def vllm_state(context: ServerContext) -> str:
+    """`serving`, `installed`, `absent` or `asks_key` for this server: the vLLM entry's own `detect`
+    (`runtimes.detect_vllm`, A3) on this machine's platform, so a Windows or macOS server is `absent`."""
+    room = context.room
+    return detect_vllm(
+        context.vllm, system=context.probes.platform, which=room.which, home=room.home, is_file=context.is_file
+    )
 
 
 def _ollama_reachable(daemon: Daemon) -> bool:
@@ -150,9 +194,21 @@ def profile_result(payload: dict, context: ServerContext) -> dict:
         context.probes.platform, context.probes.runner, context.probes.read_text, context.probes.memory_bytes,
         False, machine_class, context.probes.list_dir, reference,
     )
-    profile = build_profile(measured, reference, profile_id, "remote", context.now())
+    profile = build_profile(measured, reference, profile_id, "remote", context.now(), _runtime_keys(context))
     export = ExportObject(schema_version=EXPORT_SCHEMA_VERSION, profile=profile, measurements=[])
     return {"export": export.model_dump(mode="json")}
+
+
+def _runtime_keys(context: ServerContext) -> list[str]:
+    """F4 "Gemerkt": the runtimes this server has, in table order -- Ollama where its daemon answers or its
+    program is on the `PATH`, vLLM where it is `serving` or `installed` (`asks_key` and `absent` do not
+    count) -- read here (AP9-SV2-R, R1) and sent as literals only."""
+    keys = []
+    if _ollama_reachable(context.daemon) or context.room.which("ollama") is not None:
+        keys.append("ollama")
+    if vllm_state(context) in ("serving", "installed"):
+        keys.append("vllm")
+    return keys
 
 
 def room_result(payload: dict, context: ServerContext) -> dict:
@@ -162,6 +218,19 @@ def room_result(payload: dict, context: ServerContext) -> dict:
     return {
         "disk": {"known": disk.known, "free_bytes": disk.free_bytes if disk.known else None, "unclear": disk.reason == _UNCLEAR},
         "graphics_free_mib": graphics,
+        "model_disk": _model_disk(context, disk),
+    }
+
+
+def _model_disk(context: ServerContext, ollama: Any) -> dict:
+    """Where vLLM keeps its models (AP9-SV2-R, R1): whether it was read, the free bytes, whether that is
+    the drive Ollama's place is on, and whether the cache is set as a relative path -- no drive, no path."""
+    vllm = hf_cache.vllm_disk(context.room)
+    return {
+        "known": vllm.known,
+        "free_bytes": vllm.free_bytes if vllm.known else None,
+        "same_as_ollama": bool(vllm.known and ollama.known and vllm.drive == ollama.drive),
+        "relative": vllm.relative,
     }
 
 
@@ -296,6 +365,94 @@ def measure_result(payload: dict, context: ServerContext, write: Write) -> None:
     write(_result({"record": clean.model_dump(mode="json")}))
 
 
+# --- vLLM at the server (AP9-SV2-R, R2) -------------------------------------------------------------------
+
+
+def _refs(payload: dict) -> list:
+    """The package references of a validated request, as models again (`remote_protocol.VllmPackageRef`)."""
+    return [remote_protocol.VllmPackageRef.model_validate(entry) for entry in payload["packages"]]
+
+
+def vllm_result(payload: dict, context: ServerContext) -> dict:
+    """What this server's vLLM is, and which package of the request it serves (R2).
+
+    `state` as `hello` says it. `served` only for a server that answers with one model: the index of the
+    one package of the request whose repo is the model's `root` (`null` for none or for several of one
+    repo, a revision the server does not state), and the context; the model's own name never leaves.
+    `missing_bytes`: for each package, in the request's order, what `hf_cache.missing_bytes` says of its
+    start files in this server's Hugging Face cache -- a number or `null`, never a file name or a path."""
+    refs = _refs(payload)
+    state = vllm_state(context)
+    served = _served(context, refs) if state == "serving" else None
+    room = context.room
+    place = hf_cache.hf_cache_candidates(room.environ, room.home, room.system)[0]
+    return {
+        "state": state,
+        "served": served,
+        "missing_bytes": [hf_cache.missing_bytes(ref, place, context.cache) for ref in refs],
+    }
+
+
+def _served(context: ServerContext, refs: list) -> dict | None:
+    try:
+        model = read_vllm_models(context.vllm)
+    except VllmServerError:
+        return None  # a list that names no single model, or a server gone since `detect`: no index to give
+    matching = [index for index, ref in enumerate(refs) if ref.repo == model.root]
+    return {"package": matching[0] if len(matching) == 1 else None, "context": model.max_model_len}
+
+
+def vllm_measure_result(payload: dict, context: ServerContext, write: Write) -> None:
+    """One load test of this server's vLLM (R2), at the server, against `127.0.0.1:8000`: first a look
+    at what it serves now -- another model than `packages[package]`, a key asked for, or no answer are
+    error codes -- then one warm-up and three batches, `progress` after each. Nothing is stored here;
+    the result is numbers and one code of the fixed set (`remote_protocol.VLLM_PROBLEMS`)."""
+    refs = _refs(payload)
+    ref = refs[payload["package"]]
+    try:
+        served = read_vllm_models(context.vllm)
+    except VllmKeyError:
+        raise RemoteRequestError(ERROR_VLLM_ASKS_KEY) from None
+    except ServedModelsError:
+        raise RemoteRequestError(ERROR_OTHER_MODEL) from None
+    except VllmServerError:
+        raise RemoteRequestError(ERROR_VLLM_UNREACHABLE) from None
+    if served.root != ref.repo:
+        raise RemoteRequestError(ERROR_OTHER_MODEL)
+    asked = payload["scenario"]
+    scenario = Scenario(
+        context_requested=asked["context_requested"], context_origin="entered", kv_type="f16", kv_type_assumed=True,
+        requests=asked["requests"],
+    )
+
+    def progress(stage: str, number: int, of: int) -> None:
+        write(_progress({"stage": stage, "number": number, "of": of}))
+
+    try:
+        measurement = run_vllm_load_test(context.vllm, served, scenario, progress=progress)
+    except LoadTestError:
+        write(_result({"measurement": _measurement_fields(None, scenario, served)}))
+        return
+    write(_result({"measurement": _measurement_fields(measurement, scenario, served)}))
+
+
+def _measurement_fields(measurement: Any, scenario: Scenario, served: Any) -> dict:
+    """The wire form of a measurement: counts, speeds and the code of its problem. A server that was lost
+    during the run is `server_gone` with no speed."""
+    if measurement is None:
+        return {
+            "requests": min(scenario.requests, 64), "ranking_requests": scenario.requests, "context": served.max_model_len,
+            "total_tps": None, "total_min": None, "total_max": None, "request_tps": None, "request_min": None,
+            "request_max": None, "problem": "server_gone",
+        }
+    return {
+        "requests": measurement.requests, "ranking_requests": measurement.ranking_requests, "context": measurement.context,
+        "total_tps": measurement.total_tps, "total_min": measurement.total_min, "total_max": measurement.total_max,
+        "request_tps": measurement.request_tps, "request_min": measurement.request_min, "request_max": measurement.request_max,
+        "problem": measurement.problem_code,
+    }
+
+
 def dispatch(op: str, payload: dict, context: ServerContext, write: Write) -> None:
     if op == "hello":
         write(_result(hello_result(context)))
@@ -309,6 +466,10 @@ def dispatch(op: str, payload: dict, context: ServerContext, write: Write) -> No
         write(_result(candidates_result(payload, context)))
     elif op == "measure":
         measure_result(payload, context, write)
+    elif op == "vllm":
+        write(_result(vllm_result(payload, context)))
+    elif op == "vllm-measure":
+        vllm_measure_result(payload, context, write)
     else:
         raise RemoteRequestError(ERROR_BAD_REQUEST)
 
@@ -319,7 +480,7 @@ def main(op: str, stdin: bytes, write: Write, context: ServerContext | None = No
     codes only for the OS/protocol pre-checks 127/2/255, never for a call that ran and answered."""
     context = context if context is not None else ServerContext()
     try:
-        request = _validated_request(op, read_request(stdin)) if op in OPS else None
+        request = _validated_request(op, read_request(stdin, input_limit(op))) if op in OPS else None
         if request is None:
             raise RemoteRequestError(ERROR_BAD_REQUEST)
         dispatch(op, request, context, write)
@@ -337,21 +498,30 @@ __all__ = [
     "ERROR_CALL_REFUSED",
     "ERROR_INTERNAL",
     "ERROR_OLLAMA_UNREACHABLE",
+    "ERROR_OTHER_MODEL",
     "ERROR_TOO_LARGE",
+    "ERROR_VLLM_ASKS_KEY",
+    "ERROR_VLLM_UNREACHABLE",
     "MAX_INPUT_BYTES",
     "OPS",
     "PROTOCOL_VERSION",
     "REMOTE_VERSION",
     "RemoteRequestError",
     "ServerContext",
+    "VLLM_MAX_INPUT_BYTES",
     "Write",
     "candidates_result",
     "daemon_lines",
     "dispatch",
+    "default_vllm",
     "hello_result",
+    "input_limit",
     "main",
     "measure_result",
     "profile_result",
     "read_request",
     "room_result",
+    "vllm_measure_result",
+    "vllm_result",
+    "vllm_state",
 ]

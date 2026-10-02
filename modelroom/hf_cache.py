@@ -89,9 +89,8 @@ class CacheCheck:
 _UNKNOWN = CacheCheck(None, None)
 
 
-def _folder_name(package: Package) -> str | None:
-    """`models--<owner>--<name>` for a package whose repo and revision are safe to build a path from."""
-    repo, revision = package.repo, package.revision
+def _folder_name(repo: object, revision: object) -> str | None:
+    """`models--<owner>--<name>` for a repo and revision that are safe to build a path from."""
     if not isinstance(repo, str) or not repo.isascii() or not _HF_REPO_RE.fullmatch(repo):
         return None
     if not isinstance(revision, str) or not _REVISION_RE.fullmatch(revision):
@@ -107,8 +106,20 @@ def _inside(base: str, path: str) -> bool:
         return False
 
 
-def check_package(package: Package, cache: Path, probes: CacheProbes | None = None) -> CacheCheck:
-    """`CacheCheck` of `package` in the cache folder `cache`: its start files against the snapshot folder.
+@dataclass(frozen=True)
+class _StartRef:
+    """What the check reads of a package: its repo, its revision and its start files, nothing else
+    (the shape of `remote_vllm.package_ref`, which is what crosses the wire to a server)."""
+
+    repo: object
+    revision: object
+    files: Sequence[Any]
+
+
+def _inspect(ref: Any, cache: Path, probes: CacheProbes | None) -> CacheCheck:
+    """The one place the rules of the cache check live (I3, Rev 3, Rev 4), for a package of this
+    computer and for the reference a server is sent alike. `ref` has `repo`, `revision` and `files`,
+    each with `name` and `size_bytes`; every file of it is a start file.
 
     Every name and the revision are checked first. The repo folder itself must be where the cache puts
     it (`realpath(cache)/models--<owner>--<name>`: a link that moves the folder away is not followed),
@@ -116,8 +127,8 @@ def check_package(package: Package, cache: Path, probes: CacheProbes | None = No
     `stat`ed at that resolved path and counts only as a regular file of the declared size.
     """
     probes = probes if probes is not None else CacheProbes()
-    folder = _folder_name(package)
-    files = start_files(package.files)
+    folder = _folder_name(ref.repo, ref.revision)
+    files = list(ref.files)
     if folder is None or not files or not all(is_safe_repo_path(file.name) for file in files):
         return _UNKNOWN
     base = os.path.join(str(cache), folder)
@@ -126,7 +137,7 @@ def check_package(package: Package, cache: Path, probes: CacheProbes | None = No
         return _UNKNOWN  # the repo folder is a link that leads elsewhere: nothing below it is touched
     resolved = []
     for file in files:
-        path = os.path.join(base, "snapshots", package.revision, *file.name.split("/"))
+        path = os.path.join(base, "snapshots", ref.revision, *file.name.split("/"))
         real = probes.realpath(path)
         if not _inside(real_base, real):
             return _UNKNOWN
@@ -149,6 +160,27 @@ def check_package(package: Package, cache: Path, probes: CacheProbes | None = No
     if missing == 0 and not unsayable:
         return CacheCheck(True, 0)
     return CacheCheck(False, None if unsayable else missing)
+
+
+def missing_bytes(ref: Any, cache: Path, probes: CacheProbes | None = None) -> int | None:
+    """The bytes the first start of `ref` still has to download: `0` only where every start file is
+    there with its declared size (a missing file of declared size 0 is never `0`), the sum of the
+    missing ones otherwise, `None` where nobody can say (an unsafe name, a link out of the repo folder,
+    an unreadable cache, a missing start file of declared size 0).
+
+    The one function of both ends (AP9-SV2-R, R2, Codex r2-6, r3-6): this computer's disk rule reads it
+    for its own packages (`vllm_disk`), a server reads it for the references it was sent
+    (`remote_server.vllm_result`), so the rules above are in one place."""
+    return _inspect(ref, cache, probes).missing_bytes
+
+
+def check_package(package: Package, cache: Path, probes: CacheProbes | None = None) -> CacheCheck:
+    """`CacheCheck` of `package` in the cache folder `cache`: its start files against the snapshot folder."""
+    return _inspect(_start_ref(package), cache, probes)
+
+
+def _start_ref(package: Package) -> _StartRef:
+    return _StartRef(package.repo, package.revision, start_files(package.files))
 
 
 def on_disk(package: Package, cache: Path, probes: CacheProbes | None = None) -> bool | None:
@@ -177,10 +209,10 @@ def vllm_disk(room: RoomProbes, packages: Sequence[Package] = ()) -> Disk:
     for package in packages:
         if not _is_tensor(package):
             continue
-        identity, check = package_identity_key(package), check_package(package, place)
-        if check.on_disk is True:
+        identity, missing = package_identity_key(package), missing_bytes(_start_ref(package), place)
+        if missing == 0:  # `0` is only ever said of a package whose start files are all there
             held.add(identity)
-        needs[identity] = check.missing_bytes if check.missing_bytes is not None else _download_bytes(package)
+        needs[identity] = missing if missing is not None else _download_bytes(package)
     return replace(base, held=frozenset(held), needs=needs, relative=cache_is_relative(room.environ, room.system))
 
 
@@ -202,6 +234,7 @@ __all__ = [
     "cache_is_relative",
     "check_package",
     "hf_cache_candidates",
+    "missing_bytes",
     "on_disk",
     "shared_disk_words",
     "vllm_disk",

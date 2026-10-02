@@ -7,6 +7,23 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **vLLM at a server over SSH** (AP9-SV2-R, R1 to R3; `modelroom/remote_vllm.py`, `modelroom/guided_remote_vllm.py`,
+  `modelroom/remote_server.py`, `modelroom/remote_protocol.py`; CONTRACTS.md, "The remote protocol v1", "vLLM at a
+  server over SSH"). `modelroom remote` reads and measures the server's own vLLM against its `127.0.0.1:8000`, with the
+  same three calls as a local run and nothing started, loaded or forwarded. Three optional fields: `hello.vllm`
+  (`serving`, `installed`, `absent`, `asks_key`), `profile.runtimes` (what the server has, so a profile read over SSH
+  remembers its vLLM) and `room.model_disk` (where vLLM keeps its models there: free bytes, same drive as Ollama's,
+  relative cache -- no drive, no path); an older server reads as `absent` and nothing. Two operations: `vllm` (the state,
+  which package of the run it serves **by index**, never the model's own name or path, and the bytes still to fetch per
+  package) and `vllm-measure` (one warm-up and three batches at the server, progress with numbers only, the problem as
+  one code of a fixed set that this computer puts into words). Only a `PackageRef` goes out (repo, revision, start files),
+  never a whole package with its `approval.by`; the server checks every field again before it touches its cache.
+  `hf_cache.missing_bytes` is the one function that counts the bytes still to fetch, for this computer's disk rule and
+  for the server. Three new error codes (`vllm_unreachable`, `vllm_asks_key`, `other_model`) with fixed sentences. In the
+  guided run the active computer's vLLM enters its live runtimes, step 4 offers `vLLM server on gpu1  context 32k  10
+  requests at once  <package>` in the list of its candidates (the number stays in memory and on the card), and step 5 reads
+  the disk rule, the `on disk already` mark and the two commands of I1 -- `on gpu1` in the label, nothing started over SSH --
+  for that computer's vLLM rows. `modelroom remote vllm` and `vllm-measure` read requests up to 16 MiB.
 - **A vLLM row is installed with a command, not a pull** (AP9-SV2-I, I1 to I4;
   `modelroom/install_vllm.py`, `modelroom/hf_cache.py`; CONTRACTS.md, "Local servers and the vLLM load
   test"). For a vLLM row the install line prints two commands and starts nothing: `vllm serve ...` with
@@ -30,7 +47,7 @@ All notable changes to this project are documented in this file. The format foll
   CONTRACTS.md, "Hardware profile"): `modelroom hardware` and the guided measurement write
   `runtimes` (`serving` or `installed`, in table order, empty not written), so a Linux machine with vLLM
   installed and not running gets its vLLM rows and install lines at the first start. A machine over SSH
-  is not covered yet.
+  writes it too (AP9-SV2-R).
 - **The cache check holds its boundary** (AP9-SV2-I, Codex r1, R1-2 to R1-4; `modelroom/hf_cache.py`): the
   repo folder in the cache must be where the cache puts it, the one `stat` per start file is made at the
   resolved path that passed the check, and only a regular file counts as there.

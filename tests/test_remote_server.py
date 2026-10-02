@@ -133,7 +133,8 @@ def test_a_daemon_request_with_a_non_string_method_is_bad_request():
 
 def test_room_carries_no_drive_no_path():
     result = _one(_run("room", b'{"cards": []}', _context())[0])["result"]
-    assert set(result.keys()) == {"disk", "graphics_free_mib"}
+    assert set(result.keys()) == {"disk", "graphics_free_mib", "model_disk"}  # `model_disk`: AP9-SV2-R, R1
+    assert set(result["model_disk"].keys()) == {"known", "free_bytes", "same_as_ollama", "relative"}
     assert set(result["disk"].keys()) == {"known", "free_bytes", "unclear"}
     assert "drive" not in result["disk"] and "reason" not in result["disk"]
 

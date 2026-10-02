@@ -407,9 +407,11 @@ def present_runtimes(profile: HardwareProfile | None, live: object) -> frozenset
     (`GuidedRun.servers.found.get("vllm")` for the machine the run is on, nothing for any other):
     only a real `ServedModel` answer counts as detected -- a server that asked for a key, one whose
     answer could not be read, or nothing at all, does not (E5: "does not count as detected").
+    A computer over SSH (AP9-SV2-R, R1) adds the word `"installed"`: its `hello.vllm` said vLLM is there
+    and not serving (a `ServedModel` of its own where it serves, built from this run's own package).
     """
     keys = frozenset(profile.runtimes) if profile is not None and profile.runtimes else frozenset({"ollama"})
-    return keys | {"vllm"} if isinstance(live, ServedModel) else keys
+    return keys | {"vllm"} if isinstance(live, ServedModel) or live == "installed" else keys
 
 
 def _ollama_state(daemon: Any, which: Callable[[str], str | None]) -> str:

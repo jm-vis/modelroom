@@ -296,17 +296,20 @@ def machine_checked(pointer_path: Path, config: Configuration, results_dir: Path
 def chosen_runtimes(run: "GuidedRun", config: Configuration) -> list[tuple[HardwareProfile | None, object]]:
     """`runtimes.machine_has_vllm`'s two inputs for every machine this run chose (F3): its stored
     profile (`[machines.<name>].profile`, the one the render ranks it with), and what this run's
-    own step 1 detected live -- for the machine the run is on only; any other machine has no live
-    detection here, so its stored profile alone speaks for it."""
+    own step 1 detected live -- for the machine the run is on and the active computer over SSH
+    (its `hello`, AP9-SV2-R); any other machine has no live detection here, so its stored profile
+    alone speaks for it."""
+    from .guided_remote_vllm import live_map
     from .remote_store import remote_path_for, this_machine
 
     here = this_machine(remote_path_for(run.pointer_path))
     scan = scan_profiles(config.paths.hardware_dir)
+    over_ssh = live_map(run)  # the active computer over SSH: what its `hello` said of its vLLM (AP9-SV2-R, R3)
     found = []
     for name in run.selection.machines:
         machine = config.machines.get(name)
         profile = scan.profiles.get(machine.profile) if machine is not None and machine.profile else None
-        found.append((profile, run.servers.found.get("vllm") if name == here else None))
+        found.append((profile, run.servers.found.get("vllm") if name == here else over_ssh.get(name)))
     return found
 
 

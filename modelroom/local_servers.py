@@ -27,6 +27,7 @@ from . import guided_vllm
 from .config import Configuration
 from .dialog import Choice
 from .guided_loadtest import NOTHING_MEASURED, QUESTIONS as LOAD_TEST_QUESTIONS, STEP, wants_load_test
+from .guided_remote_vllm import card_facts as remote_card_facts
 from .intro import Fact
 from .measurements import Scenario
 from . import runtimes
@@ -100,8 +101,10 @@ ROW_WORDS = {guided_vllm.ROW: "vLLM server"}
 
 
 def card_facts(run: "GuidedRun") -> tuple[Fact, ...]:
-    """The rows every registered server adds to the card of step 5, in the order of the list."""
-    return tuple(fact for server in runtimes.local_servers() for fact in server.card_facts(run))
+    """The rows every registered server adds to the card of step 5, in the order of the list, then the vLLM
+    server of the active computer over SSH where step 4 measured it (AP9-SV2-R, R3)."""
+    local = tuple(fact for server in runtimes.local_servers() for fact in server.card_facts(run))
+    return local + remote_card_facts(run)
 
 
 __all__ = [

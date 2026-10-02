@@ -16,7 +16,7 @@ from typing import Mapping, Sequence
 from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
-from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_set_line, unequal_cards_note
+from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_row, runtime_set_line, unequal_cards_note  # noqa: F401
 from .views_runtime import vllm_pool_pieces, vllm_shown, vllm_table
 from .views_sections import ALTERNATIVES, runtime_sections, section_head, section_title
 from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noqa: F401 -- moved (size guard, F5)
@@ -568,7 +568,10 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
         lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + speed)
     disk = _disk(block, view)
     served = view.live_vllm.get(block.machine)
-    return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view), served)
+    over_ssh = block.machine == view.ssh_active  # its own disk was read over SSH (AP9-SV2-R, R3)
+    return lines + install_lines(
+        block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view), served, over_ssh
+    )
 
 
 def _disk(block: MachineRanking, view: RunView) -> Disk | None:
@@ -624,7 +627,7 @@ def _runtime_lines(block: MachineRanking, view: RunView) -> list[Line]:
     that set and nothing else (Codex r8): no state words -- `serving`, `installed, not
     serving` are AP9-SV2-I/R's (`views_runtime.runtime_line`, not called here).
     """
-    text = runtime_set_line(block.profile, view.live_vllm.get(block.machine))
+    text = runtime_row(block, view.live_vllm.get(block.machine), view.ssh_active, view.packages, glyphs().dot)
     if text is None:
         return []
     texts = [text]

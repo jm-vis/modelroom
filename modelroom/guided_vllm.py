@@ -261,17 +261,18 @@ def _measure(run: "GuidedRun", served: ServedModel, scenario: Scenario) -> VllmM
     return measurement
 
 
-def measurement_lines(measurement: VllmMeasurement, dash: str) -> list[str]:
-    """The notes of a measurement: the two speeds, or the reason in their place, then what it is."""
+def measurement_lines(measurement: VllmMeasurement, dash: str, where: str = "") -> list[str]:
+    """The notes of a measurement: the two speeds, or the reason in their place, then what it is.
+    `where` (` on gpu1`, AP9-SV2-R) names the computer of a server read over SSH."""
     lines = []
     if measurement.requests != measurement.ranking_requests:
         lines.append(f"{measurement.requests} of {requests_words(measurement.ranking_requests)} measured")
     if measurement.problem is not None:
-        lines.append(f"{NAME}: {measurement.problem}")
+        lines.append(f"{NAME}{where}: {measurement.problem}")
     else:
         total = f"{measurement.total_tps:.1f} tok/s total ({measurement.total_min:.1f}{dash}{measurement.total_max:.1f})"
         request = f"{measurement.request_tps:.1f} tok/s ({measurement.request_min:.1f}{dash}{measurement.request_max:.1f})"
-        lines.append(f"measured vLLM: {total}, context {context_tokens_text(measurement.context)}")
+        lines.append(f"measured vLLM{where}: {total}, context {context_tokens_text(measurement.context)}")
         lines.append(f"per request: {request}")
     lines.append(NOTHING_WRITTEN_LINE)
     return lines

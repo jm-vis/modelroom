@@ -16,7 +16,7 @@ real process is `ssh_process.SubprocessSsh`; a test builds a `FakeSsh` that redi
 
 Every failure becomes one fixed local sentence with the alias in it: ssh's own stderr and any text
 the server sent are never shown, stored or put in `run.problems` -- stderr is classified by pattern
-and dropped, and an `error` line carries only one of five known codes, each with its own sentence.
+and dropped, and an `error` line carries only one of eight known codes, each with its own sentence.
 """
 
 from __future__ import annotations
@@ -66,6 +66,10 @@ ERROR_SENTENCES: dict[str, str] = {
     "ollama_unreachable": "Ollama does not answer on {alias}",
     "too_large": "the request to {alias} was larger than modelroom there reads",
     "internal": "modelroom on {alias} failed on its own side before it could answer",
+    # AP9-SV2-R (R2): the three codes of a vLLM operation, each with its own fixed sentence.
+    "vllm_unreachable": "vLLM does not answer on {alias}",
+    "vllm_asks_key": "the vLLM server on {alias} asks for an API key; modelroom reads an open server only",
+    "other_model": "vLLM on {alias} serves another model now",
 }
 assert set(ERROR_SENTENCES) == set(ERROR_CODES), ERROR_SENTENCES
 

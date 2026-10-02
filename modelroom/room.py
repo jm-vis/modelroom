@@ -112,6 +112,9 @@ class Disk:
     vllm: "Disk | None" = None
     needs: Mapping[tuple[str, str, str], int] = field(default_factory=dict)
     relative: bool = False
+    # AP9-SV2-R (R1): on a computer over SSH the server says itself whether the two places are on one
+    # drive (`room.model_disk.same_as_ollama`) -- no drive of it is ever named here. `None`: compare the drives.
+    same_place: bool | None = None
 
     @property
     def known(self) -> bool:
