@@ -45,7 +45,7 @@ from .daemon import ALLOWED_CALLS, Daemon, DaemonError, LocalDaemon
 from .hf_cache import CacheProbes
 from .llmfit import read_llmfit_reference
 from .loadtest import LoadTestError, installed_candidates, installed_models, run_load_test, weight_digest
-from .loadtest_vllm import INVALID_CODES, run_vllm_load_test
+from .loadtest_vllm import run_vllm_load_test
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware, read_os_identity
 from .measurements import EXPORT_SCHEMA_VERSION, ExportObject, Scenario, shipped_protocol
 from .neutral import neutral_record, neutral_version

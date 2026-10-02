@@ -1057,20 +1057,27 @@ def test_a_measurement_whose_numbers_and_code_agree_is_taken():
 
 def _server_without_model_disk(tmp_path, missing: int | None):
     """The active computer with the vLLM package of the run, a server of the old form (`room` has no `model_disk`),
-    `missing` the bytes still to fetch it counted (`0`: every start file there)."""
+    `missing` the bytes still to fetch it counted: `0` every start file there; `None` every weight there and the
+    tokenizer of declared size 0 missing (Rev 4), so the server cannot say -- the answer is checked to be exactly that."""
     from modelroom.guided_remote_vllm import with_model_disk
     from modelroom.remote_vllm import read_state
 
-    package = _awq_package()
+    if missing == 0:
+        package = _awq_package()
+        present = _present(package)
+    else:
+        package = _awq_package(
+            files=[_file("model.safetensors", 6_098_581_864, "weights"), _file("tokenizer.json", 0), _file("config.json", 1000)],
+        )
+        present = _present(package, skip=("tokenizer.json",))
     hub = tmp_path / "hub"
-    present = _present(package) if missing == 0 else {}
     context = _context(
         tmp_path, vllm=_silent(), room=_room(tmp_path, hub=hub, free=50 * GIB), is_file=lambda path: True, cache=_fake_cache(hub, present),
     )
     run = _Run(FakeSsh(context=context))
     _hello(run)
     state = run.remote_vllm["gpu1"] = read_state("gpu1", [package], run.ssh, ssh_path="ssh")
-    assert state.missing_bytes[0] == missing or missing is None
+    assert state.missing_bytes == (missing,)
     disk = with_model_disk(run, "gpu1", Disk(50 * GIB, "gpu1"), None)
     return run, package, state, disk
 
