@@ -16,8 +16,11 @@ only reads what the render wrote.
   GGUF package on the same machine give it two rows, each with a list value no answer file can
   confuse with the other's (`<runtime.key> <name>`, unprefixed for Ollama, so a machine with Ollama
   alone keeps exactly its values), and a package no runtime of the machine accepts gets no row.
-  Without `packages` (`pull_other.py`), or for a row whose package is not among them, each shown
-  row stays the one Ollama row it always was.
+  Without `packages`, or for a row whose package is not among them, each shown Ollama row stays
+  the one Ollama row it always was. Since AP9-SV2-I a vLLM row is a row of the list as well
+  (`Fit.runtime` says it is one): named by its repo (`vllm <repo>`), judged against vLLM's own
+  disk place (`disk_fit.place`), locked `no safe command` or `computed only: ...` where
+  `install_vllm.vllm_install` has no line for it.
 - `repo_lines` names the repository of every shown row whose `packager · quant` another shown row
   of the same block has too (F7), with the file form where one repository has both.
 """
@@ -30,8 +33,9 @@ from typing import Mapping, Sequence
 
 from . import runtimes
 from .contracts import Package
-from .disk_fit import entry_over_disk, too_big_words
+from .disk_fit import entry_download_gib, entry_over_disk, place, too_big_words
 from .document import MachineRanking, RankedEntry, RenderDocument
+from .install_vllm import NO_SAFE_COMMAND, safe_repo, vllm_install
 from .profile import HardwareProfile
 from .quantization import package_identity_key
 from .room import Disk
@@ -139,7 +143,12 @@ def run_packages(config, selection=None) -> list[Package]:
 
 
 def entry_pull_name(entry: RankedEntry) -> str | None:
-    """The pull name of a shown row, or `None` where it has none."""
+    """The pull name of a shown row, or `None` where it has none: for a vLLM row `vllm <repo>`
+    (`runtime_value`, the one value form a collision key shares with the list), for every other
+    row Ollama's name, unchanged."""
+    if entry.fit.runtime == runtimes.VLLM.key:
+        repo = entry.package_identity[1]
+        return runtime_value(repo, runtimes.VLLM.key) if safe_repo(repo) else None
     return install_name(entry.package_identity, entry.quantization, entry.format)
 
 
@@ -201,6 +210,12 @@ def row_names(entry: RankedEntry, package: Package | None, profile: HardwareProf
     """`(runtime key, install name)` for every runtime of this machine that accepts `entry`'s
     package, in table order; none where the package is known and no runtime of the machine accepts
     it; Ollama's name of the row itself where the package is not known (`package` `None`)."""
+    if entry.fit.runtime == runtimes.VLLM.key:
+        # The render showed this row because the machine's runtime set holds vLLM (the profile, or a
+        # server found live on an old one): that decides it, not `profile.runtimes` alone.
+        if package is None or not runtimes.VLLM.accepts(package):
+            return [(runtimes.VLLM.key, None)]
+        return [(runtimes.VLLM.key, runtimes.VLLM.install_name(package))]
     if package is None:
         return [(runtimes.OLLAMA.key, entry_pull_name(entry))]
     return [(runtime.key, runtime.install_name(package)) for runtime in runtimes.accepting_on_machine(package, profile)]
@@ -208,12 +223,16 @@ def row_names(entry: RankedEntry, package: Package | None, profile: HardwareProf
 
 def runtime_disk(runtime: str, disk: Disk | None, held: Mapping[str, frozenset] | None = None) -> Disk | None:
     """`disk` as the rows of the runtime with key `runtime` see it: `disk.held` is what the Ollama
-    daemon holds (the guided run reads it there), so it counts for Ollama's rows alone -- for any
-    other runtime the same free disk, holding what its own `on_disk` found (`held`, by runtime
-    key; nothing where `held` does not name it)."""
+    daemon holds (the guided run reads it there), so it counts for Ollama's rows alone. vLLM's rows
+    read the disk nested in it (`Disk.vllm`, the Hugging Face cache; `None` where it was not read),
+    holding what it found itself and what its own `on_disk` found (`held`, by runtime key); any other
+    runtime sees the same free disk holding what its own `on_disk` found."""
     if disk is None or runtime == runtimes.OLLAMA.key:
         return disk
-    return replace(disk, held=frozenset((held or {}).get(runtime, frozenset())))
+    own = frozenset((held or {}).get(runtime, frozenset()))
+    if runtime == runtimes.VLLM.key:
+        return None if disk.vllm is None else replace(disk, vllm=replace(disk.vllm, held=disk.vllm.held | own))
+    return replace(disk, held=own)
 
 
 def pull_rows(
@@ -252,19 +271,34 @@ def block_rows(
     by_identity = {package_identity_key(package): package for package in packages}
     rows = []
     for entry in block.ranked:
-        if entry.fit.runtime != runtimes.OLLAMA.key:
-            continue  # F5: the pull offers Ollama's rows alone until AP9-SV2-I builds vLLM's start line
         package = by_identity.get(tuple(entry.package_identity))
         cell = f"{entry.packager} {dot} {entry.quantization}"
         for key, name in row_names(entry, package, block.profile):
             own = runtime_disk(key, disk, held)
             too_big = entry_over_disk(entry, own)  # a package held already is never over (U11c)
-            locked = NO_PULL_NAME if name is None else NOT_UNIQUE if runtime_value(name, key) in ambiguous else None
+            locked = _name_lock(key, name, entry, package, block.profile, ambiguous)
             over = locked is None and too_big
-            locked = too_big_words(entry.weights_gib, own) if over else locked
+            locked = too_big_words(entry_download_gib(entry, own), place(entry.fit.runtime, own)) if over else locked
             identity = tuple(entry.package_identity)
-            rows.append(PullRow(entry.rank, cell, entry.weights_gib, name, locked, identity, over, key, too_big))
+            shown = cell if key == runtimes.OLLAMA.key else f"{runtimes.runtime_of(key).name} {dot} {cell}"
+            rows.append(PullRow(entry.rank, shown, entry.weights_gib, name, locked, identity, over, key, too_big))
     return rows
+
+
+def _name_lock(
+    key: str, name: str | None, entry: RankedEntry, package: Package | None, profile: HardwareProfile | None,
+    ambiguous: frozenset[str],
+) -> str | None:
+    """Why a row cannot be chosen for its name, or `None`. Ollama's: no safe name, then a name more
+    than one package answers to. vLLM's: no safe command (name, revision, cards), then `computed
+    only` where its cards are not `nvidia-smi`'s (`install_vllm.vllm_install`), then the same collision."""
+    if key == runtimes.VLLM.key:
+        reason = NO_SAFE_COMMAND if name is None else vllm_install(package, entry.fit, profile).reason
+        if reason is not None:
+            return reason
+    elif name is None:
+        return NO_PULL_NAME
+    return NOT_UNIQUE if runtime_value(name, key) in ambiguous else None
 
 
 @dataclass(frozen=True)
@@ -314,7 +348,7 @@ def rank_over(block: MachineRanking, rows: Sequence[PullRow], disk: Disk | None)
     over = []
     for entry in block.ranked:
         group = [row for row in rows if row.rank == entry.rank]
-        if all(row.too_big for row in group) if group else entry_over_disk(entry, runtime_disk(runtimes.OLLAMA.key, disk)):
+        if all(row.too_big for row in group) if group else entry_over_disk(entry, runtime_disk(entry.fit.runtime, disk)):
             over.append(entry.rank)
     return over
 

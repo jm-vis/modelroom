@@ -567,7 +567,8 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
         speed = [SPEED_HINT] if block.ranked else []
         lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + speed)
     disk = _disk(block, view)
-    return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view))
+    served = view.live_vllm.get(block.machine)
+    return lines + install_lines(block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view), served)
 
 
 def _disk(block: MachineRanking, view: RunView) -> Disk | None:

@@ -12,10 +12,12 @@ then LM Studio) is a new row, never a plug-in: no dynamic loading, no registrati
 Ollama sits on this table without a behavior change: `OLLAMA.accepts`, `.fit`, `.install_name`,
 `.command`, `.model_place` and `.on_disk` are the functions that did the work before, referenced
 here, not rewritten, and every caller reads them through this table (`pull_choice.py`,
-`views_install.py`, `guided_install.py`). `VLLM` carries only what AP9-SV1 built -- its `server`
-and `hello_field` -- and `accepts = lambda package: False`, so it claims no package until the
-Tensor package class and its fit exist. Its other fields are named stand-ins that raise if ever
-called; `test_every_runtime_has_every_field` only checks that every field is set.
+`views_install.py`, `guided_install.py`). `VLLM` carries what AP9-SV1 built -- its `server` and
+`hello_field` -- and, since AP9-SV2-F and AP9-SV2-I, a real `accepts` (the Hugging Face tensor
+packages), `fit` (`fit_vllm`), `detect` (`detect_vllm` below), `install_name`, `model_place`
+(`hf_cache.hf_cache_candidates`) and `on_disk` (`hf_cache`). Its install lines are
+`install_vllm.vllm_install`'s: a vLLM row needs the fit and the cards of its machine besides a name,
+which `Runtime.command` (a name in, a line out) cannot carry; `VLLM.command` is only the stem.
 
 `Runtime.detect`, `.model_place` and `.on_disk` are typed loosely on purpose: the probe and state
 types of the finished table do not exist yet. `install_name` and `command` are two fields on
@@ -30,6 +32,8 @@ Two imports are deferred to call time, inside the functions that need them (the 
 
 from __future__ import annotations
 
+import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
@@ -41,12 +45,15 @@ from .dialog import Choice
 from .fit import compute_fit_v2
 from .fit_vllm import vllm_fit_as_fit
 from .guided_loadtest import NO_CANDIDATE_LINE, NO_INSTALLED_LINE, installed_note, measure_ollama, ollama_offer, ollama_rows
+from .hf_cache import hf_cache_candidates, on_disk as hf_on_disk
+from .install_vllm import DOCKER_LOCAL_HOST, VLLM_IMAGE, install_name as vllm_install_name  # noqa: F401 -- the constants are re-exported
 from .intro import Fact, daemon_fact
 from .measurements import Scenario
 from .profile import HardwareProfile, RuntimeKey
+from .quantization import package_identity_key
 from .room import ollama_models_candidates
 from .screen import pull_command
-from .vllm_server import VLLM_BASE_URL, ServedModel
+from .vllm_server import VLLM_BASE_URL, ServedModel, ServedModelsError, VllmKeyError, VllmServerError, read_vllm_models
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
@@ -109,17 +116,53 @@ class Runtime:
     shown_only_with: Callable[[Package], bool] = lambda package: False
 
 
-def _not_built_yet(field_name: str, sub_package: str) -> Callable[..., Any]:
-    """A named stand-in for a vLLM field that is not built yet.
+def detect_vllm(
+    server: Any = None,
+    *,
+    system: str = sys.platform,
+    which: Callable[[str], str | None] = shutil.which,
+    home: Path | None = None,
+    is_file: Callable[[Path], bool] = lambda path: path.is_file(),
+) -> str:
+    """`VLLM.detect`: `serving`, `asks_key`, `installed` or `absent` for the machine this runs on.
 
-    `VLLM.accepts` refuses every package, so none of these ever runs; a call fails loudly (the
-    package that will fill the field in, named in the message) rather than guessing quietly.
+    Only on Linux (Rev 6): vLLM does not run on native Windows or on a Mac, whatever else is in the
+    `PATH`, so there is no vLLM state and no vLLM line for them. A server that answers with a model
+    list is `serving`, one that asks for a key `asks_key` (never read further, E5); otherwise `vllm`
+    in the `PATH` or at `~/.local/bin/vllm` is `installed`, else `absent`. Never a Docker call: a
+    machine with vLLM only as an image counts as without vLLM (F5 a). `server` is the vLLM transport
+    (`None`: not asked); `which`, `home` and `is_file` are the machine, passed in by a test.
     """
+    if not system.startswith("linux"):
+        return "absent"
+    if server is not None:
+        try:
+            read_vllm_models(server)
+            return "serving"
+        except VllmKeyError:
+            return "asks_key"
+        except ServedModelsError:
+            return "serving"  # a vLLM list that names no single model is still a server that answers
+        except VllmServerError:
+            pass
+    if which("vllm") is not None or is_file((home if home is not None else Path.home()) / ".local" / "bin" / "vllm"):
+        return "installed"
+    return "absent"
 
-    def _placeholder(*_args: Any, **_kwargs: Any) -> Any:
-        raise NotImplementedError(f"Runtime.{field_name} for vllm is built in {sub_package}")
 
-    return _placeholder
+def _vllm_on_disk(target: Any, packages: Sequence[Package]) -> frozenset:
+    """The identities of those `packages` whose start files all lie in the Hugging Face cache of the
+    machine of the run (`hf_cache.on_disk`, size checked); empty where the run has no room to read."""
+    room = getattr(target, "room", None)
+    if room is None:
+        return frozenset()
+    place = hf_cache_candidates(room.environ, room.home, room.system)[0]
+    return frozenset(package_identity_key(package) for package in packages if hf_on_disk(package, place) is True)
+
+
+def _vllm_command(name: str) -> str:
+    """The stem of vLLM's install line; the whole line, with the fit's cards and context, is `install_vllm.vllm_install`'s."""
+    return f"vllm serve {name}"
 
 
 def _ollama_accepts(package: Package) -> bool:
@@ -300,7 +343,7 @@ VLLM = Runtime(
         measure=_vllm_measure,
         card_facts=guided_vllm.card_facts,
     ),
-    detect=_not_built_yet("detect", "AP9-SV2-I/AP9-SV2-R"),
+    detect=detect_vllm,
     hello_field="vllm",
     # AP9-SV2-F: the Tensor package class and vLLM's fit now exist, so vLLM claims exactly the
     # Hugging Face tensor packages SV2-P's search finds -- the same predicate `shown_only_with`
@@ -309,21 +352,16 @@ VLLM = Runtime(
     # never claims `format == "gguf"`, whatever the package's source.
     accepts=_huggingface_tensor,
     fit=vllm_fit_as_fit,
-    # `install_name` returns `None` (a genuine, documented value of its own type: "no safe pull
-    # name") rather than `_not_built_yet`'s loud failure -- unlike every other not-yet field, this
-    # one is now reachable the moment `accepts` claims a real package: `pull_choice.pull_collisions`
-    # and `.ambiguous_names` call `runtime.install_name(package)` over *every* package a runtime of
-    # `RUNTIMES` accepts, independent of which machine (or whether any machine at all) has vLLM --
-    # the comment at `pull_choice.py:93` ("today only Ollama ever accepts a package") no longer
-    # holds once this row's `accepts` is real. SV2-I gives this its own pull name and the `vllm
-    # serve` install line; until then a vLLM row is simply never offered to pull (deliberately out
-    # of scope by design: modelroom does not start vLLM itself).
-    install_name=lambda package: None,
-    command=_not_built_yet("command", "AP9-SV2-I"),
-    model_place=_not_built_yet("model_place", "AP9-SV2-I"),
-    on_disk=_not_built_yet("on_disk", "AP9-SV2-I"),
+    # AP9-SV2-I: the name a vLLM row is chosen by is its repo (list value `vllm <repo>`), `None` where
+    # repo or revision is not safe to put in a command (`install_vllm.install_name`). Read by
+    # `pull_choice.pull_collisions` over *every* package this runtime accepts, whatever the machine:
+    # two groups of one repo answer to one name and are locked (`pull name not unique`).
+    install_name=vllm_install_name,
+    command=_vllm_command,
+    model_place=hf_cache_candidates,
+    on_disk=_vllm_on_disk,
     # F5: no prefix and no key line -- a vLLM row stands in a section or on a machine that names
-    # its runtime already, and no start command is promised before AP9-SV2-I builds one.
+    # its runtime already (the pull list names it itself, `pull_choice.block_rows`).
     words=RuntimeWords(package_prefix="", key_text=None, question="Which package should be installed?"),
     shown_only_with=_huggingface_tensor,
 )
@@ -458,12 +496,14 @@ def fit_for(
 
 
 __all__ = [
+    "DOCKER_LOCAL_HOST",
     "LOCAL_SERVERS",
     "OLLAMA",
     "Offer",
     "Origins",
     "QUESTIONS",
     "RUNTIMES",
+    "VLLM_IMAGE",
     "LocalServer",
     "Runtime",
     "RuntimeWords",
@@ -473,6 +513,7 @@ __all__ = [
     "accepting_on_machine",
     "accepting_runtimes",
     "any_has_vllm",
+    "detect_vllm",
     "fit_for",
     "local_servers",
     "machine_has_vllm",

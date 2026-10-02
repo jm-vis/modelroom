@@ -19,10 +19,11 @@ from typing import Mapping, Sequence
 
 from . import runtimes
 from .contracts import Package
-from .disk_fit import known, none_fits_words, skipped_words
+from .disk_fit import block_place, known, none_fits_words, skipped_words
 from .document import MachineRanking, RankedEntry
+from .install_vllm import COMPUTED_ONLY, install_block_lines, vllm_install
 from .intro import label_line
-from .pull_choice import NOT_UNIQUE, Offered, block_rows, offered, rank_over
+from .pull_choice import NOT_UNIQUE, Offered, PullRow, block_rows, offered, package_of, rank_over
 from .room import Disk
 from .screen import Line, install_pull_line
 
@@ -97,6 +98,7 @@ def install_lines(
     pull_other_machines: frozenset[str] = frozenset(),
     packages: Sequence[Package] = (),
     held: Held = None,
+    live_vllm: object = None,
 ) -> list[Line]:
     """The install line of a block, behind a blank line; nothing where a row has no local name.
 
@@ -107,19 +109,26 @@ def install_lines(
     machine named, and the reminder that this run pulls only here (U3). The disk of this machine
     moves the line to the best row that fits it, or turns it into the red `no package fits` (U11);
     `held` is what each runtime but Ollama holds itself (`guided_install.other_runtimes_held`).
+
+    A vLLM row (AP9-SV2-I) is two commands and what to do with them (`install_vllm.install_block_lines`),
+    nothing to pull; `live_vllm` is what this machine's local server states it serves, so another
+    model there adds the stop line.
     """
     if install_for is None or not block.ranked:
         return []
     own = block.machine == install_for
-    read = known(disk) if own else None
-    offer = install_offer(block, read, packages, held, ambiguous)
+    read = known(block_place(block, disk)) if own else None
+    offer = install_offer(block, disk if own else None, packages, held, ambiguous)
     if own and offer.all_over:
         return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
     if offer.row is None:
         stop = offer.stop
         note = f"#{stop.rank} {NOT_UNIQUE_INSTALL}" if stop is not None and stop.locked == NOT_UNIQUE else None
+        note = f"#{stop.rank} {COMPUTED_ONLY}" if stop is not None and stop.locked == COMPUTED_ONLY else note
         return [] if note is None else [[], label_line(INSTALL_LABEL, [("class:note", note)])]
     row, runtime = offer.row, runtimes.runtime_of(offer.row.runtime)
+    if runtime.key == runtimes.VLLM.key:
+        return _vllm_lines(block, row, own, disk, packages, held, live_vllm, offer.skipped, dash)
     command = runtime.command(str(row.name))
     if own:
         # The one line of this view that may pass 100 characters: it is a command to copy, and a
@@ -130,6 +139,25 @@ def install_lines(
     other = [("class:note", f"#{row.rank} on {block.label}"), ("", "  "), ("class:command", command)]
     note = OTHER_INSTALL_NOTE_WITH_LIST if block.machine in pull_other_machines else OTHER_INSTALL_NOTE
     return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", note)])]
+
+
+def _vllm_lines(
+    block: MachineRanking, row: PullRow, own: bool, disk: Disk | None, packages: Sequence[Package], held: Held,
+    live_vllm: object, skipped: Sequence[int], dash: str,
+) -> list[Line]:
+    """The install block of a vLLM row under a table: this machine's with its notes (on disk already,
+    another model served), another machine's with the machine named and no promise about this run."""
+    entry = next(entry for entry in block.ranked if entry.rank == row.rank)
+    vllm = disk.vllm if own and disk is not None else None
+    relative = vllm is not None and vllm.relative
+    install = vllm_install(package_of(row, packages), entry.fit, block.profile, relative_cache=relative)
+    if not own:
+        return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, where=block.label)]
+    there = row.identity in (held or {}).get(runtimes.VLLM.key, frozenset()) or (vllm is not None and row.identity in vllm.held)
+    lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=live_vllm, on_disk=there)
+    if skipped:
+        lines.append(label_line("", [("class:note", skipped_words(list(skipped), dash))]))
+    return [[], *lines]
 
 
 __all__ = [

@@ -100,13 +100,17 @@ def test_the_numbers_are_unique_over_both_sections_ollama_first():
     assert block.ranked_total == 2
 
 
-def test_the_pull_offers_ollamas_rows_alone():
+def test_the_pull_offers_the_rows_of_both_runtimes():
+    """AP9-SV2-I (replaces `test_the_pull_offers_ollamas_rows_alone`, F5's stop-gap): the list takes
+    vLLM's row too, each row of its own runtime; without the run's packages a vLLM row has no revision to
+    build a command from and stays locked, so the install lines stay the one of Ollama's section."""
     from modelroom.pull_choice import pull_rows
 
     document = _both()
     rows = pull_rows(document, "server", packages=[_gguf_package(), _tensor_package()])
 
-    assert [(row.rank, row.runtime) for row in rows] == [(1, "ollama")]
+    assert [(row.rank, row.runtime) for row in rows] == [(1, "ollama"), (2, "vllm")]
+    assert rows[1].locked is None and rows[1].value == "vllm RedHatAI/Qwen3-8B-quantized.w4a16"
     install = [line for line in terminal_lines(document, install_for="server") if line.startswith(" install")]
     assert len(install) == 1 and "#1" in install[0]
 

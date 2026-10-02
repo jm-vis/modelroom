@@ -49,6 +49,7 @@ from .guided_install import QUESTIONS as PULL_QUESTIONS, PullContext, held_ident
 from .pull_other import KEY as PULL_OTHER_KEY, QUESTION as PULL_OTHER_QUESTION
 from .pull_other import eligible_other_machines, pull_other_step
 from .pull_choice import ambiguous_names, run_packages
+from .hf_cache import vllm_disk
 from .room import Disk, RoomProbes, free_disk, live_room
 # `_hardware_class` is re-exported: `tests/test_guided_cards.py` reads it from here (AP9-UX move).
 from .guided_machines import ANOTHER_COMPUTER, _hardware_class, _machine_choices, _measured_here  # noqa: F401
@@ -672,8 +673,11 @@ def _render_step(
     # Free disk read once, before the render: Markdown, table and pull list mark the same rows (AP9-RM
     # U11); the check before a pull reads it again.
     disk = free_disk(run.room)
+    packages = run_packages(config, chosen)
+    if vllm_among_chosen(run, config):  # where vLLM keeps its models (I2): read only for a run that has a machine with vLLM
+        disk = replace(disk, vllm=vllm_disk(run.room, packages))
     if daemon_reachable:  # a package the daemon holds already needs no disk and is never marked (U11c)
-        disk = replace(disk, held=held_identities(run, run_packages(config, chosen)))
+        disk = replace(disk, held=held_identities(run, packages))
     code = render_with_config(
         config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk}, live_vllm={here: live}
     )

@@ -5480,6 +5480,73 @@ profile `guided_context.machine_checked` reads); tensor parallel over several ca
 server started below 0.92 has less KV cache than computed; CUDA's first card need not be the largest;
 the prefix cache is not modeled; `render` never shows any of it.
 
+**The install of a vLLM row (AP9-SV2-I, I1 to I4; `modelroom/install_vllm.py`, `modelroom/hf_cache.py`).**
+modelroom starts no vLLM and pulls nothing for it: a vLLM row prints **two commands** built by one
+function (`install_vllm.vllm_install(package, fit, profile, relative_cache=False)`) from the same
+checked values, and the reader pastes one into a terminal that stays open (GF 2026-09-29, F1 a, F2 b).
+Both are plain POSIX shell text for the measured Linux machine only; **nothing here runs a process or
+looks for `docker`**.
+
+```
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<index>,... VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 vllm serve <repo> --revision <sha> --max-model-len <context> --tensor-parallel-size <t> --gpu-memory-utilization 0.92 --host 127.0.0.1 --port 8000
+mkdir -p "<expr>" && docker --host unix:///var/run/docker.sock run --rm --ipc=host --gpus '"device=<index>,..."' -e CUDA_DEVICE_ORDER=PCI_BUS_ID -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 -p 127.0.0.1:8000:8000 --mount "type=bind,src=<expr>,dst=/root/.cache/huggingface/hub" vllm/vllm-openai:v0.30.0 <repo> --revision <sha> --max-model-len <context> --tensor-parallel-size <t> --gpu-memory-utilization 0.92 --host 0.0.0.0 --port 8000
+```
+
+`<expr>` is the constant `hf_cache.HF_CACHE_EXPRESSION`,
+`${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}`, in the `mkdir` and in the
+mount, character for character: the shell of the machine resolves it, so the download lands where the
+disk was checked and no host path stands in a line. The mount is `--mount type=bind`, never `-v`;
+`--host unix:///var/run/docker.sock` (`DOCKER_LOCAL_HOST`) outranks `DOCKER_HOST` and `DOCKER_CONTEXT`
+(rootless Docker uses another socket); the image is the constant `VLLM_IMAGE` (`vllm/vllm-openai:v0.30.0`,
+the version of the SV1 recordings and of the calculation, assumption A8; a change is that one line and a
+hand test); in the container `--host 0.0.0.0`, outside only `127.0.0.1:8000`, `--ipc=host` as the vLLM
+documentation asks. The Docker line appears exactly where the `vllm serve` line does: vLLM is detected on
+the measured machine (`runtimes.detect_vllm`: Linux only, a server that answers or `vllm` in the `PATH` or
+at `~/.local/bin/vllm`, never a Docker call) and the row's cards are nameable. A relative
+`HF_HUB_CACHE`, `HF_HOME` or `XDG_CACHE_HOME` (the effective one, `hf_cache.cache_is_relative`,
+`Disk.relative`) leaves the Docker line out and says `docker: left out, the Hugging Face cache is set as a
+relative path; set it absolute to get this line`; the `vllm serve` line stays.
+
+Every value is checked before it reaches a line: the repo against the Hub's name rule and ASCII, the
+revision against 40 lower-case hex digits (`fullmatch`), the context, the card count and the card
+numbers as whole numbers (never text, never `bool`) of the fit; the image, socket, expression and
+container path are constants. Anything else gives no line and the lock `no safe command`. **The cards are
+bound by number, always** -- the `index` values of exactly the cards the fit chose
+(`fit_vllm.chosen_cards`), also when that is all of them, so an inherited `CUDA_VISIBLE_DEVICES` cannot
+shrink the line; a chosen card whose memory is not `nvidia-smi`'s (`vram_source` `sysfs`, `sysctl`,
+`llmfit`, `entered`) has no CUDA number modelroom can name: no line, the lock `computed only:
+modelroom cannot name these cards to vLLM`, the row stays in the ranking with its fit. Under the lines
+the table says what to do: `run one of the two in a terminal that stays open; vLLM downloads the model
+at its first start`, `then run modelroom again: step 4 finds the server and measures it`; a package on
+disk already replaces the first with `#<n> is on disk already (size checked)`; another model served on
+port 8000 adds `vLLM serves another model on port 8000 now; stop it first (one model per server)`.
+
+**The list of step 5** (I4) takes the vLLM rows: value `vllm <repo>` (Ollama's values are unchanged), a
+locked row says `no safe command`, `computed only: ...` or `pull name not unique` (two groups of one repo).
+The question is `Which package should be installed?` only where a vLLM row stands in the list, else
+`Which package should be pulled into Ollama?`; a vLLM row is offered whether or not Ollama's daemon
+answered. Choosing one prints its lines: **no yes/no question, no pull**; an unknown `pull_package` value is
+an error (exit `2`) as before. For another computer (`pull_other`) a vLLM row is handed over with both
+commands and the machine named, never `modelroom pull`, also for the active SSH machine.
+
+**Where vLLM keeps its models, and "on disk"** (`hf_cache`). The place is `HF_HUB_CACHE`, else
+`$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub` (an empty variable is
+unset, as in the shell), measured at the nearest existing parent like Ollama's. **The disk rule of AP9-RM U11
+is unchanged and reads each row at its own runtime's place** (`disk_fit.place`): download plus the 1 GiB
+margin against the free disk -- Ollama's rows at Ollama's, vLLM's at the cache, nothing marked where that place
+was not read. The download of a vLLM row is the sum of its start files (`tensor_quant.start_files`, one
+definition); `Disk.needs` carries, per package, the bytes still to fetch. The `room` line says
+`disk 41.2 GB free on C: (Ollama and vLLM models)` where both places are one drive, two pieces otherwise,
+and is as before for a machine without vLLM. A package is **on disk** when every start file lies in
+`<cache>/models--<owner>--<name>/snapshots/<sha>/` with the size the package declares (`stat` only, never
+a digest or a read). Missing start files make it not on disk and the rule counts the bytes still missing;
+a missing start file declaring size 0 (or a present one of another size) leaves `missing_bytes` `None` and
+the rule counts the whole download. Unsafe names (`SAFE_REPO_PATH_RE`), repo or revision are `None`
+**before any file is touched**; a path whose real location lies outside `models--<owner>--<name>` (a link
+to another repo, `/etc`, a drive, a share) is `None`, as is an unreadable cache. The legitimate
+`snapshots/<sha>/<file>` -> `../../blobs/<hash>` links count. **Limit:** Docker started with another
+volume than the printed line has another place; the check does not apply.
+
 ## Guided mode
 
 `modelroom` with **no subcommand** is the guided mode (`modelroom/guided.py`): a configuration

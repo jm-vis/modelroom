@@ -79,22 +79,27 @@ def test_each_runtimes_server_is_local_servers_own_entry():
     assert runtimes.VLLM.server is by_key["vllm"]
 
 
-@pytest.mark.parametrize("field", ["detect", "command", "model_place", "on_disk"])
-def test_every_vllm_field_not_built_yet_fails_loudly_if_called(field):
-    """AP9-SV2-F: `VLLM.accepts` claims a real package now (below), so `fit` and `install_name` are
-    built and no longer here (`fit_vllm.vllm_fit_as_fit`; `install_name` is `None` on purpose, its
-    own update below) -- every field still unbuilt fails loudly, naming the package that builds it,
-    rather than guessing quietly."""
-    with pytest.raises(NotImplementedError, match="AP9-SV2-"):
-        getattr(runtimes.VLLM, field)()
+def test_every_vllm_field_is_built():
+    """AP9-SV2-I (replaces `test_every_vllm_field_not_built_yet_fails_loudly_if_called`): the last four
+    stand-ins are real -- `detect` (Linux only), `command` (the stem; the whole lines are
+    `install_vllm.vllm_install`'s), `model_place` (the Hugging Face cache) and `on_disk` (size checked)."""
+    from pathlib import Path
+
+    assert runtimes.VLLM.detect(None, system="win32") == "absent"
+    assert runtimes.VLLM.command("acme/Nova-7B-AWQ") == "vllm serve acme/Nova-7B-AWQ"
+    assert runtimes.VLLM.model_place({"HF_HOME": "/h"}, Path("/srv/user"), "linux") == [Path("/h") / "hub"]
+    assert runtimes.VLLM.on_disk(object(), [_package(format="tensor")]) == frozenset()  # no room to read: nothing is held
 
 
-def test_vllm_install_name_is_none_not_a_loud_failure():
-    """AP9-SV2-F: unlike every other not-yet field, `install_name` is reachable the moment `accepts`
-    claims a real package (`pull_choice.pull_collisions`, over every package a runtime accepts,
-    whatever the machine) -- `None` is a genuine value of its own type ("no safe pull name"),
-    so a vLLM row is simply never offered to pull until AP9-SV2-I gives it a real one."""
-    assert runtimes.VLLM.install_name(_package(format="tensor")) is None
+def test_vllm_install_name_is_the_repo_where_repo_and_revision_are_safe():
+    """AP9-SV2-I (replaces `test_vllm_install_name_is_none_not_a_loud_failure`): the name a vLLM row is
+    chosen by is its repo -- what `pull_choice.pull_collisions` and the list's `vllm <repo>` value read
+    -- and `None` where repo or revision is not safe to put in a command (`install_vllm.install_name`)."""
+    package = _package(format="tensor")
+
+    assert runtimes.VLLM.install_name(package) == package.repo
+    assert runtimes.VLLM.install_name(package.model_copy(update={"revision": "main"})) is None
+    assert runtimes.VLLM.install_name(package.model_copy(update={"repo": "a/b;rm"})) is None
 
 
 # --- accepts: which packages a runtime claims ------------------------------------------------------

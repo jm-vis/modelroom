@@ -22,10 +22,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
+from .contracts import Package
 from .dialog import AnswerMissingError, Choice
 from .document import RenderDocument
+from .install_vllm import install_block_lines, vllm_install
 from .intro import label_line
 from .pull_choice import NONE_VALUE, PullRow, has_named_row, package_of, pull_rows, weights_bytes_of
+from .runtimes import VLLM
 from .views_install import INSTALL_LABEL
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -52,13 +55,16 @@ class OtherRow:
         return f"{self.machine} {self.row.value}"
 
 
-def other_rows(document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·") -> list[OtherRow]:
+def other_rows(
+    document: RenderDocument, machine: str, ambiguous: frozenset[str] = frozenset(), dot: str = "·", packages: Sequence[Package] = ()
+) -> list[OtherRow]:
     """Every shown row of every chosen machine but `machine`, in document order, each machine's own
-    rows in table order."""
+    rows in table order. `packages` are the run's: a vLLM row is built from its package (revision),
+    so without them its row is locked `no safe command`."""
     rows: list[OtherRow] = []
     for block in document.machines:
         if block.machine != machine:
-            rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot)]
+            rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot, packages=packages)]
     return rows
 
 
@@ -99,7 +105,7 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
         return
     if not eligible_other_machines(context.document, context.machine, context.ambiguous):
         return
-    rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot)
+    rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, context.packages)
     choices = pull_other_choices(rows)
     try:
         value = run.asker.select(KEY, QUESTION, choices)
@@ -108,6 +114,12 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
     chosen = next((entry for entry in rows if entry.row.locked is None and entry.value == value), None)
     run.screen.answer(QUESTION, NONE_WORDS if chosen is None else f"{chosen.machine}  #{chosen.row.rank}  {chosen.row.name}")
     if chosen is None:
+        return
+    if chosen.row.runtime == VLLM.key:
+        # modelroom starts no vLLM, here or over SSH: the row is handed over like one for a computer it
+        # cannot reach, with both commands and no `modelroom pull` (that command is Ollama's alone).
+        for line in vllm_handover_lines(context, chosen.machine, chosen.row):
+            run.screen.write(line)
         return
     if chosen.machine == run.ssh_active:
         from .guided_remote import pull_remote_row  # imported here: only an SSH row needs the SSH layer
@@ -119,6 +131,15 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
         return
     for line in handover_lines(chosen.machine, chosen.row, weights_bytes_of(package)):
         run.screen.write(line)
+
+
+def vllm_handover_lines(context: "PullContext", machine: str, row: PullRow) -> list:
+    """The handover of a vLLM row (A3, AP9-SV2-I): both install lines with the machine named, what to do
+    there, and no `modelroom pull` line (`install_vllm.install_block_lines`)."""
+    block = next(block for block in context.document.machines if block.machine == machine)
+    entry = next(entry for entry in block.ranked if entry.rank == row.rank)
+    install = vllm_install(package_of(row, context.packages), entry.fit, block.profile)
+    return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, where=machine)]
 
 
 def handover_lines(machine: str, row: PullRow, weights_bytes: float) -> list:
@@ -145,4 +166,5 @@ __all__ = [
     "other_rows",
     "pull_other_choices",
     "pull_other_step",
+    "vllm_handover_lines",
 ]

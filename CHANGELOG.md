@@ -7,6 +7,25 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **A vLLM row is installed with a command, not a pull** (AP9-SV2-I, I1 to I4;
+  `modelroom/install_vllm.py`, `modelroom/hf_cache.py`; CONTRACTS.md, "Local servers and the vLLM load
+  test"). For a vLLM row the install line prints two commands and starts nothing: `vllm serve ...` with
+  the model, its revision, the context, `--tensor-parallel-size`, `--gpu-memory-utilization 0.92`, the
+  loopback address and the two switches that turn telemetry off, and the same server as one `docker run`
+  line (fixed image `vllm/vllm-openai:v0.30.0`, the local socket, the Hugging Face cache mounted as the
+  shell resolves it and created first). The cards are bound by number, always, so a mask inherited from
+  the shell cannot shrink the line; cards whose memory `nvidia-smi` did not read give no line, only `computed
+  only`. Every value is checked first (`no safe command` otherwise); the Docker line is left out, with a
+  note, where a cache variable is a relative path. The list of step 5 takes the vLLM rows (value `vllm
+  <repo>`, the question `Which package should be installed?` only beside them); choosing one prints the
+  lines, with no yes/no question and no pull, and another computer is handed both commands.
+- **The disk rule reads vLLM's own place** (AP9-SV2-I, I2, I3): the free disk where vLLM keeps its models,
+  the Hugging Face cache (`HF_HUB_CACHE`, `HF_HOME`, `XDG_CACHE_HOME`, else `~/.cache/huggingface/hub`), marks
+  vLLM's rows exactly as Ollama's place marks Ollama's, and the `room` line names it
+  (`disk 41.2 GB free on C: (Ollama and vLLM models)` on one drive, two pieces on two). A package whose
+  start files all lie in the cache with their declared size is `on disk already` (sizes, never a digest) and
+  needs no disk; a part that is missing counts only its missing bytes. A name or link that leaves the
+  repo's folder in the cache makes the answer unknown without touching a file.
 - **Section titles stand out in the terminal view** (AP9-SV2-F, F6; `modelroom/views_sections.py`,
   `section_head`): `with Ollama` and `with vLLM` have one blank line before them and the style class
   `class:label`, the muted blue of the step heads. The Markdown view and every output of one runtime

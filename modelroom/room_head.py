@@ -19,6 +19,7 @@ from typing import Literal
 
 from .document import MachineRanking
 from .fit_vllm import NO_CARD_REASON, SHARED_MEMORY_REASON, VLLM_GPU_MEMORY_UTILIZATION, largest_pool
+from .hf_cache import shared_disk_words, vllm_disk_words
 from .intro import LABEL_COLUMN
 from .reserve import old_default_hint
 from .room import UNCLEAR_REASON, LiveRoom, LoadedModel, disk_words, gb, graphics_words
@@ -47,7 +48,7 @@ def head_pieces(
     `runtime_keys` are the machine's runtimes (`runtimes.machine_runtime_keys`, F5, Codex r5-2):
     Ollama's budgets and its disk only where Ollama is one of them -- named `for Ollama` beside vLLM,
     `for models` alone, word for word as before -- and vLLM's pool where vLLM is. vLLM has no
-    system-memory fallback and its disk place is AP9-SV2-I's, so it adds neither.
+    system-memory fallback, so it adds no memory piece; its disk is `_disk_pieces`'s.
     """
     profile = block.profile
     ollama, vllm = "ollama" in runtime_keys, "vllm" in runtime_keys and profile is not None
@@ -59,7 +60,23 @@ def head_pieces(
     else:
         pieces = [_graphics_piece(block, whom), _memory_piece(block, whom)]
     pieces = (pieces if ollama else []) + ([_vllm_piece(block)] if vllm else [])
-    return [*pieces, *([_disk_piece(live, where, block.machine)] if ollama else [])]
+    return [*pieces, *_disk_pieces(live, where, block.machine, ollama, vllm)]
+
+
+def _disk_pieces(live: LiveRoom | None, where: Where, machine: str, ollama: bool, vllm: bool) -> list[str]:
+    """The disk piece(s) of the `room` line (AP9-SV2-I, I2): Ollama's, as before, where Ollama is one of
+    the machine's runtimes; vLLM's own place where vLLM is and it was read (`Disk.vllm`, this machine only).
+    Both places on one drive are one piece, `disk 41.2 GB free on C: (Ollama and vLLM models)`; two
+    drives, two pieces. A vLLM machine whose place was not read says nothing about it (as before)."""
+    disk = live.disk if live is not None else None
+    own = disk.vllm if vllm and disk is not None else None
+    if own is None or not own.known:
+        return [_disk_piece(live, where, machine)] if ollama else []
+    if not ollama:
+        return [vllm_disk_words(own)]
+    if disk.known and disk.drive == own.drive:
+        return [shared_disk_words(disk)]
+    return [_disk_piece(live, where, machine), vllm_disk_words(own)]
 
 
 def _vllm_piece(block: MachineRanking) -> str:

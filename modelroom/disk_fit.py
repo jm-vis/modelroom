@@ -35,22 +35,52 @@ def known(disk: Disk | None) -> Disk | None:
     return disk if disk is not None and disk.known else None
 
 
+def place(runtime: str, disk: Disk | None) -> Disk | None:
+    """The disk where `runtime` keeps its models, out of the one `Disk` a machine carries: Ollama's is
+    that disk itself, vLLM's the one nested in it (`Disk.vllm`, AP9-SV2-I); another runtime has none."""
+    if disk is None:
+        return None
+    return disk if runtime == "ollama" else disk.vllm if runtime == "vllm" else None
+
+
 def over_disk(weights_gib: float, disk: Disk | None, identity: Sequence[str] | None = None) -> bool:
     """Whether a download of `weights_gib` and its margin need more than the free disk; never where it
-    is unknown, and never for a package the daemon holds already (`identity` in `Disk.held`, U11c).
+    is unknown, and never for a package its runtime holds already (`identity` in `Disk.held`, U11c).
+    `disk` is the place of the row's own runtime (`place`); where it names the bytes still to fetch of
+    this package (`Disk.needs`, vLLM's missing start files) those count instead of `weights_gib`.
     The rule of the check before a pull (`room.pull_need_bytes`)."""
     read = known(disk)
     if read is None:
         return False
     held = identity is not None and tuple(identity) in read.held
-    return pull_need_bytes(weights_gib * GIB, held) > read.free_bytes
+    return pull_need_bytes(_download_bytes(weights_gib, read, identity), held) > read.free_bytes
+
+
+def _download_bytes(weights_gib: float, disk: Disk, identity: Sequence[str] | None) -> float:
+    still = disk.needs.get(tuple(identity)) if identity is not None else None
+    return weights_gib * GIB if still is None else float(still)
+
+
+def entry_download_gib(entry: RankedEntry, disk: Disk | None) -> float:
+    """What the disk rule counts as the download of a shown row, in GiB: the bytes still to fetch
+    where its runtime's place names them, else its weights."""
+    read = known(place(entry.fit.runtime, disk))
+    return entry.weights_gib if read is None else _download_bytes(entry.weights_gib, read, entry.package_identity) / GIB
 
 
 def entry_over_disk(entry: RankedEntry, disk: Disk | None) -> bool:
     """`over_disk` of a shown row, by its download and its package: the one test of the table, the
-    `disk` line, the install line and the pull list. The disk read is the one where Ollama keeps
-    its models, so a vLLM row is never judged against it (F5; vLLM's own place is AP9-SV2-I's)."""
-    return entry.fit.runtime == "ollama" and over_disk(entry.weights_gib, disk, entry.package_identity)
+    `disk` line, the install line and the pull list. The disk read is the one where the row's own
+    runtime keeps its models (`place`): Ollama's for an Ollama row, vLLM's (the Hugging Face cache)
+    for a vLLM row -- never the one for the other, and nothing marked where that one was not read."""
+    return over_disk(entry.weights_gib, place(entry.fit.runtime, disk), entry.package_identity)
+
+
+def block_place(block: MachineRanking, disk: Disk | None) -> Disk | None:
+    """The disk the words about `block` name: vLLM's for a block of vLLM rows alone (a runtime section,
+    or a machine with vLLM only), else Ollama's -- as before for every machine without vLLM."""
+    runtimes = {entry.fit.runtime for entry in block.ranked}
+    return place("vllm", disk) if runtimes == {"vllm"} else disk
 
 
 def over_ranks(block: MachineRanking, disk: Disk | None) -> list[int]:
@@ -67,7 +97,7 @@ def disk_words(
     ranks = over_ranks(block, disk) if ranks is None else list(ranks)
     if not ranks:
         return None
-    read = known(disk)
+    read = known(block_place(block, disk))
     need = "needs" if len(ranks) == 1 else "need"
     text = f"{mark} {ranks_text(ranks, dash)} {need} more than the {gb(read.free_bytes)} free on {read.drive}"
     return text + (_ALL_OVER_TAIL if len(ranks) == len(block.ranked) else "")
@@ -103,12 +133,15 @@ __all__ = [
     "DISK_LABEL",
     "MARK",
     "best_on_disk",
+    "block_place",
     "disk_words",
+    "entry_download_gib",
     "entry_over_disk",
     "known",
     "none_fits_words",
     "over_disk",
     "over_ranks",
+    "place",
     "skipped_words",
     "too_big_words",
 ]

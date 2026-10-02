@@ -102,6 +102,14 @@ class Disk:
     drive: str | None
     reason: str | None = None
     held: frozenset[tuple[str, str, str]] = frozenset()
+    # AP9-SV2-I (I2): the free disk where vLLM keeps its models, the Hugging Face cache, next to
+    # this one's place where Ollama keeps its own -- `None` where nobody read it. On that disk
+    # `needs` is, per package identity, the bytes still to download (`hf_cache.vllm_disk`; an
+    # identity it does not name needs its whole weights), `held` the packages already there, and
+    # `relative` says that a cache variable of the machine is a relative path (`hf_cache.cache_is_relative`).
+    vllm: "Disk | None" = None
+    needs: Mapping[tuple[str, str, str], int] = field(default_factory=dict)
+    relative: bool = False
 
     @property
     def known(self) -> bool:
@@ -128,8 +136,17 @@ def free_disk(room: RoomProbes) -> Disk:
     """The free disk of the place Ollama keeps its models, measured now (F6: an approximation)."""
     try:
         place = _models_place(room)
-        if place is None:
-            return Disk(None, None, UNCLEAR_REASON)
+    except (OSError, ValueError, RuntimeError):
+        return Disk(None, None)
+    if place is None:
+        return Disk(None, None, UNCLEAR_REASON)
+    return free_disk_at(room, place)
+
+
+def free_disk_at(room: RoomProbes, place: Path) -> Disk:
+    """The free disk at `place`, or at the nearest folder above it that exists (a place not created
+    yet); unknown, without a reason, where it cannot be measured. Ollama's place and vLLM's both."""
+    try:
         measured = _nearest_existing(room, room.resolve(place))
         return Disk(room.disk_usage(measured), _drive_name(room, measured))
     except (OSError, ValueError, RuntimeError):
@@ -352,6 +369,7 @@ __all__ = [
     "default_room_probes",
     "disk_words",
     "free_disk",
+    "free_disk_at",
     "free_graphics_mib",
     "free_sysfs_mib",
     "free_vram_mib",

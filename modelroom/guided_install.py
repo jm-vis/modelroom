@@ -37,7 +37,8 @@ from .pull_choice import LOCAL_ALREADY, NONE_VALUE, QUESTION as CHOICE_QUESTION
 from .pull_choice import PullRow, default_row, package_of, pull_rows, weights_bytes_of
 from .quantization import package_identity_key
 from .room import Disk, free_disk, gb, pull_need_bytes
-from .runtimes import OLLAMA, runtime_of
+from .install_vllm import install_block_lines, vllm_install
+from .runtimes import OLLAMA, VLLM, runtime_of
 from .screen import PULL_CANCELED as CANCELED_LINE
 from .screen import Screen
 from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
@@ -155,9 +156,9 @@ class PullContext:
 
 def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) -> None:
     """The list of the rows shown, the command of the choice, the disk, the question; a fault is `run.failed`."""
-    if context is None or not reachable:
+    if context is None:
         return
-    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, packages=context.packages)
+    rows = _offerable(pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, packages=context.packages), reachable)
     if not any(row.name is not None for row in rows):
         return
     run.screen.blank()
@@ -168,7 +169,7 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     # runtime's rows count only what that runtime holds (`pull_choice.runtime_disk`).
     ollama = held.get(OLLAMA.key, frozenset())
     disk = None if context.disk is None else replace(context.disk, held=context.disk.held | ollama)
-    rows = pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk, context.packages, held)
+    rows = _offerable(pull_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, disk, context.packages, held), reachable)
     locals_ = {(row.runtime, row.identity) for row in rows if row.locked is None and row.identity in held[row.runtime]}
     row = _choose(run, rows, locals_)
     if row is None:
@@ -176,9 +177,30 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     package = package_of(row, context.packages)
     if package is None:
         return
+    if row.runtime == VLLM.key:
+        _show_vllm(run, context, row, package, disk, (row.runtime, row.identity) in locals_)
+        return
     command = runtime_of(row.runtime).command(str(row.name))
     first = FirstRow(row.rank, str(row.name), row.weights_gib, package, weights_bytes_of(package), command)
     pull_chosen(run, first, local=(row.runtime, row.identity) in locals_)
+
+
+def _offerable(rows: Sequence[PullRow], reachable: bool) -> list[PullRow]:
+    """The rows the list may offer: Ollama's only where the start screen reached its daemon, vLLM's
+    always -- modelroom talks to no vLLM to print its command, so a machine with vLLM alone is asked too."""
+    return [row for row in rows if reachable or row.runtime != OLLAMA.key]
+
+
+def _show_vllm(run: "GuidedRun", context: PullContext, row: PullRow, package: Package, disk: Disk | None, local: bool) -> None:
+    """A chosen vLLM row: its install lines, nothing else -- no yes/no question and no pull, modelroom
+    starts no server (GF 2026-09-29, F1 a). The same block the table's install line draws."""
+    block = next(block for block in context.document.machines if block.machine == context.machine)
+    entry = next(entry for entry in block.ranked if entry.rank == row.rank)
+    relative = disk is not None and disk.vllm is not None and disk.vllm.relative
+    install = vllm_install(package, entry.fit, block.profile, relative_cache=relative)
+    served = run.servers.found.get("vllm")
+    for line in install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=served, on_disk=local):
+        run.screen.write(line)
 
 
 def held_by_runtime(
@@ -248,12 +270,15 @@ def _disk_allows(target: PullTarget, first: FirstRow) -> bool:
 def _choose(run: "GuidedRun", rows: Sequence[PullRow], locals_: set[tuple[str, tuple[str, str, str]]]) -> PullRow | None:
     """The row the user chose from the list, or `None` for `none`. An answer file without the key takes
     `#1` where it has a pull name of its own, else nothing (the behavior before U6)."""
+    # The one question of the list, asked "installed" once a vLLM row stands in it (I4); Ollama's own
+    # words, unchanged, where only its rows do.
+    question = VLLM.words.question if any(row.runtime != OLLAMA.key for row in rows) else CHOICE_QUESTION
     try:
-        value = run.asker.select(CHOICE_KEY, CHOICE_QUESTION, pull_choices(rows, locals_))
+        value = run.asker.select(CHOICE_KEY, question, pull_choices(rows, locals_))
     except AnswerMissingError:
         return default_row(rows)
     chosen = next((row for row in rows if row.locked is None and row.value == value), None)
-    run.screen.answer(CHOICE_QUESTION, NONE_WORDS if chosen is None else f"#{chosen.rank}  {chosen.name}")
+    run.screen.answer(question, NONE_WORDS if chosen is None else f"#{chosen.rank}  {chosen.name}")
     return chosen
 
 
