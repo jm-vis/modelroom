@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **Section titles stand out in the terminal view** (AP9-SV2-F, F6; `modelroom/views_sections.py`,
+  `section_head`): `with Ollama` and `with vLLM` have one blank line before them and the style class
+  `class:label`, the muted blue of the step heads. The Markdown view and every output of one runtime
+  are unchanged.
 - **No file carries a machine name** (AP9-FR, FR-N; `modelroom/neutral.py`, `modelroom/neutral_sweep.py`,
   `modelroom/remote_store.py`; CONTRACTS.md, "Neutral names", "Remote machines"). One sink decides
   what of a name and of foreign text reaches a file: machine keys and `display_name` are neutral

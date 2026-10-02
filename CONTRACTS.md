@@ -1978,6 +1978,14 @@ speed was measured carries the measurement's note instead, so in
 the Markdown view the basis of such a row is in the JSON view only; the Markdown table's own `Fit
 (computed)` cell is unchanged.
 
+**Sections per runtime (AP9-SV2-F, F5, F6).** A machine whose rows belong to both Ollama and vLLM is shown
+in one section per runtime, `with Ollama` and `with vLLM`, joined by a sentence that they are
+alternatives on the same cards. In the terminal view every section title has exactly one blank line
+before it and carries the style class `class:label` (the muted blue of `screen.head_line`); without
+color (a file, `NO_COLOR`, an answers run) the text is the same, with the blank line. The Markdown
+view already has its blank line and is unchanged. A machine of one runtime has no title and no
+blank line before its table.
+
 ## Render (AP5)
 
 > **Superseded in part by "Render (schema 2)" below (AP9-C).** What still holds, unchanged: the

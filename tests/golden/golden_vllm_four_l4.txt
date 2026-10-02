@@ -7,6 +7,7 @@
            disk unknown (modelroom render reads no machine live)
  runtime   Ollama · vLLM (from its profile)
  One section per runtime: alternatives on the same cards, not both at once.
+
  with Ollama
  #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@
            best: the least compression of the same model that fits
            modelroom rates no model family against another
            Speed is measured, see its column.
+
  with vLLM
  #    Model                   Package                Fit          Speed         Memory    Download
  ───────────────────────────────────────────────────────────────────────────────────────────────────

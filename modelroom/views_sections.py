@@ -16,7 +16,7 @@ from __future__ import annotations
 from .document import MachineRanking, SetAsideEntry
 from .intro import LABEL_COLUMN
 from .runtimes import RUNTIMES, runtime_of
-from .screen import JOIN_WIDTH
+from .screen import JOIN_WIDTH, Line
 from .views_runtime import block_runtimes, packager_cell
 
 ALTERNATIVES = "One section per runtime: alternatives on the same cards, not both at once."
@@ -30,6 +30,11 @@ _NAMED_PER_REASON = 3
 def section_title(runtime_key: str) -> str:
     """`with Ollama`, `with vLLM`: the heading of one runtime's section."""
     return f"with {runtime_of(runtime_key).name}"
+
+
+def section_head(title: str) -> list[Line]:
+    """F6: a blank line, then the section title on the muted blue of `screen.head_line`."""
+    return [[], [("class:label", title)]]
 
 
 def runtime_sections(block: MachineRanking) -> list[tuple[str, MachineRanking]]:
@@ -99,4 +104,4 @@ def _named(names: list[str], room: int) -> str:
     return ""
 
 
-__all__ = ["ALTERNATIVES", "NOTE_WIDTH", "runtime_sections", "section_title", "set_aside_pieces"]
+__all__ = ["ALTERNATIVES", "NOTE_WIDTH", "runtime_sections", "section_head", "section_title", "set_aside_pieces"]

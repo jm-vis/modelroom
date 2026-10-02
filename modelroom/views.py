@@ -18,7 +18,7 @@ from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_set_line, unequal_cards_note
 from .views_runtime import vllm_pool_pieces, vllm_shown, vllm_table
-from .views_sections import ALTERNATIVES, runtime_sections, section_title
+from .views_sections import ALTERNATIVES, runtime_sections, section_head, section_title
 from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noqa: F401 -- moved (size guard, F5)
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
@@ -645,7 +645,7 @@ def _terminal_ranking(
     lines += [[("", ALTERNATIVES)]] if len(parts) > 1 else []
     for key, part in parts:
         title = section_title(key) if len(parts) > 1 else ""
-        lines += ([[("", title)]] if title else []) + _terminal_body(part, dash, dot, view, several, f" {title}" if title else "")
+        lines += (section_head(title) if title else []) + _terminal_body(part, dash, dot, view, several, f" {title}" if title else "")
     return lines
 
 

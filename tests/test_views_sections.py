@@ -409,3 +409,29 @@ def test_the_step_3_scale_counts_what_the_vllm_only_table_ranks():
 
     assert texts[32768].startswith("all 1 package")
     assert len(_vllm_only().machines[0].ranked) == 1
+
+
+# --- F6 (AP9-SV2-F, GF 2026-10-02): the section titles stand out in the terminal ------------------------
+
+
+def test_the_terminal_lines_carry_a_blank_line_before_each_section_title_in_the_label_class():
+    """F6: before `with Ollama` and `with vLLM` exactly one empty line; the title is one fragment of
+    `class:label` (the muted blue of `screen.head_line`). The Markdown view is untouched."""
+    from modelroom.views import terminal_blocks
+
+    lines = terminal_blocks(_both())
+
+    titles = [index for index, line in enumerate(lines) if line and line[0][1] in ("with Ollama", "with vLLM")]
+    assert [lines[index] for index in titles] == [[("class:label", "with Ollama")], [("class:label", "with vLLM")]]
+    for index in titles:
+        assert lines[index - 1] == [] and lines[index - 2] != []
+
+
+def test_a_vllm_only_table_gets_no_blank_line_before_it():
+    """F6: no title, so no blank line either -- the table follows the machine's lines as before."""
+    from modelroom.views import terminal_blocks
+
+    lines = terminal_blocks(_vllm_only())
+
+    head = next(index for index, line in enumerate(lines) if line and line[0][1].startswith("#    Model"))
+    assert lines[head - 1] != [] and not any(line and line[0][1].startswith("with ") for line in lines)
