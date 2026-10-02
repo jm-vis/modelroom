@@ -88,6 +88,8 @@ def vllm_offer(run: "GuidedRun", config: Configuration, scenario: Scenario) -> R
         return None
     packages = sendable(run_packages(config, run.selection))
     if not packages:
+        if state.state == "asks_key":  # known from `hello`: said although there is nothing to send (R1-4)
+            run.screen.note(KEY_NOTE.format(alias=alias))
         return None
     try:
         fresh = read_state(alias, packages, run.ssh)
@@ -168,16 +170,19 @@ def with_model_disk(run: "GuidedRun", alias: str, disk: Disk, model_disk: dict |
     """`disk` with vLLM's own place nested in it, from what `room` said (`room.model_disk`, R1): the free bytes
     and whether it is the drive of Ollama's place, a relative cache variable, and -- from what step 4's `vllm`
     operation counted -- the bytes still to fetch per package and the packages that are there already (I2, I3).
-    A server that said nothing of it leaves `disk` as it was (`disk unknown on gpu1` for vLLM's place)."""
+    A server that said nothing of it still has what step 4 counted taken over (R1-3), on a place of unknown
+    free space (`disk unknown on gpu1`): `on disk already` and the bytes still to fetch do not depend on it."""
     state = _state(run, alias)
+    needs, held = state.needs() if state is not None else ({}, frozenset())
     if model_disk is not None:
-        needs, held = state.needs() if state is not None else ({}, frozenset())
         known = model_disk["known"]
         vllm = Disk(
             model_disk["free_bytes"] if known else None, alias if known else None, None,
             held=held, needs=needs, relative=model_disk["relative"], same_place=model_disk["same_as_ollama"],
         )
         disk = replace(disk, vllm=vllm)
+    elif state is not None and state.missing_bytes:
+        disk = replace(disk, vllm=Disk(None, None, None, held=held, needs=needs))
     if state is not None:
         state.relative = model_disk["relative"] if model_disk is not None else None
         state.disk = disk

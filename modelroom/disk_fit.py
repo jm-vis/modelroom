@@ -17,6 +17,7 @@ it stays a `local already` row of the pull list, as before U11.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Sequence
 
 from .document import MachineRanking, RankedEntry
@@ -41,6 +42,15 @@ def place(runtime: str, disk: Disk | None) -> Disk | None:
     if disk is None:
         return None
     return disk if runtime == "ollama" else disk.vllm if runtime == "vllm" else None
+
+
+def vllm_only(disk: Disk | None) -> Disk | None:
+    """`disk` as a computer over SSH lends it to the rows of the disk rule (AP9-SV2-R, R1-1): vLLM's own place
+    (`Disk.vllm`, from `room.model_disk`) and nothing of Ollama's -- its free space is unknown here, so no
+    Ollama row of that computer is marked, locked or passed over, exactly as before SV2-R (FR B5)."""
+    if disk is None:
+        return None
+    return replace(disk, free_bytes=None, drive=None, held=frozenset(), needs={})
 
 
 def over_disk(weights_gib: float, disk: Disk | None, identity: Sequence[str] | None = None) -> bool:
@@ -144,4 +154,5 @@ __all__ = [
     "place",
     "skipped_words",
     "too_big_words",
+    "vllm_only",
 ]

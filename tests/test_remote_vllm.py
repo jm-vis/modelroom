@@ -955,3 +955,183 @@ def test_remote_non_linux_server_gets_neither_line(tmp_path):
     assert info["vllm"] == "absent" and info["system"] == "win32"
     text = "\n".join(lines)
     assert "vllm serve" not in text and "docker" not in text and "vLLM" not in text
+
+
+# --- Codex r1 of SV2-R (fix round r1) -----------------------------------------------------------------------------------------
+
+
+def _ollama_sig(rows):
+    return [(r.machine, r.row.rank, r.row.runtime, r.row.locked, r.row.over_disk, r.row.too_big) for r in rows if r.row.runtime == "ollama"]
+
+
+def _install_text(block, packages, disk, over_ssh):
+    from modelroom.views_install import install_lines
+
+    lines = install_lines(block, "laptop", frozenset(), disk, "-", frozenset({"gpu1"}), packages, None, None, over_ssh)
+    return [plain(line) for line in lines]
+
+
+def test_the_ssh_disk_rule_leaves_ollama_rows_as_in_fr():
+    """R1-1: over SSH the disk rule is for the vLLM rows of the active computer (R3 step 5). A computer whose
+    Ollama rows meet a far too small `room.disk` shows the same install line, and the same list rows, as in FR."""
+    from modelroom.pull_choice import ambiguous_names
+    from modelroom.pull_other import other_rows
+
+    packages = [_gguf_package()]
+    document = _document(_gpu1_profile(runtimes=["ollama"]), packages)
+    block = document.machines[0]
+    assert block.ranked
+    tiny, huge = Disk(1000, "gpu1"), Disk(500 * GIB, "gpu1")
+
+    fr = _install_text(block, packages, tiny, False)  # the basis: another machine's block never reads a disk
+    assert any("ollama pull" in line for line in fr)
+    assert _install_text(block, packages, tiny, True) == fr
+    assert _install_text(block, packages, huge, True) == fr
+
+    ambiguous = ambiguous_names(packages)
+    plain_rows = other_rows(document, "laptop", ambiguous, "·", packages, {})
+    assert plain_rows and not any(r.row.over_disk or r.row.locked for r in plain_rows)
+    assert _ollama_sig(other_rows(document, "laptop", ambiguous, "·", packages, {"gpu1": tiny})) == _ollama_sig(plain_rows)
+
+
+def test_the_ssh_disk_rule_marks_vllm_rows_only_in_a_mixed_list():
+    """R1-1: on a computer with Ollama and vLLM rows a small disk locks the vLLM rows by `room.model_disk`, the Ollama
+    rows stay what they are without it."""
+    from modelroom.pull_choice import ambiguous_names
+    from modelroom.pull_other import other_rows
+
+    packages = _packages()
+    document = _document(_gpu1_profile(), packages)
+    ambiguous = ambiguous_names(packages)
+    disk = Disk(1000, "gpu1", vllm=Disk(1000, "gpu1"))
+
+    rows = other_rows(document, "laptop", ambiguous, "·", packages, {"gpu1": disk})
+    without = other_rows(document, "laptop", ambiguous, "·", packages, {})
+
+    assert _ollama_sig(rows) == _ollama_sig(without) and any(r.row.runtime == "ollama" for r in rows)
+    vllm_rows = [r for r in rows if r.row.runtime == "vllm"]
+    assert vllm_rows and all(r.row.over_disk for r in vllm_rows)
+
+
+def _measure_wire(wire: dict, scenario: Scenario):
+    from modelroom.remote_vllm import vllm_measure
+
+    line = json.dumps({"protocol": 1, "result": {"measurement": wire}}).encode("utf-8")
+    return vllm_measure("gpu1", [_small()], 0, scenario, FaultSsh(ProcessOutcome(0), lines=(line,)), ssh_path="ssh")
+
+
+def _speeds_wire(**changes) -> dict:
+    speeds = {name: 1.5 for name in ("total_tps", "total_min", "total_max", "request_tps", "request_min", "request_max")}
+    return {"requests": 20, "ranking_requests": 20, "context": 4096, **speeds, "problem": None, **changes}
+
+
+@pytest.mark.parametrize(
+    "scenario, change",
+    [
+        (_scenario(requests=128), {"requests": 64, "ranking_requests": 128}),  # fewer requests measured, no code
+        (_scenario(), {"problem": "other_requests"}),  # the code without the numbers
+        (_scenario(), {"context": 2048}),  # a shorter context, no code
+        (_scenario(), {"problem": "other_context"}),  # the code without the numbers
+        (_scenario(requests=128), {"requests": 64, "ranking_requests": 128, "problem": "other_context", "context": 4096}),
+    ],
+    ids=["requests no code", "other_requests no numbers", "context no code", "other_context no numbers", "wrong code for requests"],
+)
+def test_a_measurement_that_contradicts_its_own_scenario_is_a_form_fault(scenario, change):
+    """R1-2: what this computer can check from its own scenario it checks -- the numbers and the code must agree."""
+    with pytest.raises(SshError, match=FORM):
+        _measure_wire(_speeds_wire(**change), scenario)
+
+
+def test_a_measurement_whose_numbers_and_code_agree_is_taken():
+    """R1-2: the same deviations, stated with their code, are not comparable -- and nothing else changes."""
+    short = _measure_wire(_speeds_wire(requests=64, ranking_requests=128, problem="other_requests"), _scenario(requests=128))
+    assert short.comparable is False and short.comparable_reason.code == "other_requests" and short.validity == "valid"
+    other = _measure_wire(_speeds_wire(context=2048, problem="other_context"), _scenario())
+    assert other.comparable is False and other.comparable_reason.code == "other_context"
+    fine = _measure_wire(_speeds_wire(), _scenario())
+    assert fine.comparable is True and fine.validity == "valid"
+    nothing = {name: None for name in ("total_tps", "total_min", "total_max", "request_tps", "request_min", "request_max")}
+    masked = _measure_wire(_speeds_wire(requests=64, ranking_requests=128, problem="invalid_tokens", **nothing), _scenario(requests=128))
+    assert masked.validity == "invalid"  # an invalid answer names its own rule first, whatever else deviates
+
+
+def _server_without_model_disk(tmp_path, missing: int | None):
+    """The active computer with the vLLM package of the run, a server of the old form (`room` has no `model_disk`),
+    `missing` the bytes still to fetch it counted (`0`: every start file there)."""
+    from modelroom.guided_remote_vllm import with_model_disk
+    from modelroom.remote_vllm import read_state
+
+    package = _awq_package()
+    hub = tmp_path / "hub"
+    present = _present(package) if missing == 0 else {}
+    context = _context(
+        tmp_path, vllm=_silent(), room=_room(tmp_path, hub=hub, free=50 * GIB), is_file=lambda path: True, cache=_fake_cache(hub, present),
+    )
+    run = _Run(FakeSsh(context=context))
+    _hello(run)
+    state = run.remote_vllm["gpu1"] = read_state("gpu1", [package], run.ssh, ssh_path="ssh")
+    assert state.missing_bytes[0] == missing or missing is None
+    disk = with_model_disk(run, "gpu1", Disk(50 * GIB, "gpu1"), None)
+    return run, package, state, disk
+
+
+def test_a_server_without_model_disk_still_gives_on_disk_already(tmp_path):
+    """R1-3: `missing_bytes=[0]` counts without `room.model_disk`: the cache result is taken whatever the room said,
+    vLLM's place of unknown free space -- `on disk already` in the table and in the handover."""
+    from modelroom.guided_install import PullContext
+    from modelroom.pull_choice import ambiguous_names
+    from modelroom.pull_other import pull_other_step
+
+    run, package, state, disk = _server_without_model_disk(tmp_path, 0)
+
+    assert disk.vllm is not None and disk.vllm.known is False and disk.vllm.held == state.needs()[1] != frozenset()
+    packages = _packages()
+    document = _document(_gpu1_profile(), packages)
+    lines = [line.strip() for line in _lines(document, packages, LiveRoom(disk=disk), {"gpu1": state.live()})]
+    assert any("on disk already" in line for line in lines)
+    out: list[str] = []
+    run.asker, run.screen, run.out = FileAsker({"pull_other": f"gpu1 vllm {AWQ_REPO}"}), Screen(out.append, colored=False), out.append
+    pull_other_step(run, PullContext(document, "laptop", packages, ambiguous_names(packages)))
+    assert "on disk already" in "\n".join(out)
+
+
+def test_a_server_without_model_disk_keeps_the_whole_download_unknown_disk(tmp_path):
+    """R1-3: `null` (not determinable) is the whole download against a place of unknown free space: nothing marked,
+    no `on disk already`, the needs are kept and the room line says the place is unknown."""
+    from modelroom.remote_vllm import download_bytes
+
+    run, package, state, disk = _server_without_model_disk(tmp_path, None)
+
+    assert disk.vllm is not None and disk.vllm.known is False and disk.vllm.held == frozenset()
+    assert list(disk.vllm.needs.values()) == [download_bytes(package)]
+    packages = _packages()
+    document = _document(_gpu1_profile(), packages)
+    lines = [line.strip() for line in _lines(document, packages, LiveRoom(disk=disk), {"gpu1": state.live()})]
+    assert not any("on disk already" in line for line in lines)
+    assert any("disk unknown on gpu1" in line for line in lines)
+
+
+@pytest.mark.parametrize("packages", [[], [_gguf_package()]], ids=["no packages", "no tensor package"])
+def test_a_key_asking_server_is_one_note_without_a_sendable_package(tmp_path, monkeypatch, packages):
+    """R1-4: `hello.vllm = asks_key` is known; the note is said although the run has no tensor package to send --
+    and `vllm` is not called for it."""
+    run = _Run(FakeSsh(context=_context(tmp_path, vllm=_asks_key())))
+    assert _hello(run)["vllm"] == "asks_key"
+
+    assert _offer(run, packages, monkeypatch) is None
+
+    assert run.screen.notes == ["the vLLM server on gpu1 asks for an API key; modelroom reads an open server only"]
+    assert [call[1] for call in run.ssh.calls] == ["hello"]
+
+
+def test_a_mixed_table_says_where_vllm_keeps_its_models_when_the_server_did_not(tmp_path):
+    """R1-5: Ollama and vLLM both shown, the server sent no `model_disk`: Ollama's piece and `disk unknown on gpu1`."""
+    from modelroom.room_head import head_pieces
+
+    document = _document(_gpu1_profile(), _packages())
+    live = LiveRoom(disk=Disk(50 * GIB, "gpu1"))
+
+    pieces = head_pieces(document.machines[0], live, "ssh", frozenset({"ollama", "vllm"}))
+
+    assert "disk unknown on gpu1" in pieces
+    assert any("free on gpu1" in piece for piece in pieces if piece != "disk unknown on gpu1")

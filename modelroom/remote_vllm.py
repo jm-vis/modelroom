@@ -174,6 +174,7 @@ def to_measurement(alias: str, wire: dict, scenario: Scenario) -> VllmMeasuremen
     code = wire["problem"]
     if code == "server_gone":
         raise SshError(SERVER_GONE.format(alias=alias))
+    _agrees_with_the_scenario(alias, wire, scenario)
     reason = None
     if code is not None:
         words = PROBLEM_WORDS[code].format(
@@ -188,6 +189,25 @@ def to_measurement(alias: str, wire: dict, scenario: Scenario) -> VllmMeasuremen
         comparable=not (code is not None and not invalid), comparable_reason=reason if code is not None and not invalid else None,
         **speeds,
     )
+
+
+def _agrees_with_the_scenario(alias: str, wire: dict, scenario: Scenario) -> None:
+    """What this computer can check of the numbers against its own scenario (R1-2): the code and the numbers must
+    tell the same. An invalid answer names its own rule first (`VllmMeasurement.problem_code`) and may hide a
+    deviation; a deviation otherwise carries its code (`other_requests`, then `other_context`, the order of
+    `loadtest_vllm.not_comparable_reason`), and a code that says one has the number that shows it."""
+    code = wire["problem"]
+    fewer = wire["requests"] != wire["ranking_requests"]
+    other_context = wire["context"] != scenario.context_requested
+    masked = code in INVALID_CODES
+    fault = (
+        (fewer and code != "other_requests" and not masked)
+        or (code == "other_requests" and not fewer)
+        or (other_context and code is None)
+        or (code == "other_context" and not other_context)
+    )
+    if fault:
+        raise SshError(FORM_ERROR.format(alias=alias))
 
 
 __all__ = [

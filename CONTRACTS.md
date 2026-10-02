@@ -3573,7 +3573,13 @@ Ollama candidates (`load_test_remote_packages`, value `vllm`); a model that is n
 `the vLLM server on gpu1 serves a model that is no package of this run`, a server asking for a key
 `the vLLM server on gpu1 asks for an API key; modelroom reads an open server only`. Step 5 turns `room.model_disk` and
 `missing_bytes` into the disk rule of that computer's vLLM rows (I2): its table marks rows over the free disk, the
-`install` line takes the best row that also fits it, and the list of `pull_other` locks the others. Choosing a vLLM row
+`install` line takes the best row that also fits it, and the list of `pull_other` locks the others. The disk rule over
+SSH is for the **vLLM rows** of that computer alone: its Ollama rows read no disk there, as in FR (no mark, no lock, no
+skipped rank, the same command). A server that sends no `room.model_disk` still has what `vllm` counted taken over, on a
+place of unknown free space (`disk unknown on gpu1`, also beside Ollama's disk piece in a mixed table). The numbers of a
+`vllm-measure` answer must agree with its code: `requests` below `ranking_requests` is `other_requests` (an `invalid_*`
+code may hide it), a `context` other than the requested one has a code, and each of the two codes needs its number, else a
+form fault. A server that asks for a key is said so once even where the run has no tensor package to send. Choosing a vLLM row
 there prints the two commands of I1, built from the profile the server sent, with `#<rank> on gpu1` in the label and the
 cache only as the shell expression (a relative cache variable at the server leaves the Docker line out with its note); it
 starts nothing over SSH, asks no yes/no question and pulls nothing (GF question F1 a).

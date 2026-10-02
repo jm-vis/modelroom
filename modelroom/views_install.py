@@ -19,7 +19,7 @@ from typing import Mapping, Sequence
 
 from . import runtimes
 from .contracts import Package
-from .disk_fit import block_place, known, none_fits_words, skipped_words
+from .disk_fit import block_place, known, none_fits_words, skipped_words, vllm_only
 from .document import MachineRanking, RankedEntry
 from .install_vllm import COMPUTED_ONLY, NO_SAFE_COMMAND, install_block_lines, vllm_install
 from .intro import label_line
@@ -115,16 +115,18 @@ def install_lines(
     nothing to pull; `live_vllm` is what this machine's local server states it serves, so another
     model there adds the stop line.
 
-    `over_ssh` (AP9-SV2-R, R3): the block is the active computer over SSH, whose own free disk was read
-    there (`guided_remote.read_room`) -- it takes the disk rule like this machine's, the best row that also
-    fits it, with its command naming the computer.
+    `over_ssh` (AP9-SV2-R, R3): the block is the active computer over SSH, whose free disk for vLLM was read
+    there (`guided_remote.read_room`, `room.model_disk`) -- its vLLM rows take the disk rule like this machine's,
+    the best row that also fits it, with its command naming the computer. Its Ollama rows do not (`vllm_only`):
+    they behave as before SV2-R (FR B5).
     """
     if install_for is None or not block.ranked:
         return []
     own = block.machine == install_for
     reads = own or over_ssh
-    read = known(block_place(block, disk)) if reads else None
-    offer = install_offer(block, disk if reads else None, packages, held, ambiguous)
+    rule = disk if own else vllm_only(disk) if over_ssh else None  # over SSH the rule is vLLM's alone (R1-1)
+    read = known(block_place(block, rule)) if reads else None
+    offer = install_offer(block, rule, packages, held, ambiguous)
     if reads and offer.all_over:
         return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
     if offer.row is None:

@@ -18,6 +18,7 @@ All notable changes to this project are documented in this file. The format foll
   package) and `vllm-measure` (one warm-up and three batches at the server, progress with numbers only, the problem as
   one code of a fixed set that this computer puts into words). Only a `PackageRef` goes out (repo, revision, start files),
   never a whole package with its `approval.by`; the server checks every field again before it touches its cache.
+  Over SSH the disk rule applies to the vLLM rows of that computer only; its Ollama rows behave as in FR.
   `hf_cache.missing_bytes` is the one function that counts the bytes still to fetch, for this computer's disk rule and
   for the server. Three new error codes (`vllm_unreachable`, `vllm_asks_key`, `other_model`) with fixed sentences. In the
   guided run the active computer's vLLM enters its live runtimes, step 4 offers `vLLM server on gpu1  context 32k  10

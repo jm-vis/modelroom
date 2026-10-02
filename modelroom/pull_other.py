@@ -28,6 +28,7 @@ from .document import RenderDocument
 from .install_vllm import install_block_lines, vllm_install
 from .intro import label_line
 from .pull_choice import NONE_VALUE, PullRow, has_named_row, package_of, pull_rows, weights_bytes_of
+from .disk_fit import vllm_only
 from .room import Disk
 from .runtimes import VLLM
 from .views_install import INSTALL_LABEL
@@ -63,11 +64,12 @@ def other_rows(
     """Every shown row of every chosen machine but `machine`, in document order, each machine's own
     rows in table order. `packages` are the run's: a vLLM row is built from its package (revision),
     so without them its row is locked `no safe command`. `disks` (AP9-SV2-R, R3) are the free disks read
-    over SSH, by machine: a row of such a machine whose download does not fit is locked like a row of this one (U11)."""
+    over SSH, by machine: a vLLM row of such a machine whose download does not fit is locked like a row of this
+    one (U11); its Ollama rows read no disk, as in FR (R1-1)."""
     rows: list[OtherRow] = []
     for block in document.machines:
         if block.machine != machine:
-            disk = (disks or {}).get(block.machine)
+            disk = vllm_only((disks or {}).get(block.machine))  # over SSH only the vLLM rows read a disk (R1-1)
             rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot, disk, packages)]
     return rows
 
