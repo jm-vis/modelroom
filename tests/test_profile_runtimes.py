@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from modelroom.cli import main
-from modelroom.daemon import DaemonError, FixtureDaemon
+from modelroom.daemon import DaemonError
 from modelroom.dialog import FileAsker
 from modelroom.guided import run_guided
 from modelroom.profile import HardwareProfile
@@ -24,9 +24,9 @@ from modelroom.screen import plain
 from modelroom.vllm_server import MODELS_PATH, FixtureVllmServer, VllmKeyError
 
 from fixture_room import fixed_room
-from fixture_support import json_response, offline_daemon, offline_servers, vllm_servers, windows_probes
+from fixture_support import offline_daemon, vllm_servers, windows_probes
 from test_hardware_cmd import ID_ONE, RUN1, _probes, _write_config_file
-from test_install_vllm import REPO, SERVE, _package
+from test_install_vllm import SERVE, _package
 from test_golden_vllm import _base_model, _gguf_package, _profile, _render
 from test_intro import _daemon as _ollama_daemon
 

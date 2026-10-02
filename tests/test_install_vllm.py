@@ -131,11 +131,16 @@ def _attrappe(folder: Path, name: str, body: str) -> Path:
 
 def _on_path(folder: Path, shell: str | None = None) -> str:
     """The stand-ins first, then only the system default path (`mkdir`, `sh`): never the inventory of the
-    machine's own `PATH`. On Windows the Git shell's own folder and the one of its `mkdir` come with it."""
+    machine's own `PATH`. On Windows the tools come from the Git installation of `shell` alone (Codex r2,
+    R1-5): its own folder (`usr\\bin`, where `mkdir.exe` lives) and, where `shell` is the launcher in
+    `<git>\\bin`, the `usr\\bin` beside it; nothing is looked up in the inherited `PATH`."""
     parts = [str(folder)]
-    for program in (shell, shutil.which("mkdir")):
-        if program is not None and os.name == "nt":
-            parts.append(str(Path(program).parent))
+    if shell is not None and os.name == "nt":
+        shell_dir = Path(shell).parent
+        parts.append(str(shell_dir))
+        usr_bin = shell_dir.parent / "usr" / "bin"
+        if usr_bin.is_dir():
+            parts.append(str(usr_bin))
     parts.append(os.defpath)
     return os.pathsep.join(parts)
 
