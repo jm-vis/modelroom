@@ -74,6 +74,8 @@ class RoomProbes:
     # The file and folder layer of sysfs, for the free memory of an AMD card (AP9-GPU G9).
     read_text: FileText = read_file_text
     list_dir: ListDir = list_directory
+    # Whether a program is on the PATH (a runtime installed but not serving, AP9-SV2-I R1-1).
+    which: Callable[[str], str | None] = lambda name: shutil.which(name)
 
 
 def default_room_probes() -> RoomProbes:

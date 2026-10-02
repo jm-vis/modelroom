@@ -412,6 +412,34 @@ def present_runtimes(profile: HardwareProfile | None, live: object) -> frozenset
     return keys | {"vllm"} if isinstance(live, ServedModel) else keys
 
 
+def _ollama_state(daemon: Any, which: Callable[[str], str | None]) -> str:
+    """The state word of Ollama for `local_runtime_keys`: `daemon_fact` says only whether the daemon
+    answered (`OLLAMA.detect` itself is unchanged), so `serving` is that, else `installed` where the
+    program is in the `PATH`, else `absent`."""
+    _fact, reachable = daemon_fact(daemon)
+    if reachable:
+        return "serving"
+    return "installed" if which("ollama") is not None else "absent"
+
+
+def local_runtime_keys(daemon: Any, servers: Mapping[str, Any], room: Any) -> list[str]:
+    """The runtimes this machine has, for `HardwareProfile.runtimes` (F4 "Gemerkt", AP9-SV2-I R1-1):
+    each row of `RUNTIMES` in table order whose state is `serving` or `installed`; `absent` and
+    `asks_key` do not count. Read with the probes of the run: `daemon` and the transports in
+    `servers` (never Docker), the `room`'s platform, home, `PATH` and file test. Empty is not written."""
+    keys: list[str] = []
+    for runtime in RUNTIMES:
+        if runtime.key == "ollama":
+            state = _ollama_state(daemon, room.which)
+        else:
+            state = runtime.detect(
+                servers.get(runtime.key), system=room.system, which=room.which, home=room.home, is_file=room.exists
+            )
+        if state in ("serving", "installed"):
+            keys.append(runtime.key)
+    return keys
+
+
 def machine_runtime_keys(profile: HardwareProfile | None) -> frozenset[str]:
     """`present_runtimes` without a live reading: no logic of its own (Codex r7), for a reader that
     has none -- a machine of `modelroom render`, or a question live detection cannot change (it only
@@ -517,6 +545,7 @@ __all__ = [
     "fit_for",
     "local_servers",
     "machine_has_vllm",
+    "local_runtime_keys",
     "machine_runtime_keys",
     "present_runtimes",
     "runtime_of",

@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import Callable, Literal
+from typing import Callable, Literal, Sequence
 
 from .gpu import (  # noqa: F401 -- exported back: the tests and callers import these from here
     DISPLAY_ONLY_NOTE,
@@ -503,6 +503,7 @@ def build_profile(
     profile_id: str,
     display_name: str,
     recorded_at: datetime,
+    runtimes: Sequence[str] = (),
 ) -> HardwareProfile:
     """The current profile of one measurement (CONTRACTS.md, "Hardware profile v2").
 
@@ -533,6 +534,7 @@ def build_profile(
         llmfit_crosscheck=build_crosscheck(measured, reference),
         llmfit_version=reference.version,
         adapters=list(measured.gpu.graphics),
+        runtimes=list(runtimes),
     )
 
 

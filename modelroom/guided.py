@@ -369,6 +369,7 @@ def _measure_this_machine(
 ) -> Configuration:
     """Measure this machine, then write `[machines.<name>].profile` -- the one write A leaves to C."""
     from .cli import hardware_with_config  # imported here: the CLI imports this module in turn
+    from .runtimes import local_runtime_keys  # imported here: runtimes.py imports guided_vllm.py (a cycle)
 
     results_dir = config_file.parent
     name = _machine_key(run)
@@ -387,6 +388,8 @@ def _measure_this_machine(
         # The readings are the profile file's business; this step says in one note what was measured.
         summary=False,
         note=run.screen.note,  # every note of the measurement indented like its neighbors (AP9-UX G)
+        # F4 "Gemerkt": the runtimes this machine has, read with this run's own probes (AP9-SV2-I R1-1)
+        runtimes=local_runtime_keys(run.daemon, run.servers.transports, run.room),
     )
     if code != 0:
         run.failed(

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +25,11 @@ from test_golden_vllm import FIXTURES, _base_model, _gguf_package, _profile, _re
 from test_install_vllm import REVISION, _package
 
 SHARD_1, SHARD_2 = "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"
+
+
+def _regular(size: int):
+    """What `os.stat` says of a regular file of `size` bytes."""
+    return SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_size=size)
 FOLDER = "models--Qwen--Qwen3-8B-AWQ"
 
 
@@ -153,10 +160,10 @@ def test_an_unreadable_cache_is_unknown(tmp_path: Path):
     package = _small()
     hub = _fill(tmp_path / "hub", package)
 
-    def denied(path: str) -> int:
+    def denied(path: str):
         raise PermissionError(path)
 
-    probes = CacheProbes(size=denied)
+    probes = CacheProbes(stat=denied)
 
     assert on_disk(package, hub, probes) is None
     assert check_package(package, hub, probes).missing_bytes is None
@@ -196,7 +203,7 @@ def test_on_disk_refuses_unsafe_names_without_touching_files(tmp_path: Path):
     def touched(path: str):
         raise AssertionError(f"a file was touched: {path}")
 
-    probes = CacheProbes(realpath=touched, size=touched)
+    probes = CacheProbes(realpath=touched, stat=touched)
     for name in ("/etc/x.safetensors", "../x.safetensors", "a/../../x.json", "..\\x.json", "C:\\x.json", "\\\\host\\share\\x.json", "a:b.json", "a/b/c/d/e.json"):
         package = _small([PackageFile(name=name, role="weights", size_bytes=1, digest=None)])
         assert on_disk(package, tmp_path / "hub", probes) is None, name
@@ -215,7 +222,7 @@ def test_a_link_leaving_the_repo_cache_is_unknown(tmp_path: Path):
     outside = tmp_path / "outside" / "secret"
     sized: list[str] = []
     for target in (other, outside, Path("/etc/passwd"), Path("C:/Windows/system.ini")):
-        probes = CacheProbes(realpath=lambda path, target=target: str(target) if path.endswith(SHARD_1) else os.path.realpath(path), size=lambda path: sized.append(path) or 1)
+        probes = CacheProbes(realpath=lambda path, target=target: str(target) if path.endswith(SHARD_1) else os.path.realpath(path), stat=lambda path: sized.append(path) or _regular(1))
         assert on_disk(package, hub, probes) is None, target
     assert sized == []
 
@@ -244,6 +251,99 @@ def test_a_real_blob_link_inside_the_repo_folder_counts(tmp_path: Path):
     shard.unlink()
     os.symlink(str(foreign / "h2"), shard)
     assert on_disk(package, hub) is None
+
+
+def test_a_repo_folder_that_is_a_link_leads_nowhere(tmp_path: Path):
+    """Codex r1-2 (R1-2): `models--<owner>--<name>` itself is a link to another repo's folder, or to a place
+    outside the cache: the answer is unknown and no `stat` is made. A real folder with blob links stays valid."""
+    from modelroom.hf_cache import CacheProbes, on_disk
+
+    package = _small()
+    foreign = _fill(tmp_path / "other-hub", package)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    hub = tmp_path / "hub"
+    hub.mkdir()
+    stated: list[str] = []
+    probes = CacheProbes(stat=lambda path: stated.append(path) or _regular(1))
+    for target in (foreign / FOLDER, outside):
+        try:
+            os.symlink(target, hub / FOLDER, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("this machine may not create symbolic links")
+        assert on_disk(package, hub, probes) is None, target
+        (hub / FOLDER).unlink() if (hub / FOLDER).is_symlink() else None
+    assert stated == []
+    real = _fill(tmp_path / "real-hub", package)
+    assert on_disk(package, real) is True
+
+
+def test_the_repo_folder_anchor_is_the_resolved_cache_and_the_folder_name(tmp_path: Path):
+    """R1-2 without a symbolic link: whatever `realpath` says of the repo folder must be the folder name below
+    the resolved cache, else nothing is read."""
+    from modelroom.hf_cache import CacheProbes, on_disk
+
+    package = _small()
+    hub = _fill(tmp_path / "hub", package)
+    stated: list[str] = []
+    moved = str(tmp_path / "elsewhere" / FOLDER)
+    probes = CacheProbes(
+        realpath=lambda path: moved + path[len(str(hub / FOLDER)):] if path.startswith(str(hub / FOLDER)) else os.path.realpath(path),
+        stat=lambda path: stated.append(path) or _regular(1),
+    )
+    assert on_disk(package, hub, probes) is None
+    assert stated == []
+
+
+def test_the_size_is_read_at_the_resolved_path_never_the_original(tmp_path: Path):
+    """R1-3: the one `stat` per start file is made at the path that passed the boundary check."""
+    from modelroom.hf_cache import CacheProbes, check_package
+
+    package = _small()
+    hub = tmp_path / "hub"
+    base = os.path.realpath(hub / FOLDER)
+    seen: list[str] = []
+
+    def realpath(path: str) -> str:
+        real = os.path.realpath(path)
+        marker = os.path.join(base, "snapshots", package.revision)
+        return os.path.join(base, "blobs", "h-" + os.path.basename(real)) if real.startswith(marker) else real
+
+    sizes = {file.name: file.size_bytes for file in package.files}
+
+    def stat_(path: str):
+        seen.append(path)
+        return _regular(sizes[os.path.basename(path)[2:]])
+
+    result = check_package(package, hub, CacheProbes(realpath=realpath, stat=stat_))
+
+    assert result.on_disk is True
+    assert len(seen) == 4 and all(os.path.join(base, "blobs") in path for path in seen)
+    assert not any("snapshots" in path for path in seen)
+
+
+def test_a_start_file_that_is_no_regular_file_is_not_there(tmp_path: Path):
+    """R1-4: a folder (or a FIFO) in place of a size-0 `tokenizer.json` is not "on disk"."""
+    from modelroom.hf_cache import check_package, on_disk
+
+    package = _small(_files(tokenizer=0))
+    hub = _fill(tmp_path / "hub", package, skip=("tokenizer.json",))
+    assert on_disk(package, hub) is False  # missing: baseline
+    (_snapshot(hub) / "tokenizer.json").mkdir()
+    assert on_disk(package, hub) is False
+    assert check_package(package, hub).missing_bytes is None
+    if hasattr(os, "mkfifo"):
+        (_snapshot(hub) / "tokenizer.json").rmdir()
+        os.mkfifo(_snapshot(hub) / "tokenizer.json")
+        assert on_disk(package, hub) is False
+    # the same file as a regular one of size 0 is there
+    target = _snapshot(hub) / "tokenizer.json"
+    if target.is_dir():
+        target.rmdir()
+    elif target.exists():
+        target.unlink()
+    target.write_bytes(b"")
+    assert on_disk(package, hub) is True
 
 
 def test_local_zero_size_tokenizer_missing_is_null_not_on_disk(tmp_path: Path):

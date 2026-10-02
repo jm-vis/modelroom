@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .contracts import Package, _HF_REPO_RE
 from .quantization import package_identity_key
@@ -64,17 +65,14 @@ def cache_is_relative(environ: Mapping[str, str], system: str = "linux") -> bool
     return not path.is_absolute()
 
 
-def _real_size(path: str) -> int:
-    return os.stat(path).st_size
-
-
 @dataclass(frozen=True)
 class CacheProbes:
-    """Everything the check touches: where a path really leads (`realpath`, links followed) and how
-    large the file there is (`size`, `stat` only). A test passes its own."""
+    """Everything the check touches: where a path really leads (`realpath`, links followed) and what
+    is there (`stat`: its `st_mode` and `st_size`, metadata only, never the content). `stat` is asked
+    of the resolved path that passed the boundary check, once per file. A test passes its own."""
 
     realpath: Callable[[str], str] = os.path.realpath
-    size: Callable[[str], int] = _real_size
+    stat: Callable[[str], Any] = os.stat
 
 
 @dataclass(frozen=True)
@@ -112,8 +110,10 @@ def _inside(base: str, path: str) -> bool:
 def check_package(package: Package, cache: Path, probes: CacheProbes | None = None) -> CacheCheck:
     """`CacheCheck` of `package` in the cache folder `cache`: its start files against the snapshot folder.
 
-    Every name and the revision are checked first, and every resolved path must lie inside
-    `models--<owner>--<name>` before one size is read; then each start file is `stat`ed.
+    Every name and the revision are checked first. The repo folder itself must be where the cache puts
+    it (`realpath(cache)/models--<owner>--<name>`: a link that moves the folder away is not followed),
+    and every resolved path must lie inside it before one `stat` is made; then each start file is
+    `stat`ed at that resolved path and counts only as a regular file of the declared size.
     """
     probes = probes if probes is not None else CacheProbes()
     folder = _folder_name(package)
@@ -122,16 +122,20 @@ def check_package(package: Package, cache: Path, probes: CacheProbes | None = No
         return _UNKNOWN
     base = os.path.join(str(cache), folder)
     real_base = probes.realpath(base)
-    paths = []
+    if os.path.normcase(real_base) != os.path.normcase(os.path.join(probes.realpath(str(cache)), folder)):
+        return _UNKNOWN  # the repo folder is a link that leads elsewhere: nothing below it is touched
+    resolved = []
     for file in files:
         path = os.path.join(base, "snapshots", package.revision, *file.name.split("/"))
-        if not _inside(real_base, probes.realpath(path)):
+        real = probes.realpath(path)
+        if not _inside(real_base, real):
             return _UNKNOWN
-        paths.append(path)
+        resolved.append(real)
     missing, unsayable = 0, False
-    for file, path in zip(files, paths):
+    for file, real in zip(files, resolved):
         try:
-            found: int | None = probes.size(path)
+            info = probes.stat(real)
+            found: int | None = info.st_size if stat.S_ISREG(info.st_mode) else None  # a FIFO, a folder: not there
         except (FileNotFoundError, NotADirectoryError):
             found = None
         except OSError:

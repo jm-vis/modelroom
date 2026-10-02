@@ -29,7 +29,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping, Sequence
 
 from pydantic import ValidationError
 
@@ -48,7 +48,7 @@ from .cli_remote import OPS as REMOTE_OPS
 from .cli_remote import run_remote
 from .config import ConfigError, Configuration, load_config
 from .contracts import HardwareSnapshot, SchemaVersionError
-from .daemon import Daemon
+from .daemon import Daemon, LocalDaemon
 from .dialog import (
     AnswerInvalidError,
     AnswerMissingError,
@@ -78,7 +78,10 @@ from .neutral_sweep import moved_machine, sweep_for_command
 from .profile import MACHINE_CLASSES, HardwareProfile, MachineClass, fit_block_reason, os_fingerprint, read_profile_document
 from .remote_store import RemoteStoreError
 from .render_cmd import render_with_config
+from . import room as room_module
+from .local_servers import default_transports
 from .room import RoomProbes
+from .runtimes import local_runtime_keys
 from .ssh import SshRunner
 from .state import (
     LockHeldError,
@@ -207,7 +210,7 @@ def main(
     if args.command == "fetch":
         return _cmd_fetch(args, transport, now, pointer_path, host)
     if args.command == "hardware":
-        return _cmd_hardware(args, probes, pointer_path, now)
+        return _cmd_hardware(args, probes, pointer_path, now, daemon, servers, room)
     if args.command == "render":
         return _cmd_render(args, now, pointer_path, host)
     if args.command == "migrate":
@@ -399,8 +402,28 @@ def _run_locked(
     return 0 if all(area.status == "complete" for area in result.snapshot.areas) else 1
 
 
+def _default_daemon() -> Daemon:
+    """The real daemon of this machine (a seam: the suite puts a silent one in its place)."""
+    return LocalDaemon()
+
+
+def _detected_runtimes(daemon: Daemon | None, servers: Mapping[str, Any] | None, room: RoomProbes | None) -> list[str]:
+    """The runtimes `hardware` remembers in the profile (AP9-SV2-I R1-1): read with this run's own probes."""
+    return local_runtime_keys(
+        daemon if daemon is not None else _default_daemon(),
+        servers if servers is not None else default_transports(),
+        room if room is not None else room_module.default_room_probes(),
+    )
+
+
 def _cmd_hardware(
-    args: argparse.Namespace, probes: Probes | None, pointer_path: Path | None, now: datetime | None
+    args: argparse.Namespace,
+    probes: Probes | None,
+    pointer_path: Path | None,
+    now: datetime | None,
+    daemon: Daemon | None = None,
+    servers: Mapping[str, Any] | None = None,
+    room: RoomProbes | None = None,
 ) -> int:
     active = probes if probes is not None else Probes()
     code, swept = sweep_for_command(args.config, "hardware", now, pointer_path, active.hostname)
@@ -426,6 +449,7 @@ def _cmd_hardware(
         same_machine=args.same_machine,
         results_dir=args.config.resolve().parent,
         machine_class=args.machine_class,
+        runtimes=_detected_runtimes(daemon, servers, room),
     )
 
 
@@ -446,10 +470,12 @@ def hardware_with_config(
     summary: bool = True,
     machine_class: MachineClass | None = None,
     note: Callable[[str], None] | None = None,
+    runtimes: Sequence[str] = (),
 ) -> int:
     """Run `hardware` against an already-loaded `Configuration` -- the programmatic entry point.
 
-    `note` receives every note of the measurement without its `note: ` prefix; the guided mode
+    `runtimes` are the local-server runtimes this machine has (`runtimes.local_runtime_keys`), written into the
+    profile; none is a profile without the field. `note` receives every note of the measurement without its `note: ` prefix; the guided mode
     passes its screen's own note, so the notes stand indented like their neighbors (AP9-UX G).
     Without it they are printed as `note: <text>`, as `modelroom hardware` always did.
 
@@ -504,7 +530,7 @@ def hardware_with_config(
     try:
         return _hardware_locked(
             config, machine, active, measured, reference, recorded_at, pointer_file, new_identity,
-            _binding_key(config, results_dir), same_machine, summary, note,
+            _binding_key(config, results_dir), same_machine, summary, note, runtimes,
         )
     finally:
         release_lock(handle)
@@ -523,6 +549,7 @@ def _hardware_locked(
     same_machine: bool = False,
     summary: bool = True,
     note: Callable[[str], None] | None = None,
+    runtimes: Sequence[str] = (),
 ) -> int:
     """Pick this machine's profile, write it and bind it -- everything the lock has to cover.
 
@@ -571,7 +598,7 @@ def _hardware_locked(
     # as an uncaught pydantic error. Validation happens before the write, so nothing is written
     # either way (probe: a naive `now`, which `recorded_at` refuses).
     try:
-        profile = neutral_profile(build_profile(measured, reference, target.profile_id, display_name, recorded_at))
+        profile = neutral_profile(build_profile(measured, reference, target.profile_id, display_name, recorded_at, runtimes))
     except ValidationError as exc:
         print(f"this measurement did not validate as a hardware profile: {exc}", file=sys.stderr)
         return 2

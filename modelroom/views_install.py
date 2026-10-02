@@ -21,7 +21,7 @@ from . import runtimes
 from .contracts import Package
 from .disk_fit import block_place, known, none_fits_words, skipped_words
 from .document import MachineRanking, RankedEntry
-from .install_vllm import COMPUTED_ONLY, install_block_lines, vllm_install
+from .install_vllm import COMPUTED_ONLY, NO_SAFE_COMMAND, install_block_lines, vllm_install
 from .intro import label_line
 from .pull_choice import NOT_UNIQUE, Offered, PullRow, block_rows, offered, package_of, rank_over
 from .room import Disk
@@ -125,6 +125,7 @@ def install_lines(
         stop = offer.stop
         note = f"#{stop.rank} {NOT_UNIQUE_INSTALL}" if stop is not None and stop.locked == NOT_UNIQUE else None
         note = f"#{stop.rank} {COMPUTED_ONLY}" if stop is not None and stop.locked == COMPUTED_ONLY else note
+        note = f"#{stop.rank} {NO_SAFE_COMMAND}" if stop is not None and stop.locked == NO_SAFE_COMMAND else note
         return [] if note is None else [[], label_line(INSTALL_LABEL, [("class:note", note)])]
     row, runtime = offer.row, runtimes.runtime_of(offer.row.runtime)
     if runtime.key == runtimes.VLLM.key:

@@ -2671,6 +2671,15 @@ detected carries:
 }
 ```
 
+Every local measurement writes it (AP9-SV2-I, Codex r1 R1-1): `modelroom hardware` and the guided run's
+measurement call `runtimes.local_runtime_keys`, which reads each row of the runtime table in table order
+and keeps the ones whose state is `serving` or `installed` (`absent` and `asks_key` do not count; Ollama
+`serving` where the daemon answers, `installed` where `ollama` is in the `PATH`; vLLM through `detect_vllm`:
+Linux only). The probes are the run's own: its daemon, its server transports, the `room`'s platform, home,
+`PATH` and file test -- never a Docker call. An empty list is not written; a machine measured before this
+reads as "Ollama only" as ever. A machine reached over SSH (`remote profile`, `hello.system`) does not
+write the field yet.
+
 `RuntimeKey` (`modelroom/profile.py`) names only `"ollama"` and `"vllm"` today; a later runtime
 (LM Studio, AP9-LS) is a new value in the same list, additive again -- never a plug-in, "Laufzeit
 als Eintrag" (AP9-SV2-L builds the `RUNTIMES` table this field feeds).
@@ -5519,7 +5528,9 @@ modelroom cannot name these cards to vLLM`, the row stays in the ranking with it
 the table says what to do: `run one of the two in a terminal that stays open; vLLM downloads the model
 at its first start`, `then run modelroom again: step 4 finds the server and measures it`; a package on
 disk already replaces the first with `#<n> is on disk already (size checked)`; another model served on
-port 8000 adds `vLLM serves another model on port 8000 now; stop it first (one model per server)`.
+port 8000 adds `vLLM serves another model on port 8000 now; stop it first (one model per server)`. A row
+locked `no safe command` (or `computed only`, or `pull name not unique`) where no other row offers a line
+says so under the table as `#<rank> <lock>`.
 
 **The list of step 5** (I4) takes the vLLM rows: value `vllm <repo>` (Ollama's values are unchanged), a
 locked row says `no safe command`, `computed only: ...` or `pull name not unique` (two groups of one repo).
@@ -5544,8 +5555,15 @@ a missing start file declaring size 0 (or a present one of another size) leaves 
 the rule counts the whole download. Unsafe names (`SAFE_REPO_PATH_RE`), repo or revision are `None`
 **before any file is touched**; a path whose real location lies outside `models--<owner>--<name>` (a link
 to another repo, `/etc`, a drive, a share) is `None`, as is an unreadable cache. The legitimate
-`snapshots/<sha>/<file>` -> `../../blobs/<hash>` links count. **Limit:** Docker started with another
-volume than the printed line has another place; the check does not apply.
+`snapshots/<sha>/<file>` -> `../../blobs/<hash>` links count. **The repo folder itself is anchored**
+(Codex r1, R1-2): `realpath(<cache>/models--<owner>--<name>)` must equal `realpath(<cache>)` joined with that
+folder name, else the answer is `None` and nothing below is touched, so a link that moves the whole repo folder
+elsewhere is no boundary. **One `stat` per start file, at the resolved path** that passed the boundary check
+(R1-3), and only a regular file counts (`S_ISREG`, R1-4): a folder, a FIFO or a socket where a file belongs
+is a file that is not there. **Limit:** Docker started with another volume than the printed line has another
+place; the check does not apply. A link swapped between the `realpath` and the `stat` is not caught (no
+directory handle or `O_NOFOLLOW`: not portable to Windows); that window reads metadata only, never content,
+in a cache that belongs to the user.
 
 ## Guided mode
 

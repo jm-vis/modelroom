@@ -47,6 +47,7 @@ def fixed_room(
         disk_usage=disk_usage,
         mount_of=lambda path: "/",
         runner=FixtureRunner({NVIDIA_SMI_FREE_ARGS: answer}),
+        which=lambda name: None,  # no program on this room's PATH, whatever the machine running the suite has
     )
 
 

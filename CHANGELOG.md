@@ -26,6 +26,15 @@ All notable changes to this project are documented in this file. The format foll
   start files all lie in the cache with their declared size is `on disk already` (sizes, never a digest) and
   needs no disk; a part that is missing counts only its missing bytes. A name or link that leaves the
   repo's folder in the cache makes the answer unknown without touching a file.
+- **A measurement remembers its runtimes** (AP9-SV2-I, Codex r1, R1-1; `runtimes.local_runtime_keys`;
+  CONTRACTS.md, "Hardware profile"): `modelroom hardware` and the guided measurement write
+  `runtimes` (`serving` or `installed`, in table order, empty not written), so a Linux machine with vLLM
+  installed and not running gets its vLLM rows and install lines at the first start. A machine over SSH
+  is not covered yet.
+- **The cache check holds its boundary** (AP9-SV2-I, Codex r1, R1-2 to R1-4; `modelroom/hf_cache.py`): the
+  repo folder in the cache must be where the cache puts it, the one `stat` per start file is made at the
+  resolved path that passed the check, and only a regular file counts as there.
+- **`no safe command` is said under the table** (AP9-SV2-I, R1-6), like `computed only`.
 - **Section titles stand out in the terminal view** (AP9-SV2-F, F6; `modelroom/views_sections.py`,
   `section_head`): `with Ollama` and `with vLLM` have one blank line before them and the style class
   `class:label`, the muted blue of the step heads. The Markdown view and every output of one runtime

@@ -117,14 +117,27 @@ def _env(**extra: str) -> dict[str, str]:
 
 
 def _attrappe(folder: Path, name: str, body: str) -> Path:
-    """A one-file stand-in for a program, written as bytes with LF, first in the `PATH` of a test."""
+    """A one-file stand-in for a program, written as bytes with LF, executable, first in the `PATH` of a test.
+
+    Its first output line is `STUB <name>`: a test checks it, so a real `vllm` or `docker` of the machine
+    running the suite never answers unnoticed (Codex r1, R1-5).
+    """
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / name).write_bytes(f"#!/bin/sh\n{body}\n".encode("utf-8"))
+    path = folder / name
+    path.write_bytes(f'#!/bin/sh\necho "STUB {name}"\n{body}\n'.encode("utf-8"))
+    path.chmod(0o755)
     return folder
 
 
-def _on_path(folder: Path) -> str:
-    return f"{folder}{os.pathsep}{os.environ.get('PATH', '')}"
+def _on_path(folder: Path, shell: str | None = None) -> str:
+    """The stand-ins first, then only the system default path (`mkdir`, `sh`): never the inventory of the
+    machine's own `PATH`. On Windows the Git shell's own folder and the one of its `mkdir` come with it."""
+    parts = [str(folder)]
+    for program in (shell, shutil.which("mkdir")):
+        if program is not None and os.name == "nt":
+            parts.append(str(Path(program).parent))
+    parts.append(os.defpath)
+    return os.pathsep.join(parts)
 
 
 # --- I1: the vllm serve line -------------------------------------------------------------------------
@@ -184,11 +197,29 @@ def test_an_inherited_mask_is_overridden_by_the_prefix(tmp_path: Path):
     `vllm` with all four (a stand-in prints the variable it sees)."""
     shell = _sh()
     folder = _attrappe(tmp_path / "bin", "vllm", 'printf "%s\\n" "$CUDA_VISIBLE_DEVICES"')
-    env = _env(PATH=_on_path(folder), CUDA_VISIBLE_DEVICES="0,1")
+    env = _env(PATH=_on_path(folder, shell), CUDA_VISIBLE_DEVICES="0,1")
 
     done = subprocess.run([shell, "-c", _install().serve], env=env, capture_output=True, text=True, check=True)
 
-    assert done.stdout.strip() == "0,1,2,3"
+    assert done.stdout.split() == ["STUB", "vllm", "0,1,2,3"]  # the stand-in ran, and saw all four cards
+
+
+def test_the_stand_ins_are_executable_and_the_inventory_of_the_path_is_not_searched(tmp_path: Path, monkeypatch):
+    """R1-5: a stand-in is executable, and `PATH` holds the stand-ins and the system default only: a `vllm`
+    that lives elsewhere on the machine's own `PATH` is never found, so a real program cannot answer."""
+    shell = _sh()
+    folder = _attrappe(tmp_path / "bin", "vllm", "true")
+    assert os.name == "nt" or (folder / "vllm").stat().st_mode & 0o111 == 0o111
+    inventory = _attrappe(tmp_path / "inventory", "vllm-real", "true")
+    (inventory / "vllm-real").rename(inventory / "inventory-only")
+    monkeypatch.setenv("PATH", f"{inventory}{os.pathsep}{os.environ.get('PATH', '')}")
+    env = _env(PATH=_on_path(folder, shell))
+
+    found = subprocess.run([shell, "-c", "command -v inventory-only"], env=env, capture_output=True, text=True)
+    own = subprocess.run([shell, "-c", "vllm"], env=env, capture_output=True, text=True)
+
+    assert found.returncode != 0 and found.stdout.strip() == ""
+    assert own.returncode == 0 and own.stdout.split() == ["STUB", "vllm"]
 
 
 @pytest.mark.parametrize("source", ["sysfs", "entered", "sysctl", "llmfit"])
@@ -224,6 +255,24 @@ def test_computed_only_prints_neither_line():
 
     assert row.runtime == "vllm" and row.locked == COMPUTED_ONLY and document.machines[0].ranked  # the fit stays
     assert COMPUTED_ONLY in text and "vllm serve" not in text and "docker" not in text
+
+
+def test_a_no_safe_command_lock_prints_its_note_under_the_table():
+    """R1-6: a package without a safe command name (a repo letters the Hub allows and a shell line never gets; a
+    snapshot refuses a revision that is no digest, so the repo is the way in) says why under the table, like
+    `computed only`, and the list row stays locked."""
+    from modelroom.pull_choice import pull_rows
+    from modelroom.views import RunView, terminal_blocks
+
+    package = _package(repo="Qü/Qwen3-8B-AWQ")
+    document = _render(_profile(), [_base_model()], [package])
+
+    row = pull_rows(document, "server", packages=[package])[0]
+    text = "\n".join(plain(line) for line in terminal_blocks(document, view=RunView(install_for="server", packages=[package])))
+
+    assert row.runtime == "vllm" and row.locked == "no safe command"
+    assert re.search(r"^ *install +#\d+ no safe command$", text, re.M), text
+    assert "vllm serve" not in text and "docker" not in text
 
 
 def _four_only_sysfs(path: Path):
@@ -365,12 +414,13 @@ def test_first_start_creates_the_missing_cache(tmp_path: Path):
     folder = _attrappe(tmp_path / "bin", "docker", 'printf "%s\\n" "$@"')
     hf_home = tmp_path / "hfhome"
     hf_home.mkdir()
-    env = _env(PATH=_on_path(folder), HF_HOME=hf_home.as_posix(), HOME=(tmp_path / "home").as_posix())
+    env = _env(PATH=_on_path(folder, shell), HF_HOME=hf_home.as_posix(), HOME=(tmp_path / "home").as_posix())
 
     done = subprocess.run([shell, "-c", _install().docker], env=env, capture_output=True, text=True, check=True)
 
     assert (hf_home / "hub").is_dir()
-    arguments = done.stdout.splitlines()
+    assert done.stdout.splitlines()[0] == "STUB docker"
+    arguments = done.stdout.splitlines()[1:]
     assert arguments[:4] == ["--host", "unix:///var/run/docker.sock", "run", "--rm"]
     assert f"type=bind,src={hf_home.as_posix()}/hub,dst=/root/.cache/huggingface/hub" in arguments
     assert '"device=0,1,2,3"' in arguments

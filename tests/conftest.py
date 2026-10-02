@@ -47,6 +47,24 @@ def _fixed_room(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(room, "default_room_probes", lambda: fixed_room())
 
 
+@pytest.fixture(autouse=True)
+def _no_real_local_servers(monkeypatch: pytest.MonkeyPatch):
+    """`modelroom hardware` reads which runtimes this machine has (AP9-SV2-I R1-1); a test that passes no
+    daemon or server transport meets silence, never a real Ollama or vLLM of the person running it."""
+    from modelroom import cli
+    from modelroom.daemon import DaemonError
+
+    def _silent(*args, **kwargs):
+        raise DaemonError("no daemon in this test")
+
+    class _SilentDaemon:
+        base_url = "http://127.0.0.1:0"
+        __call__ = _silent
+
+    monkeypatch.setattr(cli, "_default_daemon", lambda: _SilentDaemon(), raising=False)
+    monkeypatch.setattr(cli, "default_transports", lambda: {}, raising=False)
+
+
 class _UnusedSsh:
     """The default `GuidedRun.ssh` of every test that never touches FR-B1 at all: a loud failure
     the moment anything tries to use it, instead of a silent real connection (FR-B1, "Teststrategie
