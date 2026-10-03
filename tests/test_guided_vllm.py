@@ -725,9 +725,10 @@ def test_one_request_is_singular(tmp_path: Path):
     "case, said, identity",
     [
         # AP9-SV2-F, rule (b): at 4k the smallest `t` that fits is one card (20 requests fit it), which
-        # holds 32 at once. "other context" (8192): neither one card nor two hold the 20, so the
-        # largest allowed `t` (2) is shown, and its 16 is by coincidence the number of the one card
-        # at half the tokens -- the size basis does not halve the per-token cost with the cards.
+        # holds 32 at once. "other context" (8192): one card holds 16 and two cards hold 16 as well
+        # (the size basis does not halve the per-token cost with the cards, and the halved share of
+        # the weights frees too little for a 17th), so neither holds the 20 and the largest allowed
+        # `t` (2) is shown with its 16.
         ("counts", "counts for this run", "identity stated · fit: 32 at once, fits"),
         ("other context", "not counted", "identity stated · fit: 16 at once, tight"),
         ("no package", "counts, no fit", "identity stated · no package of this folder"),

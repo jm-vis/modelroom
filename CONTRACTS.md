@@ -820,7 +820,7 @@ fit_class = vllm_fit_class(at_once, requests, basis)
 | `basis` | `architecture` where the base model's architecture gives the KV bytes per token, else `size` (the class then never reaches `ample`) |
 | `reason` | `None`, except the head-count reason (`t = 1`, the fit still computed) or the guard that made the fit `unknown` |
 | `weights_gib` | the whole package: the sum of its safetensors files in GiB |
-| `kv_gib` | the KV cache of `requests` requests of `context` tokens over **all** `t` cards: `(per_token x context + state) x requests x t`, what the ranking assumes |
+| `kv_gib` | the KV cache of `requests` requests of `context` tokens over **all** `t` cards, in GiB: `(per_token x context + state) x requests x t / GIB` (`per_token` and `state` are bytes, above), what the ranking assumes |
 | `need_gib` | `weights_gib + t x 1.50 + kv_gib` |
 | `pool_gib` | `t x 0.92 x card`: what vLLM may take of the chosen cards |
 | `reserve_gib` | `t x (card - 0.92 x card)`: what vLLM leaves free of them |
@@ -831,8 +831,9 @@ fit_class = vllm_fit_class(at_once, requests, basis)
 (docs.vllm.ai/en/v0.30.0/configuration/engine_args). `1.50` GiB (`VLLM_RUNTIME_OVERHEAD_GIB`) is the runtime of the
 recording on one A100 at utilization 0.5 (`0.5 x 80 - 0.920 - 37.58`, decided 2026-09-27); the recording on one L4
 gave `1.31`. **Assumptions, until a rented server confirms them:** A1, the 1.50 GiB applies to every card under
-tensor parallel (documented for one card); A2, with fewer KV heads than cards vLLM replicates the heads, so a card
-counts `per_token / min(t, num_key_value_heads)`, and a hybrid model's state divides by `t`. A test of this formula
+tensor parallel (documented for one card); A2, with fewer KV heads than cards vLLM replicates the heads, so a card's
+`per_token` is `kv_token_bytes(architecture) / min(t, num_key_value_heads)` (the formula above, divided by the heads
+it can split, never by `t` alone), and a hybrid model's state divides by `t`. A test of this formula
 proves no behavior of vLLM. Worked example (test): four L4 of 22.49 GiB, `Qwen/Qwen3-8B-AWQ` (5.68 GiB, 36 layers,
 8 KV heads, `head_dim` 128), context 32,768, 10 requests: `t = 1` holds 3 and `t = 2` holds 7 (both `tight`),
 `t = 4` holds 15 (`fits`), so `t = 4`; with 7 requests `t = 2` is the smallest that fits.
