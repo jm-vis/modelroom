@@ -77,7 +77,10 @@ def _check_kind_evidence(model: CatalogModel) -> None:
                 f"{model.hub_pipeline_tag!r}, which gives {from_task!r}"
             )
         if model.kind_source is not None:
-            raise ValueError(f"{model.hf_repo}: kind_source must be null, kind {model.kind!r} follows hub_pipeline_tag")
+            raise ValueError(
+                f"{model.hf_repo}: kind_source {model.kind_source!r} must be null, hub_pipeline_tag "
+                f"{model.hub_pipeline_tag!r} is in the kind table and already gives kind {model.kind!r}"
+            )
         return
     if model.kind_source is None:
         raise ValueError(
@@ -85,7 +88,7 @@ def _check_kind_evidence(model: CatalogModel) -> None:
             f"{model.hub_pipeline_tag!r} is not in the kind table"
         )
     if model.kind_source == "decision" and model.note is None:
-        raise ValueError(f"{model.hf_repo}: kind_source 'decision' needs a note")
+        raise ValueError(f"{model.hf_repo}: kind_source 'decision' needs a note that says why kind {model.kind!r} stands")
 
 
 def _check_gguf_owners(model: CatalogModel, packagers: set[str]) -> None:

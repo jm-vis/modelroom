@@ -212,6 +212,20 @@ def test_an_unlisted_repo_without_evidence_is_an_error_that_names_the_row(tmp_pa
     _assert_refused(path, before, problems, repo)
 
 
+def test_a_listed_repo_whose_table_tags_name_one_other_kind_is_an_error_and_gets_no_sentence(tmp_path):
+    """The decision list only covers a repo with no table evidence; one tag of another kind is evidence against `kind`."""
+    repo = DECISION_REPOS[0]
+    answers = _hub_answers(_shipped())
+    answers[repo] = {"tags": ["transformers", "text-generation"]}
+    path, transport, _ = _setup(tmp_path, answers=answers)
+    before = _sha(path)
+
+    problems = fill.fill(path, transport)
+
+    _assert_refused(path, before, problems, repo)
+    assert "decision" not in path.read_text(encoding="utf-8")
+
+
 def test_a_note_of_exactly_three_hundred_characters_after_the_sentence_is_written_and_loads(tmp_path):
     repo = DECISION_REPOS[0]
     blank = _blank_catalog()
@@ -291,6 +305,22 @@ def test_an_answer_that_is_no_usable_model_record_fails_the_run_and_names_the_ro
     _assert_refused(path, before, problems, repo)
 
 
+def test_a_redirect_is_never_followed_and_the_row_after_it_is_still_asked(tmp_path):
+    repo = "Qwen/Qwen3.5-9B"
+    target = API + "other/Renamed"
+    answers = _hub_answers(_shipped())
+    answers[repo] = Response(status=307, headers={"Location": target})
+    path, transport, _ = _setup(tmp_path, answers=answers)
+    before = _sha(path)
+
+    problems = fill.fill(path, transport)
+
+    _assert_refused(path, before, problems, repo, "redirect")
+    assert ("GET", target) not in transport.calls
+    assert transport.calls.count(("GET", API + repo)) == 1
+    assert len(transport.calls) == 62
+
+
 def test_a_429_stops_at_once_names_the_retry_after_and_asks_no_further_row(tmp_path):
     repo = "mistralai/Ministral-3-14B-Instruct-2512"
     answers = _hub_answers(_shipped())
@@ -313,6 +343,29 @@ def test_the_budget_ending_after_sixty_one_requests_fails_the_run_and_names_the_
 
     _assert_refused(path, before, problems, _shipped()["models"][61]["hf_repo"])
     assert len(transport.calls) == 61
+
+
+def test_a_filled_catalog_the_loader_refuses_at_the_end_is_one_problem_and_leaves_the_file_and_the_folder_alone(
+    tmp_path, capsys
+):
+    """The script checks the rows it fills, not the whole document; the final load is the last guard."""
+    blank = _blank_catalog()
+    _row(blank, "Qwen/Qwen3.5-9B")["source"] = "http://huggingface.co/Qwen/Qwen3.5-9B"
+    path, transport, _ = _setup(tmp_path, blank)
+    before = _sha(path)
+
+    problems = fill.fill(path, transport)
+
+    assert len(problems) == 1
+    assert problems[0].startswith("the filled catalog does not load: ")
+    assert len(transport.calls) == 62
+    assert _sha(path) == before
+    assert [entry.name for entry in path.parent.iterdir()] == ["catalog.json"]
+
+    assert fill.main(["--catalog", str(path)], transport=transport) == 1
+    assert "the filled catalog does not load" in capsys.readouterr().err
+    assert _sha(path) == before
+    assert [entry.name for entry in path.parent.iterdir()] == ["catalog.json"]
 
 
 def test_the_main_function_exits_one_on_a_problem_and_zero_on_success(tmp_path, capsys):
