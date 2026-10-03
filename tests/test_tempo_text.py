@@ -13,11 +13,14 @@ from pathlib import Path
 
 import pytest
 
+from modelroom.cli import main
 from modelroom.render import document_json
 from modelroom.tempo_text import QUALITY_LINK_LINE
 from modelroom.views import document_markdown, document_terminal, terminal_lines
 
 from fixture_rows import document, document_multi, package
+from test_cli import RUN2
+from test_cli_render import _fetched
 from test_guided_screen import CHOSEN, NOTHING_CHOSEN, _screen
 
 LINK_TEXT = "Quality of these models for your task: https://artificialanalysis.ai"
@@ -75,8 +78,10 @@ def test_a_guided_run_that_chose_nothing_shows_no_link(tmp_path: Path):
     assert QUALITY_LINK_LINE not in _screen(tmp_path, NOTHING_CHOSEN)
 
 
-def test_no_request_to_the_quality_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """The address is text: a step 5 and a document written with every connection refused still show it."""
+def test_no_request_to_the_quality_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    """The address is text: a document and a `modelroom render` with every connection refused still show it."""
+    config_path = _fetched(tmp_path)  # the snapshot first (a fake transport); the refusals then cover the CLI path too
+    capsys.readouterr()
 
     def refuse(*args, **kwargs):
         raise AssertionError("a test opened a connection to the quality site")
@@ -85,3 +90,5 @@ def test_no_request_to_the_quality_site(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(socket.socket, "connect", refuse)
 
     assert QUALITY_LINK_LINE in document_terminal(document([ONE]))
+    assert main(["render", "--config", str(config_path)], now=RUN2) == 0
+    assert capsys.readouterr().out == QUALITY_LINK_LINE + "\n"

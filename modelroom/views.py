@@ -768,8 +768,8 @@ def document_terminal(
     snapshot time and the ranking rule stay in the Markdown file a reader can take their time
     over, and since 2026-09-24 so does the scenario -- the head of each machine's block says the
     context, which is what a reader of a table needs from it. It is step 5 of the guided mode, so
-    it carries that step's head; `modelroom render` writes the two files and stays silent unless a
-    caller asks for it (its own handler prints the quality link, `cli._cmd_render`).
+    it carries that step's head; `modelroom render` writes the two files and prints the quality link
+    on success (its handler `cli._cmd_render` prints it; `render_with_config` itself stays silent).
     """
     lines = [plain(head_line(RESULTS_STEP, glyphs()))]
     if document.rating_unavailable is not None:
