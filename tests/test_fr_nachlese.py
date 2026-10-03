@@ -208,6 +208,19 @@ def test_a_failed_candidates_call_in_step_5_leaves_the_room_line_as_it_was(tmp_p
     assert room and room == [line.strip() for line in clean_lines if line.strip().startswith("room ")]
 
 
+def test_a_failed_room_read_keeps_what_candidates_found(tmp_path):
+    ssh = _FailingOnce(context=_holding().context, op="room", nth=1)
+
+    _code, lines, asker = _run(tmp_path, {**SSH_MEASURED, "pull_other": "none"}, ssh)
+
+    assert ssh.failed_at == [1]  # the failure reached the `room` call of step 5
+    shown = _table_lines(lines)
+    assert LOCAL_IN_OLLAMA in [line.strip() for line in shown]
+    assert any("disk unknown (gpu1 not reached)" in line for line in shown)  # the disk line still says it
+    held = next(choice for choice in asker.choices["pull_other"] if choice.value == f"gpu1 {DEEPSEEK_OLLAMA_NAME}")
+    assert held.label.endswith("  local already")
+
+
 def _sentinel_daemon() -> FixtureDaemon:
     """The server's Ollama holds DeepSeek and, besides it, a model named `sentinel-host:latest`."""
     data = json.loads((FIXTURES / "ollama_tags_local_loadtest.json").read_text(encoding="utf-8"))
@@ -410,14 +423,32 @@ INVALID = "measured, not valid (run 1: done_reason 'stop', expected 'length')"
 OTHER_CONTEXT = "measured at context 32k, this ranking's is 8k"
 
 
-def test_a_reason_wider_than_the_card_is_a_count():
+def test_two_reasons_too_wide_together_keep_the_first():
     document = _document_with({2: OTHER_CONTEXT, 4: INVALID})
     joined = "#2 measured at context 32k, this ranking's is 8k · #4 measured, not valid"
     assert len(joined) > 65  # the premise: the two different reasons do not fit one card row
 
     fact = _speed_fact(document)
 
-    assert (fact.value, fact.note) == ("none counted", "2 rows measured, not counted here")
+    assert (fact.value, fact.note) == ("none counted", "#2 measured at context 32k, this ranking's is 8k")
+
+
+def test_the_first_reason_is_the_one_the_ranking_meets_first():
+    document = _document_with({4: INVALID, 2: OTHER_CONTEXT})
+    document.machines[0].ranked.sort(key=lambda entry: entry.rank, reverse=True)  # rank 4 first
+
+    assert _speed_fact(document).note == "#4 measured, not valid"
+
+
+def test_ranks_too_many_for_the_row_are_a_count():
+    ranks = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]  # no run of ranks: every rank is named
+    document = _document_with({rank: INVALID for rank in ranks})
+    named = "#1, #3, #5, #7, #9, #11, #13, #15, #17, #19, #21, #23 measured, not valid"
+    assert len(named) > 65  # the premise: one reason alone, named by rank, is wider than the row
+
+    fact = _speed_fact(document)
+
+    assert (fact.value, fact.note) == ("none counted", "12 rows measured, not counted here")
 
 
 def test_contiguous_invalid_rows_stay_ranks():

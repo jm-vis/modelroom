@@ -234,7 +234,8 @@ def read_room(
         result = ssh_room(alias, _profile_cards(profile) if profile is not None else [], run.ssh)
     except SshError as exc:
         run.failed(str(exc))
-        return LiveRoom(disk=Disk(None, alias, f"{alias} not reached"))
+        lost = Disk(None, alias, f"{alias} not reached", held=held)  # the held set outlives the failed room read
+        return LiveRoom(disk=with_model_disk(run, alias, lost, None))  # in `run.remote_vllm`, where the list reads it
     disk_info = result["disk"]
     reason = _UNCLEAR if disk_info["unclear"] else None
     disk = with_model_disk(run, alias, Disk(disk_info["free_bytes"], alias, reason, held=held), result.get("model_disk"))  # vLLM's place (R3 step 5)
@@ -274,7 +275,7 @@ def _fresh_disk(run: "GuidedRun", alias: str, document: "RenderDocument") -> Dis
     live = read_room(run, alias, document)
     if live is not None and live.disk is not None:
         return live.disk
-    return Disk(None, alias, f"{alias} not reached")
+    return Disk(None, alias, f"{alias} not reached")  # `read_room` always returns a disk; kept as the safe default
 
 
 __all__ = [

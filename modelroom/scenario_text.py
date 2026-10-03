@@ -101,8 +101,9 @@ def unused_measurements(block: MachineRanking | None, dash: str, width: int | No
 def other_measurements(block: MachineRanking | None, dash: str, width: int | None = None, dot: str = "·") -> str | None:
     """The rows whose measurement counts nowhere here, each with the reason the `speed` note under the table
     gives (AP9-FR-N2, c2): `#8 measured, not valid`, `#2, #8 measured, not valid`, or two kinds joined by
-    `dot`. The text of a reason stops before its first ` (` -- the full one stays under the table. Wider
-    than `width`: `2 rows measured, not counted here`, the one line the card has for it."""
+    `dot` where that fits `width`, else the first (in the order the ranking meets them). The text of a reason
+    stops before its first ` (` -- the full one stays under the table. Only where the ranks of one reason
+    alone are wider than `width`: `2 rows measured, not counted here`, the one line the card has for it."""
     rows = [] if block is None else [entry for entry in block.ranked if entry.note.code == OTHER_MEASUREMENT_NOTE]
     groups: dict[str, list[int]] = {}
     for entry in rows:
@@ -110,10 +111,11 @@ def other_measurements(block: MachineRanking | None, dash: str, width: int | Non
         groups.setdefault(reason, []).append(entry.rank)
     if not groups:
         return None
-    named = f" {dot} ".join(f"{ranks_text(ranks, dash)} {reason}" for reason, ranks in groups.items())
-    if width is None or len(named) <= width:
-        return named
-    return f"{len(rows)} {'row' if len(rows) == 1 else 'rows'} measured, not counted here"
+    named = [f"{ranks_text(ranks, dash)} {reason}" for reason, ranks in groups.items()]
+    if width is not None and any(len(one) > width for one in named):
+        return f"{len(rows)} {'row' if len(rows) == 1 else 'rows'} measured, not counted here"
+    joined = f" {dot} ".join(named)
+    return joined if width is None or len(joined) <= width else named[0]
 
 
 def measurement_reason(block: MachineRanking | None, dash: str, dot: str, width: int) -> str | None:

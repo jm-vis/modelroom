@@ -364,7 +364,8 @@ All notable changes to this project are documented in this file. The format foll
 - **The speed row of the card names a measurement that did not count** (AP9-FR-N2, c2;
   `modelroom/scenario_text.py`, `modelroom/result_card.py`): `speed     none counted     #8 measured, not
   valid` instead of `not measured  say Yes in step 4 ...`; the same reasons the note under the table gives
-  (not valid, not comparable, another context), by count where they would not fit one card row. The value
+  (not valid, not comparable, another context); two kinds that do not fit one card row together leave the
+  first, and only the ranks of one kind that alone are too wide become a count. The value
   is `none counted` for the one-request reason as well.
 - **Step 4 says which computer it means** (AP9-FR-N2, c1): `no load test on this computer: it has no
   profile in this results folder` and `... it is not part of this run's result`.
