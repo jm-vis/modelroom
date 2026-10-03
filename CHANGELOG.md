@@ -7,6 +7,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **README, CONTRACTS and ADR for vLLM** (AP9-SV2-D; README.md, "vLLM" and a sentence in "Step 2, Packages";
+  CONTRACTS.md, "Fit for vLLM"; `docs/adr/0014`). The README names where packages come from, both install commands,
+  that modelroom starts nothing, where vLLM keeps its models, the limits of the Docker line (another volume, files
+  owned by `root`, a relative cache value, rootless Docker), that vLLM counts as found only where it is installed, the
+  server over SSH (which today still needs an answering Ollama there) and which of the eight assumptions a rented
+  server has confirmed. CONTRACTS.md gets the vLLM fit as one section (guards, cards, rule for `t`, formula, where each
+  `Fit` field comes from) and the three `Fit` fields `runtime`, `at_once`, `cards`. ADR 0014 is brought to the state
+  after AP9-SV2-R.
 - **vLLM at a server over SSH** (AP9-SV2-R, R1 to R3; `modelroom/remote_vllm.py`, `modelroom/guided_remote_vllm.py`,
   `modelroom/remote_server.py`, `modelroom/remote_protocol.py`; CONTRACTS.md, "The remote protocol v1", "vLLM at a
   server over SSH"). `modelroom remote` reads and measures the server's own vLLM against its `127.0.0.1:8000`, with the
@@ -337,6 +345,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **Tensor parallel takes the smallest size at which the package fits** (AP9-SV2-D, GF 2026-10-03;
+  `modelroom/fit_vllm.py`, `modelroom/install_vllm.py`; CONTRACTS.md, "Fit for vLLM"). `--tensor-parallel-size` was the
+  largest of 1, 2, 4, 8 that the equal cards and the head count allow; it is now the smallest of them at which the
+  package fits (`fits` or `ample` over the first `t` cards), and the largest allowed one where it fits at none, so
+  answers come faster and the other cards stay free. The pool in the table head is unchanged. Where the machine has
+  more equal cards than `t`, a line under the two commands says that a larger `--tensor-parallel-size` spreads the
+  load over more cards, if the server is yours alone.
 - **Machine keys and names of a folder of 0.1.0 change once** (FR-N): the first command that writes
   to it renames `[machines.<host name>]` and every other hand-written key to a neutral one, and a
   profile's `display_name` to its neutral name (`machine renamed to server-3f9a0c21 (no host names in

@@ -45,6 +45,7 @@ COMPUTED_ONLY = "computed only: modelroom cannot name these cards to vLLM"
 RELATIVE_CACHE_NOTE = (
     "docker: left out, the Hugging Face cache is set as a relative path; set it absolute to get this line"
 )
+LARGER_HINT = "larger --tensor-parallel-size spreads the load over more cards, if the server is yours alone"
 STOP_LINE = "vLLM serves another model on port 8000 now; stop it first (one model per server)"
 _START_LATER = "vLLM downloads the model at its first start"
 _AGAIN = "then run modelroom again: step 4 finds the server and measures it"
@@ -60,12 +61,15 @@ class VllmInstall:
 
     `docker` is `None` with `docker_note` where only the Docker line is left out (a relative cache
     variable); with `serve` also `None`, `reason` is the lock (`no safe command`, `computed only: ...`).
+    `larger`: the equal cards of the machine are more than `--tensor-parallel-size` names (rule (b)
+    takes the smallest `t` that fits), so a note says a larger value spreads the load further.
     """
 
     serve: str | None
     docker: str | None = None
     docker_note: str | None = None
     reason: str | None = None
+    larger: bool = False
 
 
 def safe_repo(repo: object) -> bool:
@@ -105,6 +109,7 @@ def vllm_install(
         return refused
     if any(card.vram_source != _NVIDIA_SMI for card in cards):
         return VllmInstall(None, reason=COMPUTED_ONLY)
+    larger = len(equal_size_group(profile).cards) > fit.cards
     numbers = ",".join(str(card.index) for card in cards)
     common = (
         f"{package.repo} --revision {package.revision} --max-model-len {fit.context} "
@@ -115,14 +120,14 @@ def vllm_install(
         f"vllm serve {common} --host 127.0.0.1 --port 8000"
     )
     if relative_cache:
-        return VllmInstall(serve, None, RELATIVE_CACHE_NOTE)
+        return VllmInstall(serve, None, RELATIVE_CACHE_NOTE, larger=larger)
     docker = (
         f'mkdir -p "{HF_CACHE_EXPRESSION}" && docker --host {DOCKER_LOCAL_HOST} run --rm --ipc=host '
         f"--gpus '\"device={numbers}\"' -e CUDA_DEVICE_ORDER=PCI_BUS_ID -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 "
         f'-p 127.0.0.1:8000:8000 --mount "type=bind,src={HF_CACHE_EXPRESSION},dst={CONTAINER_CACHE}" '
         f"{VLLM_IMAGE} {common} --host 0.0.0.0 --port 8000"
     )
-    return VllmInstall(serve, docker)
+    return VllmInstall(serve, docker, larger=larger)
 
 
 def install_block_lines(
@@ -146,7 +151,7 @@ def install_block_lines(
         lines.append([("", "    "), ("class:note", "docker"), ("", "    "), ("class:command", install.docker)])
     elif install.docker_note is not None:
         lines.append(label_line("", [("class:note", install.docker_note)]))
-    notes: list[str] = []
+    notes: list[str] = [LARGER_HINT] if install.larger else []
     if isinstance(served, ServedModel) and served.root != repo and not where:
         notes.append(STOP_LINE)
     both = "one of the two" if install.docker is not None else "it"
@@ -164,6 +169,7 @@ __all__ = [
     "COMPUTED_ONLY",
     "CONTAINER_CACHE",
     "DOCKER_LOCAL_HOST",
+    "LARGER_HINT",
     "NO_SAFE_COMMAND",
     "RELATIVE_CACHE_NOTE",
     "STOP_LINE",

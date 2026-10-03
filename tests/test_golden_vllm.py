@@ -277,9 +277,11 @@ def test_an_unequal_cards_machine_describes_the_group_not_a_packages_own_usage()
             observed_at=SNAPSHOT_RUN_AT, last_seen=SNAPSHOT_RUN_AT, active=True,
         )
 
-    base_t2 = _base("acme/Eight-7B", 8)  # group of 3 -> t = 2 (8 heads divide 2)
+    # Rule (b) (SV2-D): 17 GB of weights hold 2 of 4 requests on one card (`tight`) and 20 on two
+    # (`fits`), so the smallest `t` that fits is 2 -- a smaller package would take one card.
+    base_t2 = _base("acme/Eight-7B", 8)  # group of 3 -> t = 2 (8 heads divide 2, and one card is too few)
     base_t1 = _base("acme/NoHeads-7B", None)  # no head count -> t = 1
-    packages = [_pkg("acme/Eight-7B-AWQ", base_t2.hf_repo, 5_000_000_000), _pkg("acme/NoHeads-7B-AWQ", base_t1.hf_repo, 5_000_000_000)]
+    packages = [_pkg("acme/Eight-7B-AWQ", base_t2.hf_repo, 17_000_000_000), _pkg("acme/NoHeads-7B-AWQ", base_t1.hf_repo, 17_000_000_000)]
 
     document = _render(profile, [base_t2, base_t1], packages, context=8192, requests=4)
 
@@ -323,8 +325,8 @@ def _awq(size: int = 6_098_581_864) -> Package:
 VLLM_CLASSES = {
     # The rechenbeispiel at `t = 4`: 15 at once, 10 assumed -> fits.
     "fits": (32, 10, 6_098_581_864, "vLLM holds 15 requests at once on 4 cards of 22.5 GiB"),
-    # The same 15 against 5 assumed: twice them or more -> ample.
-    "ample": (32, 5, 6_098_581_864, "vLLM holds 15 requests at once on 4 cards of 22.5 GiB"),
+    # Rule (b): one request assumed, the smallest `t` (one card) holds 3: twice them or more -> ample.
+    "ample": (32, 1, 6_098_581_864, "vLLM holds 3 requests at once on one card of 22.5 GiB"),
     # The rechenbeispiel at `t = 1`: 3 of 10 at once -> tight (52.2 GiB needed against a 20.7 GiB pool).
     "tight": (None, 10, 6_098_581_864, "vLLM holds only 3 of 10 requests at once on one card of 22.5 GiB"),
     # 20 GB of weights on one card leave no KV cache at all -> no fit.

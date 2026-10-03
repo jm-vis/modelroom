@@ -75,9 +75,10 @@ def test_the_served_model_is_found_through_the_guided_configuration(tmp_path: Pa
     # The fit through its integration point `guided_vllm._fit` (Codex r1 m9), now `runtimes.fit_for`
     # itself (AP9-SV2-F, "eine Rechnung, eine Wahrheit"): the profile this folder binds this machine
     # to is the recorded L4 server, two equal 22.49 GiB cards; the base model's 16 attention heads
-    # divide evenly by 2, so tensor parallel spreads the package over both (`t = 2`).
+    # divide evenly by 2, but rule (b) (SV2-D) takes the smallest `t` at which the package fits: one request
+    # fits one card, so `t = 1` and the other card stays free.
     fit, reason, notes = _guided_fit(tmp_path.resolve(), config, matched, snapshot.base_models)
-    assert reason is None and fit.basis == "architecture" and fit.cards == 2
+    assert reason is None and fit.basis == "architecture" and fit.cards == 1
     profile = HardwareProfile.model_validate(
         json.loads((FIXTURES / "profiles_v4" / "two_l4_server.json").read_text(encoding="utf-8"))
     )

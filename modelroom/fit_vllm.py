@@ -18,7 +18,7 @@ otherwise (`architecture.state_bytes`, AP9-UX2 P1).
 The class says how the requests the ranking assumes stand against what the card holds: `no_fit`
 below one request, `tight` below the requests, `ample` at twice the requests or more on the
 architecture basis, `fits` otherwise. Since AP9-SV2-F `vllm_fit_as_fit` computes this per card
-over the `t` equal cards tensor parallel chooses (F1, F2) and returns fit contract v1's own `Fit`;
+over the `t` equal cards tensor parallel chooses (F1, F2, rule (b)) and returns fit contract v1's own `Fit`;
 what a row then says about itself is `vllm_words`'s. Tensor parallel is computed, never measured
 (ADR 0008). `fit.py` is unchanged, and nothing here is persisted.
 """
@@ -38,8 +38,9 @@ from .profile import GpuAdapter, HardwareProfile, fit_block_reason
 VLLM_GPU_MEMORY_UTILIZATION = 0.92
 VLLM_RUNTIME_OVERHEAD_GIB = 1.50
 
-# F1: the largest power of two of 1, 2, 4, 8 modelroom will ever ask vLLM to split a model's
-# weights over -- a simplification of this package, not a limit vLLM itself has.
+# F1: the powers of two of 1, 2, 4, 8 modelroom will ever ask vLLM to split a model's weights over --
+# a simplification of this package, not a limit vLLM itself has. Rule (b) (GF 2026-10-03) takes the
+# smallest of them at which the package fits; the largest allowed one is the fallback.
 TENSOR_PARALLEL_SIZES: tuple[int, ...] = (8, 4, 2, 1)
 # Cards within 1 % of the largest are "the same size" for the grouping that chooses `t` (F1).
 EQUAL_CARD_TOLERANCE = 0.01
@@ -50,6 +51,8 @@ SHARED_MEMORY_REASON = "vLLM does not run on shared memory"
 INCOMPLETE_PACKAGE_REASON = "only a complete package is judged"
 ZERO_WEIGHT_REASON = "a weight file has no size"
 _WEIGHT_ROLES = ("weights", "weights_shard")
+# Rule (b): the classes of `vllm_fit_class` that count as "the package fits" for choosing `t`.
+_FITTING_CLASSES = ("fits", "ample")
 
 
 @dataclass(frozen=True)
@@ -154,17 +157,21 @@ def equal_size_group(profile: HardwareProfile) -> CardGroup:
     return CardGroup(group, len(profile.gpus) - len(group))
 
 
+def allowed_sizes(group_size: int, num_attention_heads: int) -> tuple[int, ...]:
+    """The `t` F1 allows, smallest first: each of `TENSOR_PARALLEL_SIZES` that is at most `group_size`
+    cards and divides `num_attention_heads` evenly. `1` is always in it (`group_size` is at least 1
+    here: a caller with no card never reaches this)."""
+    return tuple(size for size in reversed(TENSOR_PARALLEL_SIZES) if size <= group_size and num_attention_heads % size == 0)
+
+
 def tensor_parallel_size(group_size: int, num_attention_heads: int | None) -> tuple[int, str | None]:
-    """`t` (F1): the largest power of two of `TENSOR_PARALLEL_SIZES` that is at most `group_size`
-    cards and divides `num_attention_heads` evenly. `1` with `NO_HEAD_COUNT_REASON` where the head
-    count is unknown -- the one case `t` itself carries a reason; a computed `t` above one needs
-    none. `group_size` is assumed at least 1 (a caller with no card never reaches this)."""
+    """The largest `t` F1 allows (`allowed_sizes`): the one a package that fits at no `t` is shown with.
+    Rule (b) (`_vllm_formula`) takes the smallest `t` at which the package fits instead. `1` with
+    `NO_HEAD_COUNT_REASON` where the head count is unknown -- the one case `t` itself carries a
+    reason; a computed `t` above one needs none."""
     if num_attention_heads is None:
         return 1, NO_HEAD_COUNT_REASON
-    for size in TENSOR_PARALLEL_SIZES:
-        if size <= group_size and num_attention_heads % size == 0:
-            return size, None
-    return 1, None  # unreachable: 1 always divides and group_size is at least 1 here
+    return allowed_sizes(group_size, num_attention_heads)[-1], None
 
 
 def largest_parallel_size(group_size: int) -> int:
@@ -286,8 +293,27 @@ def _vllm_guard_reason(
 
 
 def _vllm_formula(group: CardGroup, package: Package, base_model: BaseModelSpec, scenario: Scenario) -> Fit:
-    """F2's formula, over the cards `_vllm_guard_reason` already cleared (`group.cards` is not empty)."""
-    cards, t_reason = tensor_parallel_size(len(group.cards), base_model.architecture.num_attention_heads)
+    """F2's formula, over the cards `_vllm_guard_reason` already cleared (`group.cards` is not empty).
+
+    Rule (b) (GF 2026-10-03): `t` is the smallest allowed size (`allowed_sizes`) at which the package
+    fits -- shorter latency, the other cards stay free. "Fits" is F2's own class over the first `t`
+    cards: `fits` or `ample`, so neither `no_fit` nor `tight` (`unknown` cannot reach the formula).
+    At no size it fits: the largest allowed `t`, the best try. No head count: `t = 1` with its reason."""
+    heads = base_model.architecture.num_attention_heads
+    if heads is None:
+        return _vllm_fit_at(group, 1, NO_HEAD_COUNT_REASON, package, base_model, scenario)
+    sizes = allowed_sizes(len(group.cards), heads)
+    for cards in sizes:
+        fit = _vllm_fit_at(group, cards, None, package, base_model, scenario)
+        if fit.fit_class in _FITTING_CLASSES:
+            return fit
+    return _vllm_fit_at(group, sizes[-1], None, package, base_model, scenario)
+
+
+def _vllm_fit_at(
+    group: CardGroup, cards: int, t_reason: str | None, package: Package, base_model: BaseModelSpec, scenario: Scenario
+) -> Fit:
+    """F2's formula for exactly `cards` cards of `group`, as a `Fit`."""
     card_gib = min(gpu.vram_gib for gpu in chosen_cards(group, cards))
     weights_gib = sum(f.size_bytes for f in package.files if f.role in _WEIGHT_ROLES) / GIB
     budget, at_once, basis, kv_gib = _vllm_budget(card_gib, weights_gib, cards, base_model.architecture, scenario)
@@ -347,6 +373,7 @@ __all__ = [
     "CardGroup",
     "VllmFit",
     "VllmPool",
+    "allowed_sizes",
     "chosen_cards",
     "equal_size_group",
     "kv_per_token_bytes",

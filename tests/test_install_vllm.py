@@ -197,6 +197,31 @@ def test_a_subset_of_equal_cards_is_bound():
     assert "--tensor-parallel-size 2" in install.serve
 
 
+HINT = "larger --tensor-parallel-size spreads the load over more cards, if the server is yours alone"
+
+
+def _block_text(profile, package, scenario: Scenario | None = None) -> str:
+    from modelroom.install_vllm import install_block_lines, vllm_install
+
+    fit = _fit(profile, package, 32, scenario)
+    lines = install_block_lines("install", 1, vllm_install(package, fit, profile), repo=package.repo)
+    return "\n".join(plain(line) for line in lines)
+
+
+def test_the_hint_under_the_commands_only_where_more_equal_cards_exist_than_t():
+    """AP9-SV2-D, rule (b): 1 GB and 3 requests give `t = 1` of four cards -- the hint, once; the
+    worked example takes all four cards, and two cards with `t = 2` take both: no hint."""
+    base = _package()
+    small = base.model_copy(update={"files": [base.files[0].model_copy(update={"size_bytes": 1_000_000_000})]})
+
+    spare = _block_text(_four(), small, _scenario(requests=3))
+    assert spare.count(HINT) == 1 and "--tensor-parallel-size 1 " in spare
+    assert spare.index(HINT) > spare.index("docker") and spare.index(HINT) < spare.index("run one of the two")
+
+    assert HINT not in _block_text(_four(), _package())  # t = 4 of 4
+    assert HINT not in _block_text(_cards([22.49, 22.49]), _package(), _scenario(requests=7))  # t = 2 of 2
+
+
 def test_an_inherited_mask_is_overridden_by_the_prefix(tmp_path: Path):
     """The line, run in a POSIX shell whose environment already masks the cards to `0,1`, reaches
     `vllm` with all four (a stand-in prints the variable it sees)."""

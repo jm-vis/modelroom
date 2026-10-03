@@ -246,15 +246,14 @@ def test_step_4_reads_the_lines_of_the_brief_with_the_vllm_row_picked(tmp_path: 
         "measured vLLM: <n> tok/s total (<n>–<n>), context 4k",
         "per request: <n> tok/s (<n>–<n>)",
         "identity stated by the server; not ranked, nothing written",
-        # AP9-SV2-F: the two equal L4 cards of this profile now carry tensor parallel (`t = 2`,
-        # `Qwen/Qwen2.5-0.5B-Instruct`'s 14 attention heads divide by 2) -- weights and the runtime
-        # overhead split per card, the KV budget doubles; the basis stays `size` (this fetch never
-        # resolves the model's own architecture) so the per-token cost is not halved with it.
-        "vLLM fit, computed: 2 cards of 22.49 GiB, 0.92 of each for vLLM",
-        # Codex r1-1: the KV cache reported here is the whole model's, over both cards -- 11.25 GiB
-        # per card, doubled.
-        "weights 0.92 GiB, runtime 3.00 GiB (2 cards, one recording), KV cache 22.50 GiB",
-        "33 requests of context 4k at once, from size: fits",
+        # AP9-SV2-F, rule (b) (SV2-D): the two equal L4 cards of this profile could carry tensor parallel
+        # (`Qwen/Qwen2.5-0.5B-Instruct`'s 14 attention heads divide by 2), but 20 requests of 4k already
+        # fit one card, so `t = 1` and the other card stays free. The basis stays `size` (this fetch
+        # never resolves the model's own architecture).
+        "vLLM fit, computed: 1 card of 22.49 GiB, 0.92 of each for vLLM",
+        # The KV cache reported here is the whole model's, over the one card.
+        "weights 0.92 GiB, runtime 1.50 GiB (1 card, one recording), KV cache 11.25 GiB",
+        "32 requests of context 4k at once, from size: fits",
         "✓ Measurement     vLLM measured",
     ]
 
@@ -286,7 +285,7 @@ def test_the_start_screen_names_the_served_model_and_the_card_its_speed(tmp_path
     card = _card(lines)
     assert " server    vLLM                    <n> tok/s total, 20 requests at once, counts for this run" in card
     # AP9-SV2-F: tensor parallel over the two equal cards (`t = 2`, see the step-4 assertion above).
-    assert "                                   identity stated · fit: 33 at once, fits" in card
+    assert "                                   identity stated · fit: 32 at once, fits" in card
     labels = [line.split()[0] for line in card if line[1:2].strip() and not line.startswith(" ──")]
     assert labels[labels.index("speed") : labels.index("result") + 1] == ["speed", "server", "result"]
 
@@ -362,7 +361,7 @@ def test_an_answer_file_without_the_load_test_answer_measures_nothing(tmp_path: 
     card = _card(lines)
     assert " server    vLLM                    not measured in this run" in card
     # AP9-SV2-F: tensor parallel over the two equal cards (`t = 2`).
-    assert "                                   identity stated · fit: 33 at once, fits" in card
+    assert "                                   identity stated · fit: 32 at once, fits" in card
 
 
 def test_without_a_bound_profile_the_server_is_not_offered(tmp_path: Path):
@@ -726,7 +725,7 @@ def test_one_request_is_singular(tmp_path: Path):
         # AP9-SV2-F: tensor parallel over the two equal cards of this profile (`t = 2`); "other
         # context" (8192) still reads 16 -- its old single-card number, by coincidence of the
         # halved context against the doubled card count, not because nothing changed.
-        ("counts", "counts for this run", "identity stated · fit: 33 at once, fits"),
+        ("counts", "counts for this run", "identity stated · fit: 32 at once, fits"),
         ("other context", "not counted", "identity stated · fit: 16 at once, tight"),
         ("no package", "counts, no fit", "identity stated · no package of this folder"),
     ],

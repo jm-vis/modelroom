@@ -280,18 +280,21 @@ def test_the_tensor_parallel_worked_example_t4_and_t1():
     assert with_t1.reason == NO_HEAD_COUNT_REASON
 
 
+_SCENARIO_100 = Scenario(context_requested=32768, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=100)
+
+
 def test_fewer_kv_heads_than_cards_replicates():
-    """`t` above the KV head count does not split the KV cache any further than the heads allow
+    """Rule (b): at 100 requests the package fits at no `t`, so the largest allowed one shows. `t` above the KV head count does not split the KV cache any further than the heads allow
     (Annahme A2): `t = 4` against 2 KV heads reads the same per-token cost as `t = 2` would."""
     profile = _profile_from("four_l4_server_vllm.json")
     package = _tensor_package()
     few_kv_heads = _architecture(4, num_key_value_heads=2)  # 4 divides 4 attention heads: t = 4
 
-    fit = vllm_fit_as_fit(profile, package, _base_model(few_kv_heads), _SCENARIO_10, _MACHINE)
+    fit = vllm_fit_as_fit(profile, package, _base_model(few_kv_heads), _SCENARIO_100, _MACHINE)
 
     assert fit.cards == 4
     two_card_equivalent = _architecture(2, num_key_value_heads=2)
-    as_if_t2 = vllm_fit_as_fit(profile, package, _base_model(two_card_equivalent), _SCENARIO_10, _MACHINE)
+    as_if_t2 = vllm_fit_as_fit(profile, package, _base_model(two_card_equivalent), _SCENARIO_100, _MACHINE)
     # The per-card KV cost is the same at `t = 4` as at `t = 2`: the divisor is `min(t,
     # num_key_value_heads)`, capped at the head count, so a `t` above it replicates rather than
     # splitting any further (Assumption A2). `Fit.kv_gib` is the whole model's KV need, that
@@ -380,3 +383,52 @@ def test_a_blocked_profile_is_unknown_the_same_way_ollamas_fit_reads_it():
     fit = vllm_fit_as_fit(profile, _tensor_package(), _base_model(_architecture(32)), _SCENARIO_10, _MACHINE)
 
     assert fit.fit_class == "unknown" and fit.reason == fit_block_reason(profile)
+
+
+# --- AP9-SV2-D, rule (b) (GF 2026-10-03): the smallest `t` at which the package fits ----------------
+
+
+def _t_for(heads: int | None, *, requests: int, weights_bytes: int = 6_098_581_864, cards: str = "four_l4_server_vllm.json"):
+    """`(cards, at_once, fit_class)` of the fit rule (b) chooses on `cards` for a package of `weights_bytes`."""
+    scenario = Scenario(
+        context_requested=32768, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=requests
+    )
+    fit = vllm_fit_as_fit(
+        _profile_from(cards), _tensor_package(weights_bytes=weights_bytes), _base_model(_architecture(heads)), scenario, _MACHINE
+    )
+    return fit.cards, fit.at_once, fit.fit_class
+
+
+def test_a_package_that_fits_one_card_of_four_takes_t_1():
+    """1 GB of weights, 3 requests: one L4 holds 4 at once (`fits`) -- the other three cards stay free."""
+    assert _t_for(32, requests=3, weights_bytes=1_000_000_000) == (1, 4, "fits")
+
+
+def test_a_package_that_fits_only_at_t_2_takes_t_2():
+    """5.68 GiB, 7 requests: `t = 1` holds 3 (`tight`), `t = 2` holds 7 (`fits`), `t = 4` would hold 15."""
+    assert _t_for(32, requests=7) == (2, 7, "fits")
+
+
+def test_a_package_that_fits_only_at_t_4_takes_t_4():
+    """The worked example (10 requests): `t = 1` holds 3, `t = 2` holds 7 (both `tight`), `t = 4` holds 15."""
+    assert _t_for(32, requests=10) == (4, 15, "fits")
+
+
+def test_a_package_that_fits_at_no_t_takes_the_largest_one():
+    """100 requests: `tight` at every `t`; the line shows the best try, the largest `t` the cards allow."""
+    assert _t_for(32, requests=100) == (4, 15, "tight")
+    assert _t_for(14, requests=100)[0] == 2  # 4 does not divide 14 heads: 2 is the largest allowed
+
+
+def test_an_unknown_head_count_stays_on_one_card_whatever_fits():
+    profile = _profile_from("four_l4_server_vllm.json")
+    fit = vllm_fit_as_fit(profile, _tensor_package(), _base_model(_architecture(None)), _SCENARIO_10, _MACHINE)
+
+    assert (fit.cards, fit.reason) == (1, NO_HEAD_COUNT_REASON)
+
+
+def test_the_head_still_names_what_the_machine_offers_at_most():
+    """`largest_parallel_size` is the pool of the head, whatever the model: three cards give two."""
+    from modelroom.fit_vllm import largest_parallel_size
+
+    assert [largest_parallel_size(n) for n in (1, 2, 3, 4, 8, 16)] == [1, 2, 2, 4, 8, 8]

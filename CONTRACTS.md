@@ -747,6 +747,9 @@ The field names `MachineRanking.no_fit` and `Requirement.ample_reachable` and th
 | `basis` | `"architecture" \| "size"` | default `"architecture"` | what the KV cache was computed from: the base model's architecture, or the size alone ("Fit from size") |
 | `reason` | `str \| None` | non-`None` typically iff `fit_class == "unknown"` | why the fit could not be computed, when it could not |
 | `requests` | `int` | `1..1024`, default `1` | the parallel requests the KV cache was computed for, once per request (decided 2026-09-25; see "Fit contract v1", "Parallel requests") |
+| `runtime` | `str` | one value of `RuntimeKey` (`"ollama"`, `"vllm"`), default `"ollama"`, not written at the default | the entry of `runtimes.RUNTIMES` that judged this row; "Fit for vLLM" below |
+| `at_once` | `int` | `>= 0`, default `0`, not written at `0` | how many requests of `context` the runtime holds at once on the cards of this row (vLLM only; `0` is "not computed", true of every Ollama fit) |
+| `cards` | `int` | `>= 1`, default `1`, not written at `1` | how many cards the weights are spread over (vLLM's tensor-parallel size `t`; Ollama rows stay at one) |
 
 ```json
 {
@@ -764,6 +767,72 @@ The field names `MachineRanking.no_fit` and `Requirement.ample_reachable` and th
   "requests": 1
 }
 ```
+
+### Fit for vLLM
+
+`fit_vllm.vllm_fit_as_fit(profile, package, base_model, scenario, machine_config)` is the `fit` of the
+`vllm` entry of `runtimes.RUNTIMES` (AP9-SV2-F): it judges one `tensor` package on one machine and returns the
+`Fit` above with `runtime == "vllm"`. `render` calls it; `guided_vllm._fit` and the table read that very `Fit`
+(one calculation, one truth). It is computed, never measured (ADR 0008), and nothing here is persisted.
+
+**Guards, in this order, each giving `unknown` with a fixed `reason` and a `Fit` that still says
+`runtime == "vllm"`** (the words of `fit.py`, so a reader cannot tell a vLLM guard from a GGUF one): a profile the
+fit may not compute for (`profile.fit_block_reason`); a package that is not `complete` (`only a complete package
+is judged`); a weight file of size 0 (`a weight file has no size`); a known context window smaller than the
+run's (`context beyond the window of this model (<n>)`); unified memory (`vLLM does not run on shared memory`);
+no graphics card (`vLLM needs a graphics card`). The last two put the package in `not_covered`, never `no_fit`.
+
+**The cards.** The group is the cards within 1 % of the largest (`EQUAL_CARD_TOLERANCE`), in the order of their
+`index`; smaller cards stay out and the table head says so. The sizes `t` may take are those of `1, 2, 4, 8` that
+are at most the group's size and divide `Architecture.num_attention_heads` (`fit_vllm.allowed_sizes`; the
+limit to `1, 2, 4, 8` is modelroom's own, not vLLM's).
+
+**The rule for `t` (b)** (GF 2026-10-03, replacing "the largest size", F1 a of the build brief): `t` is the
+**smallest** allowed size at which the package fits. *Fits* is `fit_vllm.vllm_fit_class` over the first `t`
+cards of the group (by `index`) giving `fits` or `ample`, so neither `no_fit` nor `tight`; `unknown` does not
+occur here, the guards ran before. Where it fits at no allowed size, `t` is the largest allowed one, and the row
+shows that best try. Where the head count is unknown, `t = 1` and `reason` is `tensor parallel needs the model's
+head count; computed on one card`. The reason is the GF's: a smaller `t` answers faster, and the other cards stay
+free. `fit_vllm.largest_parallel_size` stays as it was: the pool in the table head is what the machine offers at
+most (the largest size at most the group), whatever the model; three equal cards give two.
+
+```
+card      = smallest of the t chosen cards
+budget    = 0.92 x card                                      per card
+weights   = sum of the safetensors / t                       per card, no 1.10 overhead
+runtime   = 1.50                                             per card, GiB
+kv        = budget - weights - runtime                       per card
+per_token = kv_token_bytes(architecture) / min(t, num_key_value_heads)   size basis: 147,456 B, not divided
+state     = state_bytes(architecture) / t                    hybrid models, else 0
+at_once   = floor(kv / (per_token x context + state))
+fit_class = vllm_fit_class(at_once, requests, basis)
+            no_fit below 1, tight below the requests, ample at twice them or more (architecture basis only), else fits
+```
+
+| `Fit` field | Where it comes from, for `runtime == "vllm"` |
+|---|---|
+| `mode` | `gpu` where `t = 1`, else `gpu_split`; `None` where `fit_class == "unknown"` |
+| `cards` | `t` (above) |
+| `at_once` | the formula above, over one card's own share; `0` for an `unknown` fit |
+| `basis` | `architecture` where the base model's architecture gives the KV bytes per token, else `size` (the class then never reaches `ample`) |
+| `reason` | `None`, except the head-count reason (`t = 1`, the fit still computed) or the guard that made the fit `unknown` |
+| `weights_gib` | the whole package: the sum of its safetensors files in GiB |
+| `kv_gib` | the KV cache of `requests` requests of `context` tokens over **all** `t` cards: `(per_token x context + state) x requests x t`, what the ranking assumes |
+| `need_gib` | `weights_gib + t x 1.50 + kv_gib` |
+| `pool_gib` | `t x 0.92 x card`: what vLLM may take of the chosen cards |
+| `reserve_gib` | `t x (card - 0.92 x card)`: what vLLM leaves free of them |
+| `context_assumed` | always `false`: the context is the run's own, never the 8192 fallback |
+
+`fit_class`, `context` and `requests` are the run's, as for any `Fit`. **Constants:** `0.92`
+(`VLLM_GPU_MEMORY_UTILIZATION`) is vLLM 0.30.0's default of `--gpu-memory-utilization`
+(docs.vllm.ai/en/v0.30.0/configuration/engine_args). `1.50` GiB (`VLLM_RUNTIME_OVERHEAD_GIB`) is the runtime of the
+recording on one A100 at utilization 0.5 (`0.5 x 80 - 0.920 - 37.58`, decided 2026-09-27); the recording on one L4
+gave `1.31`. **Assumptions, until a rented server confirms them:** A1, the 1.50 GiB applies to every card under
+tensor parallel (documented for one card); A2, with fewer KV heads than cards vLLM replicates the heads, so a card
+counts `per_token / min(t, num_key_value_heads)`, and a hybrid model's state divides by `t`. A test of this formula
+proves no behavior of vLLM. Worked example (test): four L4 of 22.49 GiB, `Qwen/Qwen3-8B-AWQ` (5.68 GiB, 36 layers,
+8 KV heads, `head_dim` 128), context 32,768, 10 requests: `t = 1` holds 3 and `t = 2` holds 7 (both `tight`),
+`t = 4` holds 15 (`fits`), so `t = 4`; with 7 requests `t = 2` is the smallest that fits.
 
 ### Rating
 
@@ -5571,7 +5640,8 @@ at_once = floor(kv_gib / per_token / context)
 `fit.py` (147,456 bytes), and then the class is capped at `fits`. The class: `no_fit` below one
 request, `tight` below the ranking's requests, `ample` at twice them or more on the architecture
 basis, else `fits`. The card is the **largest card** of the profile this machine is bound to (the
-profile `guided_context.machine_checked` reads); tensor parallel over several cards is not computed.
+profile `guided_context.machine_checked` reads); the table of a machine with several equal cards
+uses the per-card rule with `t` cards of "Fit for vLLM", not this paragraph.
 **1.50 GiB** is the runtime of the recording on one A100-SXM4-80GB at utilization 0.5 (`0.5 x 80 -
 0.920 - 37.58`, decided 2026-09-27); the recording on one L4 gave **1.31** (`0.5 x 22.494 - 0.920 -
 9.02`), the second measured value. **Limits:** one 0.5B model at utilization 0.5 is the evidence; a
@@ -5617,7 +5687,10 @@ modelroom cannot name these cards to vLLM`, the row stays in the ranking with it
 the table says what to do: `run one of the two in a terminal that stays open; vLLM downloads the model
 at its first start`, `then run modelroom again: step 4 finds the server and measures it`; a package on
 disk already replaces the first with `#<n> is on disk already (size checked)`; another model served on
-port 8000 adds `vLLM serves another model on port 8000 now; stop it first (one model per server)`. A row
+port 8000 adds `vLLM serves another model on port 8000 now; stop it first (one model per server)`. Where the
+machine has more equal cards than the `--tensor-parallel-size` names (rule (b) takes the smallest `t` that fits),
+`larger --tensor-parallel-size spreads the load over more cards, if the server is yours alone` stands first among
+these notes (`VllmInstall.larger`, one line, `LARGER_HINT`). A row
 locked `no safe command` (or `computed only`, or `pull name not unique`) where no other row offers a line
 says so under the table as `#<rank> <lock>`.
 

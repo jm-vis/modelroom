@@ -305,6 +305,10 @@ than shown as rows nobody can choose. After the choice the run fetches, per mode
 the publisher's own repository and of the first listed packager that has it: their sizes,
 formats, quantizations and the exact revision they were seen at.
 
+modelroom looks for packages on Hugging Face, at the model's publisher and at RedHatAI (vLLM
+builds) and at the listed GGUF packagers, and in the Ollama library. The start screen shows the runtimes, not
+the origins; the origin stands with each row at the package name (`<packager> · <quant>`).
+
 ### Step 3, Context
 
 ![Step 3: the context scale from XS to XXL, with how many of the fetched packages fit at each level](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/6-context.png)
@@ -459,6 +463,88 @@ It checks the name is safe to pull, that Ollama answers on this computer, notes 
 name already, checks the free disk against `--weights-bytes` where one was given, then asks **Pull
 `<name>` into Ollama now?** (default No) before it pulls -- `--yes` skips the question for a
 terminal-less run. See `CONTRACTS.md`, "`modelroom pull`", for its exit codes.
+
+## vLLM
+
+On a machine that has vLLM, the table lists vLLM rows beside the Ollama rows: safetensors packages
+(AWQ, GPTQ, FP8, W4A16, BF16), judged by vLLM's own memory rule, and under the table head a line
+`runtime  Ollama · vLLM serving Qwen3-8B-AWQ` (or `vLLM installed, not serving`, or `vLLM (from its
+profile)` for a machine without a connection). A machine without vLLM shows neither the rows nor the
+line, and its result is the same as before. **modelroom finds vLLM only where it is installed on the
+machine (Linux); the docker line is another way to start the same server, not a way to detect it.** A
+machine whose vLLM exists only as a Docker image counts as a machine without vLLM; native Windows
+and macOS count as without vLLM as well.
+
+**The fit.** vLLM takes 0.92 of each card, loads the weights, keeps 1.50 GiB per card for itself and
+gives the rest to the KV cache. The ranking assumes the requests of step 3 and asks how many of them
+the cards hold at once. Several cards of the same size (within 1 %) can share a model by tensor
+parallel; the other cards of the machine are left out, and the table head says so. **The number of
+cards `t` is the smallest of 1, 2, 4, 8 at which the package fits**, that is at most the number of
+equal cards, divides the model's attention head count and gives the class `fits` or `ample` on the
+first `t` cards; where it fits at none, the largest allowed `t` shows what the cards can do at best,
+and with no head count `t` is 1, with the reason named. A smaller `t` answers faster and leaves the
+other cards free. Computed, never measured; the numbers behind it are in `CONTRACTS.md`, "Fit for
+vLLM".
+
+**The install line is a command, not a pull, and modelroom starts nothing.** Choosing a vLLM row prints
+two commands for the same server; run one of the two in a terminal that stays open. vLLM downloads the
+model at its first start; then run modelroom again, and step 4 finds the server and measures it
+(10 requests at once, if that is what the ranking assumes; the number is not ranked and nothing is
+written).
+
+```
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 vllm serve Qwen/Qwen3-8B-AWQ --revision 4da05a8edb55c6046cce958586c33b61da07bb79 --max-model-len 32768 --tensor-parallel-size 4 --gpu-memory-utilization 0.92 --host 127.0.0.1 --port 8000
+mkdir -p "${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}" && docker --host unix:///var/run/docker.sock run --rm --ipc=host --gpus '"device=0,1,2,3"' -e CUDA_DEVICE_ORDER=PCI_BUS_ID -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 -p 127.0.0.1:8000:8000 --mount "type=bind,src=${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub},dst=/root/.cache/huggingface/hub" vllm/vllm-openai:v0.30.0 Qwen/Qwen3-8B-AWQ --revision 4da05a8edb55c6046cce958586c33b61da07bb79 --max-model-len 32768 --tensor-parallel-size 4 --gpu-memory-utilization 0.92 --host 0.0.0.0 --port 8000
+```
+
+Every value in them is checked first (`no safe command` otherwise), and the cards are bound by
+number, always, so a mask your shell already holds cannot shrink the line. If the machine has more
+equal cards than `--tensor-parallel-size` names, a line under the commands says `larger
+--tensor-parallel-size spreads the load over more cards, if the server is yours alone`. Cards whose
+memory `nvidia-smi` did not read give no line, only `computed only`.
+
+**The docker line.** It talks to the local Docker daemon at `unix:///var/run/docker.sock` and creates
+the cache folder first; with rootless Docker, change the part after `--host` to your socket. Four
+limits:
+
+- It mounts the Hugging Face cache of the machine, so the download lands where the free disk was
+  checked. Started with another volume, vLLM has another place, and the disk check does not apply.
+- The container writes into the cache as `root`. A later `vllm serve` of the same user reads those
+  files but cannot write there.
+- If `HF_HUB_CACHE`, `HF_HOME` or `XDG_CACHE_HOME` (the one that counts) is a relative path, `docker
+  --mount` refuses it; the line is left out and a note says `docker: left out, the Hugging Face cache is
+  set as a relative path; set it absolute to get this line`. The `vllm serve` line stays.
+- modelroom never calls Docker, neither to detect nor to start, and it ignores `DOCKER_HOST` and
+  `DOCKER_CONTEXT`.
+
+**Where the models are, and "on disk already".** vLLM keeps them in the Hugging Face cache: `HF_HUB_CACHE`,
+else `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`. The disk
+rule of step 5 reads the free space there for vLLM rows and at Ollama's place for Ollama rows
+(`disk 41.2 GB free on C: (Ollama and vLLM models)` where both are one drive). A package is on disk when
+every start file is in the cache with the size the package declares; the check reads sizes, never
+content. `huggingface_hub` 1.x keeps large files in the cache's own `blobs/` folder, and modelroom
+counts them as there. A part that is missing counts only its missing bytes.
+
+**A server over SSH.** With a computer reached over SSH (see "Another computer"), the other end reads
+and measures vLLM at the server against its own `127.0.0.1:8000`, with no forwarded port. The table
+shows `runtime  Ollama · vLLM serving Qwen3-8B-AWQ · on gpu1`, step 4 offers `vLLM server on gpu1`
+beside the Ollama candidates, and step 5 prints both commands with `on gpu1` in the label (nothing is
+started over SSH) and `is on disk already (size checked)` where the server has the files. Neither
+the model's own name or path as the server states it, nor an address, nor a path of the server
+reaches this computer: the server answers with the number of the package of the run, or "another
+model". **Current behavior:** the SSH way needs an answering Ollama at the server; `Ollama does not
+answer on gpu1` ends the run even when only vLLM runs there.
+
+**What is assumed and what is checked.** The numbers rest on eight assumptions, named in `CONTRACTS.md`.
+Confirmed at a rented server (hand probes of 2026-10-02 and 2026-10-03): vLLM is found at
+`127.0.0.1:8000` also when it runs from the docker line; the measurement with 10 requests at once
+runs; the cache place follows the four rules above; and `huggingface_hub` 1.x keeps large files in
+`<cache>/blobs/`, which the check now counts. Still open: A1 (1.50 GiB per card also under tensor
+parallel), A2 (a model with fewer KV heads than cards, and a hybrid model), A3 (vLLM found over a
+non-interactive SSH command in `PATH` or `~/.local/bin`), A5 (vLLM fetches exactly the start files),
+A6 and A7 (the card numbers of `CUDA_VISIBLE_DEVICES` and of Docker's `--gpus device=` are the
+`index` values of `nvidia-smi`), A8 (the fixed image tag starts and writes into the mounted cache).
+A4 concerns LM Studio, which is not part of this release.
 
 ## Files
 
@@ -615,10 +701,9 @@ procedure is in `AGENTS.md`, "Versioning and releases".
 In the order we plan to build it, none of it dated:
 
 - **Throughput for many people.** Step 3 sizes the memory for the parallel requests a head count
-  stands for; how fast those requests are served is not measured. Beyond roughly eight at once it
-  is a job for a serving stack such as vLLM, which uses another package format and needs a fetch, a
-  catalog part and a measurement of its own. Rule of thumb, not measured yet; the release that
-  brings it will carry the measurements.
+  stands for; how fast those requests are served is measured only for one vLLM server you started
+  (see "vLLM"), and that number is not ranked. Beyond roughly eight at once it is a job for a
+  serving stack such as vLLM; the ranking itself stays a rule of thumb, not measured.
 - **Unified memory, measured.** The rule is in; a measured profile of such a machine is what is
   missing -- an export from one is welcome.
 - **The catalog's successors.** A model shows `legacy` only when the catalog names its
