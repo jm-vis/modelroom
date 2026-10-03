@@ -74,7 +74,7 @@ ERROR_SENTENCES: dict[str, str] = {
 assert set(ERROR_SENTENCES) == set(ERROR_CODES), ERROR_SENTENCES
 
 _FORM = "{alias} answered in a form this modelroom does not read"
-_PULL_RESUMES = "the pull on {alias} did not finish: the connection ended; Ollama keeps what arrived, the same pull resumes"
+_PULL_RESUMES = "the connection to {alias} ended; Ollama there keeps what arrived, the same pull resumes"
 _CONNECTION_ENDED = "the connection to {alias} ended before the answer"
 _ENVELOPE_FIELDS = ("progress", "result", "error")
 

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import modelroom
 from fixture_room import fixed_room
 from modelroom.daemon import DaemonError, FixtureDaemon
 from modelroom.http import Response
@@ -74,10 +75,22 @@ def test_every_line_has_protocol_1_and_exactly_one_field():
 def test_hello_names_protocol_version_system_ollama():
     daemon = FixtureDaemon({("GET", "/api/version"): Response(200, {}, b"{}")})
     result = _one(_run("hello", b"{}", _context(daemon=daemon))[0])["result"]
-    assert result["version"] == "0.2.0"
+    assert result["version"] == modelroom.__version__
     assert result["system"] == "linux"
     assert result["ollama"] == "reachable"
     assert result["agent_forwarded"] is False
+
+
+def test_hello_names_the_version_of_this_package():
+    """The `version` of `hello` is the version of the package that answers, read from its one source."""
+    from importlib.metadata import version
+
+    daemon = FixtureDaemon({("GET", "/api/version"): Response(200, {}, b"{}")})
+    lines: list[bytes] = []
+
+    assert main("hello", b"{}", lines.append, _context(daemon=daemon)) == 0
+
+    assert json.loads(lines[0])["result"]["version"] == version("modelroom")
 
 
 def test_hello_says_unreachable_when_ollama_does_not_answer():

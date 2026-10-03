@@ -32,6 +32,9 @@ from .screen import ranks_text
 # The code of the row note that says why a measurement did not count; the text before its first
 # full stop is that reason (a size-basis row adds its own sentence after it).
 ONE_REQUEST_NOTE = "measured_with_one_request"
+# The code of the row note for a measurement that counts nowhere here for any other reason (not valid,
+# not comparable, another context); the text before its first ` (` is that reason.
+OTHER_MEASUREMENT_NOTE = "measured_not_comparable"
 # Under `speed` and on the card, where a machine entered by hand has no measured row.
 ENTERED_NEVER_MEASURED = "a machine entered by hand is never measured"
 
@@ -95,6 +98,35 @@ def unused_measurements(block: MachineRanking | None, dash: str, width: int | No
     return f"{len(rows)} {'row' if len(rows) == 1 else 'rows'} {reason}"
 
 
+def other_measurements(block: MachineRanking | None, dash: str, width: int | None = None, dot: str = "·") -> str | None:
+    """The rows whose measurement counts nowhere here, each with the reason the `speed` note under the table
+    gives (AP9-FR-N2, c2): `#8 measured, not valid`, `#2, #8 measured, not valid`, or two kinds joined by
+    `dot`. The text of a reason stops before its first ` (` -- the full one stays under the table. Wider
+    than `width`: `2 rows measured, not counted here`, the one line the card has for it."""
+    rows = [] if block is None else [entry for entry in block.ranked if entry.note.code == OTHER_MEASUREMENT_NOTE]
+    groups: dict[str, list[int]] = {}
+    for entry in rows:
+        reason = entry.note.text.split(". ")[0].rstrip(".").partition(" (")[0]
+        groups.setdefault(reason, []).append(entry.rank)
+    if not groups:
+        return None
+    named = f" {dot} ".join(f"{ranks_text(ranks, dash)} {reason}" for reason, ranks in groups.items())
+    if width is None or len(named) <= width:
+        return named
+    return f"{len(rows)} {'row' if len(rows) == 1 else 'rows'} measured, not counted here"
+
+
+def measurement_reason(block: MachineRanking | None, dash: str, dot: str, width: int) -> str | None:
+    """Why no row of the block shows a speed although one was measured, for the card's `speed` row: the
+    reasons of `other_measurements` and `unused_measurements` joined by `dot` where that fits `width`, else
+    the first; `None` where no measurement is named (AP9-FR-N2, c2: the card follows the table's rule)."""
+    parts = [part for part in (other_measurements(block, dash, width, dot), unused_measurements(block, dash, width)) if part]
+    if not parts:
+        return None
+    joined = f" {dot} ".join(parts)
+    return joined if len(joined) <= width else parts[0]
+
+
 def never_measured(block: MachineRanking | None) -> str | None:
     """Why a machine entered by hand has no speed, said in place of the advice to measure; else `None`.
 
@@ -124,6 +156,8 @@ __all__ = [
     "load_hint",
     "never_measured",
     "never_measured_of",
+    "measurement_reason",
+    "other_measurements",
     "scenario_line",
     "scenario_words",
     "unused_measurements",

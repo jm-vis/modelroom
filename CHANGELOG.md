@@ -342,6 +342,14 @@ All notable changes to this project are documented in this file. The format foll
 - **Render document schema 2** (ADR 0003): `Fit.requests` in every row, `users` and
   `requests_origin` in `docs/models.json` when the rendered scenario is the configuration's.
 - **`docs/adr/`**, the first three decision records, with its index.
+- **What a computer already holds is said under its table** (AP9-FR-N2, a; `modelroom/held_text.py`,
+  `modelroom/guided_remote.py`, `modelroom/pull_other.py`; CONTRACTS.md, "Another computer", "The screen"):
+  a line `local     #1, #4 already in Ollama on this computer` (or `... on gpu1`) stands behind `speed`
+  under the table of this computer and of the active computer over SSH, where at least one shown row is
+  held; in the list `Which package should go onto another computer?` such a row of the active computer ends
+  `  local already`. Step 5 asks the server once which packages of the run it holds (`candidates`, identities
+  only) and lets that set mark the table, the `disk` line and the list alike, so a package held there is never
+  `too large` for its disk either. A failed call is no problem of its own.
 
 ### Changed
 
@@ -353,6 +361,21 @@ All notable changes to this project are documented in this file. The format foll
   a larger size than `t` on the machine's equal cards (`Fit.larger_size`; not where the head count is unknown or
   divides to no larger size), a line under the two commands says that a larger `--tensor-parallel-size` spreads the
   load over more cards, if the server is yours alone.
+- **The speed row of the card names a measurement that did not count** (AP9-FR-N2, c2;
+  `modelroom/scenario_text.py`, `modelroom/result_card.py`): `speed     none counted     #8 measured, not
+  valid` instead of `not measured  say Yes in step 4 ...`; the same reasons the note under the table gives
+  (not valid, not comparable, another context), by count where they would not fit one card row. The value
+  is `none counted` for the one-request reason as well.
+- **Step 4 says which computer it means** (AP9-FR-N2, c1): `no load test on this computer: it has no
+  profile in this results folder` and `... it is not part of this run's result`.
+- **An early end of a speed run is said with numbers** (AP9-FR-N2, f; `modelroom/guided_loadtest.py`): a second
+  line after the fault line, `<name>: run 1 ended after 2 of 128 tokens (done_reason 'stop'); protocol v1
+  counts a run only when it reaches 128 tokens (done_reason 'length')`, for a local run and over SSH. The stored
+  record and its reason are as before; no cause is named.
+- **A server that lost or gained its machine identity is asked about** (AP9-FR-N2, e;
+  `modelroom/guided_remote_bind.py`): exactly one fingerprint `none` is a difference like two different
+  values; where both are `none` nothing is asked and the run says once that `gpu1 gives no machine identity;
+  modelroom cannot tell whether it is still the same machine`.
 - **Machine keys and names of a folder of 0.1.0 change once** (FR-N): the first command that writes
   to it renames `[machines.<host name>]` and every other hand-written key to a neutral one, and a
   profile's `display_name` to its neutral name (`machine renamed to server-3f9a0c21 (no host names in
@@ -562,6 +585,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- **`modelroom remote hello` names the version of the package** (AP9-FR-N2, b; `modelroom/remote_server.py`):
+  `version` was a fixed `0.2.0`; it is `modelroom.__version__` now, and the unused constant
+  `cli_remote.MIN_VERSION_TEXT` is gone. The laptop reads no version; `protocol` alone decides.
+- **A pull cut over SSH is one line with one `did not finish`** (AP9-FR-N2, d; `modelroom/ssh.py`): `the pull of
+  <name> did not finish: the connection to gpu1 ended; Ollama there keeps what arrived, the same pull resumes`
+  instead of two prefixes in a row.
 - **A pool of 0 or less is said in words** (`modelroom/render.py`; AP9-RM RM-2): a package set
   aside on a machine whose reserve takes all of its memory says `nothing is left after the reserve of
   8.0 GiB (3.8 GiB in all)` instead of `of the -4.2 GiB left after the reserve`.

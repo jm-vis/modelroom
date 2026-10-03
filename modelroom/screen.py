@@ -434,6 +434,8 @@ NOTHING_CHOSEN_SUMMARY = "nothing chosen, the folder stays as it is"
 # --- the card of step 5 ----------------------------------------------------------------------------
 
 SPEED_NOT_MEASURED = "not measured"
+# The card's value where a measurement was made and none of its rows counts here (AP9-FR-N2, c2).
+SPEED_NONE_COUNTED = "none counted"
 # The fit class `no_fit` where prose says it: the words with a space, the underscore being the one
 # difference between a value and its text, and only outside a cell (decided 2026-09-27).
 NO_FIT = "no fit"
@@ -499,14 +501,15 @@ def models_fact(names: Sequence[str], packages: int, accounts: Sequence[str]) ->
     return Fact("models", names_words(names, "none"), f"{counted} from {named_accounts(accounts)}")
 
 
-def speed_fact(measured: int, fastest: tuple[str, float] | None, reason: str | None = None) -> Fact:
+def speed_fact(measured: int, fastest: tuple[str, float] | None, reason: str | None = None, from_measurement: bool = False) -> Fact:
     """The speed row of the card: how many packages were measured here, and which was fastest.
 
     Where no row carries a speed, `reason` is why a measurement a row has did not count
     (`#3 measured with 1 request, ranking assumes 3`); only without one does the row say to measure.
+    `from_measurement`: that reason names a measurement, so the value says `none counted`, not `not measured`.
     """
     if not measured or fastest is None:
-        return Fact("speed", SPEED_NOT_MEASURED, reason or MEASURE_HINT)
+        return Fact("speed", SPEED_NONE_COUNTED if from_measurement else SPEED_NOT_MEASURED, reason or MEASURE_HINT)
     name, speed = fastest
     return Fact("speed", f"{measured} measured", f"fastest {name} at {speed:.1f} tok/s")
 

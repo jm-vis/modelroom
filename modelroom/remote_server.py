@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import hf_cache, remote_protocol
+from . import __version__, hf_cache, remote_protocol
 from .contracts import Package
 from .daemon import ALLOWED_CALLS, Daemon, DaemonError, LocalDaemon
 from .hf_cache import CacheProbes
@@ -66,7 +66,6 @@ OPS = ("hello", "profile", "room", "daemon", "candidates", "measure", "vllm", "v
 # The 0.1.0 default (`config.LlmfitConfig.min_version`): the server has no configuration to read one
 # from, so the profile op uses the same floor a fresh configuration would.
 _DEFAULT_LLMFIT_MIN_VERSION = "1.1.16"
-REMOTE_VERSION = "0.2.0"
 
 ERROR_BAD_REQUEST = "bad_request"
 ERROR_CALL_REFUSED = "call_refused"
@@ -160,7 +159,7 @@ def hello_result(context: ServerContext) -> dict:
     identity = read_os_identity(context.probes.platform, context.probes.runner, context.probes.read_text)
     fingerprint = os_fingerprint(identity.raw_id) if identity.raw_id else "none"
     return {
-        "version": neutral_version(REMOTE_VERSION),
+        "version": neutral_version(__version__),
         "system": context.probes.platform,
         "ollama": "reachable" if _ollama_reachable(context.daemon) else "unreachable",
         "agent_forwarded": bool(context.environ.get("SSH_AUTH_SOCK")),
@@ -505,7 +504,6 @@ __all__ = [
     "MAX_INPUT_BYTES",
     "OPS",
     "PROTOCOL_VERSION",
-    "REMOTE_VERSION",
     "RemoteRequestError",
     "ServerContext",
     "VLLM_MAX_INPUT_BYTES",

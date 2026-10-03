@@ -150,6 +150,13 @@ def test_the_question_follows_the_card_with_the_size_of_the_first_row(tmp_path: 
     assert f"install   #1  ollama pull {FIRST_NAME}" in lines
 
 
+def test_the_table_names_the_rows_this_computer_holds(tmp_path: Path):
+    """DeepSeek is held by the daemon (its digest is proven) and measured, so it is #1: the table says so."""
+    _code, lines, _asker = _run(tmp_path, {**MEASURED, "pull": False}, pull_daemon())
+
+    assert "local     #1 already in Ollama on this computer" in lines
+
+
 def test_a_daemon_the_start_screen_did_not_reach_is_not_asked(tmp_path: Path):
     code, lines, asker = _run(tmp_path, PULL, offline_daemon())
 

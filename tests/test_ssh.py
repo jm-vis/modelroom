@@ -154,7 +154,7 @@ def test_a_connection_cut_mid_pull_gets_its_own_resumable_sentence():
         call("gpu1", "daemon_pull", _PULL, FaultSsh(ProcessOutcome(0), lines=(_PROGRESS,)))
 
 
-_RESUMES = "the pull on gpu1 did not finish: the connection ended; Ollama keeps what arrived, the same pull resumes"
+_RESUMES = "the connection to gpu1 ended; Ollama there keeps what arrived, the same pull resumes"
 
 
 @pytest.mark.parametrize(

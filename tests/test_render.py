@@ -1203,7 +1203,7 @@ def test_a_measurement_that_counts_but_for_its_requests_is_named_under_speed_not
     assert MEASURE_HINT not in terminal
     assert "| measured with 1 request, ranking assumes 3 |" in document_markdown(document)
     card = next(fact for fact in _card_facts(document) if fact.label == "speed")
-    assert (card.value, card.note) == ("not measured", "#1 measured with 1 request, ranking assumes 3")
+    assert (card.value, card.note) == ("none counted", "#1 measured with 1 request, ranking assumes 3")
 
 
 def test_rows_without_any_measurement_still_say_so_and_what_to_do():

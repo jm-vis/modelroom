@@ -711,7 +711,7 @@ def _shown_render_result(
     document, facts, context = written[0]
     own = next((block.profile for block in document.machines if block.machine == here), None)
     live = {here: live_room(run.room, own, run.daemon if daemon_reachable else None, disk)}  # U10: this machine only
-    live.update(active_room(run, document))  # B5: the active SSH machine's own room, if it has a table here
+    live.update(active_room(run, document, context.packages))  # B5: the active SSH machine's own room, if it has a table here
     # A3 (AP9-FR): other machines `pull_other_step` lists after this table, computed once so the note
     # under a table and the list that may follow never disagree.
     other_machines = eligible_other_machines(document, here, context.ambiguous)

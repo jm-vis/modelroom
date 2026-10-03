@@ -178,9 +178,10 @@ def test_the_chosen_row_of_the_active_target_is_pulled_over_ssh_not_the_first(tm
     daemon = FixtureDaemon(
         {
             ("GET", "/api/version"): Response(200, {}, b"{}"),
-            # Three reads (FR-B2): step 4's own `candidates` call (nothing installed yet), then the
-            # pre-pull digest check, then `pulled_problem` after the pull -- `tags_before` twice.
-            ("GET", "/api/tags"): [tags_before, tags_before, tags_after],
+            # Four reads (FR-B2, AP9-FR-N2 a): step 4's own `candidates` call and step 5's one (nothing
+            # installed yet), then the pre-pull digest check, then `pulled_problem` after the pull --
+            # `tags_before` three times.
+            ("GET", "/api/tags"): [tags_before, tags_before, tags_before, tags_after],
             ("POST", PULL_PATH): Response(200, {}, pull_body),
         }
     )

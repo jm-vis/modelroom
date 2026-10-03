@@ -29,7 +29,7 @@ from .loadtest import (
     weight_digest,
 )
 from .measure import read_os_identity
-from .measurements import MeasurementExistsError, MeasurementRecord, Scenario
+from .measurements import MeasurementExistsError, MeasurementRecord, Scenario, run_invalid_reason, shipped_protocol
 from .neutral import NeutralError, neutral_record
 from .profile import os_fingerprint
 from .screen import context_tokens_text
@@ -102,7 +102,7 @@ def _bound_profile_id(run: "GuidedRun", config: Configuration, results_dir: Path
     """
     bound = read_pointer(run.pointer_path).binding_for(results_dir)
     if bound is None:
-        run.screen.note(f"{prefix}no load test: this machine is not bound to a profile in this results folder")
+        run.screen.note(f"{prefix}{NOT_BOUND_LINE}")
         return None
     scan = scan_profiles(config.paths.hardware_dir)
     known = {
@@ -210,6 +210,45 @@ def _record_problem(record: MeasurementRecord) -> str | None:
     return None
 
 
+_EARLY_END = (
+    "{name}: run {number} ended after {count} of {wanted} tokens (done_reason {got!r}); "
+    "protocol v1 counts a run only when it reaches {wanted} tokens (done_reason {expected!r})"
+)
+
+
+def early_end_line(record: MeasurementRecord) -> str | None:
+    """What an invalid record's first invalid run did, where it ended before the protocol's token count
+    (AP9-FR-N2, f): the tokens it reached, the count and `done_reason` the protocol asks. Only what was
+    observed and the condition it breaks, never a cause; read from the record after the sink, so
+    `done_reason` is a known word and `eval_count` an integer. `None` for any other invalid record."""
+    if record.protocol != "v1" or record.validity != "invalid" or record.ollama_name is None:
+        return None
+    protocol = shipped_protocol()
+    for number, run in enumerate(record.runs, start=1):
+        if run_invalid_reason(run, protocol, record.scenario.context_requested) is None:
+            continue
+        if run.done_reason == protocol.validity.done_reason:
+            return None
+        return _EARLY_END.format(
+            name=record.ollama_name, number=number, count=run.eval_count, wanted=protocol.options.num_predict,
+            got=run.done_reason, expected=protocol.validity.done_reason,
+        )
+    return None
+
+
+def report_problem(run: "GuidedRun", record: MeasurementRecord) -> bool:
+    """Say why a stored record is no measurement (`_record_problem`), and for a run that ended early the
+    second line of `early_end_line`; `False` where the record is a measurement and nothing is said."""
+    problem = _record_problem(record)
+    if problem is None:
+        return False
+    run.screen.note(f"{record.ollama_name}: {problem}")
+    early = early_end_line(record)
+    if early is not None:
+        run.screen.note(early)
+    return True
+
+
 def _measure_candidate(
     run: "GuidedRun", config: Configuration, candidate: Candidate, scenario: Scenario, profile_id: str
 ) -> bool:
@@ -236,12 +275,10 @@ def _measure_candidate(
     except (LockHeldError, MeasurementExistsError, OSError, NeutralError) as exc:
         run.failed(f"the measurement of {candidate.shown_name} was not stored: {exc}")
         return False
-    problem = _record_problem(record)
-    if problem is not None:
+    if report_problem(run, record):
         # The record is written and the run stays `0`: a measurement that does not count in
         # measured group 0 is still a measurement of this machine, and the ranking says where it
         # stands ("Load test (stage 1)"). What it is missing is said here, once.
-        run.screen.note(f"{record.ollama_name}: {problem}")
         return True
     run.screen.note(_measurement_note(record, run.screen.glyphs.skip))
     return True
@@ -257,7 +294,9 @@ class OllamaOffer:
     unavailable: str | None = None
 
 
-NOT_CHOSEN_LINE = "no load test: this machine is not part of this run's result"
+# "This computer", not "this machine": a second round for the active SSH computer may follow in the same step.
+NOT_BOUND_LINE = "no load test on this computer: it has no profile in this results folder"
+NOT_CHOSEN_LINE = "no load test on this computer: it is not part of this run's result"
 
 
 def chosen_here(run: "GuidedRun", config: Configuration, profile_id: str) -> bool:

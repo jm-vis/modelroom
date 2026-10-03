@@ -66,6 +66,7 @@
  shown     2 rows of 24 packages, one row per model
  memory    #1–2 fit into graphics memory, budget 11.0 GB (card minus reserve, from the profile)
  speed     #1 measured <speed>
+ local     #1 already in Ollama on this computer
  key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
            fits: up to 85 % · tight: up to 98 % · no fit: more
            the pool is what the mode names, minus its reserve (per card) · gpu: one card

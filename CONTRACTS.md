@@ -3309,8 +3309,13 @@ README)`; `2` with no protocol line `modelroom on <alias> is older than 0.2.0; u
 `255` whose stderr names an unknown or changed host key or a refused login, its own sentence
 (stderr classified by pattern, then dropped). These clear start faults keep their sentence for a
 pull too. Every other end of a pull without its final line -- with or without a `progress` line
-before it, since Ollama may have taken the pull on before its first line -- is `the pull on <alias>
-did not finish: the connection ended; Ollama keeps what arrived, the same pull resumes`. Outside a
+before it, since Ollama may have taken the pull on before its first line -- is `the connection to
+<alias> ended; Ollama there keeps what arrived, the same pull resumes`. That sentence is the *reason*
+the unchanged `_pull` of the guided mode puts behind its own `the pull of <name> did not finish: `, so
+the whole line on the screen says "did not finish" once: `the pull of qwen3.8:27b-mtp-q8_0 did not
+finish: the connection to gpu1 ended; Ollama there keeps what arrived, the same pull resumes`
+(AP9-FR-N2, d; the other reasons, `Ollama on <alias> answered with status <n>` and the start faults,
+carry no "did not finish" of their own and stay). Outside a
 pull, any other `255` is `<alias> could not be reached over SSH; try ssh <alias> yourself to see
 why`, anything else `the connection to <alias> ended before the answer`.
 
@@ -3319,7 +3324,7 @@ server" below; AP9-SV2-R: `vllm`, `vllm-measure`, "vLLM at a server over SSH" be
 
 | op | request | `result` |
 |---|---|---|
-| `hello` | `{}` | `{"version": "X.Y.Z"\|null, "system": "linux"\|"win32"\|"darwin", "ollama": "reachable"\|"unreachable", "agent_forwarded": bool, "os_fingerprint": "<salted>"\|"none", "vllm": "serving"\|"installed"\|"absent"\|"asks_key"}` -- `vllm` optional, `absent` where an older server sends none |
+| `hello` | `{}` | `{"version": "X.Y.Z"\|null, "system": "linux"\|"win32"\|"darwin", "ollama": "reachable"\|"unreachable", "agent_forwarded": bool, "os_fingerprint": "<salted>"\|"none", "vllm": "serving"\|"installed"\|"absent"\|"asks_key"}` -- `vllm` optional, `absent` where an older server sends none; `version` is the modelroom version of the server (`modelroom.__version__`, the one version source), read by no rule of the laptop: `protocol` alone decides whether the laptop goes on, so a server of another version with protocol 1 is used as any other (AP9-FR-N2, b) |
 | `profile` | `{"profile_id": "<16 hex>", "machine_class": null\|"laptop"\|"workstation"\|"server"}` | `{"export": <ExportObject v1>}`, `display_name` the placeholder `"remote"`, `measurements` empty, `Probes.hostname` never called |
 | `room` | `{"cards": [[index, name], ...]}` | `{"disk": {"known": bool, "free_bytes": int\|null, "unclear": bool}, "graphics_free_mib": [..]\|null, "model_disk": {"known": bool, "free_bytes": int\|null, "same_as_ollama": bool, "relative": bool}}` -- no drive, no path; `model_disk` (vLLM's place) optional, not there on an older server |
 | `daemon` | `{"method", "path", "body"}` | short calls: `{"status": int, "body": <JSON>\|null}`; `POST /api/pull` also emits `progress` lines and ends with `{"status": int, "done": bool}` |
@@ -3426,6 +3431,19 @@ is written, and `remote.json` names the fresh id, which the same alias converges
 When a stored profile picked directly turns out to be another machine, the table of *this* run
 still counts the old profile (a note says so): no pull and no measurement for `alias` in this run.
 
+**A fingerprint that is `none` (AP9-FR-N2, e; GF decision 2026-10-01).** The comparison needs a stored
+profile to compare with; without one nothing is asked and nothing is said. Where one is stored: both
+fingerprints a value, different -- the question above, as before; **exactly one of the two `none`**
+(the server had an identity and has none now, or the other way round) -- the same question, because a
+computer that just lost or gained its identity is not provably the same one; **both `none`** -- no
+question (there is nothing to tell them apart by), and once per run the note `<alias> gives no
+machine identity; modelroom cannot tell whether it is still the same machine`; both equal -- nothing.
+The fingerprint of a Linux server is its `/etc/machine-id`; a server without that file has none. A
+second identity for such a server is a package of its own. The binding of this computer
+(`binding.py`) is unchanged. A `new` after an import that failed is read as before: `remote.json`
+names an id with no profile in the folder, and the next run with the same alias takes a fresh id
+without asking (no history of earlier profiles is kept).
+
 **Every already-stored SSH profile is checked once before it is used actively** (room, pull,
 measurement) even when it was picked directly from the machine list, not just a freshly typed
 alias: the same `hello`/fingerprint comparison and the same question. Under `--answers` with no
@@ -3449,6 +3467,21 @@ on <alias> for #<rank>: needs <n> GB, <m> GB free`), the question `Pull #<rank> 
 (<size>)` (`pull_remote`, default No, optional) and the success line (`✓ Pulled <name> · <size> · on
 <alias>`). No row chosen, no pull over SSH -- the first row is never taken on its own.
 `where=<alias>`, bare; the "on"/"onto" wording is the screen's own, not part of the field.
+
+**What the active target already holds (AP9-FR-N2, a; GF decision 2026-10-01).** Step 5 asks the
+counterpart **once** which packages of the run Ollama there holds (`candidates`, the digest rule of
+"Load test on the server": identities only, no name of the server's own), in `guided_remote.active_room`
+before the `room` op, and puts the answer into the `held` of the target's `Disk` -- the one set the
+table's mark, the `disk` line and the list read, so a held package is never "too large" for that
+disk either (U11c, below). A failed call is no problem of its own: no `held`, no line, nothing more
+said -- the digest proof after the choice stays the binding check. Where a table is that of a computer
+whose Ollama was asked in this run (this computer with its daemon reached, or the active target), a
+line `local` stands behind its `speed` line when at least one shown row is held: `local     #1, #4
+already in Ollama on this computer`, `local     #8 already in Ollama on gpu1` (ranks as everywhere,
+`#2–5`; no column, no effect on rank or order). In `pull_other`'s list a row of the **active** target
+that it holds ends `  local already` like the rows of this computer's own list; the rows of another
+stored SSH profile, not connected in this run, do not (no daemon was asked, "One active SSH target
+per run").
 
 **What `remote.json`/a file never carries** (B6): `HostName`, address, user name, port, key path,
 jump host, ssh's own stderr, the server's own text (error, Ollama's), its paths and drive, its
@@ -4912,6 +4945,16 @@ with ` · ` and wrapped between pieces at what the label leaves of the 100 chara
    rows, so the card and this line count the same measurements; a measured package the fit sets
    aside (`no_fit`, `not covered`) is in no `RankedEntry` and in neither count (second-model round,
    2026-09-24 and 2026-09-25; ADR 0009, "Limits").
+   Since AP9-FR-N2 the rows whose measurement counts nowhere here are named whatever the reason --
+   `#8 measured, not valid`, `#2 measured, not comparable` -- by the card as well as by this line
+   (the card's `speed` row below follows this rule and no other).
+   `local` -- directly behind `speed`, only in a guided run, only under the table of a computer whose
+   Ollama was asked in that run (this computer with its daemon reached; the active target over SSH),
+   and only where at least one shown Ollama row is one that daemon provably holds: `local     #1, #4
+   already in Ollama on this computer`, `local     #8 already in Ollama on gpu1`. The ranks are
+   the rows' own, joined like every rank list (`#2–5`); the label is 5 columns, so it fits the
+   label width of 8. No line where nothing is held: the screens of such a run stay as they were.
+   It adds no column and changes no rank, order or mark.
 5. `key` -- only under a ranked table: the fit hint (`screen.FIT_HINT`, the same pieces as in the
    Markdown view), wrapped between its pieces, and `Speed is measured, see its column.` on a row of
    its own (decided 2026-09-27).
@@ -6436,7 +6479,7 @@ report a reader looks at once the run is over:
 | `models` | the base models of the snapshot, by name | `<p> packages from <up to three packager accounts, else "and n more">` |
 | `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32k (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
 | `load` | only beyond `OLLAMA_REQUEST_HINT` (8) requests: the hint of the Markdown head's `Load:` line, wrapped on rows of its own so no line is wider than 100 columns | -- |
-| `speed` | `not measured` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts but for its requests alone (`#3 measured with 1 request, ranking assumes 3`; by count, `6 rows measured with ...`, where the ranks would make the row wider than 100 columns), and only without such a row `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table |
+| `speed` | `not measured`, `none counted` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts nowhere here, each with its reason as the `speed` note under the table says it (`#3 measured with 1 request, ranking assumes 3`, `#8 measured, not valid`, `#2 measured, not comparable`, `#4 measured at context 32k, this ranking's is 8k`; two kinds joined by ` · ` where that fits 65 columns, else the first; by count, `6 rows measured with ...` or `2 rows measured, not counted here`, where the ranks would make the row wider than 100 columns), the value then `none counted`; only without such a row the value is `not measured` and the note `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table, which the card takes over and no other (AP9-FR-N2, c2) |
 | `server` | only for a registered server step 4 read a served model of (AP9-SV1): `vLLM` | whether its number counts for this run (AP9-UX E): `48.2 tok/s total, 20 requests at once, counts for this run`, `..., not counted` (another model or another context), `..., counts, no fit` (no package of this folder); `not measured in this run`; a measurement fault its reason (`invalid (<reason>)`, `not comparable (<reason>)`), cut at 65 columns. On a row of its own without a label `identity stated · fit: 32 at once, fits` (`no fit computed` without a fit, `no package of this folder` without a package). The same rows on the card of a run with nothing to rank (`views.show_nothing`) |
 | `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> no fit` (`0 no fit` where there is none), and every other set-aside reason with its count behind a `·` |
 
@@ -6491,9 +6534,11 @@ whose name is not unique (below). Since AP9-RM U11 a row whose download is
 larger than the free disk of this machine, as step 5 read it, stands in light red with what it needs
 in place of its name -- `#1  unsloth · Q6_K  94.1 GB  needs 94.1 GB plus 1 GB room, 26.4 GB free` -- and is locked
 too (an answer file that names it is exit 2; one without `pull_package` then pulls nothing). A
-package the daemon provably holds already needs no disk: it is never marked -- not in the table, the
-`disk` line, the install line, `docs/models.md` or this list -- and stays a `local already` row that
-can be chosen, with its note as before (U11c; `room.pull_need_bytes` is 0 for it). The
+package the daemon provably holds already needs no disk: it is never marked as too large -- not in
+the table, the `disk` line, the install line, `docs/models.md` or this list -- and stays a `local
+already` row that can be chosen, with its note as before (U11c; `room.pull_need_bytes` is 0 for it).
+It is marked as held, though: the table of that computer says so on its `local` line ("The screen",
+`local`), and so does the list of the active SSH target in `pull_other` (AP9-FR-N2, a). The
 pointer starts on the first row that can be chosen, on `none, do not pull` where none can; nothing
 is marked. After the choice the pull part names it, `install   #3  ollama
 pull <name>`, then checks the disk, then asks `Pull #3 into Ollama now? (5.0 GB)`; a local row is
@@ -6596,11 +6641,14 @@ takeover rule (`resolve_profile_target`, "Profile binding") says `bound` for it 
 in the folder and its `os_fingerprint` agrees with this machine's. Never into
 `[machines.<host>].profile`: a configuration is shared, and a stale or foreign entry there would give
 this machine's speed to another device. Without a binding, without that agreement, or without a
-snapshot to take packages from, the daemon says so in one line and offers nothing. **Nor where this
+snapshot to take packages from, the daemon says so in one line and offers nothing. Without a binding
+the line is `no load test on this computer: it has no profile in this results folder`; "this
+computer" because a second round for the active SSH target may follow in the same step, and the line
+is about the first (AP9-FR-N2, c1). **Nor where this
 machine is not part of the run's result** (Codex F2): where no machine this run chose names the
 profile this machine is bound to, its measurement would land in a profile the result does not show,
-so the step says `no load test: this machine is not part of this run's result` and offers no Ollama
-row. Otherwise its
+so the step says `no load test on this computer: it is not part of this run's result` and offers no
+Ollama row. Otherwise its
 inventory is read and matched against the active packages of **this run's models**
 (`selection.narrow_snapshot`, AP9-UX B). What was left out is named first, **one note per reason**
 with the number of installed models behind it and **no names** (`12 installed models -- <reason>`);
@@ -6615,13 +6663,25 @@ written as its own file and reported in one note: `measured <name>: 41.1 tok/s (
 32k`; a record that is not valid or not comparable carries **what it is missing** instead (`<name>:
 not comparable (<reason>)`) and the run still ends `0`.
 
+**A run that ends early (AP9-FR-N2, f; GF decision 2026-10-01, option A).** Where a stored record is
+`invalid` and its first invalid run did not end with `done_reason 'length'`, a second note follows the
+fault line, with the neutral name the fault line has (`record.ollama_name`) and only what was
+observed and the condition it breaks: `<name>: run 1 ended after 2 of 128 tokens (done_reason
+'stop'); protocol v1 counts a run only when it reaches 128 tokens (done_reason 'length')`. The
+numbers are `record.runs[i].eval_count`, its `done_reason` and `protocol.options.num_predict`, read
+from the record **after** the sink (so `done_reason` is a known word or `unknown`, `eval_count` an
+integer); no cause is named on the screen. It is display only: the stored reason and the record stay
+as protocol v1 forms them, a speed run of such a model counts nowhere, and a protocol that fits it is
+a new protocol version, not an edit of v1 ("Measurement protocol v1"). The same note stands for the
+measurement of the active SSH target (`guided_remote_measure`).
+
 The vLLM part (AP9-SV1, "Local servers and the vLLM load test"). The server runs on this machine, so
 it passes the daemon's own check, one function for both (`guided_loadtest.local_measure_target`,
 Codex r3 and r4): first the identity -- the profile this machine is bound to is in the folder and its
 `os_fingerprint` agrees with this machine's (the takeover rule's `bound`) -- then the choice -- a
 machine this run chose names that profile. Where either fails the step says the daemon's note with
 `vLLM: ` in front (`vLLM: no load test: profile from home binding has another os_fingerprint (<id>)`,
-`vLLM: no load test: this machine is not part of this run's result`) and offers no row -- nothing is
+`vLLM: no load test on this computer: it is not part of this run's result`) and offers no row -- nothing is
 measured, and neither the balance nor the card counts a number. Otherwise, where the start screen read a served
 model: `a vLLM server answers here, context 4096`, `it states it serves <id>`, `revision unknown (not
 stated)`, `one warm-up request, then three batches of 20 requests, 128 tokens each` (`1 request` for

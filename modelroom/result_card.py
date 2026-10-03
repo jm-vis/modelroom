@@ -17,7 +17,7 @@ from .document import MachineRanking, RankedEntry, RenderDocument
 from .guided_context import LEVELS
 from .intro import Fact, glyphs
 from .measurements import Scenario
-from .scenario_text import load_hint, never_measured, never_measured_of, scenario_words, unused_measurements
+from .scenario_text import load_hint, measurement_reason, never_measured, never_measured_of, scenario_words
 from .screen import NO_FIT, machine_fact, models_fact, result_fact, speed_fact
 
 _DASH = "–"
@@ -178,7 +178,8 @@ def result_card(
     facts += [Fact("" if index else "load", row, "") for index, row in enumerate(load_hint(document, 86))]
     # 65: what is left of 100 columns behind the screen's leading blank, the card's label and value
     # columns and the two gaps (`screen.plain`, `intro.fact_line`).
-    facts.append(speed_fact(measured, fastest, unused_measurements(block, glyphs().skip, 65) or never_measured(block)))
+    reason = measurement_reason(block, glyphs().skip, glyphs().dot, 65)  # the rule of the `speed` note under the table (c2)
+    facts.append(speed_fact(measured, fastest, reason or never_measured(block), from_measurement=reason is not None))
     facts += extra
     facts.append(
         result_fact(

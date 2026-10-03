@@ -2286,7 +2286,7 @@ def test_a_configuration_that_names_a_profile_is_not_proof_that_it_is_this_machi
 
     assert code == 0
     assert _measurement_files(tmp_path) == first
-    assert any("not bound to a profile" in line for line in lines)
+    assert any("it has no profile in this results folder" in line for line in lines)
 
 
 def test_a_bound_profile_the_folder_no_longer_holds_measures_nothing(tmp_path: Path):
@@ -2904,7 +2904,7 @@ def test_a_machine_entered_by_hand_leaves_a_card_without_an_install_line_and_no_
 
     assert code == 0
     stripped = [line.strip() for line in lines]
-    assert any(line.startswith("no load test: ") for line in stripped)
+    assert any(line.startswith("no load test on this computer: it has no profile in this results folder") for line in stripped)
     assert all(" on workstation-00000000 " in line for line in stripped if line.startswith(("install ", "? Pull")))  # U3
     card = next(line for line in stripped if line.startswith("machine") and "workstation-00000000" in line)
     assert card.endswith("graphics card 24 GB, 64 GB memory, entered")
@@ -3175,7 +3175,7 @@ def test_step_four_measures_this_machine_only_where_the_run_chose_it(tmp_path: P
 
     assert code == 0
     assert "load_test" not in asker.asked
-    assert "no load test: this machine is not part of this run's result" in [line.strip() for line in lines]
+    assert "no load test on this computer: it is not part of this run's result" in [line.strip() for line in lines]
     assert not (_results(tmp_path) / "state" / "measurements").exists()
     payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
     assert [block["profile"]["profile_id"] for block in payload["machines"]] == [FOUR_L4_ID]

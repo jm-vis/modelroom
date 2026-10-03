@@ -33,8 +33,10 @@ from .guided_remote_bind import (
     _fresh_id,
     _identity_changed,
     _resolve_profile_id,
+    note_no_identity,
 )
 from .importer import ProfileScan
+from .remote_client import candidates as ssh_candidates
 from .remote_client import hello as ssh_hello
 from .remote_client import profile as ssh_profile
 from .remote_client import room as ssh_room
@@ -106,7 +108,9 @@ def ssh_step(run: "GuidedRun", config_file: Path, config: Configuration, scan: P
         return config, set(), None
     remember_hello(run, alias, info)  # its vLLM, live in this run (AP9-SV2-R, R3 step 1)
     profile_id = _resolve_profile_id(run, scan, alias)
-    if _identity_changed(scan.profiles.get(profile_id), info["os_fingerprint"]) and _ask_clone(run, alias) == "new":
+    known = scan.profiles.get(profile_id)
+    note_no_identity(run, known, alias, info["os_fingerprint"])
+    if _identity_changed(known, info["os_fingerprint"]) and _ask_clone(run, alias) == "new":
         profile_id = _fresh_id(run, scan)
     machine_class = _ask_class(run, alias)
     try:
@@ -156,6 +160,7 @@ def verify_active(run: "GuidedRun", config: Configuration, config_file: Path, sc
         return False
     remember_hello(run, alias, info)  # its vLLM, live in this run (AP9-SV2-R, R3 step 1)
     known = scan.profiles.get(profile_id)
+    note_no_identity(run, known, alias, info["os_fingerprint"])
     if not _identity_changed(known, info["os_fingerprint"]):
         return True
     if _ask_clone(run, alias) == "same":
@@ -192,19 +197,38 @@ def resolve_active(
 # --- B5: the room and the pull of the active SSH machine, in step 5 --------------------------------
 
 
-def active_room(run: "GuidedRun", document: "RenderDocument") -> dict:
+def active_room(run: "GuidedRun", document: "RenderDocument", packages: Sequence = ()) -> dict:
     """`{run.ssh_active: LiveRoom}`, or `{}` without an active target or a table for it here --
-    `guided.py`'s one call into this module for step 5's `live` mapping (U10, B5)."""
+    `guided.py`'s one call into this module for step 5's `live` mapping (U10, B5). `packages` are the
+    run's: the one `candidates` call before the `room` read says which of them Ollama there holds."""
     if run.ssh_active is None or not any(block.machine == run.ssh_active for block in document.machines):
         return {}
-    return {run.ssh_active: read_room(run, run.ssh_active, document)}
+    held = active_held(run, run.ssh_active, packages)
+    return {run.ssh_active: read_room(run, run.ssh_active, document, held)}
 
 
-def read_room(run: "GuidedRun", alias: str, document: "RenderDocument") -> LiveRoom | None:
+def active_held(run: "GuidedRun", alias: str, packages: Sequence) -> frozenset[tuple[str, str, str]]:
+    """The identities of `packages` that Ollama at `alias` provably holds (AP9-FR-N2, a): one `candidates`
+    call, the digest rule at the server, identities only -- no name of the server's own ever travels.
+    A call that fails, or no package to ask about, is the empty set and no line of its own: the digest
+    proof after the choice of a row stays the binding check (`pull_remote_row`)."""
+    if not packages:
+        return frozenset()
+    try:
+        result = ssh_candidates(alias, list(packages), run.ssh)
+    except SshError:
+        return frozenset()
+    return frozenset(tuple(entry["package_identity"]) for entry in result["candidates"])
+
+
+def read_room(
+    run: "GuidedRun", alias: str, document: "RenderDocument", held: frozenset[tuple[str, str, str]] = frozenset()
+) -> LiveRoom | None:
     """The room of the active target, read once for step 5 (B5): the disk (named `alias`, never a
     path) and the free graphics memory of its own cards. `disk.drive` always carries the alias
     (never a real drive letter or path), so `room_head._ssh_disk_piece` can name it in every case,
-    known, unclear, or the connection failed outright."""
+    known, unclear, or the connection failed outright. `held` is what `active_held` found: it goes
+    into the disk, where the mark of the table and the list already read it (U11c)."""
     profile = next((block.profile for block in document.machines if block.machine == alias), None)
     try:
         result = ssh_room(alias, _profile_cards(profile) if profile is not None else [], run.ssh)
@@ -213,7 +237,7 @@ def read_room(run: "GuidedRun", alias: str, document: "RenderDocument") -> LiveR
         return LiveRoom(disk=Disk(None, alias, f"{alias} not reached"))
     disk_info = result["disk"]
     reason = _UNCLEAR if disk_info["unclear"] else None
-    disk = with_model_disk(run, alias, Disk(disk_info["free_bytes"], alias, reason), result.get("model_disk"))  # vLLM's place (R3 step 5)
+    disk = with_model_disk(run, alias, Disk(disk_info["free_bytes"], alias, reason, held=held), result.get("model_disk"))  # vLLM's place (R3 step 5)
     graphics = result.get("graphics_free_mib")
     return LiveRoom(disk=disk, graphics_free_mib=tuple(graphics) if graphics else None)
 

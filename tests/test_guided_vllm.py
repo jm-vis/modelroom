@@ -372,7 +372,7 @@ def test_without_a_bound_profile_the_server_is_not_offered(tmp_path: Path):
     _code, lines = _run(tmp_path, bound=False)
 
     step = _step(lines, 4)
-    assert "vLLM: no load test: this machine is not bound to a profile in this results folder" in step
+    assert "vLLM: no load test on this computer: it has no profile in this results folder" in step
     assert not any(line.startswith(("vLLM fit, computed", "measured vLLM")) for line in step)
     assert not any("server    vLLM" in line for line in _card(lines))
 
@@ -802,7 +802,7 @@ def test_the_vllm_server_is_measured_only_where_the_run_chose_this_machine(tmp_p
     expected = (
         f"vLLM: no load test: profile from home binding has another os_fingerprint ({L4_PROFILE})"
         if case == "another fingerprint"
-        else "vLLM: no load test: this machine is not part of this run's result"
+        else "vLLM: no load test on this computer: it is not part of this run's result"
     )
     assert expected in step
     assert not any(line.startswith(("? Measure the speed", "measured vLLM")) for line in step)

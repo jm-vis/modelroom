@@ -23,6 +23,7 @@ from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noq
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
 from .disk_fit import DISK_LABEL, disk_words, entry_over_disk
+from .held_text import LOCAL_LABEL, local_pieces
 from .pull_choice import collision_pieces, repo_lines
 from .ranking_words import EACH_MACHINE_SENTENCE, several_ranked, showing_line, shown_pieces
 from .render import format_header_line
@@ -563,6 +564,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += [] if vllm else _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
+    lines += _labeled_rows(LOCAL_LABEL, local_pieces(block, _disk(block, view), "this computer" if block.machine == view.install_for else block.machine, dash))
     if block.ranked or vllm_shown(block):  # a vLLM row set aside owes its key too (Codex r3-1)
         speed = [SPEED_HINT] if block.ranked else []
         lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + speed)

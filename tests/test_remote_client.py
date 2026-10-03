@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import modelroom
 from fixture_ssh import FakeSsh, FaultSsh
 from modelroom.daemon import DaemonError, FixtureDaemon
 from modelroom.http import Response
@@ -41,7 +42,7 @@ def _context(**kw) -> ServerContext:
 def test_hello_reads_version_system_ollama():
     runner = FakeSsh(context=_context())
     result = hello("gpu1", runner)
-    assert result["version"] == "0.2.0"
+    assert result["version"] == modelroom.__version__
     assert result["ollama"] == "reachable"
 
 

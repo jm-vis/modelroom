@@ -53,6 +53,7 @@ QUESTIONS: dict[str, str] = {
 _FRESH_ATTEMPTS = 8
 _ATTEMPTS_ERROR = "no unused profile_id after 8 attempts; the id source repeats itself"
 _ID_MISMATCH = "{alias} answered in a form this modelroom does not read"
+_NO_IDENTITY = "{alias} gives no machine identity; modelroom cannot tell whether it is still the same machine"
 
 
 def _form_error(alias: str) -> str:
@@ -109,11 +110,18 @@ def _resolve_profile_id(run: "GuidedRun", scan: ProfileScan, alias: str) -> str:
 
 
 def _identity_changed(known: HardwareProfile | None, live_fingerprint: str) -> bool:
-    """B4: a stored profile's own fingerprint differs from the one `hello` reads now -- `none` on
-    either side never counts as a difference (there is nothing to compare)."""
-    if known is None or known.os_fingerprint == "none" or live_fingerprint == "none":
-        return False
-    return known.os_fingerprint != live_fingerprint
+    """B4: a stored profile's own fingerprint differs from the one `hello` reads now. Without a stored
+    profile there is nothing to compare. A fingerprint that is `none` on exactly one side is a difference
+    (a server that lost or gained its identity is not provably the same machine); on both sides it is
+    none -- `note_no_identity` says so, nothing is asked (AP9-FR-N2, e)."""
+    return known is not None and known.os_fingerprint != live_fingerprint
+
+
+def note_no_identity(run: "GuidedRun", known: HardwareProfile | None, alias: str, live_fingerprint: str) -> None:
+    """Both fingerprints `none`: modelroom cannot tell whether `alias` is still the same machine, and
+    says so once for this run -- nothing is asked and the run goes on (AP9-FR-N2, e)."""
+    if known is not None and known.os_fingerprint == "none" and live_fingerprint == "none":
+        run.screen.note(_NO_IDENTITY.format(alias=alias))
 
 
 def _bind_and_import(run: "GuidedRun", config_file: Path, config: Configuration, alias: str, profile_id: str, result: dict):

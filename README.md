@@ -196,7 +196,9 @@ here. Beyond that, there are three ways to reach another computer directly:
    safe set of options: never asks for a password, never accepts a host key it does not already
    know. Behind a jump host these two hold only for the target itself; the jump host answers with
    its own connection, under its own `Host` block (below), and needs `BatchMode yes` and
-   `StrictHostKeyChecking yes` there too for the same guarantee.
+   `StrictHostKeyChecking yes` there too for the same guarantee. A server is told apart by its
+   machine identity, on Linux the `/etc/machine-id`; where a server gives none, modelroom cannot tell
+   whether it is still the same machine, says so once, and asks nothing -- unless it had one before.
 
 **Setting SSH up, once**, on Windows, macOS or Linux:
 
@@ -339,7 +341,9 @@ downloads anything. **No** skips new measurements; a measurement stored earlier 
 content at the same context stays in the ranking, and a row without one shows `–` for speed. A
 measurement always runs one request; when the ranking assumes more, the step says so first, and a
 measured row then names why its speed does not count there. The balance says `vLLM measured` only
-where the number counts, else `vLLM ran, not counted`.
+where the number counts, else `vLLM ran, not counted`. A run that ends before the 128 tokens of the
+protocol is invalid, and a second line says how far it got (`run 1 ended after 2 of 128 tokens`) and what
+the protocol counts; such a package stays without a speed.
 
 ### Step 5, Results
 
@@ -355,7 +359,8 @@ model, package (packager and quantization), fit, measured speed, memory need. Th
 table say what is **shown** (ten of 45, one no fit), which rows fit into graphics **memory** and
 which need system memory, which rows have their fit computed from the package size as its
 **basis** rather than from the architecture (the line appears only when there are such rows) and
-what was measured for **speed**; the **key** says what the fit words mean. The **install** line is the command for the first row, ready to
+what was measured for **speed**, and, where that computer's Ollama was asked (this computer, or the
+computer over SSH), a **local** line with the rows it already has; the **key** says what the fit words mean. The **install** line is the command for the first row, ready to
 paste. Under the head of the table a **room** line says the budget the fit computes with and how
 much disk is free right now where Ollama keeps its models (with its drive; `unknown` where it cannot
 be read), and the **Download** column is what a pull of that row brings; the **memory** line names
@@ -373,7 +378,8 @@ at the line to paste; step 4 of the next run measures it. Too little disk says s
 A row the daemon already has gets a note instead of the question. Rows that look alike name their
 repository under the table. A machine that is not this computer -- imported, entered by hand, or
 another profile of the folder -- says so on the card and in its table head, and gets its command to
-copy there, or, over SSH, the pull there. Where that other machine's table has a package of its
+copy there, or, over SSH, the pull there (a row the SSH computer already has ends `local already`
+in the list below). Where that other machine's table has a package of its
 own, step 5 also asks **Which package should go onto another computer?** afterwards -- even for a
 run that only ever imported that other machine and never measured or ranked this computer at all --
 with the rows of every other chosen machine under its own heading; choosing one hands over

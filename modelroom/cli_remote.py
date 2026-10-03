@@ -15,8 +15,6 @@ from typing import BinaryIO
 
 from .remote_server import OPS, ServerContext, input_limit, main as server_main
 
-MIN_VERSION_TEXT = "modelroom remote needs modelroom 0.2.0 or newer on this computer"
-
 
 def run_remote(op: str, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None) -> int:
     """Read stdin (bounded), dispatch `op`, write every line as it is produced; the exit code is

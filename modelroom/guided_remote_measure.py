@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from .config import Configuration
 from .contracts import Package
 from .dialog import AnswerMissingError, Choice, columns
-from .guided_loadtest import NOTHING_MEASURED, _CANDIDATE_WIDTHS, _GIB, _UNKNOWN, _measurement_note, _record_problem
+from .guided_loadtest import NOTHING_MEASURED, _CANDIDATE_WIDTHS, _GIB, _UNKNOWN, _measurement_note, report_problem
 from .guided_remote_vllm import ROW as VLLM_ROW
 from .guided_remote_vllm import measure as measure_vllm
 from .guided_remote_vllm import row_words, vllm_offer, vllm_row
@@ -170,9 +170,7 @@ def _store_checked(run: "GuidedRun", config: Configuration, offer: RemoteOffer, 
     except (LockHeldError, MeasurementExistsError, OSError, NeutralError) as exc:
         run.failed(f"the measurement of {shown_name} was not stored: {exc}")
         return False
-    problem = _record_problem(record)
-    if problem is not None:
-        run.screen.note(f"{record.ollama_name}: {problem}")
+    if report_problem(run, record):
         return True
     run.screen.note(_measurement_note(record, run.screen.glyphs.skip))
     return True

@@ -27,10 +27,10 @@ from .dialog import AnswerMissingError, Choice
 from .document import RenderDocument
 from .install_vllm import install_block_lines, vllm_install
 from .intro import label_line
-from .pull_choice import NONE_VALUE, PullRow, has_named_row, package_of, pull_rows, weights_bytes_of
+from .pull_choice import LOCAL_ALREADY, NONE_VALUE, PullRow, has_named_row, package_of, pull_rows, weights_bytes_of
 from .disk_fit import vllm_only
 from .room import Disk
-from .runtimes import VLLM
+from .runtimes import OLLAMA, VLLM
 from .views_install import INSTALL_LABEL
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -49,6 +49,8 @@ class OtherRow:
 
     machine: str
     row: PullRow
+    # The active computer's own Ollama provably holds this row's package (AP9-FR-N2, a): `local already`.
+    local: bool = False
 
     @property
     def value(self) -> str:
@@ -69,8 +71,13 @@ def other_rows(
     rows: list[OtherRow] = []
     for block in document.machines:
         if block.machine != machine:
-            disk = vllm_only((disks or {}).get(block.machine))  # over SSH only the vLLM rows read a disk (R1-1)
-            rows += [OtherRow(block.machine, row) for row in pull_rows(document, block.machine, ambiguous, dot, disk, packages)]
+            read = (disks or {}).get(block.machine)
+            held = read.held if read is not None else frozenset()  # what Ollama there holds: `local already` (AP9-FR-N2, a)
+            disk = vllm_only(read)  # over SSH only the vLLM rows read a disk (R1-1)
+            rows += [
+                OtherRow(block.machine, row, row.runtime == OLLAMA.key and row.locked is None and row.identity in held)
+                for row in pull_rows(document, block.machine, ambiguous, dot, disk, packages)
+            ]
     return rows
 
 
@@ -98,10 +105,11 @@ def pull_other_choices(rows: Sequence[OtherRow]) -> list[Choice]:
 
 def _row_words(entry: OtherRow) -> str:
     """`#1  unsloth · Q4_K_S  5.0 GB  hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_S`, as U6's own list writes
-    a row (`guided_install._row_words`), without the "local already" mark: no daemon of that
-    machine was asked here."""
+    a row (`guided_install._row_words`); the "local already" mark only where a daemon of that machine
+    was asked in this run -- the active computer's (`OtherRow.local`), never a computer that was not."""
     row = entry.row
-    return f"#{row.rank}  {row.cell}  {row.weights_gib:.1f} GB  {row.locked if row.over_disk else row.name or ''}".rstrip()
+    words = f"#{row.rank}  {row.cell}  {row.weights_gib:.1f} GB  {row.locked if row.over_disk else row.name or ''}".rstrip()
+    return f"{words}  {LOCAL_ALREADY}" if entry.local else words
 
 
 def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
