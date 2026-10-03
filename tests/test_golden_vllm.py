@@ -278,7 +278,7 @@ def test_an_unequal_cards_machine_describes_the_group_not_a_packages_own_usage()
         )
 
     # Rule (b) (SV2-D): 17 GB of weights hold 2 of 4 requests on one card (`tight`) and 20 on two
-    # (`fits`), so the smallest `t` that fits is 2 -- a smaller package would take one card.
+    # (`ample`: at least twice the 4), so the smallest `t` that fits is 2 -- a smaller package would take one card.
     base_t2 = _base("acme/Eight-7B", 8)  # group of 3 -> t = 2 (8 heads divide 2, and one card is too few)
     base_t1 = _base("acme/NoHeads-7B", None)  # no head count -> t = 1
     packages = [_pkg("acme/Eight-7B-AWQ", base_t2.hf_repo, 17_000_000_000), _pkg("acme/NoHeads-7B-AWQ", base_t1.hf_repo, 17_000_000_000)]
