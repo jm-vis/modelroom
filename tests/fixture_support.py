@@ -16,6 +16,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from modelroom.catalog_remote import DATASET
 from modelroom.config import Configuration
 from modelroom.http import Response
 from modelroom.profile import PROFILE_SCHEMA_VERSION, CrossCheck, GpuAdapter, HardwareProfile, LlmfitCrosscheck
@@ -493,8 +494,17 @@ def no_tensor_hits_mapping() -> dict[tuple[str, str], Response]:
 
 
 def guided_transport_mapping() -> dict[tuple[str, str], Response]:
-    """Every request one whole guided run makes: the search, its age lookups and the fetch."""
+    """Every request one whole guided run makes: the catalog's revision, the search, its age lookups and the fetch.
+
+    The published catalog is asked for first (AP9-KA-L): the dataset does not exist yet, so the
+    recorded answer is the `404` a run meets today, and the run falls back to the shipped catalog
+    with one request booked. A run that must not ask at all sets `MODELROOM_CATALOG=shipped`, as the
+    suite's conftest does.
+    """
     return {
+        ("GET", f"https://huggingface.co/api/datasets/{DATASET}/revision/main"): Response(
+            status=404, headers={"Content-Type": "application/json"}, body=b'{"error":"Repository not found"}'
+        ),
         **search_transport_mapping(),
         **qwen35_transport_mapping(),
         **deepseek_transport_mapping(),
