@@ -63,6 +63,10 @@ class Fit(BaseModel):
     # tensor-parallel size `t`). Ollama never splits a package this way, so its rows keep the
     # default of one card.
     cards: int = Field(default=1, ge=1, exclude_if=lambda value: value == 1)
+    # vLLM only: a tensor-parallel size larger than `cards` is allowed for this model on this machine
+    # (`fit_vllm.allowed_sizes`: a size of 1, 2, 4, 8 within the equal cards that divides the head
+    # count). `False` for Ollama, for an unknown head count and where `cards` already is the largest.
+    larger_size: bool = Field(default=False, exclude_if=lambda value: value is False)
 
     @field_validator("runtime")
     @classmethod

@@ -344,6 +344,7 @@ def test_a_card_too_small_is_no_fit():
     fit = vllm_fit_as_fit(profile, huge, _base_model(_architecture(32)), _SCENARIO_10, _MACHINE)
 
     assert fit.fit_class == "no_fit"
+    assert fit.at_once == 0  # D1-2: the budget is negative, `at_once` is bounded at 0, not below it
 
 
 def test_an_incomplete_tensor_package_is_unknown():

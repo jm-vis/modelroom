@@ -306,8 +306,15 @@ def _vllm_formula(group: CardGroup, package: Package, base_model: BaseModelSpec,
     for cards in sizes:
         fit = _vllm_fit_at(group, cards, None, package, base_model, scenario)
         if fit.fit_class in _FITTING_CLASSES:
-            return fit
-    return _vllm_fit_at(group, sizes[-1], None, package, base_model, scenario)
+            return _with_larger_size(fit, sizes)
+    return _with_larger_size(_vllm_fit_at(group, sizes[-1], None, package, base_model, scenario), sizes)
+
+
+def _with_larger_size(fit: Fit, sizes: tuple[int, ...]) -> Fit:
+    """`fit` with `larger_size` set where `sizes` (`allowed_sizes`) holds a `t` above `fit.cards` (D1-3)."""
+    if sizes[-1] > fit.cards:
+        return fit.model_copy(update={"larger_size": True})
+    return fit
 
 
 def _vllm_fit_at(

@@ -284,7 +284,8 @@ def test_the_start_screen_names_the_served_model_and_the_card_its_speed(tmp_path
     assert f"server    vLLM                    context 4096, serves (stated) {QWEN25_REPO}" in [line.strip() for line in lines]
     card = _card(lines)
     assert " server    vLLM                    <n> tok/s total, 20 requests at once, counts for this run" in card
-    # AP9-SV2-F: tensor parallel over the two equal cards (`t = 2`, see the step-4 assertion above).
+    # AP9-SV2-F, rule (b): the smallest `t` at which the package fits is one card (20 requests of 4k
+    # fit it), so the other card stays free; one card holds 32 at once (see the step-4 assertion above).
     assert "                                   identity stated · fit: 32 at once, fits" in card
     labels = [line.split()[0] for line in card if line[1:2].strip() and not line.startswith(" ──")]
     assert labels[labels.index("speed") : labels.index("result") + 1] == ["speed", "server", "result"]
@@ -360,7 +361,8 @@ def test_an_answer_file_without_the_load_test_answer_measures_nothing(tmp_path: 
     assert [call[1] for call in servers["vllm"].calls] == [MODELS_PATH]
     card = _card(lines)
     assert " server    vLLM                    not measured in this run" in card
-    # AP9-SV2-F: tensor parallel over the two equal cards (`t = 2`).
+    # AP9-SV2-F, rule (b): the smallest `t` at which the package fits is one card (20 requests of 4k
+    # fit it), so the other card stays free; one card holds 32 at once.
     assert "                                   identity stated · fit: 32 at once, fits" in card
 
 
@@ -722,9 +724,10 @@ def test_one_request_is_singular(tmp_path: Path):
 @pytest.mark.parametrize(
     "case, said, identity",
     [
-        # AP9-SV2-F: tensor parallel over the two equal cards of this profile (`t = 2`); "other
-        # context" (8192) still reads 16 -- its old single-card number, by coincidence of the
-        # halved context against the doubled card count, not because nothing changed.
+        # AP9-SV2-F, rule (b): at 4k the smallest `t` that fits is one card (20 requests fit it), which
+        # holds 32 at once. "other context" (8192): neither one card nor two hold the 20, so the
+        # largest allowed `t` (2) is shown, and its 16 is by coincidence the number of the one card
+        # at half the tokens -- the size basis does not halve the per-token cost with the cards.
         ("counts", "counts for this run", "identity stated · fit: 32 at once, fits"),
         ("other context", "not counted", "identity stated · fit: 16 at once, tight"),
         ("no package", "counts, no fit", "identity stated · no package of this folder"),

@@ -2,7 +2,9 @@
 
 - **Status:** accepted, decided 2026-09-29 (GF, AP9-SV2 build brief, the "bound prior decisions"
   and "questions for the GF" sections); brought to the state after AP9-SV2-R on 2026-10-03, with the
-  rule for the number of cards replaced by the GF the same day (decision 6)
+  rule for the number of cards replaced by the GF the same day (decision 6). Brought to its final state on
+  2026-10-03 by the build brief's own instruction (AP9-SV2-D, D4), the one exception to the index rule that an
+  ADR is immutable; later changes get a new ADR
 - **Supersedes:** nothing. Extends ADR 0008 (`local_servers.LOCAL_SERVERS`, AP9-SV1) and the
   precedent of ADR 0006/ADR 0010/ADR 0011 (a schema step versus an additive extension without
   one).

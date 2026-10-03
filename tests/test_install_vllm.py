@@ -200,10 +200,10 @@ def test_a_subset_of_equal_cards_is_bound():
 HINT = "larger --tensor-parallel-size spreads the load over more cards, if the server is yours alone"
 
 
-def _block_text(profile, package, scenario: Scenario | None = None) -> str:
+def _block_text(profile, package, scenario: Scenario | None = None, heads: int | None = 32) -> str:
     from modelroom.install_vllm import install_block_lines, vllm_install
 
-    fit = _fit(profile, package, 32, scenario)
+    fit = _fit(profile, package, heads, scenario)
     lines = install_block_lines("install", 1, vllm_install(package, fit, profile), repo=package.repo)
     return "\n".join(plain(line) for line in lines)
 
@@ -220,6 +220,15 @@ def test_the_hint_under_the_commands_only_where_more_equal_cards_exist_than_t():
 
     assert HINT not in _block_text(_four(), _package())  # t = 4 of 4
     assert HINT not in _block_text(_cards([22.49, 22.49]), _package(), _scenario(requests=7))  # t = 2 of 2
+
+
+def test_the_hint_needs_a_larger_size_the_model_allows():
+    """D1-3 (Codex d1): four cards and 14 attention heads allow `t = 1, 2` only, so `t = 2` has no larger
+    size to point to; an unknown head count computes on one card and names no size at all. Neither says it."""
+    four = _four()
+    assert HINT not in _block_text(four, _package(), heads=14)  # t = 2 (best try), 4 does not divide 14
+    assert HINT not in _block_text(four, _package(), heads=None)  # t = 1 for want of a head count
+    assert HINT in _block_text(four, _package(), _scenario(requests=3), heads=14)  # t = 1: 2 is allowed
 
 
 def test_an_inherited_mask_is_overridden_by_the_prefix(tmp_path: Path):

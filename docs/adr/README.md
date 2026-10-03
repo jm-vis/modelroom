@@ -4,7 +4,7 @@ typ: moc
 
 # Architecture decision records
 
-One line per decision; an ADR is immutable, a changed situation gets a new one that supersedes it.
+One line per decision; an ADR is immutable, a changed situation gets a new one that supersedes it, except where a build brief orders the final state of a still-open series, dated in the ADR.
 
 | ADR | Decision | Status |
 |---|---|---|
@@ -21,4 +21,4 @@ One line per decision; an ADR is immutable, a changed situation gets a new one t
 | [0011](0011-graphics-adapters-llmfit-fallback.md) | Graphics adapters of every vendor, llmfit as fallback, schema 4 extended without a step | accepted, 2026-09-28 |
 | [0012](0012-memory-reserve-and-table-head.md) | The memory reserve after the machine's size, the table head names the budget | accepted, 2026-09-29 |
 | [0013](0013-another-computer-three-ways-neutral-names.md) | Another computer: three ways in (copy the command, a shared folder, over SSH), a neutral name at every machine boundary | accepted, 2026-09-29 |
-| [0014](0014-runtime-entries-and-vllm-packages.md) | A local-server runtime is one table entry, never a plug-in; snapshot schema steps to 2 for vLLM's tensor packages and the new `QUANT_ORDER` labels; `HardwareProfile.runtimes` extended without a step; the smallest tensor-parallel size that fits (2026-10-03) | accepted, 2026-09-29; final state after SV2-R 2026-10-03 |
+| [0014](0014-runtime-entries-and-vllm-packages.md) | A local-server runtime is one table entry, never a plug-in; snapshot schema steps to 2 for vLLM's tensor packages and the new `QUANT_ORDER` labels; `HardwareProfile.runtimes` extended without a step; the smallest tensor-parallel size that fits (2026-10-03) | accepted, 2026-09-29; brought to its final state on 2026-10-03 by the build brief's own instruction (AP9-SV2-D, D4), the one exception to the index rule; later changes get a new ADR |

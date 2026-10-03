@@ -61,7 +61,7 @@ class VllmInstall:
 
     `docker` is `None` with `docker_note` where only the Docker line is left out (a relative cache
     variable); with `serve` also `None`, `reason` is the lock (`no safe command`, `computed only: ...`).
-    `larger`: the equal cards of the machine are more than `--tensor-parallel-size` names (rule (b)
+    `larger`: the model allows a `--tensor-parallel-size` above the one named (`Fit.larger_size`; rule (b)
     takes the smallest `t` that fits), so a note says a larger value spreads the load further.
     """
 
@@ -109,7 +109,7 @@ def vllm_install(
         return refused
     if any(card.vram_source != _NVIDIA_SMI for card in cards):
         return VllmInstall(None, reason=COMPUTED_ONLY)
-    larger = len(equal_size_group(profile).cards) > fit.cards
+    larger = fit.larger_size  # a larger `t` the model allows (`fit_vllm.allowed_sizes`), not just more cards
     numbers = ",".join(str(card.index) for card in cards)
     common = (
         f"{package.repo} --revision {package.revision} --max-model-len {fit.context} "

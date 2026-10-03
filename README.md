@@ -498,8 +498,8 @@ mkdir -p "${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface
 ```
 
 Every value in them is checked first (`no safe command` otherwise), and the cards are bound by
-number, always, so a mask your shell already holds cannot shrink the line. If the machine has more
-equal cards than `--tensor-parallel-size` names, a line under the commands says `larger
+number, always, so a mask your shell already holds cannot shrink the line. If the model allows a
+larger `--tensor-parallel-size` than the one named on the machine's equal cards, a line under the commands says `larger
 --tensor-parallel-size spreads the load over more cards, if the server is yours alone`. Cards whose
 memory `nvidia-smi` did not read give no line, only `computed only`.
 

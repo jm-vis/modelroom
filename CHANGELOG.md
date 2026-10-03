@@ -349,8 +349,9 @@ All notable changes to this project are documented in this file. The format foll
   `modelroom/fit_vllm.py`, `modelroom/install_vllm.py`; CONTRACTS.md, "Fit for vLLM"). `--tensor-parallel-size` was the
   largest of 1, 2, 4, 8 that the equal cards and the head count allow; it is now the smallest of them at which the
   package fits (`fits` or `ample` over the first `t` cards), and the largest allowed one where it fits at none, so
-  answers come faster and the other cards stay free. The pool in the table head is unchanged. Where the machine has
-  more equal cards than `t`, a line under the two commands says that a larger `--tensor-parallel-size` spreads the
+  answers come faster and the other cards stay free. The pool in the table head is unchanged. Where the model allows
+  a larger size than `t` on the machine's equal cards (`Fit.larger_size`; not where the head count is unknown or
+  divides to no larger size), a line under the two commands says that a larger `--tensor-parallel-size` spreads the
   load over more cards, if the server is yours alone.
 - **Machine keys and names of a folder of 0.1.0 change once** (FR-N): the first command that writes
   to it renames `[machines.<host name>]` and every other hand-written key to a neutral one, and a
