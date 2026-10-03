@@ -3541,8 +3541,8 @@ and for a repository named twice (one repo at two revisions: the server states n
 computer shows only names it builds from its own package. `missing_bytes` holds one entry per package, in the request's
 order: what `hf_cache.missing_bytes(ref, cache)` says -- the **one** function both ends read, so the rules of I3 stay
 in one place (`hf_cache._inspect`). It is `0` **only** where every start file is there with its declared size, the sum
-of the missing ones otherwise, and `null` where nobody can say -- an unsafe name, a link that leaves the repo's folder,
-an unreadable cache, or a missing start file that declares size 0 (which would otherwise add nothing to the sum). It
+of the missing ones otherwise, and `null` where nobody can say -- an unsafe name, a link that leaves the repo's folder
+and the cache's blob store, an unreadable cache, or a missing start file that declares size 0 (which would otherwise add nothing to the sum). It
 is a number or `null`, never a file name or a path. The laptop checks the list against what it sent
 (`remote_vllm._checked_state`): as many entries as packages, each `null` or between `0` and the sum of that package's
 start files, `served` only where `state` is `serving`, an index only of a package sent -- else the form fault
@@ -5642,9 +5642,12 @@ and is as before for a machine without vLLM. A package is **on disk** when every
 a digest or a read). Missing start files make it not on disk and the rule counts the bytes still missing;
 a missing start file declaring size 0 (or a present one of another size) leaves `missing_bytes` `None` and
 the rule counts the whole download. Unsafe names (`SAFE_REPO_PATH_RE`), repo or revision are `None`
-**before any file is touched**; a path whose real location lies outside `models--<owner>--<name>` (a link
-to another repo, `/etc`, a drive, a share) is `None`, as is an unreadable cache. The legitimate
-`snapshots/<sha>/<file>` -> `../../blobs/<hash>` links count. **The repo folder itself is anchored**
+**before any file is touched**; a path whose real location lies outside `models--<owner>--<name>` **and**
+outside the cache's own blob store `<cache>/blobs/` (a link to another repo, `/etc`, a drive, a share) is
+`None`, as is an unreadable cache. The legitimate `snapshots/<sha>/<file>` -> `../../blobs/<hash>` links
+count, and so does the layout of huggingface_hub 1.x (Xet), where that link leads on to
+`<cache>/blobs/<xx>/<sha256>`, one store shared by every repo of the cache (seen at a rented server,
+2026-10-03: without it every fetched weight read as unknown). **The repo folder itself is anchored**
 (Codex r1, R1-2): `realpath(<cache>/models--<owner>--<name>)` must equal `realpath(<cache>)` joined with that
 folder name, else the answer is `None` and nothing below is touched, so a link that moves the whole repo folder
 elsewhere is no boundary. **One `stat` per start file, at the resolved path** that passed the boundary check

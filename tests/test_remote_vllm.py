@@ -695,6 +695,33 @@ def test_a_link_outside_the_repo_cache_on_the_server_is_not_on_disk(tmp_path):
     assert held == frozenset() and list(needs.values()) == [1000 + 50 + 30]
 
 
+def test_a_link_into_the_servers_blob_store_is_on_disk(tmp_path):
+    """huggingface_hub 1.x at the server keeps the weights it fetched in the cache's own store
+    `<cache>/blobs/<xx>/<sha256>` (a rented server, 2026-10-03, answered `null` for a package that was there):
+    a start file resolved there is inside the boundary, the answer is `0`, the package is on disk."""
+    from modelroom.hf_cache import CacheProbes
+    from modelroom.quantization import package_identity_key
+    from modelroom.remote_vllm import RemoteVllm, read_state
+
+    hub = tmp_path / "hub"
+    package = _small()
+    inner = _fake_cache(hub, _present(package))
+    stored = os.path.join(str(hub), "blobs", "d9", "d98bf35c1c9a35f0c1a08249a1fc06eb91086d26a875e62c97b2ff7fe87a3156")
+    shard = next(f for f in package.files if f.name == "model.safetensors")
+
+    def stat_of(path: str):
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_size=shard.size_bytes) if path == stored else inner.stat(path)
+
+    probes = CacheProbes(realpath=lambda path: stored if path.endswith("model.safetensors") else path, stat=stat_of)
+    ssh = FakeSsh(context=_context(tmp_path, vllm=_serving(), room=_room(tmp_path, hub=hub), cache=probes))
+
+    state = read_state("gpu1", [package], ssh, ssh_path="ssh")
+
+    assert state.missing_bytes == (0,)
+    needs, held = RemoteVllm(packages=(package,), missing_bytes=state.missing_bytes).needs()
+    assert held == {package_identity_key(package)} and list(needs.values()) == [0]
+
+
 # --- Rev 3: the bytes still to fetch decide the disk rule -----------------------------------------------------------------------
 
 

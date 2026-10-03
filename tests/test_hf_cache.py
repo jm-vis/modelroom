@@ -253,6 +253,37 @@ def test_a_real_blob_link_inside_the_repo_folder_counts(tmp_path: Path):
     assert on_disk(package, hub) is None
 
 
+def test_a_link_into_the_caches_own_blob_store_counts(tmp_path: Path):
+    """huggingface_hub 1.x (Xet) keeps every large file it fetched in the cache's own store,
+    `<cache>/blobs/<xx>/<sha256>`, shared by all repos: `snapshots/<sha>/<file>` -> `../../blobs/<etag>` is
+    itself a link there (seen at a rented server, 2026-10-03). That store is inside the boundary; a `blobs`
+    folder beside the cache, or one of another cache, is not."""
+    from modelroom.hf_cache import CacheProbes, check_package, on_disk
+
+    package = _small()
+    hub = _fill(tmp_path / "hub", package)
+    store = hub / "blobs" / "d9"
+    store.mkdir(parents=True)
+    shard = _snapshot(hub) / SHARD_1
+    (store / "d98b").write_bytes(shard.read_bytes())
+    repo_blobs = hub / FOLDER / "blobs"
+    repo_blobs.mkdir()
+    shard.unlink()
+    try:
+        os.symlink(str(store / "d98b"), repo_blobs / "etag1")
+        os.symlink(os.path.join("..", "..", "blobs", "etag1"), shard)
+    except (OSError, NotImplementedError):
+        pytest.skip("this machine may not create symbolic links")
+    assert on_disk(package, hub) is True
+    assert check_package(package, hub).missing_bytes == 0
+
+    sized: list[str] = []
+    for target in (tmp_path / "blobs" / "d9" / "d98b", tmp_path / "other-hub" / "blobs" / "d9" / "d98b"):
+        probes = CacheProbes(realpath=lambda path, target=target: str(target) if path.endswith(SHARD_1) else os.path.realpath(path), stat=lambda path: sized.append(path) or _regular(1000))
+        assert on_disk(package, hub, probes) is None, target
+    assert sized == []
+
+
 def test_a_repo_folder_that_is_a_link_leads_nowhere(tmp_path: Path):
     """Codex r1-2 (R1-2): `models--<owner>--<name>` itself is a link to another repo's folder, or to a place
     outside the cache: the answer is unknown and no `stat` is made. A real folder with blob links stays valid."""

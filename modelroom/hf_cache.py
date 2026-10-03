@@ -123,8 +123,12 @@ def _inspect(ref: Any, cache: Path, probes: CacheProbes | None) -> CacheCheck:
 
     Every name and the revision are checked first. The repo folder itself must be where the cache puts
     it (`realpath(cache)/models--<owner>--<name>`: a link that moves the folder away is not followed),
-    and every resolved path must lie inside it before one `stat` is made; then each start file is
-    `stat`ed at that resolved path and counts only as a regular file of the declared size.
+    and every resolved path must lie inside it -- or inside the cache's own blob store
+    `realpath(cache)/blobs/`, where huggingface_hub 1.x keeps every large file it fetched with Xet,
+    shared by all repos of the cache (`snapshots/<sha>/<file>` -> `../../blobs/<etag>` ->
+    `<cache>/blobs/<xx>/<sha256>`; seen at a rented server on 2026-10-03) -- before one `stat` is
+    made; then each start file is `stat`ed at that resolved path and counts only as a regular file of
+    the declared size. Another repo's folder, a place beside the cache, another drive: not inside.
     """
     probes = probes if probes is not None else CacheProbes()
     folder = _folder_name(ref.repo, ref.revision)
@@ -133,13 +137,15 @@ def _inspect(ref: Any, cache: Path, probes: CacheProbes | None) -> CacheCheck:
         return _UNKNOWN
     base = os.path.join(str(cache), folder)
     real_base = probes.realpath(base)
-    if os.path.normcase(real_base) != os.path.normcase(os.path.join(probes.realpath(str(cache)), folder)):
+    real_cache = probes.realpath(str(cache))
+    if os.path.normcase(real_base) != os.path.normcase(os.path.join(real_cache, folder)):
         return _UNKNOWN  # the repo folder is a link that leads elsewhere: nothing below it is touched
+    store = os.path.join(real_cache, "blobs")
     resolved = []
     for file in files:
         path = os.path.join(base, "snapshots", ref.revision, *file.name.split("/"))
         real = probes.realpath(path)
-        if not _inside(real_base, real):
+        if not (_inside(real_base, real) or _inside(store, real)):
             return _UNKNOWN
         resolved.append(real)
     missing, unsayable = 0, False
@@ -165,8 +171,8 @@ def _inspect(ref: Any, cache: Path, probes: CacheProbes | None) -> CacheCheck:
 def missing_bytes(ref: Any, cache: Path, probes: CacheProbes | None = None) -> int | None:
     """The bytes the first start of `ref` still has to download: `0` only where every start file is
     there with its declared size (a missing file of declared size 0 is never `0`), the sum of the
-    missing ones otherwise, `None` where nobody can say (an unsafe name, a link out of the repo folder,
-    an unreadable cache, a missing start file of declared size 0).
+    missing ones otherwise, `None` where nobody can say (an unsafe name, a link that leaves the repo
+    folder and the cache's blob store, an unreadable cache, a missing start file of declared size 0).
 
     The one function of both ends (AP9-SV2-R, R2, Codex r2-6, r3-6): this computer's disk rule reads it
     for its own packages (`vllm_disk`), a server reads it for the references it was sent

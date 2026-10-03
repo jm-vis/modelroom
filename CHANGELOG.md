@@ -52,6 +52,11 @@ All notable changes to this project are documented in this file. The format foll
 - **The cache check holds its boundary** (AP9-SV2-I, Codex r1, R1-2 to R1-4; `modelroom/hf_cache.py`): the
   repo folder in the cache must be where the cache puts it, the one `stat` per start file is made at the
   resolved path that passed the check, and only a regular file counts as there.
+- **The cache check knows the blob store of huggingface_hub 1.x** (AP9-SV2-R, hand probe at a rented server,
+  2026-10-03; `modelroom/hf_cache.py`): a start file whose link leads from the repo's `blobs/` on to the cache's
+  own store `<cache>/blobs/<xx>/<sha256>` (how Xet keeps every large file, shared by all repos) is inside the
+  boundary and counts; before, every weight vLLM had fetched read as unknown and no package was ever
+  `on disk already`. Another repo's folder, a `blobs` beside the cache or another drive stay outside.
 - **`no safe command` is said under the table** (AP9-SV2-I, R1-6), like `computed only`.
 - **Section titles stand out in the terminal view** (AP9-SV2-F, F6; `modelroom/views_sections.py`,
   `section_head`): `with Ollama` and `with vLLM` have one blank line before them and the style class
