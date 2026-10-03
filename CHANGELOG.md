@@ -15,7 +15,7 @@ All notable changes to this project are documented in this file. The format foll
   fields to `null`. The 62 shipped rows were filled once, by `scripts/catalog_fill_pipeline_tag.py` from one request
   per row: 52 carry a task of the table, three a task outside it with the evidence `tags` (two Gemma, one Hy-MT2),
   seven Mistral repos have no task and a `decision` with the sentence naming the day their model cards were read.
-  The script and its test are removed after the review; the commit that holds them is `<commit>`. The recorded answer
+  The script and its test are removed after the review; the commit that holds them is `6e2b649`. The recorded answer
   of a repo without a task stays as `tests/fixtures/hf_mistralai_ministral_3_8b_instruct_2512_model.json`.
 - **README, CONTRACTS and ADR for vLLM** (AP9-SV2-D; README.md, "vLLM" and a sentence in "Step 2, Packages";
   CONTRACTS.md, "Fit for vLLM"; `docs/adr/0014`). The README names where packages come from, both install commands,
