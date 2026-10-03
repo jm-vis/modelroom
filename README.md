@@ -197,8 +197,9 @@ here. Beyond that, there are three ways to reach another computer directly:
    know. Behind a jump host these two hold only for the target itself; the jump host answers with
    its own connection, under its own `Host` block (below), and needs `BatchMode yes` and
    `StrictHostKeyChecking yes` there too for the same guarantee. A server is told apart by its
-   machine identity, on Linux the `/etc/machine-id`; where a server gives none, modelroom cannot tell
-   whether it is still the same machine, says so once, and asks nothing -- unless it had one before.
+   machine identity, on Linux the `/etc/machine-id`; where a server gives none and a saved profile is
+   there to compare with, modelroom cannot tell whether it is still the same machine, says so once,
+   and asks nothing -- unless it had one before.
 
 **Setting SSH up, once**, on Windows, macOS or Linux:
 

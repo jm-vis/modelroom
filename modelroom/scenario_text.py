@@ -88,45 +88,78 @@ def unused_measurements(block: MachineRanking | None, dash: str, width: int | No
     `width`, by count (`6 rows measured with ...`) -- the card has one line for it, the table notes
     wrap and always name the ranks.
     """
-    rows = [] if block is None else [entry for entry in block.ranked if entry.note.code == ONE_REQUEST_NOTE]
-    if not rows:
-        return None
-    reason = rows[0].note.text.partition(".")[0]
-    named = f"{ranks_text([entry.rank for entry in rows], dash)} {reason}"
-    if width is None or len(named) <= width:
-        return named
-    return f"{len(rows)} {'row' if len(rows) == 1 else 'rows'} {reason}"
+    groups = [group for group in _reason_groups(block) if group[0] == ONE_REQUEST_NOTE]
+    return _joined(_reason_parts(groups, dash, width), "·", width)
 
 
 def other_measurements(block: MachineRanking | None, dash: str, width: int | None = None, dot: str = "·") -> str | None:
     """The rows whose measurement counts nowhere here, each with the reason the `speed` note under the table
-    gives (AP9-FR-N2, c2): `#8 measured, not valid`, `#2, #8 measured, not valid`, or two kinds joined by
+    gives (AP9-FR-N2, c2): `#8 measured, not valid`, `#2, #8 measured, not valid`, or the kinds joined by
     `dot` where that fits `width`, else the first (in the order the ranking meets them). The text of a reason
     stops before its first ` (` -- the full one stays under the table. Only where the ranks of one reason
     alone are wider than `width`: `2 rows measured, not counted here`, the one line the card has for it."""
-    rows = [] if block is None else [entry for entry in block.ranked if entry.note.code == OTHER_MEASUREMENT_NOTE]
-    groups: dict[str, list[int]] = {}
-    for entry in rows:
-        reason = entry.note.text.split(". ")[0].rstrip(".").partition(" (")[0]
-        groups.setdefault(reason, []).append(entry.rank)
-    if not groups:
-        return None
-    named = [f"{ranks_text(ranks, dash)} {reason}" for reason, ranks in groups.items()]
-    if width is not None and any(len(one) > width for one in named):
-        return f"{len(rows)} {'row' if len(rows) == 1 else 'rows'} measured, not counted here"
-    joined = f" {dot} ".join(named)
-    return joined if width is None or len(joined) <= width else named[0]
+    groups = [group for group in _reason_groups(block) if group[0] == OTHER_MEASUREMENT_NOTE]
+    return _joined(_reason_parts(groups, dash, width), dot, width)
 
 
 def measurement_reason(block: MachineRanking | None, dash: str, dot: str, width: int) -> str | None:
     """Why no row of the block shows a speed although one was measured, for the card's `speed` row: the
-    reasons of `other_measurements` and `unused_measurements` joined by `dot` where that fits `width`, else
-    the first; `None` where no measurement is named (AP9-FR-N2, c2: the card follows the table's rule)."""
-    parts = [part for part in (other_measurements(block, dash, width, dot), unused_measurements(block, dash, width)) if part]
+    kinds of `other_measurements` and `unused_measurements` in one list, in the order the ranking meets
+    them first, joined by `dot` where that fits `width`, else the first; each kind by count only where its
+    ranks alone are wider; `None` where no measurement is named (AP9-FR-N2, c2: the table's rule)."""
+    return _joined(_reason_parts(_reason_groups(block), dash, width), dot, width)
+
+
+def _reason_groups(block: MachineRanking | None) -> list[tuple[str, str, list[int]]]:
+    """The `(note code, reason, ranks)` of the measurements that did not count, by first rank in `block.ranked`.
+
+    The one-request rows are one kind with the reason of the first (text before its first full stop); the
+    others one kind per reason (text before its first sentence end and its first ` (`)."""
+    groups: dict[tuple[str, str], tuple[str, list[int]]] = {}
+    for entry in [] if block is None else block.ranked:
+        code = entry.note.code
+        if code == ONE_REQUEST_NOTE:
+            key, reason = (code, ""), entry.note.text.partition(".")[0]
+        elif code == OTHER_MEASUREMENT_NOTE:
+            reason = entry.note.text.split(". ")[0].rstrip(".").partition(" (")[0]
+            key = (code, reason)
+        else:
+            continue
+        groups.setdefault(key, (reason, []))[1].append(entry.rank)
+    return [(code, reason, ranks) for (code, _key), (reason, ranks) in groups.items()]
+
+
+def _reason_parts(groups: list[tuple[str, str, list[int]]], dash: str, width: int | None) -> list[str]:
+    """Each kind by rank, in the order given; a kind whose ranks alone are wider than `width` by count.
+
+    The other reasons fall back together (`N rows measured, not counted here`, where the first of them
+    stood), the one-request rows with their own reason (`N rows measured with 1 request, ...`)."""
+    def named(group: tuple[str, str, list[int]]) -> str:
+        return f"{ranks_text(group[2], dash)} {group[1]}"
+
+    def rows(count: int) -> str:
+        return f"{count} {'row' if count == 1 else 'rows'}"
+
+    others = [group for group in groups if group[0] == OTHER_MEASUREMENT_NOTE]
+    others_counted = width is not None and any(len(named(group)) > width for group in others)
+    parts: list[str] = []
+    for group in groups:
+        if group[0] == ONE_REQUEST_NOTE:
+            wide = width is not None and len(named(group)) > width
+            parts.append(f"{rows(len(group[2]))} {group[1]}" if wide else named(group))
+        elif not others_counted:
+            parts.append(named(group))
+        elif group is others[0]:
+            parts.append(f"{rows(sum(len(other[2]) for other in others))} measured, not counted here")
+    return parts
+
+
+def _joined(parts: list[str], dot: str, width: int | None) -> str | None:
+    """The parts joined by `dot` where that fits `width`, else the first; `None` where there is none."""
     if not parts:
         return None
     joined = f" {dot} ".join(parts)
-    return joined if len(joined) <= width else parts[0]
+    return joined if width is None or len(joined) <= width else parts[0]
 
 
 def never_measured(block: MachineRanking | None) -> str | None:

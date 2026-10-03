@@ -397,8 +397,9 @@ def test_a_bound_chosen_computer_gets_no_note(tmp_path):
     assert not any(line.startswith("no load test") for line in lines)
 
 
-def _note(entry, text: str):
-    return entry.note.model_copy(update={"code": "measured_not_comparable", "text": text})
+def _note(entry, text: str | tuple[str, str]):
+    code, text = text if isinstance(text, tuple) else ("measured_not_comparable", text)
+    return entry.note.model_copy(update={"code": code, "text": text})
 
 
 def _speed_fact(document):
@@ -421,6 +422,7 @@ def _document_with(notes: dict[int, str], valid: bool = False):
 
 INVALID = "measured, not valid (run 1: done_reason 'stop', expected 'length')"
 OTHER_CONTEXT = "measured at context 32k, this ranking's is 8k"
+ONE_REQUEST = ("measured_with_one_request", "measured with 1 request, ranking assumes 3")
 
 
 def test_two_reasons_too_wide_together_keep_the_first():
@@ -438,6 +440,24 @@ def test_the_first_reason_is_the_one_the_ranking_meets_first():
     document.machines[0].ranked.sort(key=lambda entry: entry.rank, reverse=True)  # rank 4 first
 
     assert _speed_fact(document).note == "#4 measured, not valid"
+
+
+def test_a_one_request_reason_met_first_is_kept_where_both_kinds_are_too_wide():
+    document = _document_with({1: ONE_REQUEST, 2: INVALID})
+    joined = "#1 measured with 1 request, ranking assumes 3 · #2 measured, not valid"
+    assert len(joined) > 65  # the premise: the two kinds do not fit one card row
+
+    fact = _speed_fact(document)
+
+    assert (fact.value, fact.note) == ("none counted", "#1 measured with 1 request, ranking assumes 3")
+
+
+def test_another_reason_met_first_is_kept_before_the_one_request_reason():
+    document = _document_with({1: INVALID, 2: ONE_REQUEST})
+
+    fact = _speed_fact(document)
+
+    assert (fact.value, fact.note) == ("none counted", "#1 measured, not valid")
 
 
 def test_ranks_too_many_for_the_row_are_a_count():
