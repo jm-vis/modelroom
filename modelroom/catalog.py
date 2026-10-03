@@ -44,6 +44,9 @@ CATALOG_MAX_TEXT_LEN = 300
 CATALOG_MAX_GGUF_REPOS = 50
 
 Age = Literal["latest", "legacy", "unknown"]
+KindSource = Literal["tags", "base_model", "config", "decision"]
+_TASK_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+CATALOG_MAX_TASK_LEN = 64
 Kind = Literal[
     "text", "vision", "embedding", "speech-recognition", "speech-synthesis", "audio", "image-generation",
     "video-generation",
@@ -52,9 +55,11 @@ _HUB = "https://huggingface.co/"
 # `urlsplit(...).hostname` is lowercase and without the port.
 _HUB_HOSTS = frozenset({"huggingface.co", "www.huggingface.co", "hf.co"})
 
-# `pipeline_tag` on the Hub -> `kind` in this schema, the fifteen values a repository without a
-# `pipeline_tag`, or with one outside this table, never becomes a row for. A future addition is a
-# schema change with a test of its own, never a silent new value.
+# `pipeline_tag` on the Hub -> `kind` in this schema, the fifteen values that decide `kind` on
+# their own. A row whose `hub_pipeline_tag` is missing or outside this table still has a `kind`,
+# but it names the evidence (`kind_source`); only the exclusion list of the scanner (task (b))
+# keeps a repository out. A future addition is a schema change with a test of its own, never a
+# silent new value.
 PIPELINE_TAG_TO_KIND: dict[str, Kind] = {
     "text-generation": "text", "image-text-to-text": "vision",
     "feature-extraction": "embedding", "sentence-similarity": "embedding",
@@ -117,6 +122,10 @@ class CatalogModel(BaseModel):
 
     # --- schema 2 -------------------------------------------------------------------------------
     kind: Kind = "text"
+    # The Hub's own task, verbatim (`null`: the repo has none), and the evidence for `kind` where
+    # the task does not give it; `catalog_schema.py` checks the two against each other.
+    hub_pipeline_tag: str | None = Field(default=None, max_length=CATALOG_MAX_TASK_LEN)
+    kind_source: KindSource | None = None
     family: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
     publisher: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
     added: date | None = None
@@ -159,6 +168,13 @@ class CatalogModel(BaseModel):
     def _check_ollama_tag(cls, value: str | None) -> str | None:
         if value is not None and not OLLAMA_TAG_RE.fullmatch(value):
             raise ValueError(f"ollama_tag does not look like a tag: {value!r}")
+        return value
+
+    @field_validator("hub_pipeline_tag")
+    @classmethod
+    def _check_hub_pipeline_tag(cls, value: str | None) -> str | None:
+        if value is not None and not _TASK_RE.fullmatch(value):
+            raise ValueError(f"hub_pipeline_tag must match '^[a-z0-9]+(-[a-z0-9]+)*$': {value!r}")
         return value
 
     @field_validator("family")

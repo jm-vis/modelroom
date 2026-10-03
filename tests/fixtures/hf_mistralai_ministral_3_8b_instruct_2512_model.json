@@ -1,0 +1,73 @@
+{
+  "_id": "690476b740eb8cf228ccccba",
+  "id": "mistralai/Ministral-3-8B-Instruct-2512",
+  "private": false,
+  "library_name": "vllm",
+  "tags": [
+    "vllm",
+    "safetensors",
+    "mistral3",
+    "mistral-common",
+    "en",
+    "fr",
+    "es",
+    "de",
+    "it",
+    "pt",
+    "nl",
+    "zh",
+    "ja",
+    "ko",
+    "ar",
+    "arxiv:2601.08584",
+    "base_model:mistralai/Ministral-3-8B-Base-2512",
+    "base_model:quantized:mistralai/Ministral-3-8B-Base-2512",
+    "license:apache-2.0",
+    "fp8",
+    "deploy:sagemaker",
+    "region:us"
+  ],
+  "downloads": 121234,
+  "likes": 206,
+  "modelId": "mistralai/Ministral-3-8B-Instruct-2512",
+  "author": "mistralai",
+  "sha": "5b26027e7b19eeb4b7352e1fed3926375dd2cb4d",
+  "lastModified": "2026-07-15T12:22:08.000Z",
+  "gated": false,
+  "disabled": false,
+  "model-index": null,
+  "cardData": {
+    "library_name": "vllm",
+    "language": [
+      "en",
+      "fr",
+      "es",
+      "de",
+      "it",
+      "pt",
+      "nl",
+      "zh",
+      "ja",
+      "ko",
+      "ar"
+    ],
+    "license": "apache-2.0",
+    "inference": false,
+    "base_model": [
+      "mistralai/Ministral-3-8B-Base-2512"
+    ],
+    "extra_gated_description": "If you want to learn more about how we process your personal data, please read our <a href=\"https://mistral.ai/terms/\">Privacy Policy</a>.",
+    "tags": [
+      "mistral-common"
+    ]
+  },
+  "createdAt": "2025-10-31T08:43:35.000Z",
+  "safetensors": {
+    "parameters": {
+      "BF16": 1502496768,
+      "F8_E4M3": 7415529472
+    },
+    "total": 8918026716
+  },
+  "usedStorage": 20908950383
+}

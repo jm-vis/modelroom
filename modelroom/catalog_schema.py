@@ -22,6 +22,7 @@ from .catalog import (
     CATALOG_MAX_GGUF_REPOS,  # re-exported next to the other document limits
     CATALOG_MAX_TEXT_LEN,
     CatalogError,
+    PIPELINE_TAG_TO_KIND,
     CatalogModel,
     Catalog,
     PublisherInfo,
@@ -62,6 +63,29 @@ def _check_successor_evidence(model: CatalogModel) -> None:
         f"{model.hf_repo}: successor_source must be the successor's card, the model's own card, "
         f"or a collection of {model.publisher}: {model.successor_source}"
     )
+
+
+def _check_kind_evidence(model: CatalogModel) -> None:
+    """`kind` is the view of `hub_pipeline_tag` (CONTRACTS.md, "Catalog rules"): a task of the
+    table gives exactly that kind and no `kind_source`; any other task, or none, needs the
+    `kind_source` that decided `kind`, and a `decision` needs a `note` that says on what."""
+    from_task = PIPELINE_TAG_TO_KIND.get(model.hub_pipeline_tag)
+    if from_task is not None:
+        if model.kind != from_task:
+            raise ValueError(
+                f"{model.hf_repo}: kind {model.kind!r} contradicts hub_pipeline_tag "
+                f"{model.hub_pipeline_tag!r}, which gives {from_task!r}"
+            )
+        if model.kind_source is not None:
+            raise ValueError(f"{model.hf_repo}: kind_source must be null, kind {model.kind!r} follows hub_pipeline_tag")
+        return
+    if model.kind_source is None:
+        raise ValueError(
+            f"{model.hf_repo}: kind {model.kind!r} needs a kind_source, hub_pipeline_tag "
+            f"{model.hub_pipeline_tag!r} is not in the kind table"
+        )
+    if model.kind_source == "decision" and model.note is None:
+        raise ValueError(f"{model.hf_repo}: kind_source 'decision' needs a note")
 
 
 def _check_gguf_owners(model: CatalogModel, packagers: set[str]) -> None:
@@ -160,6 +184,7 @@ class CatalogDocumentV2(BaseModel):
             if owner != model.publisher:
                 raise ValueError(f"family {model.family}: rows of two different publishers")
             _check_successor_evidence(model)
+            _check_kind_evidence(model)
             _check_gguf_owners(model, packagers)
         return self
 

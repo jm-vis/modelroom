@@ -3913,6 +3913,8 @@ a family, and says so with `*` ("Latest and legacy evidence", "Computed release"
 publisher and never form a cycle, within a family or across families; family names and
 `hf_repo` are unique across the catalog.
 
+`hub_pipeline_tag` carries the task Hugging Face gives the model (`pipeline_tag`, verbatim, or null); `kind` is the view derived from it, and `kind_source` names the evidence where it is not.
+
 **How a successor is proven in the shipped catalog** (decided 2026-09-25). A `successor` names one
 concrete model of the same publisher that is itself a `latest` row of the catalog, and the comment
 above the row names the publisher's page that says so -- the successor's model card naming this

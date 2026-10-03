@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **The task Hugging Face gives a model, and the evidence for `kind`** (AP9-KA-S2; `modelroom/catalog.py`,
+  `modelroom/catalog_schema.py`, `modelroom/catalog.json`; CONTRACTS.md, "Catalog rules"). Every catalog row carries
+  `hub_pipeline_tag` (the Hub's `pipeline_tag`, verbatim, or `null`) and `kind_source` (`tags`, `base_model`, `config`
+  or `decision`, `null` where the task gives `kind`); a task in the kind table must agree with `kind`, any other task
+  or none needs a `kind_source`, and a `decision` needs a `note`. Schema 2 stays 2; the schema-1 reader sets both
+  fields to `null`. The 62 shipped rows were filled once, by `scripts/catalog_fill_pipeline_tag.py` from one request
+  per row: 52 carry a task of the table, three a task outside it with the evidence `tags` (two Gemma, one Hy-MT2),
+  seven Mistral repos have no task and a `decision` with the sentence naming the day their model cards were read.
+  The script and its test are removed after the review; the commit that holds them is `<commit>`. The recorded answer
+  of a repo without a task stays as `tests/fixtures/hf_mistralai_ministral_3_8b_instruct_2512_model.json`.
 - **README, CONTRACTS and ADR for vLLM** (AP9-SV2-D; README.md, "vLLM" and a sentence in "Step 2, Packages";
   CONTRACTS.md, "Fit for vLLM"; `docs/adr/0014`). The README names where packages come from, both install commands,
   that modelroom starts nothing, where vLLM keeps its models, the limits of the Docker line (another volume, files
