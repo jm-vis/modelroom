@@ -21,7 +21,23 @@ All notable changes to this project are documented in this file. The format foll
   modelroom never opens the address. `tests/fixtures/` gains the recorded `config.json` of eight public models
   (mixture-of-experts and multi-token-prediction fields) and two `/api/ps` answers of Ollama 0.35.0, for the
   packages of AP9-T that follow.
-
+- **The published catalog is loaded** (AP9-KA-L; `modelroom/catalog_remote.py`, `modelroom/http.py`;
+  CONTRACTS.md, "Published catalog", "Transport security and proxying"). `current_catalog` makes at most one
+  attempt every 24 hours to read the dataset `jm-vis/modelroom-catalog` (the revision, then the file at that
+  commit through one redirect: 0, 1 or 3 requests, never more, booked against the guided run's shared budget),
+  keeps the answer in one cache envelope `~/.modelroom/catalog/catalog-v2.cache.json` written atomically, and
+  chooses the candidate with the latest `published` among fresh, cached and shipped. Every fault -- offline, a
+  bad answer, a redirect off the host, a commit that does not match, an oversized or short body, a schema this
+  version does not read -- ends in that choice with a reason of at most 97 characters, never in an abort; a
+  failed attempt counts as the day's attempt. Step 2 shows a line `catalog: published 2026-10-02` or `catalog:
+  shipped 2026-09-29 (the published one did not read: ...)`. `MODELROOM_CATALOG=shipped` asks nothing and
+  writes nothing. The listed packagers come from the configuration, else the catalog, else the built-in list.
+  `Transport` calls take an optional `max_bytes`: `RedirectingTransport` and `BudgetedTransport` pass it to every
+  hop, `UrllibTransport` reads at most that many bytes of a success or an error answer and raises
+  `ResponseTooLargeError`, `FixtureTransport` holds its recorded body against it. `RedirectingTransport` takes an
+  optional `max_hops`; every other caller follows up to `MAX_REDIRECTS` as before. A chain that does not resolve raises the
+  new `RedirectLimitError`, a `RuntimeError`, so existing callers keep working. When the cache folder cannot be written,
+  every run makes its one attempt (three requests at most) instead of one a day.
 - **vLLM at a server over SSH** (AP9-SV2-R, R1 to R3; `modelroom/remote_vllm.py`, `modelroom/guided_remote_vllm.py`,
   `modelroom/remote_server.py`, `modelroom/remote_protocol.py`; CONTRACTS.md, "The remote protocol v1", "vLLM at a
   server over SSH"). `modelroom remote` reads and measures the server's own vLLM against its `127.0.0.1:8000`, with the

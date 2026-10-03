@@ -602,6 +602,15 @@ catalog says about it. If a publisher you use is missing, open an issue in
 this repository naming the account and one of its models; the catalog is data in this repository
 and takes a new family with its evidence.
 
+The guided mode reads the current catalog from the public dataset `jm-vis/modelroom-catalog` on
+Hugging Face and keeps a copy in `~/.modelroom/catalog/`: at most one attempt every 24 hours, usually
+no request or one, three at most, each answer capped and every redirect kept on `huggingface.co`.
+Whatever goes wrong -- no network, a missing dataset, a file that does not validate -- the run goes on
+with the newer of the copy and the catalog shipped in the package, and step 2 says which one applied.
+`MODELROOM_CATALOG=shipped` skips the request and uses the shipped catalog only. If the cache folder cannot be
+written, every run makes its one attempt (three requests at most, counted against the shared budget) and the
+choice stays the same.
+
 ## What the fit class means
 
 For a judged fit, the cell reads `<class> (<mode>, need <n> / pool <n> GiB)`. The class is

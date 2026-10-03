@@ -1513,7 +1513,7 @@ that failed partway through was never booked for the hops it did make. R5 invert
 composition instead: `UrllibTransport` makes exactly one request per call and returns a 3xx
 exactly like any other status; `modelroom/http.py::RedirectingTransport(inner)` is what follows
 a chain, calling `inner` once per hop (up to `MAX_REDIRECTS = 5` hops, the first request already
-counting as hop 1; more hops raise `RuntimeError` before the hop that would exceed the limit is
+counting as hop 1; more hops raise `RedirectLimitError`, a `RuntimeError`, before the hop that would exceed the limit is
 ever made). `run_fetch` composes `RedirectingTransport(BudgetedTransport(transport, budget))` --
 `BudgetedTransport` as the *inner* layer -- so every hop of a chain arrives at the budget check
 as its own separate call, checked and booked (or raising `BudgetExhaustedError`) before it is
@@ -1592,6 +1592,16 @@ already-allowed request reaches its target, never add a target that was not alre
 allow-list. An operator who wants the local Ollama daemon reached directly even when a proxy is
 configured for everything else sets `NO_PROXY=127.0.0.1` in the environment; that is a deployment
 decision, never something this package decides on its own.
+
+**A caller may cap an answer (AP9-KA-L).** `Transport.__call__` takes the keyword `max_bytes: int | None =
+None`. `RedirectingTransport` and `BudgetedTransport` pass it unchanged to every hop (and only when it is
+set, so a transport that knows no such keyword keeps working under every caller that sets none);
+`UrllibTransport` reads at most `max_bytes + 1` bytes of a success **and** of an error answer and raises
+`ResponseTooLargeError` before anything is parsed; `FixtureTransport` holds its recorded body against
+the same limit and keeps each call's limit in `limits`. A caller that passes none gets the answer whole,
+as before. `RedirectingTransport(inner, max_hops=MAX_REDIRECTS)` takes a narrower hop limit for one
+caller (the first request counts as a hop); a redirect past it raises `RedirectLimitError` (a `RuntimeError`, like any other chain
+that does not resolve); the catalog loader turns only that one into the redirect reason on the screen.
 
 **Another computer's own daemon is never reached over HTTP (AP9-FR, FR-B1).** `SshDaemon`
 (`modelroom/remote_client.py`) is a separate transport again, `daemon.py`'s protocol but not its
@@ -3919,6 +3929,56 @@ improved version of it, but the publisher's collection lists both lines side by 
 
 `load_catalog` raises `SchemaVersionError` for an unsupported version and `CatalogError` for a
 file that does not read or validate.
+
+### Published catalog (AP9-KA-L)
+
+`modelroom/catalog_remote.py::current_catalog(transport, now, cache_dir, budget)` returns a
+`CatalogChoice(catalog, origin, source)` and never raises: every fault ends in the choice between
+the shipped catalog and the one in the cache. Only the guided run calls it, with `cache_dir` =
+`<folder of the pointer file>/catalog` (`~/.modelroom/catalog`) and the run's shared request budget
+("Shared request budget"). `MODELROOM_CATALOG=shipped` selects the shipped catalog: no request, no
+cache file written.
+
+**The cache is one file, one envelope**: `catalog-v2.cache.json` (the schema major version is in the
+name, so releases of different schemas never disturb each other) holds
+`{"cache_version": 1, "checked_at": <UTC, whole seconds, "...Z">, "sha": <40 hex | null>,
+"last_error": <text | null>, "catalog": <schema-2 document | null>}` and nothing else. The whole file is
+written each time, a temporary file in the same folder and one `os.replace` ("Atomic writes"), so
+content and `sha` never disagree; there is no lock, and when two runs write at once the last one
+leaves a consistent envelope. An envelope that does not read, has another `cache_version`, an unknown
+or missing key, a stamp without a zone, a `sha` that is not 40 lowercase hex characters, a `sha`
+without a catalog (or the reverse), or a catalog that does not validate counts as absent.
+
+**Freshness**: `age = now - checked_at`. `0 <= age < 24 h` asks nothing, even when the last attempt
+failed. Exactly 24 h, more, or a `checked_at` in the future asks once more. An attempt is
+`GET https://huggingface.co/api/datasets/jm-vis/modelroom-catalog/revision/main` (one request, `sha` of 40
+hex characters), and, only when the `sha` differs from the envelope's, `GET
+https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/<sha>/catalog-v2.json`, which answers a
+`307` to the same host and then `200` (three requests in all). `X-Repo-Commit` has to equal `sha`; the
+body has to validate as schema 2 with all its limits. The same `sha` only renews `checked_at`. **Every
+fault is the day's attempt**: the envelope is written with the new `checked_at`, the old `sha` and
+`catalog`, and the reason in `last_error`. The one exception is an attempt that fails at the budget
+before its first request: it is no attempt and writes nothing. When the cache folder cannot be written,
+no stamp is kept, so every run makes its one attempt (at most three requests, booked against the shared budget)
+instead of one a day; the choice stays the same.
+
+**Hop limit and answer size**: the revision request allows no redirect
+(`RedirectingTransport(..., max_hops=1)`), the file request exactly one (`max_hops=2`), so an attempt
+is never more than three requests whatever `MAX_REDIRECTS` says. A hop that does not stay on `https://huggingface.co` is
+refused before it is sent (it is booked, not sent). The revision answer may be 64 KiB, the file 1 MiB.
+
+**Choice**: the candidates are the fresh catalog (when the attempt succeeded), the one in the
+envelope and the shipped one; the latest `published` day wins, a missing day is the oldest, and a tie
+goes to fresh, then envelope, then shipped. The same rule applies offline. `origin` is
+`catalog: published 2026-10-02` or `catalog: shipped 2026-09-29`, followed, after a fault, by `(the
+published one did not read: <reason>)`, or `... did not read on <date>: <reason>)` for a reason an earlier
+run stored. A reason is one line of printable ASCII cut to 97 characters (`search_release._note`).
+Step 2 shows the line as the first note of the search.
+
+**Integrity** is the `sha` in the URL and in `X-Repo-Commit`; it does not protect against someone who
+controls the dataset. The protection against that is validation, the limits, the maintainer's daily
+comparison of the published file with the Hub, never fetching a URL a downloaded file names, and the
+switch above.
 
 ### CatalogModel
 

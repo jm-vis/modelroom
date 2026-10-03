@@ -25,6 +25,7 @@ from typing import Callable, Iterable, Sequence
 
 from .binding import KnownProfile, PointerFileError, default_pointer_path, read_pointer, resolve_profile_target, write_pointer
 from .catalog import Catalog, load_catalog
+from .catalog_remote import current_catalog
 from .config import (
     CONFIG_SCHEMA_VERSION, DEFAULT_RESERVE_VRAM_GIB, ConfigError, Configuration, load_config, read_config_schema_version,
 )
@@ -142,6 +143,7 @@ class GuidedRun:
     probes: Probes
     now: datetime
     catalog: Catalog
+    catalog_notes: tuple[str, ...] = ()  # the line of `catalog_remote.current_catalog`, shown in step 2
     daemon: Daemon = field(default_factory=LocalDaemon)
     servers: ServerRun = field(default_factory=lambda: ServerRun(default_transports()))  # `local_servers.py`
     out: Callable[[str], None] = print
@@ -572,7 +574,7 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tu
         return _load(config_file), 0
     picked = ask_models(run.asker, QUESTIONS["select"], step.models, hint_line(step.checked, step.context))
     run.screen.answer(QUESTIONS["select"], names_words(picked_names(step.models, picked)))
-    chosen = chosen_hits(step.models, picked, config.packagers or DEFAULT_PACKAGERS)
+    chosen = chosen_hits(step.models, picked, config.packagers or run.catalog.packagers or DEFAULT_PACKAGERS)
     if not chosen:
         return _load(config_file), 0
     # Base models, not answers -- a base model nobody picked is
@@ -764,6 +766,9 @@ def run_guided(
         room=room if room is not None else room_module.default_room_probes(),
         ssh=ssh if ssh is not None else ssh_module.default_ssh(),
     )
+    if catalog is None:  # the published catalog, else the shipped one (`catalog_remote.py`)
+        run.catalog, origin, _ = current_catalog(run.transport, run.now, run.pointer_path.parent / "catalog", run.budget)
+        run.catalog_notes = (origin,)
     known = _known_config(run, config_arg)
     elsewhere = last_elsewhere(run, config_arg, known)
     intro = collect_intro(run.daemon, run.probes, run.pointer_path, known, run.servers, last_elsewhere=elsewhere)

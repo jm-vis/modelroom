@@ -1,0 +1,20 @@
+{
+  "_id": "68f3c1a2b7d94e5a10c2d3e4",
+  "id": "jm-vis/modelroom-catalog",
+  "author": "jm-vis",
+  "sha": "3f5c1d9a7e3f5c1d9a7e3f5c1d9a7e3f5c1d9a7e",
+  "lastModified": "2026-10-02T08:15:00.000Z",
+  "createdAt": "2026-09-30T09:00:00.000Z",
+  "private": false,
+  "disabled": false,
+  "gated": false,
+  "downloads": 0,
+  "likes": 0,
+  "tags": ["license:cc-by-4.0", "region:us"],
+  "cardData": {"license": "cc-by-4.0"},
+  "siblings": [
+    {"rfilename": ".gitattributes"},
+    {"rfilename": "README.md"},
+    {"rfilename": "catalog-v2.json"}
+  ]
+}

@@ -41,6 +41,14 @@ def home_app_data(home) -> dict:
 
 
 @pytest.fixture(autouse=True)
+def _shipped_catalog(monkeypatch: pytest.MonkeyPatch):
+    """A guided run reads the published catalog unless `MODELROOM_CATALOG=shipped` (AP9-KA-L); a test
+    that passes a transport for something else meets the shipped catalog and no request for the
+    dataset. `tests/test_catalog_remote.py` takes the variable out again and tests the way that is on."""
+    monkeypatch.setenv("MODELROOM_CATALOG", "shipped")
+
+
+@pytest.fixture(autouse=True)
 def _fixed_room(monkeypatch: pytest.MonkeyPatch):
     from modelroom import room
 

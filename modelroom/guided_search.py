@@ -145,7 +145,7 @@ def _searched(
             run.transport,
             name,
             catalog=run.catalog,
-            listed_packagers=config.packagers or DEFAULT_PACKAGERS,
+            listed_packagers=config.packagers or run.catalog.packagers or DEFAULT_PACKAGERS,
             budget=run.budget,
             open_pages=not filtered,
             publisher_required=filtered,
@@ -230,7 +230,7 @@ def _report(run: GuidedRun, config: Configuration, step: SearchStep) -> None:
         # The search itself went through; its log is a record beside the run. A folder that cannot
         # hold it is said out loud and the run goes on with the choice it has to offer.
         run.failed(f"the log of this search was not written: {exc}")
-    for note in [*outcome.notes, *search_notes(log, len(outcome.hits), len(step.models), run.screen.glyphs.dot)]:
+    for note in [*run.catalog_notes, *outcome.notes, *search_notes(log, len(outcome.hits), len(step.models), run.screen.glyphs.dot)]:
         run.screen.note(note)
 
 

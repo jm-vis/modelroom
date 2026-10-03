@@ -31,6 +31,7 @@ from modelroom.http import (
     FixtureTransport,
     RedirectingTransport,
     Response,
+    ResponseTooLargeError,
     TransportSecurityError,
     UrllibTransport,
     _ALLOWED_HTTP_ORIGINS,
@@ -461,3 +462,151 @@ def test_redirecting_transport_a_redirect_status_without_a_location_header_is_re
     result = redirecting("GET", "https://example.test/a")
 
     assert result.status == 302
+
+
+# --- AP9-KA-L: `max_hops`, `max_bytes` and `ResponseTooLargeError` --------------------------------
+
+
+def _chain(length: int, host: str = "https://example.test") -> dict:
+    """`length` redirects, each to the next path, then a `200` -- `length + 1` requests to resolve."""
+    mapping = {
+        ("GET", f"{host}/{number}"): Response(status=307, headers={"Location": f"/{number + 1}"}, body=b"")
+        for number in range(1, length + 1)
+    }
+    mapping[("GET", f"{host}/{length + 1}")] = Response(status=200, headers={}, body=b"ok")
+    return mapping
+
+
+def test_max_hops_one_asks_once_and_refuses_to_follow_a_redirect():
+    inner = FixtureTransport(_chain(1))
+
+    with pytest.raises(RuntimeError, match="more than 1 redirects"):
+        RedirectingTransport(inner, max_hops=1)("GET", "https://example.test/1")
+
+    assert inner.calls == [("GET", "https://example.test/1")]
+
+
+def test_max_hops_two_follows_exactly_one_redirect_and_stops_at_a_second():
+    followed = FixtureTransport(_chain(1))
+    assert RedirectingTransport(followed, max_hops=2)("GET", "https://example.test/1").status == 200
+    assert len(followed.calls) == 2
+
+    refused = FixtureTransport(_chain(2))
+    with pytest.raises(RuntimeError, match="more than 2 redirects"):
+        RedirectingTransport(refused, max_hops=2)("GET", "https://example.test/1")
+    assert len(refused.calls) == 2  # the third request is never made
+
+
+def test_the_hop_limit_raises_its_own_error_which_is_still_a_runtime_error():
+    import modelroom.http as http_module
+
+    refused = FixtureTransport(_chain(1))
+    with pytest.raises(http_module.RedirectLimitError, match="more than 1 redirects") as raised:
+        RedirectingTransport(refused, max_hops=1)("GET", "https://example.test/1")
+
+    assert isinstance(raised.value, RuntimeError)
+
+
+def test_without_max_hops_a_chain_of_four_redirects_still_resolves_and_six_still_raise():
+    four = FixtureTransport(_chain(4))
+    assert RedirectingTransport(four)("GET", "https://example.test/1").status == 200
+    assert len(four.calls) == 5
+
+    six = FixtureTransport(_chain(6))
+    with pytest.raises(RuntimeError, match="more than 5 redirects"):
+        RedirectingTransport(six)("GET", "https://example.test/1")
+    assert len(six.calls) == 5
+
+
+def test_a_transport_that_knows_no_max_bytes_keeps_working_where_no_caller_sets_one():
+    seen: list[tuple[str, str]] = []
+
+    def plain(method, url, headers=None):
+        seen.append((method, url))
+        return Response(status=200, headers={}, body=b"ok")
+
+    layered = RedirectingTransport(BudgetedTransport(plain, budget=3))
+
+    assert layered("GET", "https://example.test/a").body == b"ok"
+    assert seen == [("GET", "https://example.test/a")]
+
+
+def test_max_bytes_goes_unchanged_to_every_hop_through_both_layers():
+    inner = FixtureTransport(_chain(2))
+    budgeted = BudgetedTransport(inner, budget=10)
+
+    RedirectingTransport(budgeted)("GET", "https://example.test/1", max_bytes=4096)
+
+    assert inner.limits == [4096, 4096, 4096]
+    assert budgeted.used == 3
+
+
+def test_a_call_without_max_bytes_reaches_the_inner_transport_without_one():
+    inner = FixtureTransport(_chain(1))
+
+    RedirectingTransport(BudgetedTransport(inner, budget=10))("GET", "https://example.test/1")
+
+    assert inner.limits == [None, None]
+
+
+def test_fixture_transport_holds_its_recorded_body_against_the_limit():
+    body = b"x" * 10
+    transport = FixtureTransport({("GET", "https://example.test/a"): Response(status=200, headers={}, body=body)})
+
+    assert transport("GET", "https://example.test/a", max_bytes=10).body == body  # exactly the limit passes
+    with pytest.raises(ResponseTooLargeError, match="longer than 9 bytes"):
+        transport("GET", "https://example.test/a", max_bytes=9)
+    assert transport.limits == [10, 9]
+
+
+def test_fixture_transport_refuses_a_large_error_answer_too():
+    transport = FixtureTransport({("GET", "https://example.test/a"): Response(status=404, headers={}, body=b"x" * 11)})
+
+    with pytest.raises(ResponseTooLargeError):
+        transport("GET", "https://example.test/a", max_bytes=10)
+
+
+class _BodyHandler(BaseHTTPRequestHandler):
+    """`/ok` answers 200 and `/gone` answers 404, each with a body of `size` bytes."""
+
+    size = 0
+
+    def do_GET(self) -> None:  # noqa: N802 -- stdlib override
+        self.send_response(200 if self.path == "/ok" else 404)
+        self.send_header("Content-Length", str(self.size))
+        self.end_headers()
+        self.wfile.write(b"x" * self.size)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 -- stdlib override
+        pass
+
+
+@contextmanager
+def _body_server(size: int):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), type("_Sized", (_BodyHandler,), {"size": size}))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", server.server_port
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_urllib_transport_reads_at_most_the_limit_and_refuses_an_answer_one_byte_over():
+    with _body_server(100) as (base_url, port):
+        transport = UrllibTransport(allowed_http_origins=frozenset({("127.0.0.1", port)}))
+
+        assert len(transport("GET", f"{base_url}/ok", max_bytes=100).body) == 100
+        assert len(transport("GET", f"{base_url}/ok").body) == 100  # no limit: the answer whole, as before
+        with pytest.raises(ResponseTooLargeError):
+            transport("GET", f"{base_url}/ok", max_bytes=99)
+
+
+def test_urllib_transport_refuses_an_oversized_error_answer_too():
+    with _body_server(100) as (base_url, port):
+        transport = UrllibTransport(allowed_http_origins=frozenset({("127.0.0.1", port)}))
+
+        assert transport("GET", f"{base_url}/gone", max_bytes=100).status == 404
+        with pytest.raises(ResponseTooLargeError):
+            transport("GET", f"{base_url}/gone", max_bytes=50)

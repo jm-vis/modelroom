@@ -154,10 +154,29 @@ class Response:
         return None
 
 
-class Transport(Protocol):
-    """`(method, url, headers) -> Response`. Every fetcher takes one of these as a parameter."""
+class ResponseTooLargeError(Exception):
+    """An answer is longer than the `max_bytes` its caller allowed; nothing of it was parsed."""
 
-    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response: ...
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"the answer is longer than {limit} bytes")
+        self.limit = limit
+
+
+class RedirectLimitError(RuntimeError):
+    """A redirect chain did not resolve within the hops its caller allowed; still a `RuntimeError` for older callers."""
+
+
+class Transport(Protocol):
+    """`(method, url, headers) -> Response`. Every fetcher takes one of these as a parameter.
+
+    `max_bytes` (AP9-KA-L) is the most a caller allows an answer to carry, error answers included:
+    a transport that is given one raises `ResponseTooLargeError` before it hands anything on. A caller
+    that passes none gets the answer whole, exactly as before.
+    """
+
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str] | None = None, *, max_bytes: int | None = None
+    ) -> Response: ...
 
 
 _REDIRECT_STATUSES = (301, 302, 303, 307, 308)
@@ -208,16 +227,38 @@ class UrllibTransport:
         self._allowed_http_origins = allowed_http_origins
         self._opener = _build_opener()
 
-    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str] | None = None, *, max_bytes: int | None = None
+    ) -> Response:
         _check_allowed(url, self._allowed_https_hosts, self._allowed_http_origins)
         request_headers = {"User-Agent": USER_AGENT}
         request_headers.update(headers or {})
         request = urllib.request.Request(url, method=method, headers=request_headers)
         try:
             with self._opener.open(request, timeout=self._timeout) as response:
-                return Response(status=response.status, headers=dict(response.headers), body=response.read())
+                return Response(status=response.status, headers=dict(response.headers), body=_read(response, max_bytes))
         except urllib.error.HTTPError as exc:
-            return Response(status=exc.code, headers=dict(exc.headers or {}), body=exc.read())
+            return Response(status=exc.code, headers=dict(exc.headers or {}), body=_read(exc, max_bytes))
+
+
+def _read(stream, max_bytes: int | None) -> bytes:
+    """The body of `stream`: whole, or at most `max_bytes + 1` bytes read and `ResponseTooLargeError` past the limit.
+
+    Used for a success and for an error answer alike: an oversized 404 is no cheaper to hold than an
+    oversized 200 (AP9-KA-L, rule 8).
+    """
+    if max_bytes is None:
+        return stream.read()
+    body = stream.read(max_bytes + 1)
+    if len(body) > max_bytes:
+        raise ResponseTooLargeError(max_bytes)
+    return body
+
+
+def _limit(max_bytes: int | None) -> dict[str, int]:
+    """The keyword a layer hands to the next one: only when a caller set a limit, so a transport that
+    knows no `max_bytes` (a test's own) keeps working under every caller that sets none."""
+    return {} if max_bytes is None else {"max_bytes": max_bytes}
 
 
 class RedirectingTransport:
@@ -227,29 +268,36 @@ class RedirectingTransport:
     header is followed -- never a method that carries a body, and never a 3xx with no `Location`
     to follow (both are returned to the caller exactly as received). `urllib.parse.urljoin`
     resolves a relative `Location` against the hop it came from. A chain that has not resolved
-    within `MAX_REDIRECTS` hops (the very first request counts as hop 1) raises `RuntimeError`
+    within `MAX_REDIRECTS` hops (the very first request counts as hop 1) raises `RedirectLimitError` (a `RuntimeError`)
     rather than following forever; the hop that would exceed the limit is never made, since it
     could only be discovered to be one *more* redirect by making it. Composed around a
     `BudgetedTransport` in `run_fetch` (this class's `inner`), so every hop this class makes --
     including the one whose response turns out to matter for `_REDIRECT_STATUSES` -- passes
     through the budget check first, charging the run's request budget one hop at a time and
     raising `BudgetExhaustedError` mid-chain exactly as it would for any other call.
+
+    `max_hops` (AP9-KA-L) narrows the limit for one caller -- the published catalog's two requests
+    (`catalog_remote.py`) allow one hop and two -- and defaults to `MAX_REDIRECTS`, so every other
+    caller follows exactly as before. `max_bytes` goes to every hop unchanged.
     """
 
-    def __init__(self, inner: Transport) -> None:
+    def __init__(self, inner: Transport, max_hops: int = MAX_REDIRECTS) -> None:
         self._inner = inner
+        self._max_hops = max_hops
 
-    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str] | None = None, *, max_bytes: int | None = None
+    ) -> Response:
         current_url = url
-        for _ in range(MAX_REDIRECTS):
-            response = self._inner(method, current_url, headers)
+        for _ in range(self._max_hops):
+            response = self._inner(method, current_url, headers, **_limit(max_bytes))
             if response.status not in _REDIRECT_STATUSES or method not in ("GET", "HEAD"):
                 return response
             location = response.header("Location")
             if not location:
                 return response
             current_url = urllib.parse.urljoin(current_url, location)
-        raise RuntimeError(f"{url}: more than {MAX_REDIRECTS} redirects")
+        raise RedirectLimitError(f"{url}: more than {self._max_hops} redirects")
 
 
 class FixtureTransport:
@@ -257,15 +305,24 @@ class FixtureTransport:
 
     Never touches the network. A call for a `(method, url)` pair with no recorded response is
     a test-authoring error, surfaced immediately as a `KeyError` rather than a silent failure.
+    `max_bytes` is held against the recorded body like `UrllibTransport` holds it against the real
+    one, and the limit of every call is kept in `limits`, so a test sees what each hop was given.
     """
 
     def __init__(self, responses: dict[tuple[str, str], Response]) -> None:
         self._responses = responses
         self.calls: list[tuple[str, str]] = []
+        self.limits: list[int | None] = []
 
-    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str] | None = None, *, max_bytes: int | None = None
+    ) -> Response:
         self.calls.append((method, url))
-        return self._responses[(method, url)]
+        self.limits.append(max_bytes)
+        response = self._responses[(method, url)]
+        if max_bytes is not None and len(response.body) > max_bytes:
+            raise ResponseTooLargeError(max_bytes)
+        return response
 
 
 class BudgetedTransport:
@@ -292,9 +349,11 @@ class BudgetedTransport:
     def remaining(self) -> int:
         return self.budget.remaining
 
-    def __call__(self, method: str, url: str, headers: dict[str, str] | None = None) -> Response:
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str] | None = None, *, max_bytes: int | None = None
+    ) -> Response:
         self.budget.charge()
-        return self._inner(method, url, headers)
+        return self._inner(method, url, headers, **_limit(max_bytes))
 
 
 class RequestBudget:
