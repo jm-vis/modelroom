@@ -444,7 +444,11 @@ cat docs/models.md
    its `[machines.<name>].profile` names -- the guided mode writes that entry after it has
    measured the machine. It assumes the context the last guided run of that folder chose
    (`[guided].context`), so the ranking it writes is the one that run showed; a configuration no
-   guided run has chosen a context in assumes 8192.
+   guided run has chosen a context in assumes 8192. On success it prints, after a note for
+   every profile file it could not read, one line with a website for model quality; with a failure
+   (no snapshot, a file of a newer version) it prints none, and a script that expected an empty
+   output now meets that one line. The same line ends the result of the guided run; it is not in
+   the Markdown or the JSON file.
 5. Read the table. Only active, complete packages with `from_metadata` or `approved`
    provenance are shown, and every one of them is ranked per machine: graphics memory before
    system memory, the largest model first and, within one model, the least compression that
@@ -677,6 +681,8 @@ above: modelroom then runs the system `ssh` to it, with your own SSH configurati
 a password for that target itself -- a jump host in between answers under its own configuration
 and needs `BatchMode yes` of its own to hold the same promise (see "Another computer"). It never
 connects anywhere else on its own.
+
+The result names a website for model quality; modelroom never opens it.
 
 ## Language choice
 

@@ -83,6 +83,7 @@ from .local_servers import default_transports
 from .room import RoomProbes
 from .runtimes import local_runtime_keys
 from .ssh import SshRunner
+from .tempo_text import QUALITY_LINK_LINE
 from .state import (
     LockHeldError,
     StaleRunError,
@@ -744,7 +745,11 @@ def _cmd_render(args: argparse.Namespace, now: datetime | None, pointer_path: Pa
         print(str(exc), file=sys.stderr)
         return 2
 
-    return render_with_config(config, now=now)
+    code = render_with_config(config, now=now)  # prints its `note:` lines itself; the guided mode calls it too
+    if code == 0:
+        # stdout order: notes (above), the Ollama setting of a saving context choice (T-K fills it here), the link.
+        print(QUALITY_LINK_LINE)
+    return code
 
 
 def _cmd_migrate(args: argparse.Namespace, now: datetime | None, pointer_path: Path | None, host: Callable[[], str]) -> int:

@@ -4811,7 +4811,15 @@ snapshot can be rendered twice with different contexts, and then both files agre
 receives the terminal view; `on_document` receives the document itself **while the lock is still
 held**, from which the guided mode draws the card of its step 5 -- it reads the snapshot inside that
 callback, so the card and the tables rest on one snapshot (second-model round, 2026-09-24) -- and
-then prints the blocks on its own; `modelroom render` passes neither and stays silent on success.
+then prints the blocks on its own; `modelroom render` passes neither, so `render_with_config` stays
+silent on success -- the CLI handler `cli._cmd_render` prints after it (AP9-T-L): on success (exit 0)
+**after its notes on unreadable profiles** (`note: skipped ...`, printed by `render_cmd._render_locked`
+before it returns) **the Ollama setting of a saving context choice (T-K)** and then **one line with
+the quality link** (`tempo_text.QUALITY_LINK_LINE`); on any other exit code nothing of this. The order
+on stdout is fixed: notes, setting, link (T-K fills the setting between notes and link; until then
+the notes are followed by the link alone). The line is printed whether or not the snapshot held a
+ranked row, so a script can rely on it. A script that expected empty output after a successful `render`
+now sees one line.
 
 **Sections of the Markdown view**, in this order: the header line, the summary block (title,
 snapshot run time, rendered time, base model and package counts, `Scenario:`, `Load:` beyond
@@ -4831,7 +4839,14 @@ to 85 % · tight: up to 98 % · no fit: more · ...`, the thresholds read from `
 neither of the last two. The hints are prose, so they say `no fit`; the cell says `no_fit`.
 
 **The terminal view** is what step 5 of the guided mode shows, and `document_terminal` carries that
-step's head; `modelroom render` writes the two files and stays silent unless a caller asks for it.
+step's head; `modelroom render` writes the two files and prints, besides its notes, only the quality
+link line (above). **The quality link** (AP9-T-L): one line, `Quality of these models for your task:
+https://artificialanalysis.ai` (`tempo_text.QUALITY_LINK_LINE`, indented like the other lines of the
+screen), stands once behind the last machine block -- behind the last runtime section of the last
+block -- and before the closing line of the step, only when at least one block has a ranked row;
+`show_nothing` (nothing to rank) does not show it. It is in `terminal_blocks`, so `document_terminal`
+and step 5 carry the same line; it is **not** in the Markdown view and **not** in the JSON view (GF
+decision 4 (a)), and modelroom never opens the address (README, "Network access").
 The guided mode draws the head and the card itself and then prints `views.terminal_lines`, which is
 the blocks alone. It shows fewer columns than the Markdown table (a terminal is narrow) and the ones
 a reader recognizes a package by: `#` (3), `Model` (22, the base model's name without its account),

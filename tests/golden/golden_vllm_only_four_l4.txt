@@ -18,3 +18,4 @@
            best: the least compression of the same model that fits
            modelroom rates no model family against another
            Speed is measured, see its column.
+ Quality of these models for your task: https://artificialanalysis.ai

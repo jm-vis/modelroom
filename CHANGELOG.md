@@ -15,6 +15,13 @@ All notable changes to this project are documented in this file. The format foll
   server has confirmed. CONTRACTS.md gets the vLLM fit as one section (guards, cards, rule for `t`, formula, where each
   `Fit` field comes from) and the three `Fit` fields `runtime`, `at_once`, `cards`. ADR 0014 is brought to the state
   after AP9-SV2-R.
+- **A link to model quality** (AP9-T-L; `modelroom/tempo_text.py`; CONTRACTS.md, "Render (schema 2)"). Step 5 of the
+  guided run ends its result with one line, `Quality of these models for your task: https://artificialanalysis.ai`,
+  behind the last machine block and only where a row is ranked; it is not in the Markdown or the JSON file, and
+  modelroom never opens the address. `tests/fixtures/` gains the recorded `config.json` of eight public models
+  (mixture-of-experts and multi-token-prediction fields) and two `/api/ps` answers of Ollama 0.35.0, for the
+  packages of AP9-T that follow.
+
 - **vLLM at a server over SSH** (AP9-SV2-R, R1 to R3; `modelroom/remote_vllm.py`, `modelroom/guided_remote_vllm.py`,
   `modelroom/remote_server.py`, `modelroom/remote_protocol.py`; CONTRACTS.md, "The remote protocol v1", "vLLM at a
   server over SSH"). `modelroom remote` reads and measures the server's own vLLM against its `127.0.0.1:8000`, with the
@@ -378,6 +385,10 @@ All notable changes to this project are documented in this file. The format foll
   `modelroom/guided_remote_bind.py`): exactly one fingerprint `none` is a difference like two different
   values; where both are `none` nothing is asked and the run says once that `gpu1 gives no machine identity;
   modelroom cannot tell whether it is still the same machine`.
+- **`modelroom render` prints one line on success** (AP9-T-L): after its notes on unreadable profile files it prints
+  the quality link line (`Quality of these models for your task: https://artificialanalysis.ai`); it printed nothing
+  before. A script that expects an empty output after a successful `render` now sees that line. A failed `render` (exit
+  1, 2, 3) prints none; `render_with_config` stays silent.
 - **Machine keys and names of a folder of 0.1.0 change once** (FR-N): the first command that writes
   to it renames `[machines.<host name>]` and every other hand-written key to a neutral one, and a
   profile's `display_name` to its neutral name (`machine renamed to server-3f9a0c21 (no host names in

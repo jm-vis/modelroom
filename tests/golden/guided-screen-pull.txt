@@ -79,6 +79,7 @@
            Speed is measured, see its column.
 
  install   #1  ollama pull hf.co/unsloth/Qwen3.5-9B-GGUF:UD-Q6_K_XL
+ Quality of these models for your task: https://artificialanalysis.ai
 
  ✓ Results         docs\models.md
 

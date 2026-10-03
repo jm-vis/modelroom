@@ -104,6 +104,29 @@ change with them until someone re-records them on purpose.
   under `text_config`, and `text_config.layer_types` mixes `"linear_attention"` and
   `"full_attention"` -- a hybrid config, so `architecture_from_hf_config` must resolve this to
   `kind="unknown"`, never `dense_classic`.
+- **Mixture-of-experts and multi-token-prediction configs (AP9-T-A, recorded 2026-10-03, pinned to the
+  revision; bytes unchanged).** Each is `GET https://huggingface.co/<repo>/resolve/<sha>/config.json`,
+  the sha read from `GET https://huggingface.co/api/models/<repo>` the same day. None of them carries a
+  field for the active parameters. Nothing reads them in AP9-T-L; AP9-T-G and AP9-T-M do.
+  - `hf_deepseek_ai_deepseek_v3_config.json` -- `deepseek-ai/DeepSeek-V3` at `e815299b0bcbac849fa540c768ef21845365c9eb`:
+    `n_routed_experts` 256, `num_experts_per_tok` 8, `num_nextn_predict_layers` 1.
+  - `hf_zai_org_glm_45_air_config.json` -- `zai-org/GLM-4.5-Air` at `a24ceef6ce4f3536971efe9b778bdaa1bab18daa`:
+    `n_routed_experts` 128, `num_experts_per_tok` 8, `num_nextn_predict_layers` 1.
+  - `hf_qwen_qwen3_30b_a3b_config.json` -- `Qwen/Qwen3-30B-A3B` at `ad44e777bcd18fa416d9da3bd8f70d33ebb85d39`:
+    `num_experts` 128, `num_experts_per_tok` 8, no multi-token-prediction field.
+  - `hf_qwen_qwen35_35b_a3b_config.json` -- `Qwen/Qwen3.5-35B-A3B` at `59d61f3ce65a6d9863b86d2e96597125219dc754`:
+    under `text_config`, `num_experts` 256, `num_experts_per_tok` 8, `mtp_num_hidden_layers` 1.
+  - `hf_qwen_qwen3_next_80b_a3b_instruct_config.json` -- `Qwen/Qwen3-Next-80B-A3B-Instruct` at
+    `9c7f2fbe84465e40164a94cc16cd30b6999b0cc7`: `num_experts` 512, `num_experts_per_tok` 10, **no**
+    multi-token-prediction field (a missing field is no statement that the model has none).
+  - `hf_openai_gpt_oss_20b_config.json` -- `openai/gpt-oss-20b` at `6cee5e81ee83917806bbde320786a8fb61efebee`:
+    `num_local_experts` 32, `num_experts_per_tok` 4 and `experts_per_token` 4, no multi-token-prediction field.
+  - `hf_xiaomimimo_mimo_7b_rl_config.json` -- `XiaomiMiMo/MiMo-7B-RL` at `6299b5a2c45daf0c429285c92b8e61a5bd011c0d`:
+    a **dense** model with `num_nextn_predict_layers` 1 and no expert field.
+  - `hf_mistralai_mixtral_8x7b_instruct_v01_config.json` -- `mistralai/Mixtral-8x7B-Instruct-v0.1` at
+    `eba92302a2861cdc0098cc54bc9f17cb2c47eb61`: `num_local_experts` 8, `num_experts_per_tok` 2, no
+    multi-token-prediction field.
+  - `google/gemma-3-27b-it` is gated; no fixture (its `config.json` answers 401 without a login).
 
 ## Ollama
 
@@ -134,6 +157,15 @@ manifest's `params` layer) answers `307` with a signed `Location` on an object-s
 that `modelroom/http.py` is not allowed to open. `Package.default_context` therefore stays
 `None` -- see `modelroom/ollama.py`'s module docstring and CONTRACTS.md, "Ollama packages:
 files and `default_context`".
+
+**`GET /api/ps` of a running model (AP9-T-A, recorded 2026-10-03, Ollama 0.35.0 on the maintainer's laptop;
+`expires_at` set to the fixed value `2026-01-01T00:00:00Z`, everything else unchanged):**
+
+- `ollama_ps_full_gpu.json` -- case (a), the model entirely on the graphics card: `smollm2:135m`, context 8192,
+  `size` and `size_vram` equal (500590181); `ollama ps` shows `100% GPU`.
+- `ollama_ps_partial.json` -- case (b), partly offloaded: `qwen3.5:9b` with `num_ctx` 131072 (`context_length`
+  131072), `size` 11067436560, `size_vram` 5034255316, so `size_vram / size` = 0.455; `ollama ps` shows
+  `55%/45% CPU/GPU`.
 
 ## Synthetic fixtures
 

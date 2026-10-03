@@ -106,5 +106,6 @@
 
  install   #1 on workstation-00000000 (entered)  ollama pull hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M
            run it on that computer, or choose a package for it below
+ Quality of these models for your task: https://artificialanalysis.ai
 
  ✓ Results         docs\models.md

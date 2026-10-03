@@ -27,6 +27,7 @@ from .held_text import LOCAL_LABEL, local_pieces
 from .pull_choice import collision_pieces, repo_lines
 from .ranking_words import EACH_MACHINE_SENTENCE, several_ranked, showing_line, shown_pieces
 from .render import format_header_line
+from .tempo_text import QUALITY_LINK_LINE
 from .room import Disk, LiveRoom
 from .room_head import LOADED_LABEL, ROOM_LABEL, head_pieces, loaded_pieces, reserve_hint_rows
 from .views_install import INSTALL_LABEL, install_lines, install_target, over_ranks_on_machine  # noqa: F401 -- `install_target` is re-exported
@@ -745,6 +746,8 @@ def terminal_blocks(
     several = several_ranked(document)
     for block in document.machines:
         lines += [[], *_terminal_ranking(block, document.scenario, marks.skip, marks.dot, view, several)]
+    if any(block.ranked for block in document.machines):  # T-L: once, behind the last block, only where a row is ranked
+        lines.append([("", QUALITY_LINK_LINE)])
     return lines
 
 
@@ -766,7 +769,7 @@ def document_terminal(
     over, and since 2026-09-24 so does the scenario -- the head of each machine's block says the
     context, which is what a reader of a table needs from it. It is step 5 of the guided mode, so
     it carries that step's head; `modelroom render` writes the two files and stays silent unless a
-    caller asks for it.
+    caller asks for it (its own handler prints the quality link, `cli._cmd_render`).
     """
     lines = [plain(head_line(RESULTS_STEP, glyphs()))]
     if document.rating_unavailable is not None:
