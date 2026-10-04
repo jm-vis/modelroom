@@ -1,0 +1,32 @@
+[
+  {
+    "items": [
+      {
+        "id": "acme/Atlas-3-9B",
+        "type": "model"
+      },
+      {
+        "id": "acme/Atlas-2-9B",
+        "type": "model"
+      }
+    ],
+    "owner": {
+      "name": "acme"
+    },
+    "slug": "acme/atlas-6a1b2c3d4e5f",
+    "title": "Atlas"
+  },
+  {
+    "items": [
+      {
+        "id": "acme/Atlas-Embed-1",
+        "type": "model"
+      }
+    ],
+    "owner": {
+      "name": "acme"
+    },
+    "slug": "acme/embeddings-6a1b2c3d4e60",
+    "title": "Embeddings"
+  }
+]

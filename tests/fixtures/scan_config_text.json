@@ -1,0 +1,8 @@
+{
+  "architectures": [
+    "AtlasForCausalLM"
+  ],
+  "hidden_size": 4096,
+  "model_type": "atlas",
+  "num_hidden_layers": 32
+}

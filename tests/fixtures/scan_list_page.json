@@ -1,0 +1,80 @@
+{
+  "body": [
+    {
+      "_id": "6710a1b2c3d4e5f607182930",
+      "cardData": {
+        "license": "apache-2.0"
+      },
+      "createdAt": "2026-10-02T08:15:30.000Z",
+      "downloads": 1200,
+      "id": "acme/Atlas-3-9B",
+      "likes": 57,
+      "pipeline_tag": "text-generation",
+      "safetensors": {
+        "parameters": {
+          "BF16": 9100000000
+        },
+        "total": 9100000000
+      },
+      "tags": [
+        "transformers",
+        "safetensors",
+        "text-generation",
+        "license:apache-2.0",
+        "region:us"
+      ]
+    },
+    {
+      "_id": "6710a1b2c3d4e5f607182930",
+      "cardData": {
+        "license": "apache-2.0"
+      },
+      "createdAt": "2026-09-27T10:00:00.000Z",
+      "downloads": 340,
+      "id": "acme/Atlas-2-9B",
+      "likes": 12,
+      "pipeline_tag": "text-generation",
+      "safetensors": {
+        "parameters": {
+          "BF16": 7000000000
+        },
+        "total": 7000000000
+      },
+      "tags": [
+        "transformers",
+        "safetensors",
+        "text-generation",
+        "license:apache-2.0",
+        "region:us"
+      ]
+    },
+    {
+      "_id": "6710a1b2c3d4e5f607182930",
+      "cardData": {
+        "license": "apache-2.0"
+      },
+      "createdAt": "2026-09-01T10:00:00.000Z",
+      "downloads": 340,
+      "id": "acme/Atlas-1-9B",
+      "likes": 12,
+      "pipeline_tag": "text-generation",
+      "safetensors": {
+        "parameters": {
+          "BF16": 7000000000
+        },
+        "total": 7000000000
+      },
+      "tags": [
+        "transformers",
+        "safetensors",
+        "text-generation",
+        "license:apache-2.0",
+        "region:us"
+      ]
+    }
+  ],
+  "headers": {
+    "Link": "<https://huggingface.co/api/models?author=acme&cursor=eyJjcmVhdGVkQXQiOiIyMDI2LTA5LTMwIn0%3D&direction=-1&limit=100&sort=createdAt>; rel=\"next\""
+  },
+  "status": 200
+}

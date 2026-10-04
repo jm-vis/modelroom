@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **The catalog scanner** (AP9-KA-T; `scripts/catalog_scan.py`, `scripts/catalog_scan_rules.py`; a maintainer tool, not in the
+  wheel). `python scripts/catalog_scan.py --catalog modelroom/catalog.json --rejected modelroom/catalog-rejected.json --out <folder>`
+  reads the catalog, the rejection list and the Hub's list pages (read-only `GET`, 300 requests a run, no token) and writes a
+  proposal for the maintainer: `<folder>/<day>/proposal.json` (numbered changes with every touched field as `old` and `new`,
+  candidates, the checksum base of the catalog) and `proposal.md`, then `<folder>/scan-state.json` (per account the day up to
+  which the lists are read without a gap, and where an unfinished catch-up resumes). It proposes new base models of listed
+  publishers with their `kind` (the task, the tags, the base model, `config.json`), GGUF packages, successors and
+  collections of a publisher as evidence, and lists new publishers and packagers and repos of open kind as candidates; what
+  nobody decided yet comes back in the next proposal with its first date. The scanner never changes the catalog or the
+  rejection list: taking a proposal into the table is a separate tool, after the maintainer's word.
 - **The task Hugging Face gives a model, and the evidence for `kind`** (AP9-KA-S2; `modelroom/catalog.py`,
   `modelroom/catalog_schema.py`, `modelroom/catalog.json`; CONTRACTS.md, "Catalog rules"). Every catalog row carries
   `hub_pipeline_tag` (the Hub's `pipeline_tag`, verbatim, or `null`) and `kind_source` (`tags`, `base_model`, `config`

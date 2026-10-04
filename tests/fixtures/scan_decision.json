@@ -1,0 +1,13 @@
+{
+  "admitted": [
+    "K1"
+  ],
+  "approved": [
+    1
+  ],
+  "date": "2026-10-03",
+  "rejected": [
+    2
+  ],
+  "state": "approved"
+}

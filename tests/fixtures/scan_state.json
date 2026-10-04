@@ -1,0 +1,9 @@
+{
+  "accounts": {
+    "acme": {
+      "covered_until": "2026-09-30T00:00:00.000Z",
+      "pending": null
+    }
+  },
+  "schema": 1
+}
