@@ -8,7 +8,7 @@ It reads the two files and the output folder, asks the Hub with `GET` only, and 
 in between leaves the old state and the next run reads the same pages again. It cannot write `catalog.json` or
 `catalog-rejected.json`; taking a proposal into the table is `catalog_publish.py`, after the maintainer's word. Exit 0;
 exit 1 when the budget ended, a page failed or a stored position was lost (the proposal is written all the same); exit 2
-when the call or a file is wrong (nothing is written). The rules are in `catalog_scan_rules.py`.
+when the call or a file is wrong or the proposal cannot be made (nothing is written). The rules are in `catalog_scan_rules.py`.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, time, timezone
@@ -67,15 +68,17 @@ class DiskFiles:
         return Path(path).read_bytes()
 
     def write(self, path, data: bytes) -> None:
+        """Atomic: a temporary file of its own in the target folder (created exclusively under a unique name, so it
+        never meets another file), then `os.replace`; on any failure only that temporary file is removed."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        handle = tempfile.NamedTemporaryFile(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp", delete=False)
         try:
-            with open(temporary, "wb") as handle:
+            with handle:
                 handle.write(data)
-            os.replace(temporary, path)
+            os.replace(handle.name, path)
         except BaseException:
-            temporary.unlink(missing_ok=True)
+            Path(handle.name).unlink(missing_ok=True)
             raise
 
     def folders(self, path) -> list[str]:
@@ -237,7 +240,7 @@ class _Run:
         if cheap is not None:
             return cheap
         budget_hit, last, base = False, {"stage": "tags", "value": "no table task in the tags"}, R.single_base(entry)
-        if base:
+        if base and not self._is_rejected(base):  # a rejected repo gives no evidence, not even of a kind
             try:
                 kind = R.kind_from_base_answer(self._body(self._get(self.t_base, R.base_url(base), R.API_MAX_BYTES)))
                 last = {"stage": "base_model", "value": "no task of the table"}
@@ -470,7 +473,7 @@ class _Run:
             change["open_since"] = before["open_since"]
             if key[2:] == ("gguf_repos",):
                 joined = list(before["fields"]["gguf_repos"]["new"])
-                change["fields"]["gguf_repos"]["new"] = (joined + [r for r in change["fields"]["gguf_repos"]["new"] if r not in joined])[:50]
+                change["fields"]["gguf_repos"]["new"] = (joined + [r for r in change["fields"]["gguf_repos"]["new"] if r not in joined])[:R.MAX_GGUF_REPOS]
                 change["evidence"] = before.get("evidence", []) + [e for e in change["evidence"] if e not in before.get("evidence", [])]
         self.changes[key] = change
 
@@ -501,7 +504,7 @@ class _Run:
                 continue
             source = collections.get(entry.owner, {}).get(entry.repo) or f"{R.HUB}/{entry.owner}"
             row = R.build_row(entry, result, family=family, today=self.today, latest=entry.repo in latest, latest_source=source)
-            row["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:50]
+            row["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:R.MAX_GGUF_REPOS]
             try:
                 rows.append(CatalogModel.model_validate(row))  # the next new row sees this one: one family, one publisher
             except ValueError as exc:  # a strange Hub answer costs this row, never the run
@@ -512,9 +515,10 @@ class _Run:
         for base, found in sorted(self.gguf.items()):
             row = None if self._is_rejected(base) else self.rows.get(base)
             added = sorted(r for r in found if r not in row.gguf_repos) if row is not None else []
-            if added:
+            target = (list(row.gguf_repos) + added)[:R.MAX_GGUF_REPOS] if row is not None else []
+            if row is not None and target != list(row.gguf_repos):  # a full list takes nothing more: no change
                 self._put(("field", base, "gguf_repos"), R.field_change(
-                    row, "A2", {"gguf_repos": (list(row.gguf_repos), (list(row.gguf_repos) + added)[:50])}, [f"{R.HUB}/{r}" for r in added], self.today, "gguf_repos"))
+                    row, "A2", {"gguf_repos": (list(row.gguf_repos), target)}, [f"{R.HUB}/{r}" for r in added if r in target], self.today, "gguf_repos"))
         for row, target in sorted(self.successors, key=lambda pair: pair[0].hf_repo):
             self._successor(row, target)
         for row in plain:
@@ -582,13 +586,17 @@ class _Run:
         R.order_proposal(changes, candidates)
         proposal = R.proposal_document(self.today, self.catalog_sha, list(dict.fromkeys(self.notes)), changes, candidates,
                                        len(self.incomplete), self.pending_publication)
-        data = R.dump_json(proposal)
         marks = {a: self.new_marks.get(a, self.marks[a]) for a in self.accounts}
         state = {"schema": STATE_SCHEMA, "accounts": {a: {"covered_until": R.stamp(c), "pending": p} for a, (c, p) in marks.items()}}
+        try:  # all three files exist in memory before the first is written
+            data = R.dump_json(proposal)
+            text, state_bytes = R.render_proposal(proposal, hashlib.sha256(data).hexdigest()).encode("utf-8"), R.dump_json(state)
+        except (TypeError, ValueError, AttributeError, KeyError) as exc:
+            raise UsageError(f"the proposal cannot be written: {_clean(exc)}") from exc
         folder = self.out / self.today
         self.files.write(folder / "proposal.json", data)
-        self.files.write(folder / "proposal.md", R.render_proposal(proposal).encode("utf-8"))
-        self.files.write(self.out / "scan-state.json", R.dump_json(state))
+        self.files.write(folder / "proposal.md", text)
+        self.files.write(self.out / "scan-state.json", state_bytes)
         return ScanResult(int(self.budget_end or self.problem), None, proposal, self.main.used, self.sub.used, self.kind_check)
 
 

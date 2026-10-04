@@ -21,7 +21,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
-from modelroom.catalog import CATALOG_MAX_TASK_LEN, CATALOG_MAX_TEXT_LEN, PIPELINE_TAG_TO_KIND, CatalogError, CatalogModel
+from modelroom.catalog import CATALOG_MAX_GGUF_REPOS, CATALOG_MAX_TASK_LEN, CATALOG_MAX_TEXT_LEN, PIPELINE_TAG_TO_KIND, CatalogError, CatalogModel
 from modelroom.catalog_schema import build_catalog_v2
 from modelroom.contracts import SchemaVersionError, validate_hf_repo
 from modelroom.parameters import parameters_from_name
@@ -59,6 +59,7 @@ B1_MIN_LIKES, B1_MIN_DOWNLOADS, B1_MAX_AGE = 100, 1000, timedelta(days=30)
 B2_MIN_ROWS = 3
 MAX_CANDIDATES = 10  # for B1 and B2 together; B3 has no limit
 MAX_PAGES = 10  # pages per account and run, all steps together
+MAX_GGUF_REPOS = CATALOG_MAX_GGUF_REPOS  # a row's list of GGUF repos is cut here; what the cut takes is no change
 OVERLAP = timedelta(days=2)
 FIRST_RUN_BACK = timedelta(days=30)
 CONFIG_MAX_BYTES, API_MAX_BYTES = 64 * 1024, 1024 * 1024
@@ -278,12 +279,13 @@ def family_for(repo: str, kind: str, rows: list[CatalogModel], size: float | Non
 
 
 def latest_among(fresh: list[tuple[str, str, float | None]], rows: list[CatalogModel]) -> set[str]:
-    """The new repos that stand over a `latest` row of their group and under no other new repo of it."""
+    """The new repos that stand over a `latest` row of their group and under no other new repo and no row of it
+    (`rows` holds the table and the carried new rows: a carried row stands over a fresh one as a fresh one does)."""
     out = set()
     for repo, kind, size in fresh:
         over_latest = any(r.latest and stands_over(repo, kind, r, size) for r in rows)
-        under_new = any(other != repo and stands_over(other, k, (repo, kind, size), o_size) for other, k, o_size in fresh)
-        if over_latest and not under_new:
+        others = [(o, k, s) for o, k, s in fresh if o != repo] + [(r.hf_repo, r.kind, r.parameters_b) for r in rows if r.hf_repo != repo]
+        if over_latest and not any(stands_over(o, k, (repo, kind, size), s) for o, k, s in others):
             out.add(repo)
     return out
 
@@ -362,12 +364,15 @@ DECISION_STATES = ("approved", "applied", "committed", "pushed", "uploaded", "pu
 
 
 def parse_rejected(raw: bytes) -> tuple[set[str], set[str]]:
-    """`(repos, accounts)` of the rejection list: strings or objects with `hf_repo` or `account`; a `/` makes it a repo."""
+    """`(repos, accounts)` of the rejection list: names, or objects with a name under `hf_repo` (else `account`); a `/`
+    makes it a repo. Any other entry is a `ValueError`, never skipped: a damaged entry must not lift a rejection."""
     entries = json.loads(raw.decode("utf-8"))
     if not isinstance(entries, list):
         raise ValueError("not a list")
-    names = {e if isinstance(e, str) else e.get("hf_repo") or e.get("account") for e in entries if isinstance(e, (str, dict))}
-    names = {name for name in names if isinstance(name, str)}
+    names = [e if isinstance(e, str) else e.get("hf_repo", e.get("account")) if isinstance(e, dict) else None for e in entries]
+    for number, name in enumerate(names, start=1):
+        if not (isinstance(name, str) and name):
+            raise ValueError(f"entry {number} is neither a name nor an object with a name under hf_repo or account")
     return {n for n in names if "/" in n}, {n for n in names if "/" not in n}
 
 
@@ -391,8 +396,9 @@ def refresh_field(change: dict, row: CatalogModel, rejected=lambda repo: False) 
         if not (isinstance(pair["new"], list) and isinstance(pair["old"], list)):
             return None
         added = [r for r in _without_rejected(pair["new"], rejected) if isinstance(r, str) and r not in pair["old"] and r not in now["gguf_repos"]]
-        change["fields"]["gguf_repos"] = {"old": now["gguf_repos"], "new": (now["gguf_repos"] + added)[:50]}
-        return change if added else None
+        target = (now["gguf_repos"] + added)[:MAX_GGUF_REPOS]
+        change["fields"]["gguf_repos"] = {"old": now["gguf_repos"], "new": target}
+        return change if target != now["gguf_repos"] else None  # a full list takes nothing more
     if all(now.get(name) == pair["new"] for name, pair in change["fields"].items()):
         return None
     for name, pair in change["fields"].items():
@@ -412,11 +418,23 @@ def _ids(decision: dict, key: str) -> set[str]:
     return {str(x) for x in found if isinstance(x, (int, str)) and not isinstance(x, bool)} if isinstance(found, list) else set()
 
 
+def _repo(value: object) -> bool:
+    try:
+        return bool(validate_hf_repo(value))
+    except (ValueError, TypeError):
+        return False
+
+
+def _strings(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
 def _sound_change(change: dict) -> bool:
-    """A carried change has every key the rest of the run reads, so a damaged file costs the entry and not the run."""
+    """A carried change has every key the rest of the run reads (also the rendering: `evidence` is a list of strings,
+    as every writer of a change writes it), so a damaged file costs the entry and not the run."""
     fields = change["fields"]
     return (
-        isinstance(change["hf_repo"], str) and isinstance(fields, dict)
+        _repo(change["hf_repo"]) and _strings(change["evidence"]) and isinstance(fields, dict)
         and all(isinstance(p, dict) and {"old", "new"} <= set(p) for p in fields.values())
         and isinstance(change["stage"], str) and isinstance(change["open_since"], str) and isinstance(change["kind"], str)
         and (change["change"] != "field" or isinstance(change["field"], str))
@@ -424,8 +442,8 @@ def _sound_change(change: dict) -> bool:
 
 
 def _sound_candidate(cand: dict) -> bool:
-    """A carried candidate has the keys and types the run reads (sorting, the second check of a B3)."""
-    if not (isinstance(cand["account"], str) and isinstance(cand["hf_repo"], str) and isinstance(cand["open_since"], str)):
+    """A carried candidate has the keys and types the run reads (sorting, the second check of a B3, the rendering)."""
+    if not (isinstance(cand["account"], str) and _repo(cand["hf_repo"]) and isinstance(cand["open_since"], str) and _strings(cand["evidence"])):
         return False
     if cand["candidate"] != "B3":
         return isinstance(cand["likes"], int) and not isinstance(cand["likes"], bool)
@@ -436,16 +454,25 @@ def _sound_candidate(cand: dict) -> bool:
     )
 
 
+def _named(entry: dict) -> list:
+    """Every other repo a carried entry takes as evidence: the successor a change names, the base model that gave a
+    new row its kind, and the models of a B1 or B2 candidate (its best repo, its list, the rows of a B2)."""
+    if "change" in entry:
+        base = entry.get("kind_evidence")
+        return [entry["fields"].get("successor", {}).get("new")] + ([base.get("value")] if isinstance(base, dict) and base.get("stage") == "base_model" else [])
+    return [entry["hf_repo"], *(r["hf_repo"] for r in entry.get("repos", [])), *entry.get("bases", [])]
+
+
 def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], rejected) -> tuple[dict, dict, set[str], set[tuple], set[str]]:
     """What of the newest earlier proposal is still open: `(changes, candidates, known repos, decided field pairs,
     decided accounts)`.
 
     Dropped: what the decision of that folder took (a number or a `Kk` in `approved`, `rejected` or `admitted`, from
-    state `approved` on), what the rejection list now holds (also inside a list of GGUF repos), a new row the table
-    now has, a field change the table already carries, a change that touches a field the decision took, an account
-    that is listed now. What the decision took is returned too, for the whole run: the repos of its new rows and B3
-    candidates (in `known`), every `(repo, field)` pair its field changes touch and the accounts of its B1 and B2
-    candidates. Unreadable entries and lists are skipped, never an error.
+    state `approved` on), what the rejection list now holds (also inside a list of GGUF repos, as a successor, as the
+    base model of a kind, as a model of a B1 or B2), a new row the table now has, a field change the table already
+    carries, a change that touches a field the decision took, an account that is listed now. What the decision took is
+    returned too, for the whole run: the repos of its new rows and B3 candidates (in `known`), every `(repo, field)`
+    pair its field changes touch and the accounts of its B1 and B2 candidates. Unreadable entries are skipped.
     """
     taken = decision if isinstance(decision, dict) and decision.get("state") in DECISION_STATES else {}
     decided = set().union(*(_ids(taken, key) for key in ("approved", "rejected", "admitted")))
@@ -460,7 +487,7 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
             if str(change.get("n")) in decided:
                 done_repos.add(repo) if change["change"] == "new_row" else done_fields.update(touched(change))
                 continue
-            if not _sound_change(change) or rejected(repo):
+            if not _sound_change(change) or rejected(repo) or any(isinstance(r, str) and rejected(r) for r in _named(change)):
                 continue
             if change["change"] == "new_row" and row is None:
                 if isinstance((gguf := change["fields"].get("gguf_repos", {})).get("new"), list):
@@ -480,8 +507,8 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
                 continue
             if kind not in ("B1", "B2", "B3") or not _sound_candidate(cand) or rejected(f"{cand['account']}/x") or rejected(key):
                 continue
-            if (kind == "B3" and key in rows) or (kind != "B3" and key in listed):
-                continue
+            if (kind == "B3" and key in rows) or (kind != "B3" and (key in listed or any(not isinstance(r, str) or rejected(r) for r in _named(cand)))):
+                continue  # a rejected model is no evidence: the candidate comes again from a run that finds it without one
             candidates[(kind, key)] = cand
         except (KeyError, TypeError, AttributeError):
             continue
