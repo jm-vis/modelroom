@@ -24,7 +24,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 rules = importlib.import_module("catalog_scan_rules")
 scanner = importlib.import_module("catalog_scan")
 
-from modelroom.catalog import PIPELINE_TAG_TO_KIND, CatalogModel  # noqa: E402
+from modelroom.catalog import CatalogModel  # noqa: E402
 from modelroom.catalog_schema import build_catalog_v2  # noqa: E402
 from modelroom.http import FixtureTransport, Response  # noqa: E402
 

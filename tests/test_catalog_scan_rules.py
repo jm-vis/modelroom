@@ -194,7 +194,7 @@ def test_a_change_of_one_new_value_changes_the_rendering_at_that_place_only():
 from modelroom.catalog import PIPELINE_TAG_TO_KIND  # noqa: E402
 from test_catalog_scan import (  # noqa: E402,F401  (the recorded Hub, the run and the readers of a proposal)
     BASELINE_CALLS, LATEST_TEXT_VISION, b1_entry, FIX, MISSING, NOW, TABLE, TODAY, YESTERDAY, Hub, applied, asked, b3, cands, ent, env, go, new_of, new_rows,
-    stage_calls, stamp, Env, digest, pg, quantized,
+    stage_calls, stamp, Env, digest, fields_of, pg, quantized,
 )
 from datetime import timedelta  # noqa: E402
 
@@ -613,3 +613,155 @@ def test_two_new_models_of_two_publishers_with_one_family_word_in_one_run_get_tw
     rows = new_rows(p)
     assert result.exit_code == 0 and (new_of(rows["acme/Zeta-1-3B"])["family"], new_of(rows["nova/Zeta-1-3B"])["family"]) == ("zeta", "zeta-nova")
     assert applied(p).model_for("nova/Zeta-1-3B").family == "zeta-nova" and not [n for n in p["notes"] if "left out" in n]
+
+
+# --- the fixes after the second review round (t2) --------------------------------------------------------------------
+
+
+def reject(env: Env, *extra: dict) -> None:
+    env.rejected.write_bytes(json.dumps(json.loads(env.rejected.read_bytes()) + list(extra)).encode("utf-8"))
+
+
+def decide(env: Env, day: str = TODAY, **lists) -> None:
+    decision = {"state": "approved", "date": day, "approved": [], "rejected": [], "admitted": [], **lists}
+    (env.out / day / "decision.json").write_bytes(json.dumps(decision).encode("utf-8"))
+
+
+@pytest.mark.parametrize("decided", [False, True])
+def test_a_change_that_touches_any_field_a_decision_took_is_not_made_in_the_whole_run(tmp_path, decided):
+    env = Env(tmp_path / "e")
+    hub = Hub()
+    hub.put(rules.collections_url("acme"), (FIX / "scan_collections.json").read_bytes())
+    first, _, _ = go(env, hub)
+    assert [(c["n"], c["hf_repo"], c["field"]) for c in first["changes"]] == [(1, "acme/Atlas-2-9B", "latest_source")]
+    if decided:
+        decide(env, approved=[1])
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Atlas-2-9B", stamp(5), cardData={"license": "mit", "new_version": "acme/Atlas-3-9B"})])
+    p, result, _ = go(env, hub, now=NOW + timedelta(days=1))
+    assert result.exit_code == 0 and "acme/Atlas-3-9B" in new_rows(p)
+    successor = fields_of(p, "acme/Atlas-2-9B", "successor")
+    if decided:  # the successor would touch `latest_source`, which the decision took
+        assert successor is None and [c for c in p["changes"] if c["hf_repo"] == "acme/Atlas-2-9B"] == []
+    else:
+        assert new_of(successor)["successor"] == "acme/Atlas-3-9B" and "latest_source" in successor["fields"]
+
+
+def test_a_carried_new_row_holds_its_family_against_a_new_row_of_another_publisher_on_every_later_day(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Zeta-1-3B", stamp(1))])
+    go(env, hub)
+    hub2 = Hub()
+    hub2.page("nova", [ent("nova/Zeta-1-3B", stamp(1))])
+    p, result, _ = go(env, hub2, now=NOW + timedelta(days=1))
+    families = {repo: new_of(c)["family"] for repo, c in new_rows(p).items()}
+    assert result.exit_code == 0 and families == {"acme/Zeta-1-3B": "zeta", "nova/Zeta-1-3B": "zeta-nova"} and applied(p)
+    p3, result3, _ = go(env, Hub(), now=NOW + timedelta(days=2))
+    assert result3.exit_code == 0 and {repo: new_of(c)["family"] for repo, c in new_rows(p3).items()} == families and applied(p3)
+
+
+@pytest.mark.parametrize("extra, repo, over", [
+    ({"hf_repo": "acme/Atlas-1-9B"}, "acme/Atlas-1-9B", {"cardData": {"license": "mit", "new_version": "acme/Atlas-2-9B"}}),
+    ({"hf_repo": "acme/Atlas-1-9B"}, "acme/Atlas-1-9B", {"cardData": {"license": "mit", "description": "Superseded by acme/Atlas-2-9B."}, "pipeline_tag": "text-to-image"}),
+    ({"account": "nova"}, "nova/Nimbus-1-30B", {"cardData": {"license": "mit", "new_version": "nova/Nimbus-2-30B"}, "pipeline_tag": "text-to-image"}),
+])
+def test_a_rejected_row_or_a_row_of_a_rejected_account_is_neither_checked_nor_read_for_its_card(env, extra, repo, over):
+    reject(env, extra)
+    hub = Hub()
+    hub.page(repo.split("/")[0], [ent(repo, stamp(1), **over)])
+    p, result, _ = go(env, hub)
+    assert p["changes"] == [] and result.kind_check[repo] == "not checked" and result.exit_code == 0
+    assert [n for n in p["notes"] if repo in n] == []
+
+
+@pytest.mark.parametrize("repo", ["acme/Rejected-1-7B", "spamlabs/Odd-1-7B"])
+def test_a_carried_budget_candidate_of_a_rejected_repo_or_account_is_not_checked_again(env, repo):
+    env.prev(YESTERDAY, candidates=[b3(repo, YESTERDAY, budget=True, tags=["base_model:acme/Atlas-Base-9B"])])
+    p, result, transport = go(env, Hub())
+    assert p["candidates"] == [] and stage_calls(transport) == 0 and result.sub_used == 0
+
+
+@pytest.mark.parametrize("extra", [{"hf_repo": "packone/Atlas-2-9B-GGUF"}, {"account": "packone"}])
+def test_a_carried_gguf_addition_rejected_since_the_last_run_is_dropped(env, extra):
+    hub = Hub()
+    hub.page("packone", [quantized("packone/Atlas-2-9B-GGUF", "acme/Atlas-2-9B")])
+    assert fields_of(go(env, hub)[0], "acme/Atlas-2-9B", "gguf_repos")
+    reject(env, extra)
+    p, result, _ = go(env, Hub(), now=NOW + timedelta(days=1))
+    assert p["changes"] == [] and result.exit_code == 0
+
+
+def test_a_carried_new_row_loses_a_gguf_repo_rejected_since_the_last_run(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+    hub.page("packone", [quantized("packone/Atlas-3-9B-GGUF", "acme/Atlas-3-9B")])
+    assert new_of(new_rows(go(env, hub)[0])["acme/Atlas-3-9B"])["gguf_repos"] == ["packone/Atlas-3-9B-GGUF"]
+    reject(env, {"account": "packone"})
+    p, _, _ = go(env, Hub(), now=NOW + timedelta(days=1))
+    assert new_of(new_rows(p)["acme/Atlas-3-9B"])["gguf_repos"] == [] and applied(p)
+
+
+def test_a_new_version_that_names_a_carried_new_row_proposes_the_successor_and_leaves_the_carried_row_as_it_was(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+    first = new_rows(go(env, hub)[0])["acme/Atlas-3-9B"]
+    hub2 = Hub()
+    hub2.page("acme", [ent("acme/Atlas-2-9B", stamp(5), cardData={"license": "mit", "new_version": "acme/Atlas-3-9B"})])
+    p, result, _ = go(env, hub2, now=NOW + timedelta(days=1))
+    change = fields_of(p, "acme/Atlas-2-9B", "successor")
+    assert change["stage"] == "A3" and new_of(change)["successor"] == "acme/Atlas-3-9B" and change["fields"]["latest"] == {"old": True, "new": False}
+    carried = new_rows(p)["acme/Atlas-3-9B"]
+    assert carried["fields"] == first["fields"] and carried["open_since"] == TODAY and result.exit_code == 0
+    assert applied(p).age_of("acme/Atlas-2-9B") == ("legacy", "acme/Atlas-3-9B") and applied(p).model_for("acme/Atlas-3-9B").latest
+
+
+def test_a_decision_with_lists_of_the_wrong_shape_counts_only_its_usable_entries(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+    hub.put(rules.b1_url("text-generation"), [b1_entry("newlab")])
+    go(env, hub)
+    decide(env, approved=None, rejected=3, admitted=[None, {"k": 1}, "K1"])
+    p, result, _ = go(env, hub, now=NOW + timedelta(days=1))
+    assert result.exit_code == 0 and list(new_rows(p)) == ["acme/Atlas-3-9B"] and p["candidates"] == []
+
+
+def test_carried_entries_with_values_of_the_wrong_type_cost_their_entries_and_never_the_run(env):
+    gguf = {"n": 2, "change": "field", "field": "gguf_repos", "stage": "A2", "hf_repo": "acme/Atlas-2-9B", "kind": "text", "open_since": YESTERDAY,
+            "evidence": [], "fields": {"gguf_repos": {"old": [], "new": "packone/Atlas-2-9B-GGUF"}}}
+    env.prev(YESTERDAY, changes=[{**carried_row("acme/Zeta-1-3B"), "hf_repo": 5}, gguf], candidates=[
+        {**b3("acme/Odd-1-7B", YESTERDAY, budget=True), "tags": 3}, {**b3("acme/Odd-2-7B", YESTERDAY, budget=True), "kind_evidence": ["budget"]},
+        {**b3("acme/Odd-3-7B", YESTERDAY), "hf_repo": ["acme/Odd-3-7B"]},
+        {"k": "K9", "candidate": "B1", "account": 7, "hf_repo": "x/y", "likes": 150, "open_since": YESTERDAY, "evidence": []},
+    ])
+    p, result, transport = go(env, Hub())
+    assert result.exit_code == 0 and p["changes"] == [] and p["candidates"] == [] and stage_calls(transport) == 0
+
+
+@pytest.mark.parametrize("which", ["catalog", "rejected"])
+@pytest.mark.parametrize("target", [f"{TODAY}/proposal.json", f"{TODAY}/proposal.md", "scan-state.json"])
+def test_an_input_file_that_is_also_an_output_ends_with_exit_two_untouched_and_without_a_request(env, which, target):
+    (env.out / "sub").mkdir(parents=True)
+    given = env.out / "sub" / ".." / target  # the same file under another spelling
+    (env.out / target).parent.mkdir(parents=True, exist_ok=True)
+    (env.out / target).write_bytes(getattr(env, which).read_bytes())
+    setattr(env, which, given)
+    before = (env.out / target).read_bytes()
+    result, transport = env.run(Hub())
+    assert result.exit_code == 2 and result.error and transport.calls == [] and (env.out / target).read_bytes() == before
+
+
+@pytest.mark.parametrize("pages, error", [
+    ([[ent(f"acme/Blank{i:02d}-3B", createdAt=MISSING)] for i in range(10)], True),
+    ([[ent("acme/Blank-1-3B", createdAt="never"), ent("acme/Blank-2-3B", createdAt=MISSING)]], True),
+    ([[]], False),
+    ([[ent("acme/Blank-1-3B", createdAt=MISSING), ent("acme/Timed-1-3B", stamp(1)), ent("acme/Blank-2-3B", createdAt="never")]], False),
+], ids=["ten pages, then the end", "one page, then the end", "an empty list", "one time of three"])
+def test_pages_that_show_entries_but_no_usable_time_are_a_page_error_however_the_list_ends(env, pages, error):
+    hub = Hub()
+    hub.chain("acme", pages)
+    p, result, _ = go(env, hub)
+    note = "acme: no usable time on the pages read, not advanced"
+    if error:
+        assert note in p["notes"] and result.exit_code == 1
+        assert env.state()["accounts"]["acme"] == {"covered_until": "2026-08-30T00:00:00.000Z", "pending": None}
+    else:
+        assert note not in p["notes"] and result.exit_code == 0 and env.state()["accounts"]["acme"]["pending"] is None

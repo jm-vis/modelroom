@@ -371,12 +371,26 @@ def parse_rejected(raw: bytes) -> tuple[set[str], set[str]]:
     return {n for n in names if "/" in n}, {n for n in names if "/" not in n}
 
 
-def refresh_field(change: dict, row: CatalogModel) -> dict | None:
-    """A carried field change against the table as it is now: new `old` values, `None` when the table has the target."""
+def touched(change: dict) -> set[tuple]:
+    """Every `(repo, field)` pair a change touches: its main field and each field it carries."""
+    repo, fields, field = change["hf_repo"], change.get("fields"), change.get("field")
+    return {(repo, name) for name in (fields if isinstance(fields, dict) else ())} | ({(repo, field)} if isinstance(field, str) else set())
+
+
+def _without_rejected(names: list, rejected) -> list:
+    """A list of GGUF repos without those the rejection list now holds (the repo or its account)."""
+    return [name for name in names if not (isinstance(name, str) and rejected(name))]
+
+
+def refresh_field(change: dict, row: CatalogModel, rejected=lambda repo: False) -> dict | None:
+    """A carried field change against the table and the rejection list as they are now: new `old` values, `None`
+    when the table has the target or nothing new is left."""
     now = row.model_dump(mode="json")
     if change["field"] == "gguf_repos":
         pair = change["fields"]["gguf_repos"]
-        added = [r for r in pair["new"] if r not in pair["old"] and r not in now["gguf_repos"]]
+        if not (isinstance(pair["new"], list) and isinstance(pair["old"], list)):
+            return None
+        added = [r for r in _without_rejected(pair["new"], rejected) if isinstance(r, str) and r not in pair["old"] and r not in now["gguf_repos"]]
         change["fields"]["gguf_repos"] = {"old": now["gguf_repos"], "new": (now["gguf_repos"] + added)[:50]}
         return change if added else None
     if all(now.get(name) == pair["new"] for name, pair in change["fields"].items()):
@@ -391,13 +405,34 @@ def _entries(proposal: dict, name: str) -> list[dict]:
     return [e for e in found if isinstance(e, dict)] if isinstance(found, list) else []
 
 
+def _ids(decision: dict, key: str) -> set[str]:
+    """The numbers and `Kk` of one list of a decision; a value that is no list counts as empty, an entry that is
+    neither a number nor a string is skipped."""
+    found = decision.get(key)
+    return {str(x) for x in found if isinstance(x, (int, str)) and not isinstance(x, bool)} if isinstance(found, list) else set()
+
+
 def _sound_change(change: dict) -> bool:
     """A carried change has every key the rest of the run reads, so a damaged file costs the entry and not the run."""
     fields = change["fields"]
     return (
-        isinstance(fields, dict) and all(isinstance(p, dict) and {"old", "new"} <= set(p) for p in fields.values())
+        isinstance(change["hf_repo"], str) and isinstance(fields, dict)
+        and all(isinstance(p, dict) and {"old", "new"} <= set(p) for p in fields.values())
         and isinstance(change["stage"], str) and isinstance(change["open_since"], str) and isinstance(change["kind"], str)
         and (change["change"] != "field" or isinstance(change["field"], str))
+    )
+
+
+def _sound_candidate(cand: dict) -> bool:
+    """A carried candidate has the keys and types the run reads (sorting, the second check of a B3)."""
+    if not (isinstance(cand["account"], str) and isinstance(cand["hf_repo"], str) and isinstance(cand["open_since"], str)):
+        return False
+    if cand["candidate"] != "B3":
+        return isinstance(cand["likes"], int) and not isinstance(cand["likes"], bool)
+    tags, task, size = cand.get("tags"), cand.get("hub_pipeline_tag"), cand.get("parameters_b")
+    return (
+        isinstance(cand.get("kind_evidence"), dict) and (tags is None or isinstance(tags, list) and all(isinstance(t, str) for t in tags))
+        and (task is None or isinstance(task, str)) and (size is None or isinstance(size, (int, float)) and not isinstance(size, bool))
     )
 
 
@@ -406,13 +441,14 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
     decided accounts)`.
 
     Dropped: what the decision of that folder took (a number or a `Kk` in `approved`, `rejected` or `admitted`, from
-    state `approved` on), what the rejection list now holds, a new row the table now has, a field change the table
-    already carries, an account that is listed now. What the decision took is returned too, for the whole run: the
-    repos of its new rows and B3 candidates (in `known`), the `(repo, field)` pairs of its field changes and the
-    accounts of its B1 and B2 candidates. Unreadable entries are skipped, never an error.
+    state `approved` on), what the rejection list now holds (also inside a list of GGUF repos), a new row the table
+    now has, a field change the table already carries, a change that touches a field the decision took, an account
+    that is listed now. What the decision took is returned too, for the whole run: the repos of its new rows and B3
+    candidates (in `known`), every `(repo, field)` pair its field changes touch and the accounts of its B1 and B2
+    candidates. Unreadable entries and lists are skipped, never an error.
     """
     taken = decision if isinstance(decision, dict) and decision.get("state") in DECISION_STATES else {}
-    decided = {str(x) for key in ("approved", "rejected", "admitted") for x in taken.get(key, [])}
+    decided = set().union(*(_ids(taken, key) for key in ("approved", "rejected", "admitted")))
     done_repos: set[str] = set()
     done_fields: set[tuple] = set()
     done_accounts: set[str] = set()
@@ -422,16 +458,19 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
         try:
             repo, row = change["hf_repo"], rows.get(change["hf_repo"])
             if str(change.get("n")) in decided:
-                done_repos.add(repo) if change["change"] == "new_row" else done_fields.add((repo, change["field"]))
+                done_repos.add(repo) if change["change"] == "new_row" else done_fields.update(touched(change))
                 continue
-            if rejected(repo) or not _sound_change(change):
+            if not _sound_change(change) or rejected(repo):
                 continue
             if change["change"] == "new_row" and row is None:
+                if isinstance((gguf := change["fields"].get("gguf_repos", {})).get("new"), list):
+                    gguf["new"] = _without_rejected(gguf["new"], rejected)
                 changes[("new_row", repo)] = change
-            elif change["change"] == "field" and row is not None and (fresh := refresh_field(change, row)):
+            elif change["change"] == "field" and row is not None and (fresh := refresh_field(change, row, rejected)):
                 changes[("field", repo, change["field"])] = fresh
         except (KeyError, TypeError, AttributeError):
             continue
+    changes = {key: change for key, change in changes.items() if not touched(change) & done_fields}
     for cand in _entries(proposal, "candidates"):
         try:
             kind = cand["candidate"]
@@ -439,9 +478,7 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
             if kind in ("B1", "B2", "B3") and cand.get("k") in decided:
                 done_repos.add(key) if kind == "B3" else done_accounts.add(key)
                 continue
-            if kind not in ("B1", "B2", "B3") or rejected(f"{cand['account']}/x") or rejected(key):
-                continue
-            if not isinstance(cand["open_since"], str) or (kind != "B3" and not isinstance(cand["likes"], int)):
+            if kind not in ("B1", "B2", "B3") or not _sound_candidate(cand) or rejected(f"{cand['account']}/x") or rejected(key):
                 continue
             if (kind == "B3" and key in rows) or (kind != "B3" and key in listed):
                 continue

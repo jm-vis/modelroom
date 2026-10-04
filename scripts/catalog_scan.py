@@ -115,6 +115,10 @@ class _Run:
     def __init__(self, catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files) -> None:
         self.files, self.out, self.now = files, Path(out_dir), now.astimezone(timezone.utc)
         self.today = self.now.date().isoformat()
+        outputs = {(self.out / self.today / name).resolve() for name in ("proposal.json", "proposal.md")} | {(self.out / "scan-state.json").resolve()}
+        for given, what in ((catalog_path, "catalog"), (rejected_path, "rejection list")):
+            if Path(given).resolve() in outputs:  # the run would overwrite what it reads
+                raise UsageError(f"{given}: the {what} is also a file this run writes; choose another --out")
         catalog_bytes = self._read(Path(catalog_path), "catalog")
         self.catalog_sha = hashlib.sha256(catalog_bytes).hexdigest()
         try:
@@ -269,7 +273,8 @@ class _Run:
 
     def _recheck(self) -> None:
         """Candidates that waited for budget are checked again before any new repo: oldest first, then by name."""
-        waiting = [c for (kind, _), c in self.cands.items() if kind == "B3" and (c.get("kind_evidence") or {}).get("stage") == "budget"]
+        waiting = [c for (kind, repo), c in self.cands.items()
+                   if kind == "B3" and c["kind_evidence"].get("stage") == "budget" and not self._is_rejected(repo)]
         for cand in sorted(waiting, key=lambda c: (c["open_since"], c["hf_repo"])):
             entry = R.entry_of_candidate(cand)
             del self.cands[("B3", cand["hf_repo"])]
@@ -281,12 +286,12 @@ class _Run:
         if entry.repo in self.seen:
             return
         self.seen.add(entry.repo)
+        if self._is_rejected(entry.repo):
+            return  # a rejected repo or account is read for nothing: no check of a row, no card, no evidence
         row = self.rows.get(entry.repo)
         if row is not None:
             self._existing(entry, row)
             return
-        if self._is_rejected(entry.repo):
-            return  # a rejected repo or account is neither a note nor evidence for a row
         self._mentions(entry)
         self._gguf(entry)
         if (
@@ -316,7 +321,8 @@ class _Run:
         if "new_version" in entry.card:
             return
         texts = R.card_texts(entry.card)
-        for repo in sorted(r for r in self.rows if r != entry.repo and r.split("/", 1)[0] == entry.owner and any(r in t for t in texts)):
+        named = (r for r in self.rows if r != entry.repo and r.split("/", 1)[0] == entry.owner and not self._is_rejected(r))
+        for repo in sorted(r for r in named if any(r in t for t in texts)):
             note = f"card mentions {repo}: {entry.repo} names it in its card, no successor proposed"
             if note not in self.notes:
                 self.notes.append(note)
@@ -329,11 +335,12 @@ class _Run:
                 self.gguf.setdefault(bases[0], set()).add(entry.repo)
 
     def _walk(self, account: str, url: str, until, pages: int, resume: bool = False):
-        """Pages from `url` until an entry satisfies `until` or the list ends: `(done, next url, pages used, newest time)`."""
-        newest, used = None, 0
+        """Pages from `url` until an entry satisfies `until` or the list ends:
+        `(done, next url, pages used, newest time, entries seen)`."""
+        newest, used, entries = None, 0, 0
         while True:
             if used >= pages:
-                return False, url, used, newest
+                return False, url, used, newest, entries
             try:
                 data, following = self._list(url, account)
             except _Fail as fail:
@@ -346,13 +353,14 @@ class _Run:
                 entry = R.parse_entry(raw)
                 if entry is None:
                     continue
+                entries += 1
                 if entry.created is not None:
                     newest = entry.created if newest is None else max(newest, entry.created)
                     self.oldest[account] = min(self.oldest.get(account, entry.created), entry.created)
                     hit = hit or until(entry.created)
                 self._see(entry)
             if hit or following is None:
-                return True, None, used, newest
+                return True, None, used, newest, entries
             url = following
 
     def _flag(self, account: str, note: str) -> None:
@@ -369,11 +377,11 @@ class _Run:
                 self._flag(account, f"{account}: resume position lost, catching up again")
                 pending = None
             if pending is None:
-                done, following, _, newest = self._walk(account, top, lambda t: t < threshold, limit)
+                done, following, _, newest, entries = self._walk(account, top, lambda t: t < threshold, limit)
                 state = (max(covered, newest) if newest else covered, None) if done else (covered, {"next_url": following, "newest_seen": R.stamp(newest or covered)})
             else:
                 seen = R.parse_time(pending.get("newest_seen")) or covered
-                done, following, used, newest = self._walk(account, top, lambda t: t <= seen, limit)
+                done, following, used, newest, entries = self._walk(account, top, lambda t: t <= seen, limit)
                 latest = max(seen, newest) if newest else seen
                 if not done:
                     state = (covered, {"next_url": following, "newest_seen": R.stamp(latest)})
@@ -381,7 +389,8 @@ class _Run:
                     state = (covered, {"next_url": pending["next_url"], "newest_seen": R.stamp(latest)})
                 else:
                     try:
-                        done, following, _, older = self._walk(account, pending["next_url"], lambda t: t < threshold, limit - used, resume=True)
+                        done, following, _, older, more = self._walk(account, pending["next_url"], lambda t: t < threshold, limit - used, resume=True)
+                        entries += more
                         state = (max(covered, latest, older or covered), None) if done else (covered, {"next_url": following, "newest_seen": R.stamp(latest)})
                     except _Lost:
                         self._flag(account, f"{account}: resume position lost, catching up again")
@@ -393,7 +402,7 @@ class _Run:
         except _Fail as fail:
             self._flag(account, f"{account}: page error ({fail}), not advanced")
             return
-        if state[1] is not None and account not in self.oldest:
+        if account not in self.oldest and (entries or state[1] is not None):  # entries seen, none with a time: however the list ended
             self._flag(account, f"{account}: no usable time on the pages read, not advanced")
             return
         self.new_marks[account] = state
@@ -418,7 +427,7 @@ class _Run:
         for account, entries in b1.items():
             self._candidate("B1", account, sorted(entries, key=lambda e: (-e.likes, e.repo)), {})
         b2: dict[str, dict[str, list[R.Entry]]] = {}
-        for row in (r for r in self.rows.values() if r.latest and r.kind in ("text", "vision")):
+        for row in (r for r in self.rows.values() if r.latest and r.kind in ("text", "vision") and not self._is_rejected(r.hf_repo)):
             for raw in self._step("B2", R.b2_url(row.hf_repo), f"B2 {row.hf_repo}"):
                 entry = R.parse_entry(raw)
                 if entry and "gguf" in entry.tags and not self._listed(entry):
@@ -453,8 +462,8 @@ class _Run:
     # --- the proposal -------------------------------------------------------------------------------------------
 
     def _put(self, key: tuple, change: dict) -> None:
-        """A change of this run; one already carried for the same row and field keeps its first date."""
-        if key[1:] in self.done_fields:
+        """A change of this run, unless it touches a field a decision took; one already carried keeps its first date."""
+        if R.touched(change) & self.done_fields:
             return
         before = self.changes.get(key)
         if before is not None:
@@ -465,11 +474,23 @@ class _Run:
                 change["evidence"] = before.get("evidence", []) + [e for e in change["evidence"] if e not in before.get("evidence", [])]
         self.changes[key] = change
 
+    def _carried_rows(self) -> list[CatalogModel]:
+        """The new rows carried from the last proposal, as rows; one that does not validate is left to `check_changes`."""
+        rows = []
+        for key, change in sorted(self.changes.items()):
+            if key[0] == "new_row":
+                try:
+                    rows.append(CatalogModel.model_validate({name: pair["new"] for name, pair in change["fields"].items()}))
+                except (ValueError, TypeError):
+                    continue
+        return rows
+
     def _build(self) -> None:
-        rows = list(self.rows.values())
+        table = [m for m in self.rows.values() if not self._is_rejected(m.hf_repo)]
+        rows = list(self.rows.values()) + self._carried_rows()  # family and latest see the table and the carried new rows
         fresh = sorted(self.fresh.values(), key=lambda item: item[0].repo)
         latest = R.latest_among([(e.repo, r.kind, e.parameters_b) for e, r, _ in fresh], rows)
-        plain = [m for m in rows if m.latest and not (m.latest_source or "").startswith(f"{R.HUB}/collections/{m.publisher}/")]
+        plain = [m for m in table if m.latest and not (m.latest_source or "").startswith(f"{R.HUB}/collections/{m.publisher}/")]
         owners = [a for a in self.publishers if any(e.owner == a and e.repo in latest for e, _, _ in fresh) or any(m.publisher == a for m in plain)]
         collections = self._collections(owners)
         for entry, result, open_since in fresh:
@@ -481,10 +502,15 @@ class _Run:
             source = collections.get(entry.owner, {}).get(entry.repo) or f"{R.HUB}/{entry.owner}"
             row = R.build_row(entry, result, family=family, today=self.today, latest=entry.repo in latest, latest_source=source)
             row["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:50]
-            rows.append(CatalogModel.model_validate(row))  # the next new row sees this one: one family, one publisher
-            self.changes[("new_row", entry.repo)] = R.new_row_change(row, result, open_since)
+            try:
+                rows.append(CatalogModel.model_validate(row))  # the next new row sees this one: one family, one publisher
+            except ValueError as exc:  # a strange Hub answer costs this row, never the run
+                self.notes.append(f"{entry.repo}: left out, it would not validate ({' '.join(str(exc).split())[:120]})")
+                self.fresh.pop(entry.repo)
+                continue
+            self._put(("new_row", entry.repo), R.new_row_change(row, result, open_since))
         for base, found in sorted(self.gguf.items()):
-            row = self.rows.get(base)
+            row = None if self._is_rejected(base) else self.rows.get(base)
             added = sorted(r for r in found if r not in row.gguf_repos) if row is not None else []
             if added:
                 self._put(("field", base, "gguf_repos"), R.field_change(
@@ -498,9 +524,12 @@ class _Run:
                     row, "A3", {"latest_source": (row.latest_source, link)}, [link], self.today, "latest_source"))
 
     def _successor(self, row: CatalogModel, target: str) -> None:
-        """`new_version` on the card of a row names a model of the same account and kind that the table or this proposal has."""
-        found = self.rows.get(target) or (self.fresh[target][1] if target in self.fresh else None)
-        kind = found.kind if found is not None else None
+        """`new_version` on the card of a row names a model of the same account and kind that the table or this proposal
+        has (a new row of this run or a carried one, as it stands; a carried row is never changed)."""
+        found, proposed = self.rows.get(target), self.changes.get(("new_row", target))
+        kind = found.kind if found is not None else proposed["kind"] if proposed is not None else None
+        if self._is_rejected(target):
+            kind = None
         try:
             validate_hf_repo(target)
         except ValueError:
