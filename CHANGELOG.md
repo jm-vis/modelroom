@@ -17,6 +17,16 @@ All notable changes to this project are documented in this file. The format foll
   collections of a publisher as evidence, and lists new publishers and packagers and repos of open kind as candidates; what
   nobody decided yet comes back in the next proposal with its first date. The scanner never changes the catalog or the
   rejection list: taking a proposal into the table is a separate tool, after the maintainer's word.
+- **The catalog publisher** (AP9-KA-P; `scripts/catalog_publish.py`, `scripts/catalog_publish_rules.py`, `docs/runbooks/catalog-publishing.md`;
+  a maintainer tool, not in the wheel). It takes a scanner proposal into `modelroom/catalog.json` and `catalog-rejected.json`
+  only for the numbers and candidates the maintainer names (`--apply ... --proposal-sha ... --approve/--reject/--admit`; no
+  "all", no prompt), in two steps (a `decision.json` with the target bytes of both files, then the files from those bytes, so
+  an interruption is resumed with `--materialize` and never by a second `--apply`), records the commit, pushes it, uploads the
+  bytes of that commit to the public dataset with `uvx` and `hf upload` (token by path only, after the release gate's hygiene
+  check) and compares the published file with the commit (`--verify`, no token). `--show` prints the full field diff of the open
+  proposal with the checksum of the bytes it read; `--complete` makes a candidate of open kind a row with the kind the
+  maintainer names; `--upload --probe` is the setup test against a probe dataset. The state `approved`, `applied`, `committed`,
+  `pushed`, `uploaded`, `published` is kept in `decision.json`, which the scanner reads.
 - **The task Hugging Face gives a model, and the evidence for `kind`** (AP9-KA-S2; `modelroom/catalog.py`,
   `modelroom/catalog_schema.py`, `modelroom/catalog.json`; CONTRACTS.md, "Catalog rules"). Every catalog row carries
   `hub_pipeline_tag` (the Hub's `pipeline_tag`, verbatim, or `null`) and `kind_source` (`tags`, `base_model`, `config`

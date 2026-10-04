@@ -1,0 +1,292 @@
+{
+  "base_catalog_sha256": "2ccb32a00fc8bb42c14e931aad88eec29578aa29f947a7ceddcdc9befc154864",
+  "candidates": [
+    {
+      "account": "newlab",
+      "candidate": "B1",
+      "created_at": "2026-10-02T08:00:00.000Z",
+      "downloads": 2400,
+      "evidence": [
+        "https://huggingface.co/newlab/Rising-1-7B"
+      ],
+      "hf_repo": "newlab/Rising-1-7B",
+      "k": "K1",
+      "likes": 300,
+      "open_since": "2026-10-04",
+      "repos": [
+        {
+          "downloads": 2400,
+          "hf_repo": "newlab/Rising-1-7B",
+          "likes": 130
+        }
+      ]
+    },
+    {
+      "account": "packthree",
+      "bases": [
+        "acme/Atlas-2-9B",
+        "nova/Nimbus-1-30B",
+        "orbit/Comet-3-8B"
+      ],
+      "candidate": "B2",
+      "created_at": "2026-10-02T08:00:00.000Z",
+      "downloads": 2400,
+      "evidence": [
+        "https://huggingface.co/packthree/Atlas-2-9B-GGUF"
+      ],
+      "hf_repo": "packthree/Atlas-2-9B-GGUF",
+      "k": "K2",
+      "likes": 200,
+      "open_since": "2026-10-04",
+      "repos": [
+        {
+          "downloads": 2400,
+          "hf_repo": "packthree/Atlas-2-9B-GGUF",
+          "likes": 130
+        }
+      ],
+      "rows": 3
+    },
+    {
+      "account": "acme",
+      "candidate": "B3",
+      "created_at": "2026-10-02T08:00:00.000Z",
+      "downloads": 2400,
+      "evidence": [
+        "https://huggingface.co/acme/Odd-1-5B"
+      ],
+      "hf_repo": "acme/Odd-1-5B",
+      "hub_pipeline_tag": null,
+      "k": "K3",
+      "kind_evidence": {
+        "stage": "config",
+        "value": "no decisive evidence"
+      },
+      "license": "apache-2.0",
+      "likes": 130,
+      "open_since": "2026-10-04",
+      "parameters_b": 9.1,
+      "tags": [
+        "safetensors"
+      ]
+    }
+  ],
+  "changes": [
+    {
+      "change": "new_row",
+      "evidence": [
+        "https://huggingface.co/acme/Atlas-3-9B"
+      ],
+      "fields": {
+        "added": {
+          "new": "2026-10-04",
+          "old": null
+        },
+        "family": {
+          "new": "atlas",
+          "old": null
+        },
+        "gguf_repos": {
+          "new": [],
+          "old": null
+        },
+        "hf_repo": {
+          "new": "acme/Atlas-3-9B",
+          "old": null
+        },
+        "hub_created": {
+          "new": "2026-10-02",
+          "old": null
+        },
+        "hub_pipeline_tag": {
+          "new": "text-generation",
+          "old": null
+        },
+        "kind": {
+          "new": "text",
+          "old": null
+        },
+        "kind_source": {
+          "new": null,
+          "old": null
+        },
+        "latest": {
+          "new": false,
+          "old": null
+        },
+        "latest_checked": {
+          "new": null,
+          "old": null
+        },
+        "latest_source": {
+          "new": null,
+          "old": null
+        },
+        "license": {
+          "new": "apache-2.0",
+          "old": null
+        },
+        "note": {
+          "new": null,
+          "old": null
+        },
+        "ollama_base": {
+          "new": null,
+          "old": null
+        },
+        "ollama_tag": {
+          "new": null,
+          "old": null
+        },
+        "parameters_b": {
+          "new": 9.1,
+          "old": null
+        },
+        "publisher": {
+          "new": "acme",
+          "old": null
+        },
+        "source": {
+          "new": "https://huggingface.co/acme/Atlas-3-9B",
+          "old": null
+        },
+        "successor": {
+          "new": null,
+          "old": null
+        },
+        "successor_checked": {
+          "new": null,
+          "old": null
+        },
+        "successor_source": {
+          "new": null,
+          "old": null
+        }
+      },
+      "hf_repo": "acme/Atlas-3-9B",
+      "kind": "text",
+      "kind_evidence": {
+        "stage": "pipeline_tag",
+        "value": "text-generation"
+      },
+      "n": 1,
+      "open_since": "2026-10-04",
+      "stage": "A1"
+    },
+    {
+      "change": "field",
+      "evidence": [
+        "https://huggingface.co/packone/Nimbus-1-30B-GGUF"
+      ],
+      "field": "gguf_repos",
+      "fields": {
+        "gguf_repos": {
+          "new": [
+            "packone/Nimbus-1-30B-GGUF"
+          ],
+          "old": []
+        }
+      },
+      "hf_repo": "nova/Nimbus-1-30B",
+      "kind": "vision",
+      "n": 2,
+      "open_since": "2026-10-04",
+      "stage": "A2"
+    },
+    {
+      "change": "field",
+      "evidence": [],
+      "field": "gguf_repos",
+      "fields": {
+        "gguf_repos": {
+          "new": [
+            "packone/Comet-3-8B-GGUF"
+          ],
+          "old": [
+            "packone/Comet-3-8B-GGUF",
+            "packtwo/Comet-3-8B-GGUF"
+          ]
+        }
+      },
+      "hf_repo": "orbit/Comet-3-8B",
+      "kind": "text",
+      "n": 3,
+      "open_since": "2026-10-04",
+      "stage": "A2"
+    },
+    {
+      "change": "field",
+      "evidence": [
+        "https://huggingface.co/acme/Atlas-1-9B"
+      ],
+      "field": "successor",
+      "fields": {
+        "successor": {
+          "new": "acme/Atlas-2-9B",
+          "old": null
+        },
+        "successor_checked": {
+          "new": "2026-10-04",
+          "old": null
+        },
+        "successor_source": {
+          "new": "https://huggingface.co/acme/Atlas-1-9B",
+          "old": null
+        }
+      },
+      "hf_repo": "acme/Atlas-1-9B",
+      "kind": "text",
+      "n": 4,
+      "open_since": "2026-10-04",
+      "stage": "A3"
+    },
+    {
+      "change": "field",
+      "evidence": [
+        "https://huggingface.co/collections/orbit/comet-1a2b3c"
+      ],
+      "field": "latest_source",
+      "fields": {
+        "latest_source": {
+          "new": "https://huggingface.co/collections/orbit/comet-1a2b3c",
+          "old": "https://huggingface.co/orbit"
+        }
+      },
+      "hf_repo": "orbit/Comet-3-8B",
+      "kind": "text",
+      "n": 5,
+      "open_since": "2026-10-04",
+      "stage": "A3"
+    },
+    {
+      "change": "field",
+      "evidence": [],
+      "field": "ollama",
+      "fields": {
+        "ollama_base": {
+          "new": "comet-echo",
+          "old": null
+        },
+        "ollama_tag": {
+          "new": "1b",
+          "old": null
+        }
+      },
+      "hf_repo": "orbit/Comet-Echo-1",
+      "kind": "speech-synthesis",
+      "n": 6,
+      "open_since": "2026-10-04",
+      "stage": "A3"
+    }
+  ],
+  "date": "2026-10-04",
+  "notes": [],
+  "schema": 1,
+  "summary": {
+    "candidates": 3,
+    "changed": 5,
+    "incomplete": 0,
+    "new": 1,
+    "pending_publication": null
+  }
+}
