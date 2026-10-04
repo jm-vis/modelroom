@@ -60,6 +60,7 @@ B2_MIN_ROWS = 3
 MAX_CANDIDATES = 10  # for B1 and B2 together; B3 has no limit
 MAX_PAGES = 10  # pages per account and run, all steps together
 MAX_GGUF_REPOS = CATALOG_MAX_GGUF_REPOS  # a row's list of GGUF repos is cut here; what the cut takes is no change
+MAX_PARAMETERS = 10 ** 15  # a parameter count at or above this is no size: a float could not hold what the Hub sent
 OVERLAP = timedelta(days=2)
 FIRST_RUN_BACK = timedelta(days=30)
 CONFIG_MAX_BYTES, API_MAX_BYTES = 64 * 1024, 1024 * 1024
@@ -154,7 +155,7 @@ def parse_entry(raw: object) -> Entry | None:
     tags = raw.get("tags")
     task = raw.get("pipeline_tag")
     total = (raw.get("safetensors") or {}).get("total") if isinstance(raw.get("safetensors"), dict) else None
-    sized = isinstance(total, int) and not isinstance(total, bool) and total > 0
+    sized = isinstance(total, int) and not isinstance(total, bool) and 0 < total < MAX_PARAMETERS  # beyond: no size, not an error
     return Entry(
         repo=repo, created=_created_at(raw.get("createdAt")), likes=read_downloads(raw.get("likes")) or 0,
         downloads=read_downloads(raw.get("downloads")) or 0,
@@ -398,6 +399,8 @@ def refresh_field(change: dict, row: CatalogModel, rejected=lambda repo: False) 
         added = [r for r in _without_rejected(pair["new"], rejected) if isinstance(r, str) and r not in pair["old"] and r not in now["gguf_repos"]]
         target = (now["gguf_repos"] + added)[:MAX_GGUF_REPOS]
         change["fields"]["gguf_repos"] = {"old": now["gguf_repos"], "new": target}
+        kept = {f"{HUB}/{r}" for r in added if r in target}  # the evidence names what is still added, nothing rejected
+        change["evidence"] = [e for e in change["evidence"] if e in kept]
         return change if target != now["gguf_repos"] else None  # a full list takes nothing more
     if all(now.get(name) == pair["new"] for name, pair in change["fields"].items()):
         return None
@@ -454,13 +457,27 @@ def _sound_candidate(cand: dict) -> bool:
     )
 
 
-def _named(entry: dict) -> list:
-    """Every other repo a carried entry takes as evidence: the successor a change names, the base model that gave a
-    new row its kind, and the models of a B1 or B2 candidate (its best repo, its list, the rows of a B2)."""
-    if "change" in entry:
-        base = entry.get("kind_evidence")
-        return [entry["fields"].get("successor", {}).get("new")] + ([base.get("value")] if isinstance(base, dict) and base.get("stage") == "base_model" else [])
-    return [entry["hf_repo"], *(r["hf_repo"] for r in entry.get("repos", [])), *entry.get("bases", [])]
+def _named(change: dict) -> list:
+    """The other repos a carried change takes as evidence: the successor it names, the base model that gave a new
+    row its kind."""
+    base = change.get("kind_evidence")
+    return [change["fields"].get("successor", {}).get("new")] + ([base.get("value")] if isinstance(base, dict) and base.get("stage") == "base_model" else [])
+
+
+def _thinned(cand: dict, rejected) -> dict | None:
+    """A carried B1 or B2 without the models the rejection list now holds: the best remaining repo on top, the
+    evidence to match, `open_since` as it was. `None` when no repo remains, or a B2 keeps fewer repos or rows than
+    the brief asks for (which GGUF repo covers which row is not in the proposal, so this is the test that is left)."""
+    repos = [r for r in cand.get("repos", []) if isinstance(r, dict) and isinstance(r.get("hf_repo"), str) and not rejected(r["hf_repo"])]
+    bases = [b for b in cand.get("bases", []) if isinstance(b, str) and not rejected(b)]
+    if not repos or (cand["candidate"] == "B2" and min(len(repos), len(bases)) < B2_MIN_ROWS):
+        return None
+    top = repos[0]
+    cand.update(hf_repo=top["hf_repo"], downloads=top.get("downloads", 0), repos=repos, evidence=[f"{HUB}/{r['hf_repo']}" for r in repos])
+    cand["likes"] = sum(r.get("likes", 0) for r in repos) if cand["candidate"] == "B2" else top.get("likes", 0)
+    if "bases" in cand:
+        cand["bases"], cand["rows"] = bases, len(bases)
+    return cand
 
 
 def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], rejected) -> tuple[dict, dict, set[str], set[tuple], set[str]]:
@@ -469,8 +486,9 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
 
     Dropped: what the decision of that folder took (a number or a `Kk` in `approved`, `rejected` or `admitted`, from
     state `approved` on), what the rejection list now holds (also inside a list of GGUF repos, as a successor, as the
-    base model of a kind, as a model of a B1 or B2), a new row the table now has, a field change the table already
-    carries, a change that touches a field the decision took, an account that is listed now. What the decision took is
+    base model of a kind; a B1 or B2 loses the rejected models and stays if the rest still makes the case), a new row
+    the table now has, a field change the table already carries, a change that touches a field the decision took, an
+    account that is listed now or that the decision took through either kind of candidate. What the decision took is
     returned too, for the whole run: the repos of its new rows and B3 candidates (in `known`), every `(repo, field)`
     pair its field changes touch and the accounts of its B1 and B2 candidates. Unreadable entries are skipped.
     """
@@ -507,12 +525,15 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
                 continue
             if kind not in ("B1", "B2", "B3") or not _sound_candidate(cand) or rejected(f"{cand['account']}/x") or rejected(key):
                 continue
-            if (kind == "B3" and key in rows) or (kind != "B3" and (key in listed or any(not isinstance(r, str) or rejected(r) for r in _named(cand)))):
-                continue  # a rejected model is no evidence: the candidate comes again from a run that finds it without one
-            candidates[(kind, key)] = cand
+            if (kind == "B3" and key in rows) or (kind != "B3" and key in listed):
+                continue
+            kept = cand if kind == "B3" else _thinned(cand, rejected)  # a rejected model is no evidence; what remains must still make the case
+            if kept is not None:
+                candidates[(kind, key)] = kept
         except (KeyError, TypeError, AttributeError):
             continue
-    known = {key[1] for key in changes if key[0] == "new_row"} | {key for kind, key in candidates if kind == "B3"} | done_repos
+    candidates = {key: c for key, c in candidates.items() if key[0] == "B3" or key[1] not in done_accounts}  # decided through either kind
+    known ={key[1] for key in changes if key[0] == "new_row"} | {key for kind, key in candidates if kind == "B3"} | done_repos
     return changes, candidates, known, done_fields, done_accounts
 
 

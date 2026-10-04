@@ -212,3 +212,63 @@ def test_a_carried_gguf_change_that_the_cap_turns_into_the_list_of_the_table_is_
                                   "fields": {"gguf_repos": {"old": [], "new": ["packtwo/Atlas-2-9B-GGUF"]}}}])
     p, result, _ = go(env, Hub())
     assert p["changes"] == [] and result.exit_code == 0
+
+
+# --- the fixes after the fourth review round (t4) ---------------------------------------------------------------------
+
+
+BASES = ("acme/Atlas-2-9B", "nova/Nimbus-1-30B", "orbit/Comet-3-8B")
+
+
+def b12(kind: str, k: str, account: str, *repos: str, bases: tuple = ()) -> dict:
+    """A carried B1 or B2 as the scanner writes one: the best repo on top, the list behind it, a B2 with its rows."""
+    return {
+        "k": k, "candidate": kind, "account": account, "hf_repo": repos[0], "likes": 150, "downloads": 2000, "created_at": stamp(3),
+        "open_since": YESTERDAY, "repos": [{"hf_repo": r, "likes": 150 - i, "downloads": 2000} for i, r in enumerate(repos)],
+        "evidence": [f"https://huggingface.co/{r}" for r in repos], **({"rows": len(bases), "bases": list(bases)} if kind == "B2" else {}),
+    }
+
+
+@pytest.mark.parametrize("decided", ["K1", "K2"])
+def test_a_carried_candidate_of_an_account_that_a_decision_took_through_the_other_kind_is_dropped(env, decided):
+    env.prev(YESTERDAY, candidates=[
+        b12("B1", "K1", "lab", "lab/Hot-1-7B"),
+        b12("B2", "K2", "lab", "lab/Atlas-2-9B-GGUF", "lab/Nimbus-1-30B-GGUF", "lab/Comet-3-8B-GGUF", bases=BASES),
+    ], decision={"state": "approved", "date": YESTERDAY, "approved": [], "rejected": [], "admitted": [decided]})
+    p, result, _ = go(env, Hub())
+    assert p["candidates"] == [] and result.exit_code == 0
+
+
+def test_a_carried_candidate_keeps_what_the_rejection_list_leaves_with_its_first_date_and_a_b2_needs_three_of_each(env):
+    env.prev(YESTERDAY, candidates=[
+        b12("B1", "K1", "lab", "lab/Hot-1-7B", "lab/Warm-1-7B"),
+        b12("B2", "K2", "pack", "pack/Atlas-2-9B-GGUF", "pack/Nimbus-1-30B-GGUF", "pack/Comet-3-8B-GGUF", "pack/Atlas-2-9B-Q4-GGUF", bases=BASES),
+        b12("B2", "K3", "thin", "thin/Atlas-2-9B-GGUF", "thin/Nimbus-1-30B-GGUF", "thin/Comet-3-8B-GGUF", bases=BASES),
+    ])
+    reject(env, {"hf_repo": "lab/Hot-1-7B"}, {"hf_repo": "pack/Atlas-2-9B-GGUF"}, {"hf_repo": "thin/Comet-3-8B-GGUF"})
+    p, result, _ = go(env, Hub())
+    (b1,), (b2,) = cands(p, "B1"), cands(p, "B2")
+    assert (b1["hf_repo"], b1["likes"], b1["open_since"], b1["evidence"]) == ("lab/Warm-1-7B", 149, YESTERDAY, ["https://huggingface.co/lab/Warm-1-7B"])
+    assert [r["hf_repo"] for r in b1["repos"]] == ["lab/Warm-1-7B"] and result.exit_code == 0
+    assert (b2["account"], b2["hf_repo"], b2["rows"], b2["likes"]) == ("pack", "pack/Nimbus-1-30B-GGUF", 3, 149 + 148 + 147)
+    assert [r["hf_repo"] for r in b2["repos"]] == ["pack/Nimbus-1-30B-GGUF", "pack/Comet-3-8B-GGUF", "pack/Atlas-2-9B-Q4-GGUF"]
+    assert b2["evidence"] == [f"https://huggingface.co/{r['hf_repo']}" for r in b2["repos"]] and b2["bases"] == list(BASES)
+
+
+def test_a_carried_gguf_addition_keeps_only_the_evidence_of_what_is_still_added(env):
+    both = ["packone/Atlas-2-9B-GGUF", "packtwo/Atlas-2-9B-GGUF"]
+    env.prev(YESTERDAY, changes=[{"n": 1, "change": "field", "field": "gguf_repos", "stage": "A2", "hf_repo": "acme/Atlas-2-9B", "kind": "text",
+                                  "open_since": YESTERDAY, "evidence": [f"https://huggingface.co/{r}" for r in both],
+                                  "fields": {"gguf_repos": {"old": [], "new": both}}}])
+    reject(env, {"account": "packtwo"})
+    p, result, _ = go(env, Hub())
+    change = fields_of(p, "acme/Atlas-2-9B", "gguf_repos")
+    assert new_of(change)["gguf_repos"] == ["packone/Atlas-2-9B-GGUF"] and change["evidence"] == ["https://huggingface.co/packone/Atlas-2-9B-GGUF"]
+    assert change["open_since"] == YESTERDAY and result.exit_code == 0
+
+
+def test_a_parameter_count_too_large_for_a_number_is_no_size_and_never_ends_the_run(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2), safetensors={"parameters": {"BF16": 10 ** 400}, "total": 10 ** 400})])
+    p, result, _ = go(env, hub)
+    assert result.exit_code == 0 and new_of(new_rows(p)["acme/Atlas-3-9B"])["parameters_b"] == 9.0
