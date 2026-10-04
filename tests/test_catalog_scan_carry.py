@@ -333,3 +333,33 @@ def test_an_out_path_that_is_a_file_ends_with_exit_two_before_any_request(env, w
     result, transport = env.run(Hub())
     assert result.exit_code == 2 and "--out must name a folder" in result.error and transport.calls == []
     assert target.read_bytes() == b"not a folder\n"
+
+
+# --- the fixes after the seventh review round (t7) --------------------------------------------------------------------
+
+
+def test_a_carried_row_that_the_table_would_not_take_is_no_successor_target(env):
+    env.prev(YESTERDAY, changes=[carried_row("acme/Atlas-4-9B", 1, family="comet")])
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-2-9B", stamp(5), cardData={"license": "mit", "new_version": "acme/Atlas-4-9B"})])
+    p, result, _ = go(env, hub)
+    assert fields_of(p, "acme/Atlas-2-9B", "successor") is None and result.exit_code == 0 and applied(p).model_for("acme/Atlas-2-9B").latest
+    assert [n for n in p["notes"] if "new_version acme/Atlas-4-9B, which is not a model of the table or of this proposal" in n]
+
+
+@pytest.mark.parametrize("target", [f"{TODAY}/proposal.json", f"{TODAY}/proposal.md", "scan-state.json"])
+def test_an_output_path_that_is_a_folder_ends_with_exit_two_before_any_request_or_write(env, target):
+    (env.out / target).mkdir(parents=True)
+    result, transport = env.run(Hub())
+    assert result.exit_code == 2 and "it is a folder" in result.error and transport.calls == []
+    assert not [p for p in env.out.rglob("*") if p.is_file()]
+
+
+def test_a_gguf_repo_that_answers_for_three_rows_counts_once_for_a_b2(env):
+    hub = Hub()
+    one = ent("quantco/Everything-GGUF", stamp(1), tags=["gguf", *(f"base_model:quantized:{b}" for b in BASES)], likes=100)
+    for base in BASES:
+        hub.put(rules.b2_url(base), [one])
+    (cand,) = cands(go(env, hub)[0], "B2")
+    assert (cand["likes"], cand["rows"], [r["hf_repo"] for r in cand["repos"]], cand["evidence"]) == (
+        100, 3, ["quantco/Everything-GGUF"], ["https://huggingface.co/quantco/Everything-GGUF"])

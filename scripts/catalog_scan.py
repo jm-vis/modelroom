@@ -125,6 +125,9 @@ class _Run:
         for folder in (self.out, self.out / self.today):
             if folder.exists() and not folder.is_dir():  # the run could not make its folders; better to know before a request
                 raise UsageError(f"{folder}: --out must name a folder, this is a file")
+        for path in sorted(outputs):
+            if path.exists() and not path.is_file():  # `os.replace` would fail on it, after the first file is written
+                raise UsageError(f"{path}: this run writes it, but it is a folder")
         catalog_bytes = self._read(Path(catalog_path), "catalog")
         self.catalog_sha = hashlib.sha256(catalog_bytes).hexdigest()
         try:
@@ -440,8 +443,8 @@ class _Run:
                     b2.setdefault(entry.owner, {}).setdefault(row.hf_repo, []).append(entry)
         for account, per_row in b2.items():
             if len(per_row) >= R.B2_MIN_ROWS:
-                everything = sorted((e for es in per_row.values() for e in es), key=lambda e: (-e.likes, e.repo))
-                self._candidate("B2", account, everything, {"rows": len(per_row), "bases": sorted(per_row)})
+                everything = {e.repo: e for es in per_row.values() for e in es}  # a GGUF repo that answers for three rows counts once
+                self._candidate("B2", account, sorted(everything.values(), key=lambda e: (-e.likes, e.repo)), {"rows": len(per_row), "bases": sorted(per_row)})
 
     def _step(self, name: str, url: str, what: str) -> list:
         """One request of an open step: the list, or nothing (a note for a fault, a count for the end of the budget)."""
@@ -497,7 +500,9 @@ class _Run:
 
     def _build(self) -> None:
         table = [m for m in self.rows.values() if not self._is_rejected(m.hf_repo)]
-        rows = list(self.rows.values()) + self._carried_rows()  # family and latest see the table and the carried new rows
+        carried = self._carried_rows()
+        self.carried = {m.hf_repo for m in carried}  # the carried rows that count: for family, latest and as a successor target
+        rows = list(self.rows.values()) + carried
         fresh = sorted(self.fresh.values(), key=lambda item: item[0].repo)
         latest = R.latest_among([(e.repo, r.kind, e.parameters_b) for e, r, _ in fresh], rows)
         plain = [m for m in table if m.latest and not (m.latest_source or "").startswith(f"{R.HUB}/collections/{m.publisher}/")]
@@ -537,7 +542,7 @@ class _Run:
     def _successor(self, row: CatalogModel, target: str) -> None:
         """`new_version` on the card of a row names a model of the same account and kind that the table or this proposal
         has (a new row of this run or a carried one, as it stands; a carried row is never changed)."""
-        found, proposed = self.rows.get(target), self.changes.get(("new_row", target))
+        found, proposed = self.rows.get(target), self.changes.get(("new_row", target)) if target in self.carried or target in self.fresh else None
         kind = found.kind if found is not None else proposed["kind"] if proposed is not None else None
         if self._is_rejected(target):
             kind = None
