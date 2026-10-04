@@ -272,3 +272,42 @@ def test_a_parameter_count_too_large_for_a_number_is_no_size_and_never_ends_the_
     hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2), safetensors={"parameters": {"BF16": 10 ** 400}, "total": 10 ** 400})])
     p, result, _ = go(env, hub)
     assert result.exit_code == 0 and new_of(new_rows(p)["acme/Atlas-3-9B"])["parameters_b"] == 9.0
+
+
+# --- the fixes after the fifth review round (t5) ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("likes", ["many", None])
+def test_a_stored_repo_of_a_carried_candidate_with_likes_of_the_wrong_type_goes_like_a_rejected_one_and_never_ends_the_run(env, likes):
+    one, two = b12("B1", "K1", "lab", "lab/Hot-1-7B"), b12("B1", "K2", "pal", "pal/Hot-1-7B", "pal/Warm-1-7B")
+    one["repos"][0]["likes"] = two["repos"][0]["likes"] = likes
+    env.prev(YESTERDAY, candidates=[one, two])
+    p, result, _ = go(env, Hub())
+    assert result.exit_code == 0 and [(c["account"], c["hf_repo"], c["likes"]) for c in cands(p)] == [("pal", "pal/Warm-1-7B", 149)]
+
+
+def test_a_carried_b2_keeps_the_likes_of_all_its_repos_and_loses_only_those_of_a_rejected_one(env):
+    cand = b12("B2", "K1", "pack", *[f"pack/Model-{i}-7B-GGUF" for i in range(10)], bases=BASES)
+    cand["likes"] = 1755  # the ten stored repos (1455) and twenty more made the case
+    env.prev(YESTERDAY, candidates=[cand])
+    first = cands(go(env, Hub())[0], "B2")
+    assert [(c["likes"], c["hf_repo"], len(c["repos"])) for c in first] == [(1755, "pack/Model-0-7B-GGUF", 10)]
+    reject(env, {"hf_repo": "pack/Model-3-7B-GGUF"})
+    p, result, _ = go(env, Hub(), now=DAY2)
+    assert [(c["likes"], len(c["repos"]), c["open_since"]) for c in cands(p, "B2")] == [(1755 - 147, 9, YESTERDAY)] and result.exit_code == 0
+
+
+def test_a_fresh_gguf_addition_that_the_cap_leaves_out_behind_a_carried_one_gives_no_evidence(env):
+    raw = json.loads(CATALOG_BYTES)
+    raw["models"][1]["gguf_repos"] = [f"packone/Atlas-2-9B-Q{i:02d}-GGUF" for i in range(49)]
+    env.catalog.write_bytes(json.dumps(raw).encode("utf-8"))
+    env.prev(YESTERDAY, changes=[{"n": 1, "change": "field", "field": "gguf_repos", "stage": "A2", "hf_repo": "acme/Atlas-2-9B", "kind": "text",
+                                  "open_since": YESTERDAY, "evidence": ["https://huggingface.co/packtwo/Atlas-2-9B-GGUF"],
+                                  "fields": {"gguf_repos": {"old": [], "new": ["packtwo/Atlas-2-9B-GGUF"]}}}])
+    hub = Hub()
+    hub.page("packone", [quantized("packone/Atlas-2-9B-GGUF", "acme/Atlas-2-9B")])
+    p, result, _ = go(env, hub)
+    change = fields_of(p, "acme/Atlas-2-9B", "gguf_repos")
+    added = new_of(change)["gguf_repos"]
+    assert len(added) == 50 and added[-1] == "packtwo/Atlas-2-9B-GGUF" and "packone/Atlas-2-9B-GGUF" not in added
+    assert change["evidence"] == ["https://huggingface.co/packtwo/Atlas-2-9B-GGUF"] and change["open_since"] == YESTERDAY and result.exit_code == 0

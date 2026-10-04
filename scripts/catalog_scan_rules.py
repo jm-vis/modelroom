@@ -399,8 +399,7 @@ def refresh_field(change: dict, row: CatalogModel, rejected=lambda repo: False) 
         added = [r for r in _without_rejected(pair["new"], rejected) if isinstance(r, str) and r not in pair["old"] and r not in now["gguf_repos"]]
         target = (now["gguf_repos"] + added)[:MAX_GGUF_REPOS]
         change["fields"]["gguf_repos"] = {"old": now["gguf_repos"], "new": target}
-        kept = {f"{HUB}/{r}" for r in added if r in target}  # the evidence names what is still added, nothing rejected
-        change["evidence"] = [e for e in change["evidence"] if e in kept]
+        change["evidence"] = [e for e in change["evidence"] if e in {f"{HUB}/{r}" for r in added if r in target}]  # what is still added
         return change if target != now["gguf_repos"] else None  # a full list takes nothing more
     if all(now.get(name) == pair["new"] for name, pair in change["fields"].items()):
         return None
@@ -464,17 +463,26 @@ def _named(change: dict) -> list:
     return [change["fields"].get("successor", {}).get("new")] + ([base.get("value")] if isinstance(base, dict) and base.get("stage") == "base_model" else [])
 
 
+def _count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _thinned(cand: dict, rejected) -> dict | None:
-    """A carried B1 or B2 without the models the rejection list now holds: the best remaining repo on top, the
-    evidence to match, `open_since` as it was. `None` when no repo remains, or a B2 keeps fewer repos or rows than
-    the brief asks for (which GGUF repo covers which row is not in the proposal, so this is the test that is left)."""
-    repos = [r for r in cand.get("repos", []) if isinstance(r, dict) and isinstance(r.get("hf_repo"), str) and not rejected(r["hf_repo"])]
-    bases = [b for b in cand.get("bases", []) if isinstance(b, str) and not rejected(b)]
+    """A carried B1 or B2 without the models the rejection list now holds and without a stored repo of the wrong
+    shape: untouched when nothing goes; else the best remaining repo on top, the evidence to match, a B2 less the likes
+    of what went (the stored ten stand for all), `open_since` as it was. `None` without a repo, or a B2 under three
+    repos or rows (which GGUF repo covers which row is not in the proposal, so this is the test that is left)."""
+    stored, old_bases = cand.get("repos", []), cand.get("bases", [])
+    repos = [r for r in stored if isinstance(r, dict) and isinstance(r.get("hf_repo"), str) and _count(r.get("likes"))
+             and _count(r.get("downloads")) and not rejected(r["hf_repo"])]
+    bases = [b for b in old_bases if isinstance(b, str) and not rejected(b)]
+    if len(repos) == len(stored) and len(bases) == len(old_bases):
+        return cand
     if not repos or (cand["candidate"] == "B2" and min(len(repos), len(bases)) < B2_MIN_ROWS):
         return None
-    top = repos[0]
-    cand.update(hf_repo=top["hf_repo"], downloads=top.get("downloads", 0), repos=repos, evidence=[f"{HUB}/{r['hf_repo']}" for r in repos])
-    cand["likes"] = sum(r.get("likes", 0) for r in repos) if cand["candidate"] == "B2" else top.get("likes", 0)
+    gone = sum(r["likes"] for r in stored if isinstance(r, dict) and _count(r.get("likes")) and r not in repos)
+    cand.update(hf_repo=repos[0]["hf_repo"], downloads=repos[0]["downloads"], repos=repos, evidence=[f"{HUB}/{r['hf_repo']}" for r in repos])
+    cand["likes"] = max(cand["likes"] - gone, sum(r["likes"] for r in repos)) if cand["candidate"] == "B2" else repos[0]["likes"]
     if "bases" in cand:
         cand["bases"], cand["rows"] = bases, len(bases)
     return cand

@@ -473,8 +473,10 @@ class _Run:
             change["open_since"] = before["open_since"]
             if key[2:] == ("gguf_repos",):
                 joined = list(before["fields"]["gguf_repos"]["new"])
-                change["fields"]["gguf_repos"]["new"] = (joined + [r for r in change["fields"]["gguf_repos"]["new"] if r not in joined])[:R.MAX_GGUF_REPOS]
-                change["evidence"] = before.get("evidence", []) + [e for e in change["evidence"] if e not in before.get("evidence", [])]
+                new = (joined + [r for r in change["fields"]["gguf_repos"]["new"] if r not in joined])[:R.MAX_GGUF_REPOS]
+                change["fields"]["gguf_repos"]["new"] = new
+                kept = {f"{R.HUB}/{r}" for r in new if r not in change["fields"]["gguf_repos"]["old"]}  # evidence names what is added, after the cap
+                change["evidence"] = [e for e in before.get("evidence", []) + [e for e in change["evidence"] if e not in before.get("evidence", [])] if e in kept]
         self.changes[key] = change
 
     def _carried_rows(self) -> list[CatalogModel]:
