@@ -498,34 +498,45 @@ class _Run:
                     continue
         return rows
 
+    def _takes(self, repo: str, change: dict) -> bool:
+        """Whether the table would take `change` alone (schema 2 with its rules); a row it would not take is left out
+        with a note, so it counts for nothing: not for family, not for latest, not as a successor target."""
+        try:
+            build_catalog_v2(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
+        except (CatalogError, SchemaVersionError, ValueError) as exc:  # a strange Hub answer costs this row, never the run
+            self.notes.append(f"{repo}: left out, it would not validate ({' '.join(str(exc).split())[:120]})")
+            self.fresh.pop(repo, None)
+            return False
+        return True
+
     def _build(self) -> None:
         table = [m for m in self.rows.values() if not self._is_rejected(m.hf_repo)]
         carried = self._carried_rows()
         self.carried = {m.hf_repo for m in carried}  # the carried rows that count: for family, latest and as a successor target
         rows = list(self.rows.values()) + carried
-        fresh = sorted(self.fresh.values(), key=lambda item: item[0].repo)
-        latest = R.latest_among([(e.repo, r.kind, e.parameters_b) for e, r, _ in fresh], rows)
-        plain = [m for m in table if m.latest and not (m.latest_source or "").startswith(f"{R.HUB}/collections/{m.publisher}/")]
-        owners = [a for a in self.publishers if any(e.owner == a and e.repo in latest for e, _, _ in fresh) or any(m.publisher == a for m in plain)]
-        collections = self._collections(owners)
-        for entry, result, open_since in fresh:
+        taken = []  # the fresh rows the table would take, each with its family and GGUF list: only these count for latest
+        for entry, result, open_since in sorted(self.fresh.values(), key=lambda item: item[0].repo):
             family = R.family_for(entry.repo, result.kind, rows, entry.parameters_b)
             if family is None:
                 self.notes.append(f"{entry.repo}: no family word in the name, not proposed")
                 self.fresh.pop(entry.repo)
                 continue
+            trial = R.build_row(entry, result, family=family, today=self.today, latest=False, latest_source=None)
+            trial["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:R.MAX_GGUF_REPOS]
+            if self._takes(entry.repo, R.new_row_change(trial, result, open_since)):
+                rows.append(CatalogModel.model_validate(trial))  # the next new row sees this one: one family, one publisher
+                taken.append((entry, result, open_since, family, trial["gguf_repos"]))
+        latest = R.latest_among([(e.repo, r.kind, e.parameters_b) for e, r, _, _, _ in taken], rows)
+        plain = [m for m in table if m.latest and not (m.latest_source or "").startswith(f"{R.HUB}/collections/{m.publisher}/")]
+        owners = [a for a in self.publishers if any(e.owner == a and e.repo in latest for e, _, _, _, _ in taken) or any(m.publisher == a for m in plain)]
+        collections = self._collections(owners)
+        for entry, result, open_since, family, gguf in taken:
             source = collections.get(entry.owner, {}).get(entry.repo) or f"{R.HUB}/{entry.owner}"
             row = R.build_row(entry, result, family=family, today=self.today, latest=entry.repo in latest, latest_source=source)
-            row["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:R.MAX_GGUF_REPOS]
+            row["gguf_repos"] = gguf
             change = R.new_row_change(row, result, open_since)
-            try:  # alone against the table (schema 2 with its rules), before it counts for anything: a row the table would not take is no successor target
-                build_catalog_v2(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
-                rows.append(CatalogModel.model_validate(row))  # the next new row sees this one: one family, one publisher
-            except (CatalogError, SchemaVersionError, ValueError) as exc:  # a strange Hub answer costs this row, never the run
-                self.notes.append(f"{entry.repo}: left out, it would not validate ({' '.join(str(exc).split())[:120]})")
-                self.fresh.pop(entry.repo)
-                continue
-            self._put(("new_row", entry.repo), change)
+            if self._takes(entry.repo, change):  # once more as it stands: a latest row carries more fields
+                self._put(("new_row", entry.repo), change)
         for base, found in sorted(self.gguf.items()):
             row = None if self._is_rejected(base) else self.rows.get(base)
             added = sorted(r for r in found if r not in row.gguf_repos) if row is not None else []

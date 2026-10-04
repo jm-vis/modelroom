@@ -249,7 +249,7 @@ def test_a_carried_candidate_keeps_what_the_rejection_list_leaves_with_its_first
     p, result, _ = go(env, Hub())
     (b1,), (b2,) = cands(p, "B1"), cands(p, "B2")
     assert (b1["hf_repo"], b1["likes"], b1["open_since"], b1["evidence"]) == ("lab/Warm-1-7B", 149, YESTERDAY, ["https://huggingface.co/lab/Warm-1-7B"])
-    assert [r["hf_repo"] for r in b1["repos"]] == ["lab/Warm-1-7B"] and result.exit_code == 0
+    assert [r["hf_repo"] for r in b1["repos"]] == ["lab/Warm-1-7B"] and b1["created_at"] is None and result.exit_code == 0
     assert (b2["account"], b2["hf_repo"], b2["rows"], b2["likes"]) == ("pack", "pack/Nimbus-1-30B-GGUF", 3, 149 + 148 + 147)
     assert [r["hf_repo"] for r in b2["repos"]] == ["pack/Nimbus-1-30B-GGUF", "pack/Comet-3-8B-GGUF", "pack/Atlas-2-9B-Q4-GGUF"]
     assert b2["evidence"] == [f"https://huggingface.co/{r['hf_repo']}" for r in b2["repos"]] and b2["bases"] == list(BASES)
@@ -378,6 +378,38 @@ def test_a_fresh_row_that_the_table_would_not_take_is_left_out_before_it_is_a_su
     assert "nova/Atlas-1-30B" not in new_rows(p) and fields_of(p, "nova/Nimbus-1-30B", "successor") is None and result.exit_code == 0
     assert [n for n in p["notes"] if n.startswith("nova/Atlas-1-30B: left out")] and [n for n in p["notes"] if "new_version nova/Atlas-1-30B, which is not" in n]
     assert applied(p).model_for("nova/Nimbus-1-30B").latest
+
+
+# --- the fixes after the ninth review round (t9) ----------------------------------------------------------------------
+
+
+def test_a_fresh_higher_version_the_table_would_not_take_does_not_keep_a_lower_one_from_latest(env, monkeypatch):
+    real = scanner.build_catalog_v2
+
+    def refuse(text, path):
+        if "acme/Atlas-4-9B" in text:
+            raise scanner.CatalogError("the table would not take acme/Atlas-4-9B")
+        return real(text, path)
+
+    monkeypatch.setattr(scanner, "build_catalog_v2", refuse)
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-4-9B", stamp(2)), ent("acme/Atlas-3-9B", stamp(3))])
+    p, result, _ = go(env, hub)
+    assert new_of(new_rows(p)["acme/Atlas-3-9B"])["latest"] is True and "acme/Atlas-4-9B" not in new_rows(p) and result.exit_code == 0
+    assert [n for n in p["notes"] if n.startswith("acme/Atlas-4-9B: left out")] and applied(p).model_for("acme/Atlas-3-9B").latest
+
+
+@pytest.mark.parametrize("repos", ["missing", "empty"])
+def test_a_carried_candidate_without_its_list_of_repos_is_dropped(env, repos):
+    cand = b12("B1", "K1", "lab", "lab/Hot-1-7B")
+    if repos == "missing":
+        del cand["repos"]
+    else:
+        cand["repos"] = []
+    env.prev(YESTERDAY, candidates=[cand])
+    reject(env, {"hf_repo": "lab/Hot-1-7B"})
+    p, result, _ = go(env, Hub())
+    assert p["candidates"] == [] and result.exit_code == 0
 
 
 def test_an_empty_hash_handed_to_the_rendering_is_printed_as_given():

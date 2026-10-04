@@ -472,7 +472,9 @@ def _thinned(cand: dict, rejected) -> dict | None:
     shape: untouched when nothing goes; else the best remaining repo on top, the evidence to match, a B2 less the likes
     of what went (the stored ten stand for all), `open_since` as it was. `None` without a repo, or a B2 under three
     repos or rows (which GGUF repo covers which row is not in the proposal, so this is the test that is left)."""
-    stored, old_bases = cand.get("repos", []), cand.get("bases", [])
+    stored, old_bases = cand.get("repos"), cand.get("bases", [])
+    if not (isinstance(stored, list) and stored):
+        return None  # a B1 or B2 without its list of repos has the wrong shape; its best repo cannot be checked
     repos = [r for r in stored if isinstance(r, dict) and isinstance(r.get("hf_repo"), str) and _count(r.get("likes"))
              and _count(r.get("downloads")) and not rejected(r["hf_repo"])]
     bases = [b for b in old_bases if isinstance(b, str) and not rejected(b)]
@@ -481,7 +483,8 @@ def _thinned(cand: dict, rejected) -> dict | None:
     if not repos or (cand["candidate"] == "B2" and min(len(repos), len(bases)) < B2_MIN_ROWS):
         return None
     gone = sum(r["likes"] for r in stored if isinstance(r, dict) and _count(r.get("likes")) and r not in repos)
-    cand.update(hf_repo=repos[0]["hf_repo"], downloads=repos[0]["downloads"], repos=repos, evidence=[f"{HUB}/{r['hf_repo']}" for r in repos])
+    cand.update(hf_repo=repos[0]["hf_repo"], downloads=repos[0]["downloads"], created_at=None, repos=repos,
+                evidence=[f"{HUB}/{r['hf_repo']}" for r in repos])  # the stored repos carry no time: none is claimed
     cand["likes"] = max(cand["likes"] - gone, sum(r["likes"] for r in repos)) if cand["candidate"] == "B2" else repos[0]["likes"]
     if "bases" in cand:
         cand["bases"], cand["rows"] = bases, len(bases)
