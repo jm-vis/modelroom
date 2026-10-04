@@ -258,11 +258,13 @@ class Tool:
                 self.say(f"committed: {commit}")
                 return 0
             raise PublishError(f"the state is {decision['state']}: --record-commit works on applied only")
-        for what, digest in ((P.CATALOG_IN_REPO, "result_sha256"), (P.REJECTED_IN_REPO, "result_rejected_sha256")):
-            try:
+        try:
+            if self.run_git(["cat-file", "-t", commit]).strip() != b"commit":  # a tree with the right files is no commit to push
+                raise PublishError(f"{commit} is not a commit")
+            for what, digest in ((P.CATALOG_IN_REPO, "result_sha256"), (P.REJECTED_IN_REPO, "result_rejected_sha256")):
                 self._commit_bytes(commit, decision[digest], what)
-            except StepFailed as exc:
-                raise PublishError(str(exc)) from exc
+        except (GitError, StepFailed) as exc:
+            raise PublishError(str(exc)) from exc
         self._state(folder, decision, "committed", commit=commit)
         self.say(f"committed: {commit}")
         return 0
@@ -335,14 +337,18 @@ class Tool:
 
     def _upload(self, dataset: str, data: bytes, message: str, token: str) -> None:
         """The one upload process, for these bytes: a file of its own in a folder of its own, read back and checked by
-        the hygiene gate again, then the fixed argument list with the token path in the environment."""
+        the hygiene gate again, then the fixed argument list with the token path in the environment. `_ready` came
+        before: what fails here is a step, exit 1, the state stays."""
         with tempfile.TemporaryDirectory(prefix="catalog-upload-") as folder:
             target = Path(folder) / REMOTE_FILE_NAME
-            target.write_bytes(data)
-            again = target.read_bytes()
-            if P.sha256_of(again) != P.sha256_of(data):
-                raise PublishError("the upload file does not hold the bytes it was made from")
-            self._hygiene(again)
+            try:
+                target.write_bytes(data)
+                again = target.read_bytes()
+                if P.sha256_of(again) != P.sha256_of(data):
+                    raise StepFailed("the upload file does not hold the bytes it was made from, the state stays")
+                self._hygiene(again)
+            except (OSError, PublishError) as exc:
+                raise StepFailed(f"the upload file could not be made and checked, the state stays: {_clean(exc)}") from exc
             child = {k: v for k, v in self.env.items() if k not in TOKEN_VARIABLES}
             child[TOKEN_PATH_ENV] = token
             try:
@@ -397,7 +403,7 @@ class Tool:
         fixtures, path = (self.root / "tests" / "fixtures").resolve(), Path(fixture).resolve()
         if not (path.is_file() and path.is_relative_to(fixtures)):
             raise PublishError("the probe file must be a file under tests/fixtures")
-        inside = path.relative_to(self.root.resolve()).as_posix()
+        inside = ":(literal)" + path.relative_to(self.root.resolve()).as_posix()  # a name, never a pathspec pattern
         try:
             tracked = self.run_git(["ls-files", "--", inside])  # an ignored file has no status line: it must be in the index
             status = self.run_git(["status", "--porcelain", "--", inside])

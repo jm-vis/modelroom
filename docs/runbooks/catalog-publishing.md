@@ -46,8 +46,8 @@ python scripts/catalog_publish.py --upload --probe tests/fixtures/catalog_v2_val
 python scripts/catalog_publish.py --verify --probe tests/fixtures/catalog_v2_valid.json
 ```
 
-The first call refuses unless the file lies under `tests/fixtures/` and `git status` shows it unchanged; it uploads to the
-probe dataset only. The second runs **without** the token variables, reads the probe dataset the way modelroom does
+The first call refuses unless the file lies under `tests/fixtures/`, is tracked by git and `git status` shows it unchanged;
+it uploads to the probe dataset only. The second runs **without** the token variables, reads the probe dataset the way modelroom does
 (revision of the main line, then the file at that commit) and compares byte for byte. Expect
 `catalog: published file equals the probe file`. A call of the first without `HF_TOKEN_PATH` must stop before any process
 starts: try it once. Write the date and the result of both calls (and whether the token could be limited to the two
@@ -72,7 +72,8 @@ datasets) into the entry that records the set-up.
 4. **Test, check, commit.** Run the test suite and the release gate's hygiene check, then commit `modelroom/catalog.json`
    and `modelroom/catalog-rejected.json`.
 5. **Record the commit.** `python scripts/catalog_publish.py --record-commit <out>/<day> <full commit hash>` (state
-   `committed`; it refuses a commit whose `catalog.json` is not the result of the decision).
+   `committed`; it refuses a hash that is no commit, or a commit whose `catalog.json` or `catalog-rejected.json` is not
+   the result of the decision; the same commit recorded again is confirmed without a write).
 6. **Publish.** `python scripts/catalog_publish.py --publish-pending <out>/<day> [--remote forgejo]` pushes that commit to
    the remote (`git push <remote> <commit>:refs/heads/main`, no force), uploads its `catalog.json` bytes after the hygiene
    check, then compares the published file with the commit (`published`). Each step is repeatable.
