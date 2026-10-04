@@ -27,7 +27,7 @@ from modelroom.contracts import SchemaVersionError  # noqa: E402
 
 KINDS = tuple(sorted(set(PIPELINE_TAG_TO_KIND.values())))  # the eight kinds of the table
 STATES = R.DECISION_STATES  # approved, applied, committed, pushed, uploaded, published: the order of a publication
-CATALOG_IN_REPO = "modelroom/catalog.json"
+CATALOG_IN_REPO, REJECTED_IN_REPO = "modelroom/catalog.json", "modelroom/catalog-rejected.json"
 # The version of `huggingface_hub` the upload runs with, through `uvx`: no dependency of the package. `uv.lock` names none,
 # so this is the newest release the build machine knew; the setup test of the runbook is what shows that this call form works.
 HF_HUB_VERSION = "1.28.0"
@@ -217,14 +217,24 @@ def decision_document(plan: Plan, proposal_sha: str, today: str, base_catalog_sh
     }
 
 
+def _number(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _candidate(value: object) -> bool:
+    return isinstance(value, str) and _CANDIDATE.fullmatch(value) is not None
+
+
 def check_decision(raw: bytes) -> dict:
-    """A `decision.json` as this tool and the scanner read it; a damaged one is an error, never guessed at."""
+    """A `decision.json` as this tool and the scanner read it: numbers as `int` (a `bool` is none), candidates as `Kk`;
+    a damaged one is an error, never guessed at."""
     try:
         decision = json.loads(raw.decode("utf-8"))
         texts = {"result_catalog": "result_sha256", "result_rejected": "result_rejected_sha256"}
+        lists = {"approved": _number, "rejected": lambda v: _number(v) or _candidate(v), "admitted": _candidate}
         sound = (
             isinstance(decision, dict) and decision.get("state") in STATES
-            and all(isinstance(decision.get(key), list) for key in ("approved", "rejected", "admitted"))
+            and all(isinstance(decision.get(key), list) and all(ok(v) for v in decision[key]) for key, ok in lists.items())
             and all(isinstance(decision.get(key), str) and _SHA256.fullmatch(decision[key]) for key in ("base_catalog_sha256", "base_rejected_sha256", "proposal_sha", *texts.values()))
             and all(isinstance(decision.get(text), str) and sha256_of(decision[text].encode("utf-8")) == decision[digest] for text, digest in texts.items())
             and (decision.get("commit") is None or isinstance(decision["commit"], str))

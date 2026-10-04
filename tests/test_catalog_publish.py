@@ -84,25 +84,36 @@ class Counting(publish.DiskFiles):
 
 
 class Git:
-    """Records every call; `commits` maps a hash to the bytes of its `modelroom/catalog.json`."""
+    """Records every call; `commits` maps a hash to the bytes of its `modelroom/catalog.json`, `rejected` to the bytes of
+    its `modelroom/catalog-rejected.json`; `tracked` and `status` are what `ls-files` and `status --porcelain` print."""
 
-    def __init__(self, commits=None, push_fail: bool = False, status: bytes = b"") -> None:
-        self.commits, self.push_fail, self.status, self.calls = dict(commits or {}), push_fail, status, []
+    def __init__(self, commits=None, push_fail: bool = False, status: bytes = b"", tracked: bytes = b"tests/fixtures/catalog_v2_valid.json\n") -> None:
+        self.commits, self.rejected, self.push_fail, self.status, self.tracked, self.calls = dict(commits or {}), {}, push_fail, status, tracked, []
 
     def __call__(self, args):
         self.calls.append(list(args))
         if args[0] == "show":
             commit, _, path = args[1].partition(":")
-            if commit not in self.commits or path != "modelroom/catalog.json":
+            held = {"modelroom/catalog.json": self.commits, "modelroom/catalog-rejected.json": self.rejected}.get(path, {})
+            if commit not in held:
                 raise publish.GitError("git show failed (exit 128)")
-            return self.commits[commit]
+            return held[commit]
         if args[0] == "push":
             if self.push_fail:
                 raise publish.GitError("git push failed (exit 1)")
             return b""
-        if args[0] == "status":
-            return self.status
+        if args[0] in ("status", "ls-files"):
+            return self.status if args[0] == "status" else self.tracked
         raise AssertionError(args)
+
+
+class Sealed(dict):
+    """An environment a token-free mode may not touch: any read fails the test."""
+
+    def _read(self, *args, **kwargs):
+        pytest.fail("the environment was read by a token-free mode")
+
+    get = __getitem__ = items = keys = values = __iter__ = __contains__ = _read
 
 
 class Runner:
@@ -159,9 +170,13 @@ class Work:
     def set_state(self, state: str, **more) -> None:
         (self.folder / "decision.json").write_bytes(R.dump_json({**self.decision(), "state": state, **more}))
 
+    def hold(self, commit: str = COMMIT) -> None:
+        """`commit` holds the result of the decision, both files."""
+        self.git.commits[commit], self.git.rejected[commit] = self.decision()["result_catalog"].encode(), self.decision()["result_rejected"].encode()
+
     def committed(self) -> None:
         assert self.apply(*APPLY).code == 0
-        self.git.commits[COMMIT] = self.decision()["result_catalog"].encode()
+        self.hold()
         assert self.call("--record-commit", self.folder, COMMIT).code == 0
 
     def scan_next(self):
@@ -218,7 +233,7 @@ def _differing(work, mutate) -> tuple[list[str], list[str], list[int]]:
     work.proposal.write_bytes(R.dump_json(data))
     after = work.call("--show", work.out).out.splitlines()
     assert len(before) == len(after)
-    return before, after, [i for i, (a, b) in enumerate(zip(before, after)) if a != b and not a.startswith("to decide")]
+    return before, after, [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
 
 
 @pytest.mark.parametrize("n, name", PAIRS)
@@ -274,19 +289,20 @@ def test_show_names_a_pending_publication_before_the_open_proposal_and_alone_whe
     earlier.mkdir()
     (earlier / "decision.json").write_bytes(R.dump_json({"state": state, "commit": COMMIT if state in ("pushed", "uploaded") else None}))
     line = f"publication pending: 2026-10-03, state {state}, commit {COMMIT if state in ('pushed', 'uploaded') else 'none'}"
-    out = work.call("--show", work.out).out
-    assert out.splitlines()[0] == line and out.splitlines()[1].startswith("# Catalog proposal") and "approval waits" in out and "to decide" not in out
+    assert work.call("--show", work.out).out == line + "\n" + R.render_proposal(json.loads(PROPOSAL_BYTES), work.sha) + "base: current\n"
     work.proposal.unlink()
     assert work.call("--show", work.out).out == line + "\n"
+    (work.out / "2026-10-03" / "decision.json").write_bytes(R.dump_json({"state": "done", "commit": None}))  # no state of the six: no decision
+    assert work.call("--show", work.out).out == "no open catalog proposal\n"
 
 
-def test_show_marks_a_stale_base_and_gives_no_hint_to_approve(work):
-    assert "to decide: --apply" in work.call("--show", work.out).out
+def test_show_prints_exactly_the_rendering_and_the_base_line_and_marks_a_stale_base(work):
+    text = R.render_proposal(json.loads(PROPOSAL_BYTES), work.sha)
+    assert work.call("--show", work.out).out == text + "base: current\n"
     document = json.loads(CATALOG_BYTES)
     document["published"] = "2026-10-01"
     work.catalog.write_bytes(R.dump_json(document))
-    out = work.call("--show", work.out).out
-    assert "base: stale, the proposal was made against another catalog; run the scanner again" in out and "to decide" not in out and "base: current" not in out
+    assert work.call("--show", work.out).out == text + "base: stale, the proposal was made against another catalog; run the scanner again\n"
 
 
 # --- --apply: only the named rows -------------------------------------------------------------------------------------
@@ -351,19 +367,36 @@ def test_apply_never_asks_for_the_token_path_and_makes_no_request(work):
     assert work.transport.calls == [] and work.runner.calls == []
 
 
+@pytest.mark.parametrize("argv", [["--show", "out"], ["--apply", "proposal", "--proposal-sha", "sha", "--approve", "1"],
+                                  ["--complete", "proposal", "--proposal-sha", "sha", "--admit", "K3", "--kind", "vision"], ["--materialize", "folder"],
+                                  ["--record-commit", "folder", COMMIT], ["--verify"], ["--verify", "--commit", COMMIT], ["--publish-pending", "folder"]])
+def test_a_token_free_mode_never_reads_the_environment(work, argv):
+    work.transport = hub_answers(CATALOG_BYTES)
+    if argv[0] in ("--materialize", "--record-commit", "--publish-pending"):
+        assert work.apply(*APPLY).code == 0
+        work.hold()
+        work.set_state({"--materialize": "approved", "--record-commit": "applied", "--publish-pending": "published"}[argv[0]])
+    argv = [{"out": work.out, "proposal": work.proposal, "sha": work.sha, "folder": work.folder}.get(a, a) for a in argv]
+    assert work.call(*argv, env=Sealed()).code == (1 if argv == ["--verify", "--commit", COMMIT] else 0)
+
+
 def _refusal(work, case: str) -> tuple[list, str]:
     base = ["--apply", work.proposal, "--proposal-sha", work.sha, "--approve", "1"]
     if case == "no-sha":
         return ["--apply", work.proposal, "--approve", "1"], "--proposal-sha"
     if case == "short-sha":
+        work.catalog.write_bytes(b"{}")  # the form of the checksum comes before everything else
         return ["--apply", work.proposal, "--proposal-sha", "abc", "--approve", "1"], "--proposal-sha"
     if case == "other-bytes":
         work.proposal.write_bytes(PROPOSAL_BYTES.replace(b"acme", b"acmf", 1))
         return base, "has changed"
-    if case == "other-base":
+    if case == "truncated":
+        work.proposal.write_bytes(PROPOSAL_BYTES[:-40])  # cut after it was shown: the bytes differ, that is the sentence (not "no JSON")
+        return base, "has changed"
+    if case in ("other-base", "base-before-validation"):
         document = json.loads(CATALOG_BYTES)
         document["published"] = "2026-10-01"
-        work.catalog.write_bytes(R.dump_json(document))
+        work.catalog.write_bytes(R.dump_json(document) if case == "other-base" else b'{"schema": 2}')
         return base, "another catalog"
     cases = {"unknown-number": (["--approve", "9"], "not in the proposal"), "two-lists": (["--approve", "1", "--reject", "1"], "named twice"),
              "candidate-approved": (["--approve", "K1"], "is a candidate"), "b3-admitted": (["--admit", "K3"], "only --complete"),
@@ -379,8 +412,8 @@ def _refusal(work, case: str) -> tuple[list, str]:
     return base, "another publication is pending"
 
 
-@pytest.mark.parametrize("case", ["no-sha", "short-sha", "other-bytes", "other-base", "unknown-number", "two-lists", "candidate-approved", "b3-admitted",
-                                  "nothing-named", "decision-exists", "other-pending"])
+@pytest.mark.parametrize("case", ["no-sha", "short-sha", "other-bytes", "truncated", "other-base", "base-before-validation", "unknown-number", "two-lists",
+                                  "candidate-approved", "b3-admitted", "nothing-named", "decision-exists", "other-pending"])
 def test_apply_is_refused_with_exit_2_before_any_write_and_nothing_changes(work, case):
     argv, fragment = _refusal(work, case)
     before = work.tree()
@@ -520,28 +553,44 @@ def test_complete_is_refused_while_a_publication_is_pending_or_a_decision_exists
 # --- --record-commit --------------------------------------------------------------------------------------------------
 
 
-def test_record_commit_stores_the_commit_when_its_catalog_is_the_result_of_the_decision(work):
+def test_record_commit_stores_the_commit_when_both_its_files_are_the_result_of_the_decision(work):
     assert work.apply(*APPLY).code == 0
-    work.git.commits[COMMIT] = work.decision()["result_catalog"].encode()
+    work.hold()
     assert work.call("--record-commit", work.folder, COMMIT).code == 0
-    assert (work.state(), work.decision()["commit"]) == ("committed", COMMIT) and work.git.calls == [["show", f"{COMMIT}:modelroom/catalog.json"]]
+    assert (work.state(), work.decision()["commit"]) == ("committed", COMMIT)
+    assert work.git.calls == [["show", f"{COMMIT}:modelroom/catalog.json"], ["show", f"{COMMIT}:modelroom/catalog-rejected.json"]]
 
 
-@pytest.mark.parametrize("commit, bytes_", [(COMMIT, CATALOG_BYTES), ("c" * 40, None), ("--force", None), ("main", None)])
-def test_record_commit_refuses_a_commit_that_is_not_the_result_and_the_state_stays_applied(work, commit, bytes_):
+@pytest.mark.parametrize("commit, held", [(COMMIT, "catalog"), (COMMIT, "rejected"), ("c" * 40, None), ("--force", None), ("main", None)])
+def test_record_commit_refuses_a_commit_whose_catalog_or_rejection_list_is_not_the_result_and_the_state_stays_applied(work, commit, held):
     assert work.apply(*APPLY).code == 0
-    if bytes_ is not None:
-        work.git.commits[commit] = bytes_
+    if held is not None:
+        work.hold(commit)
+    if held == "catalog":
+        work.git.commits[commit] = CATALOG_BYTES
+    elif held == "rejected":
+        work.git.rejected[commit] = REJECTED_BYTES
     before = work.tree()
     assert work.call("--record-commit", work.folder, commit).code == 2 and work.tree() == before and work.state() == "applied"
 
 
+def test_record_commit_refuses_the_previous_commit_after_a_decision_that_only_rejects(work):
+    assert work.apply("--reject", "4").code == 0
+    work.git.commits[COMMIT], work.git.rejected[COMMIT] = CATALOG_BYTES, REJECTED_BYTES  # the commit before: the same catalog, the old list
+    assert work.call("--record-commit", work.folder, COMMIT).code == 2 and work.state() == "applied"
+    work.hold()
+    assert work.call("--record-commit", work.folder, COMMIT).code == 0 and work.state() == "committed"
+
+
 @pytest.mark.parametrize("state", ["approved", "committed", "pushed", "published"])
-def test_record_commit_works_on_applied_only(work, state):
+def test_record_commit_works_on_applied_only_and_confirms_a_commit_recorded_already_without_writing(work, state):
     assert work.apply(*APPLY).code == 0
-    work.git.commits[COMMIT] = work.decision()["result_catalog"].encode()
-    work.set_state(state)
-    assert work.call("--record-commit", work.folder, COMMIT).code == 2 and work.state() == state
+    work.hold()
+    work.set_state(state, commit=None if state == "approved" else COMMIT)
+    before = work.tree()
+    assert work.call("--record-commit", work.folder, "c" * 40).code == 2 and work.tree() == before
+    result = work.call("--record-commit", work.folder, COMMIT)
+    assert (result.code, result.out) == ((2, "") if state == "approved" else (0, f"committed: {COMMIT}\n")) and work.tree() == before
 
 
 # --- --publish-pending ------------------------------------------------------------------------------------------------
@@ -555,8 +604,7 @@ def test_publish_pending_pushes_the_recorded_commit_uploads_its_bytes_and_checks
     work.transport = hub_answers(work.decision()["result_catalog"].encode())
     result = work.call("--publish-pending", work.folder, env=env)
     assert result.code == 0 and work.state() == "published" and result.out.splitlines()[-1] == "published"
-    assert work.git.calls[0] == ["push", "forgejo", f"{COMMIT}:refs/heads/main"] and "--force" not in work.git.calls[0]
-    assert all(call[0] == "show" for call in work.git.calls[1:])
+    assert work.git.calls == [["show", f"{COMMIT}:modelroom/catalog.json"], ["push", "forgejo", f"{COMMIT}:refs/heads/main"]]  # the bytes are read and checked before the push
     (args, child), = work.runner.calls
     assert args[:6] + args[7:] == ["uvx", "--from", f"huggingface_hub=={P.HF_HUB_VERSION}", "hf", "upload", "jm-vis/modelroom-catalog", "catalog-v2.json",
                                    "--repo-type", "dataset", "--commit-message", COMMIT]
@@ -582,14 +630,29 @@ def test_a_failed_push_leaves_committed_and_the_next_call_pushes_the_same_commit
     assert [c for c in work.git.calls if c[0] == "push"] == [["push", "forgejo", f"{COMMIT}:refs/heads/main"]] * 2
 
 
-def test_an_interruption_after_the_push_leaves_pushed_and_the_next_call_uploads_the_commit_bytes(work, tmp_path):
+@pytest.mark.parametrize("fail_at, left, pushes, uploads", [(1, "committed", 2, 1), (2, "pushed", 1, 2), (3, "uploaded", 1, 1)])
+def test_an_interrupted_publication_leaves_the_state_before_the_write_the_scanner_names_it_and_the_next_call_resumes_there(work, tmp_path, fail_at, left, pushes, uploads):
     work.committed()
+    work.transport = hub_answers(work.decision()["result_catalog"].encode())
     with pytest.raises(Interrupted):
-        work.call("--publish-pending", work.folder, files=Crashing(2), env=upload_env(tmp_path))  # the push is written, the upload is made, its state is not
-    assert work.state() == "pushed"
+        work.call("--publish-pending", work.folder, files=Crashing(fail_at), env=upload_env(tmp_path))  # the step is done, its state is not written
+    assert work.state() == left and work.decision()["commit"] == COMMIT
+    nxt, result = work.scan_next()
+    assert nxt["summary"]["pending_publication"] == {"date": TODAY, "state": left} and result.exit_code == 0
+    assert {c["hf_repo"] for c in nxt["changes"]} == {"orbit/Comet-3-8B", "orbit/Comet-Echo-1"}
     work.transport = hub_answers(work.decision()["result_catalog"].encode())
     assert work.call("--publish-pending", work.folder, env=upload_env(tmp_path)).code == 0 and work.state() == "published"
-    assert work.runner.uploaded[0] == work.runner.uploaded[1] == work.decision()["result_catalog"].encode()
+    assert len([c for c in work.git.calls if c[0] == "push"]) == pushes and len(work.runner.calls) == uploads
+    assert all(data == work.decision()["result_catalog"].encode() for data in work.runner.uploaded)
+
+
+def test_an_interrupted_record_commit_leaves_applied_without_a_commit_and_the_same_call_records_it(work):
+    assert work.apply(*APPLY).code == 0
+    work.hold()
+    with pytest.raises(Interrupted):
+        work.call("--record-commit", work.folder, COMMIT, files=Crashing(1))
+    assert (work.state(), work.decision()["commit"]) == ("applied", None) and work.scan_next()[0]["summary"]["pending_publication"]["state"] == "applied"
+    assert work.call("--record-commit", work.folder, COMMIT).code == 0 and work.state() == "committed"
 
 
 def test_a_failed_upload_process_leaves_pushed_with_exit_1_and_the_next_call_uploads_the_same_bytes(work, tmp_path):
@@ -623,13 +686,15 @@ def test_publish_pending_refuses_a_decision_without_a_commit(work, state):
 def test_publish_pending_on_a_published_decision_does_nothing(work):
     work.committed()
     work.set_state("published")
-    assert work.call("--publish-pending", work.folder).code == 0 and work.runner.calls == [] and work.git.calls == work.git.calls[:1]
+    work.git.calls.clear()
+    assert work.call("--publish-pending", work.folder).code == 0 and work.runner.calls == [] and work.git.calls == []
 
 
+@pytest.mark.parametrize("start", ["committed", "pushed"])
 @pytest.mark.parametrize("fault", ["hygiene", "no-words-variable", "no-words-file", "no-token-variable", "no-token-file", "words-inside-repo", "other-bytes"])
-def test_nothing_is_uploaded_when_a_check_before_the_process_fails_and_the_state_stays_pushed(work, tmp_path, fault):
+def test_nothing_is_uploaded_or_pushed_when_a_check_before_the_process_fails_and_the_state_stays(work, tmp_path, fault, start):
     work.committed()
-    work.set_state("pushed")
+    work.set_state(start)
     env = upload_env(tmp_path, words="atlas\n" if fault == "hygiene" else "zzprivate-word\n")
     env = {"no-words-variable": removed(env, "MODELROOM_RELEASE_PRIVATE_WORDS"), "no-token-variable": removed(env, "HF_TOKEN_PATH"),
            "no-words-file": {**env, "MODELROOM_RELEASE_PRIVATE_WORDS": str(tmp_path / "missing.txt")},
@@ -638,7 +703,8 @@ def test_nothing_is_uploaded_when_a_check_before_the_process_fails_and_the_state
     if fault == "other-bytes":
         work.git.commits[COMMIT] = CATALOG_BYTES
     result = work.call("--publish-pending", work.folder, env=env)
-    assert result.code == 2 and work.runner.calls == [] and work.state() == "pushed" and "zzprivate-word" not in result.err and TOKEN_TEXT not in result.err
+    assert result.code == 2 and work.runner.calls == [] and work.state() == start and "zzprivate-word" not in result.err and TOKEN_TEXT not in result.err
+    assert not [c for c in work.git.calls if c[0] == "push"]  # a refusal is exit 2: nothing was pushed, nothing written
 
 
 # --- --verify ---------------------------------------------------------------------------------------------------------
@@ -695,20 +761,21 @@ def test_the_probe_upload_goes_to_the_probe_dataset_only_with_the_bytes_of_an_un
     env = upload_env(tmp_path)
     result = work.call("--upload", "--probe", fixture, env=env)
     (args, child), = work.runner.calls
-    assert result.code == 0 and work.git.calls == [["status", "--porcelain", "--", "tests/fixtures/catalog_v2_valid.json"]]
+    assert result.code == 0 and work.git.calls == [["ls-files", "--", "tests/fixtures/catalog_v2_valid.json"], ["status", "--porcelain", "--", "tests/fixtures/catalog_v2_valid.json"]]
     assert args[:6] + args[7:] == ["uvx", "--from", f"huggingface_hub=={P.HF_HUB_VERSION}", "hf", "upload", "jm-vis/modelroom-catalog-probe", "catalog-v2.json",
                                    "--repo-type", "dataset", "--commit-message", "probe"]
     assert "jm-vis/modelroom-catalog" not in args and work.runner.uploaded == [fixture.read_bytes()] and "HF_TOKEN" not in child and TOKEN_TEXT not in result.out
     assert work.call("--upload", "--probe", fixture, env=removed(env, "HF_TOKEN_PATH")).code == 2 and len(work.runner.calls) == 1  # no token path: no process
 
 
-@pytest.mark.parametrize("where, status", [("outside", b""), ("changed", b" M tests/fixtures/catalog_v2_valid.json\n"), ("untracked", b"?? tests/fixtures/catalog_v2_valid.json\n"),
-                                           ("missing", b""), ("folder", b"")])
-def test_the_probe_upload_refuses_a_file_outside_the_fixtures_a_changed_one_and_a_missing_one(work, tmp_path, where, status):
+@pytest.mark.parametrize("where, status, tracked", [("outside", b"", True), ("changed", b" M tests/fixtures/catalog_v2_valid.json\n", True),
+                                                    ("untracked", b"?? tests/fixtures/catalog_v2_valid.json\n", False), ("ignored", b"", False),
+                                                    ("missing", b"", True), ("folder", b"", True)])
+def test_the_probe_upload_refuses_a_file_outside_the_fixtures_a_changed_an_untracked_an_ignored_and_a_missing_one(work, tmp_path, where, status, tracked):
     outside = tmp_path / "other.json"
     outside.write_bytes(CATALOG_BYTES)
     path = {"outside": outside, "missing": FIX / "no-such-fixture.json", "folder": FIX}.get(where, FIX / "catalog_v2_valid.json")
-    work.git.status = status
+    work.git.status, work.git.tracked = status, work.git.tracked if tracked else b""  # an ignored file: no status line and not in the index
     assert work.call("--upload", "--probe", path, env=upload_env(tmp_path)).code == 2 and work.runner.calls == []
 
 

@@ -77,9 +77,9 @@ def default_run(args: list[str], env: dict[str, str]) -> int:
 
 class Tool:
     """One call. Every outside is a parameter: the disk (`files`), git (`run_git`), the one upload process (`run`), the
-    network (`transport`), the environment (`env`) and the clock (`now`)."""
+    network (`transport`), the environment (`env`, read only on the way to an upload) and the clock (`now`)."""
 
-    def __init__(self, *, root: Path, catalog: Path, rejected: Path, files, run_git, run, transport: Transport, env: dict[str, str],
+    def __init__(self, *, root: Path, catalog: Path, rejected: Path, files, run_git, run, transport: Transport, env,
                  now: datetime, out, err) -> None:
         self.root, self.catalog_path, self.rejected_path = root, catalog, rejected
         self.files, self.run_git, self.run, self.transport, self.env, self.out, self.err = files, run_git, run, transport, env, out, err
@@ -96,32 +96,35 @@ class Tool:
         except OSError as exc:
             raise PublishError(f"{path}: cannot read the {what}: {_clean(exc)}") from exc
 
-    def _catalog(self) -> tuple[bytes, dict]:
-        data = self._read(self.catalog_path, "catalog")
+    def _document(self, data: bytes) -> dict:
+        """The catalog read as a table, validated; the bytes were compared before this is called."""
         try:
             document = json.loads(data.decode("utf-8"))
             build_catalog_v2(data.decode("utf-8"), self.catalog_path)
         except (ValueError, CatalogError, SchemaVersionError) as exc:
             raise PublishError(f"{self.catalog_path}: not a valid catalog: {_clean(exc)}") from exc
-        return data, document
+        return document
 
-    def _proposal(self, path: Path) -> tuple[bytes, dict]:
+    def _proposal_bytes(self, path: Path) -> bytes:
         if path.name != "proposal.json":
             raise PublishError(f"{path}: the proposal is a file named proposal.json")
-        data = self._read(path, "proposal")
+        return self._read(path, "proposal")
+
+    def _parsed(self, path: Path, data: bytes) -> dict:
         try:
             proposal = json.loads(data.decode("utf-8"))
         except ValueError as exc:
             raise PublishError(f"{path}: the proposal is no JSON") from exc
         if not isinstance(proposal, dict) or not isinstance(proposal.get("base_catalog_sha256"), str):
             raise PublishError(f"{path}: not a proposal of the scanner")
-        return data, proposal
+        return proposal
 
     def _days(self, out: Path) -> list[str]:
         return sorted(name for name in self.files.folders(out) if _DAY.fullmatch(name))
 
     def _pending(self, out: Path, skip: str | None = None) -> list[tuple[str, dict]]:
-        """Every day with a decision that is not `published` (the scanner's reading: a dict with a text `state`)."""
+        """Every day with a decision that is not `published`, read as the scanner reads it: a dict whose `state` is one
+        of the six; anything else is no decision."""
         found = []
         for day in self._days(out):
             path = out / day / "decision.json"
@@ -131,7 +134,7 @@ class Tool:
                 decision = json.loads(self.files.read(path).decode("utf-8"))
             except (OSError, ValueError):
                 continue
-            if isinstance(decision, dict) and isinstance(decision.get("state"), str) and decision["state"] != "published":
+            if isinstance(decision, dict) and decision.get("state") in P.STATES and decision["state"] != "published":
                 found.append((day, decision))
         return found
 
@@ -144,13 +147,13 @@ class Tool:
         self.files.write(folder / "decision.json", R.dump_json(decision))
         return decision
 
-    def _commit_bytes(self, commit: str, expected_sha: str) -> bytes:
+    def _commit_bytes(self, commit: str, expected_sha: str, what: str = P.CATALOG_IN_REPO) -> bytes:
         try:
-            data = self.run_git(["show", f"{commit}:{P.CATALOG_IN_REPO}"])
+            data = self.run_git(["show", f"{commit}:{what}"])
         except GitError as exc:
             raise StepFailed(str(exc)) from exc
         if P.sha256_of(data) != expected_sha:
-            raise PublishError("the catalog of this commit is not the result of the decision")
+            raise PublishError(f"{what} of this commit is not the result of the decision")
         return data
 
     # --- --show -----------------------------------------------------------------------------------------------
@@ -165,27 +168,23 @@ class Tool:
             if not pending:
                 self.say("no open catalog proposal")
             return 0
-        proposal_path = out / open_one / "proposal.json"
-        data = self._read(proposal_path, "proposal")  # once: the checksum and the text are made from these bytes
+        data = self._read(out / open_one / "proposal.json", "proposal")  # once: the checksum and the text are made from these bytes
         self.out.write(P.render_open(data))
-        current, line = P.base_line(data, P.sha256_of(self._read(self.catalog_path, "catalog")))
-        self.say(line)
-        if current and pending:
-            self.say("approval waits: a publication is pending")
-        elif current:
-            self.say(f"to decide: --apply {proposal_path} --proposal-sha {P.sha256_of(data)} with --approve, --reject, --admit naming numbers")
+        self.say(P.base_line(data, P.sha256_of(self._read(self.catalog_path, "catalog")))[1])
         return 0
 
     # --- --apply, --complete, --materialize -----------------------------------------------------------------------
 
     def _checked(self, proposal_path: Path, given: str | None) -> tuple[bytes, dict, str, dict, bytes, bytes]:
-        """The common refusals of `--apply` and `--complete`: the checksum, then the base."""
-        data, proposal = self._proposal(proposal_path)
+        """The common refusals of `--apply` and `--complete`, in the brief's order: the checksum's form, the bytes that
+        were shown, the base the proposal was made against; only then is anything parsed or validated."""
+        data = self._proposal_bytes(proposal_path)
         sha = P.check_sha(given, data)
-        catalog_bytes, document = self._catalog()
+        proposal = self._parsed(proposal_path, data)
+        catalog_bytes = self._read(self.catalog_path, "catalog")
         if proposal["base_catalog_sha256"] != P.sha256_of(catalog_bytes):
             raise PublishError("the proposal was made against another catalog; run the scanner again")
-        return data, proposal, sha, document, catalog_bytes, self._read(self.rejected_path, "rejection list")
+        return data, proposal, sha, self._document(catalog_bytes), catalog_bytes, self._read(self.rejected_path, "rejection list")
 
     def _free(self, folder: Path) -> None:
         if self.files.exists(folder / "decision.json"):
@@ -251,16 +250,19 @@ class Tool:
     # --- --record-commit, --publish-pending -----------------------------------------------------------------------
 
     def record_commit(self, folder: Path, commit: str) -> int:
+        """The commit that holds the result of the decision, both files; a commit recorded already is confirmed again."""
         P.check_commit(commit)
         decision = self._decision(folder)
         if decision["state"] != "applied":
+            if decision["state"] != "approved" and decision.get("commit") == commit:
+                self.say(f"committed: {commit}")
+                return 0
             raise PublishError(f"the state is {decision['state']}: --record-commit works on applied only")
-        try:
-            data = self.run_git(["show", f"{commit}:{P.CATALOG_IN_REPO}"])
-        except GitError as exc:
-            raise PublishError(str(exc)) from exc
-        if P.sha256_of(data) != decision["result_sha256"]:
-            raise PublishError("the catalog of this commit is not the result of the decision; the state stays applied")
+        for what, digest in ((P.CATALOG_IN_REPO, "result_sha256"), (P.REJECTED_IN_REPO, "result_rejected_sha256")):
+            try:
+                self._commit_bytes(commit, decision[digest], what)
+            except StepFailed as exc:
+                raise PublishError(str(exc)) from exc
         self._state(folder, decision, "committed", commit=commit)
         self.say(f"committed: {commit}")
         return 0
@@ -274,6 +276,8 @@ class Tool:
             self.say("published: nothing to do")
             return 0
         commit, remote = P.check_commit(decision.get("commit") or ""), P.check_remote(remote)
+        data = self._commit_bytes(commit, decision["result_sha256"])
+        token = self._ready(data) if state in ("committed", "pushed") else None  # every refusal of the upload comes before the push
         if state == "committed":
             try:
                 self.run_git(["push", remote, f"{commit}:refs/heads/main"])
@@ -282,10 +286,10 @@ class Tool:
             decision, state = self._state(folder, decision, "pushed"), "pushed"
             self.say("pushed")
         if state == "pushed":
-            self._upload(DATASET, self._commit_bytes(commit, decision["result_sha256"]), commit)
+            self._upload(DATASET, data, commit, token)
             decision, state = self._state(folder, decision, "uploaded"), "uploaded"
             self.say("uploaded")
-        if self._verified(DATASET, self._commit_bytes(commit, decision["result_sha256"]), commit) != 0:
+        if self._verified(DATASET, data, commit) != 0:
             raise StepFailed("the check of the published file failed, the state stays uploaded")
         self._state(folder, decision, "published")
         self.say("published")
@@ -320,9 +324,18 @@ class Tool:
         if findings:
             raise PublishError("the file fails the hygiene check, nothing is uploaded: " + "; ".join(findings[:5]))
 
-    def _upload(self, dataset: str, data: bytes, message: str) -> None:
-        """The one upload process, for these bytes: a file of its own in a folder of its own, read back, checked by the
-        hygiene gate, then the token path (never its content) and the fixed argument list."""
+    def _ready(self, data: bytes) -> str:
+        """What an upload needs, checked before any step is taken: the hygiene gate over these bytes (with the private
+        words) and the token path (never its content). Returns the token path."""
+        self._hygiene(data)
+        token = self.env.get(TOKEN_PATH_ENV, "")
+        if not token or not os.path.isfile(token) or not os.access(token, os.R_OK):
+            raise PublishError(f"{TOKEN_PATH_ENV} is not set or names no readable file")
+        return token
+
+    def _upload(self, dataset: str, data: bytes, message: str, token: str) -> None:
+        """The one upload process, for these bytes: a file of its own in a folder of its own, read back and checked by
+        the hygiene gate again, then the fixed argument list with the token path in the environment."""
         with tempfile.TemporaryDirectory(prefix="catalog-upload-") as folder:
             target = Path(folder) / REMOTE_FILE_NAME
             target.write_bytes(data)
@@ -330,9 +343,6 @@ class Tool:
             if P.sha256_of(again) != P.sha256_of(data):
                 raise PublishError("the upload file does not hold the bytes it was made from")
             self._hygiene(again)
-            token = self.env.get(TOKEN_PATH_ENV, "")
-            if not token or not os.path.isfile(token) or not os.access(token, os.R_OK):
-                raise PublishError(f"{TOKEN_PATH_ENV} is not set or names no readable file")
             child = {k: v for k, v in self.env.items() if k not in TOKEN_VARIABLES}
             child[TOKEN_PATH_ENV] = token
             try:
@@ -387,13 +397,16 @@ class Tool:
         fixtures, path = (self.root / "tests" / "fixtures").resolve(), Path(fixture).resolve()
         if not (path.is_file() and path.is_relative_to(fixtures)):
             raise PublishError("the probe file must be a file under tests/fixtures")
+        inside = path.relative_to(self.root.resolve()).as_posix()
         try:
-            status = self.run_git(["status", "--porcelain", "--", path.relative_to(self.root.resolve()).as_posix()])
+            tracked = self.run_git(["ls-files", "--", inside])  # an ignored file has no status line: it must be in the index
+            status = self.run_git(["status", "--porcelain", "--", inside])
         except GitError as exc:
             raise PublishError(f"git cannot tell whether the file is unchanged: {exc}") from exc
-        if status.strip():
-            raise PublishError("the probe file is not unchanged in the repository")
-        self._upload(PROBE_DATASET, self._read(path, "probe file"), "probe")
+        if not tracked.strip() or status.strip():
+            raise PublishError("the probe file is not a tracked, unchanged file of the repository")
+        data = self._read(path, "probe file")
+        self._upload(PROBE_DATASET, data, "probe", self._ready(data))
         self.say(f"uploaded the probe file to {PROBE_DATASET}")
         return 0
 
@@ -429,7 +442,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, *, root: Path | None = None, files=None, run_git=None, run=None, transport: Transport | None = None,
-         env: dict[str, str] | None = None, now: datetime | None = None, out=None, err=None) -> int:
+         env=None, now: datetime | None = None, out=None, err=None) -> int:
     root = (root or Path(__file__).resolve().parent.parent).resolve()
     out, err = out or sys.stdout, err or sys.stderr
     parser = _parser()
@@ -445,7 +458,7 @@ def main(argv: list[str] | None = None, *, root: Path | None = None, files=None,
     tool = Tool(
         root=root, catalog=args.catalog or root / "modelroom" / "catalog.json", rejected=args.rejected or root / "modelroom" / "catalog-rejected.json",
         files=files or DiskFiles(), run_git=run_git or default_git(root), run=run or default_run, transport=transport or UrllibTransport(),
-        env=dict(os.environ if env is None else env), now=now or datetime.now(timezone.utc), out=out, err=err,
+        env=os.environ if env is None else env, now=now or datetime.now(timezone.utc), out=out, err=err,  # not copied: a token-free mode never reads it
     )
     try:
         if mode == "show":

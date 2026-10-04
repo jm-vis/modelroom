@@ -220,13 +220,15 @@ def test_the_decision_is_read_by_the_scanner_so_that_what_it_names_is_no_longer_
     decision = decision_of(document, proposal, approve="1,2", reject="4,K1", admit="K2")
     rows = {m.hf_repo: m for f in build_catalog_v2(CATALOG_BYTES.decode(), Path("c.json")).families for m in f.models}
     changes, candidates, known, fields, accounts = R.carry_over(proposal, decision, rows, {"acme", "nova", "orbit"}, lambda repo: False)
-    assert sorted(c["n"] for c in changes.values()) == [5, 6]  # 3 drops out by itself: the scanner carries no removal from a list and [c["k"] for c in candidates.values()] == ["K3"]
+    assert sorted(c["n"] for c in changes.values()) == [5, 6]  # 3 drops out by itself: the scanner carries no removal from a list
+    assert [c["k"] for c in candidates.values()] == ["K3"]  # K1 rejected, K2 admitted: neither is carried
     assert "acme/Atlas-3-9B" in known and ("nova/Nimbus-1-30B", "gguf_repos") in fields and accounts == {"packthree", "newlab"}
 
 
 @pytest.mark.parametrize("damage", [
     lambda d: d.update(state="done"), lambda d: d.update(approved="1"), lambda d: d.update(result_sha256="0" * 64), lambda d: d.update(proposal_sha="x"),
     lambda d: d.update(result_rejected=d["result_rejected"] + " "), lambda d: d.update(commit=7), lambda d: d.pop("base_rejected_sha256"),
+    lambda d: d.update(approved=[True]), lambda d: d.update(approved=["1"]), lambda d: d.update(rejected=["x1"]), lambda d: d.update(admitted=[1]),
 ])
 def test_a_damaged_decision_is_an_error_and_never_guessed_at(document, proposal, damage):
     decision = decision_of(document, proposal, approve="1")
