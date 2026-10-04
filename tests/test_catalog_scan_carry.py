@@ -311,3 +311,25 @@ def test_a_fresh_gguf_addition_that_the_cap_leaves_out_behind_a_carried_one_give
     added = new_of(change)["gguf_repos"]
     assert len(added) == 50 and added[-1] == "packtwo/Atlas-2-9B-GGUF" and "packone/Atlas-2-9B-GGUF" not in added
     assert change["evidence"] == ["https://huggingface.co/packtwo/Atlas-2-9B-GGUF"] and change["open_since"] == YESTERDAY and result.exit_code == 0
+
+
+# --- the fixes after the sixth review round (t6) ----------------------------------------------------------------------
+
+
+def test_a_carried_row_that_the_table_would_not_take_does_not_keep_a_fresh_row_from_latest(env):
+    env.prev(YESTERDAY, changes=[carried_row("acme/Atlas-4-9B", 1, family="comet")])  # comet is orbit's family: the row cannot stand
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+    p, result, _ = go(env, hub)
+    assert new_of(new_rows(p)["acme/Atlas-3-9B"])["latest"] is True and "acme/Atlas-4-9B" not in new_rows(p)
+    assert [n for n in p["notes"] if n.startswith("acme/Atlas-4-9B: left out")] and result.exit_code == 0 and applied(p)
+
+
+@pytest.mark.parametrize("which", ["the out folder", "the day's folder"])
+def test_an_out_path_that_is_a_file_ends_with_exit_two_before_any_request(env, which):
+    target = env.out if which == "the out folder" else env.out / TODAY
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"not a folder\n")
+    result, transport = env.run(Hub())
+    assert result.exit_code == 2 and "--out must name a folder" in result.error and transport.calls == []
+    assert target.read_bytes() == b"not a folder\n"

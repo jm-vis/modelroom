@@ -122,6 +122,9 @@ class _Run:
         for given, what in ((catalog_path, "catalog"), (rejected_path, "rejection list")):
             if Path(given).resolve() in outputs:  # the run would overwrite what it reads
                 raise UsageError(f"{given}: the {what} is also a file this run writes; choose another --out")
+        for folder in (self.out, self.out / self.today):
+            if folder.exists() and not folder.is_dir():  # the run could not make its folders; better to know before a request
+                raise UsageError(f"{folder}: --out must name a folder, this is a file")
         catalog_bytes = self._read(Path(catalog_path), "catalog")
         self.catalog_sha = hashlib.sha256(catalog_bytes).hexdigest()
         try:
@@ -480,13 +483,15 @@ class _Run:
         self.changes[key] = change
 
     def _carried_rows(self) -> list[CatalogModel]:
-        """The new rows carried from the last proposal, as rows; one that does not validate is left to `check_changes`."""
+        """The new rows carried from the last proposal that the table would take, as rows; one it would not take (alone,
+        schema 2 with its rules) counts for nothing here and is left to `check_changes` and its note."""
         rows = []
         for key, change in sorted(self.changes.items()):
             if key[0] == "new_row":
                 try:
+                    build_catalog_v2(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
                     rows.append(CatalogModel.model_validate({name: pair["new"] for name, pair in change["fields"].items()}))
-                except (ValueError, TypeError):
+                except (CatalogError, SchemaVersionError, ValueError, TypeError):
                     continue
         return rows
 
