@@ -678,6 +678,6 @@ def render_proposal(data: dict, sha256: str | None = None) -> str:
         shown = {"k", "candidate", "evidence", "open_since", "kind"}
         lines += [f"  {name}: {json.dumps(cand[name], sort_keys=True)}" for name in sorted(cand) if name not in shown]
     lines += ["", "## Notes", ""] + [f"- {note}" for note in data["notes"]]
-    lines += ["", f"proposal.json sha256: {sha256 or hashlib.sha256(dump_json(data)).hexdigest()}"]
+    lines += ["", f"proposal.json sha256: {hashlib.sha256(dump_json(data)).hexdigest() if sha256 is None else sha256}"]
     return "\n".join(lines) + "\n"
 

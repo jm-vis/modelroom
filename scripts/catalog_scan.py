@@ -517,13 +517,15 @@ class _Run:
             source = collections.get(entry.owner, {}).get(entry.repo) or f"{R.HUB}/{entry.owner}"
             row = R.build_row(entry, result, family=family, today=self.today, latest=entry.repo in latest, latest_source=source)
             row["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:R.MAX_GGUF_REPOS]
-            try:
+            change = R.new_row_change(row, result, open_since)
+            try:  # alone against the table (schema 2 with its rules), before it counts for anything: a row the table would not take is no successor target
+                build_catalog_v2(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
                 rows.append(CatalogModel.model_validate(row))  # the next new row sees this one: one family, one publisher
-            except ValueError as exc:  # a strange Hub answer costs this row, never the run
+            except (CatalogError, SchemaVersionError, ValueError) as exc:  # a strange Hub answer costs this row, never the run
                 self.notes.append(f"{entry.repo}: left out, it would not validate ({' '.join(str(exc).split())[:120]})")
                 self.fresh.pop(entry.repo)
                 continue
-            self._put(("new_row", entry.repo), R.new_row_change(row, result, open_since))
+            self._put(("new_row", entry.repo), change)
         for base, found in sorted(self.gguf.items()):
             row = None if self._is_rejected(base) else self.rows.get(base)
             added = sorted(r for r in found if r not in row.gguf_repos) if row is not None else []

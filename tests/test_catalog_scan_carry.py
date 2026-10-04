@@ -20,8 +20,8 @@ if not (REPO / ".git").exists():
 
 from modelroom.catalog import CatalogModel  # noqa: E402
 from test_catalog_scan import (  # noqa: E402,F401  (the recorded Hub, the run and the readers of a proposal)
-    CATALOG_BYTES, NOW, TODAY, YESTERDAY, Hub, applied, asked, b1_entry, b3, cands, ent, env, fields_of, go, new_of,
-    new_rows, quantized, rules, scanner, stage_calls, stamp,
+    CATALOG_BYTES, NOW, TODAY, YESTERDAY, Hub, applied, asked, b1_entry, b3, cands, digest, ent, env, fields_of, go,
+    new_of, new_rows, quantized, rules, scanner, stage_calls, stamp,
 )
 from test_catalog_scan_rules import b2_hub, carried_row, reject  # noqa: E402
 
@@ -363,3 +363,24 @@ def test_a_gguf_repo_that_answers_for_three_rows_counts_once_for_a_b2(env):
     (cand,) = cands(go(env, hub)[0], "B2")
     assert (cand["likes"], cand["rows"], [r["hf_repo"] for r in cand["repos"]], cand["evidence"]) == (
         100, 3, ["quantco/Everything-GGUF"], ["https://huggingface.co/quantco/Everything-GGUF"])
+
+
+# --- the fixes after the eighth review round (t8) ---------------------------------------------------------------------
+
+
+def test_a_fresh_row_that_the_table_would_not_take_is_left_out_before_it_is_a_successor_target(env):
+    raw = json.loads(CATALOG_BYTES)
+    raw["models"][-1]["family"] = "atlas-nova"  # orbit holds the family the collision rule would give nova's Atlas
+    env.catalog.write_bytes(json.dumps(raw).encode("utf-8"))
+    hub = Hub()
+    hub.page("nova", [ent("nova/Atlas-1-30B", stamp(2)), ent("nova/Nimbus-1-30B", stamp(5), cardData={"license": "mit", "new_version": "nova/Atlas-1-30B"})])
+    p, result, _ = go(env, hub)
+    assert "nova/Atlas-1-30B" not in new_rows(p) and fields_of(p, "nova/Nimbus-1-30B", "successor") is None and result.exit_code == 0
+    assert [n for n in p["notes"] if n.startswith("nova/Atlas-1-30B: left out")] and [n for n in p["notes"] if "new_version nova/Atlas-1-30B, which is not" in n]
+    assert applied(p).model_for("nova/Nimbus-1-30B").latest
+
+
+def test_an_empty_hash_handed_to_the_rendering_is_printed_as_given():
+    data = {"schema": 1, "date": TODAY, "base_catalog_sha256": "0" * 64, "summary": {}, "notes": [], "changes": [], "candidates": []}
+    assert rules.render_proposal(data, "").rstrip("\n").endswith("proposal.json sha256: ")
+    assert rules.render_proposal(data).rstrip("\n").endswith(f"proposal.json sha256: {digest(rules.dump_json(data))}")
