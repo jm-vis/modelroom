@@ -8,8 +8,7 @@ It reads the two files and the output folder, asks the Hub with `GET` only, and 
 in between leaves the old state and the next run reads the same pages again. It cannot write `catalog.json` or
 `catalog-rejected.json`; taking a proposal into the table is `catalog_publish.py`, after the maintainer's word. Exit 0;
 exit 1 when the budget ended, a page failed or a stored position was lost (the proposal is written all the same); exit 2
-when the call or a file is wrong (nothing is written). The rules are in `catalog_scan_rules.py`; this file does the
-asking, the marks per account, the carrying over and the writing.
+when the call or a file is wrong (nothing is written). The rules are in `catalog_scan_rules.py`.
 """
 
 from __future__ import annotations
@@ -52,7 +51,9 @@ class UsageError(Exception):
 
 
 class _Fail(Exception):
-    """One answer that cannot be used; its text is the reason in the proposal."""
+    """One answer that cannot be used; its text is the reason in the proposal, `status` the HTTP status if there was one."""
+
+    status: int | None = None
 
 
 class _Lost(Exception):
@@ -140,6 +141,7 @@ class _Run:
         self.problem = self.budget_end = False
         self.seen: set[str] = set()
         self.known: set[str] = set()  # repos already decided on: carried over, or checked again in this run
+        self.done_fields, self.done_accounts = set(), set()  # (repo, field) pairs and accounts a decision took, for the whole run
         self.fresh, self.changes, self.cands, self.gguf = {}, {}, {}, {}
         self.successors: list[tuple[CatalogModel, str]] = []
         self.kind_check = {repo: "not checked" for repo in self.rows}
@@ -169,7 +171,7 @@ class _Run:
         days = sorted(n for n in self.files.folders(self.out) if _DAY.fullmatch(n) and n < self.today)
         for name in reversed(days):
             decision = self._json(self.out / name / "decision.json")
-            if isinstance(decision, dict) and decision.get("state") in R.PENDING_STATES:
+            if isinstance(decision, dict) and isinstance(decision.get("state"), str) and decision["state"] != "published":
                 self.pending_publication = {"date": name, "state": decision["state"]}
                 break
         for name in reversed(days):
@@ -190,7 +192,7 @@ class _Run:
     def _carry(self) -> None:
         """Every change and candidate of the newest earlier proposal that is still open comes back with its first date."""
         if self.carry_from is not None:
-            self.changes, self.cands, self.known = R.carry_over(self.carry_from, self.decision, self.rows, set(self.accounts), self._is_rejected)
+            self.changes, self.cands, self.known, self.done_fields, self.done_accounts = R.carry_over(self.carry_from, self.decision, self.rows, set(self.accounts), self._is_rejected)
 
     # --- asking -----------------------------------------------------------------------------------------------
 
@@ -200,7 +202,9 @@ class _Run:
         except _FAILURES as exc:
             raise _Fail(_clean(exc)) from exc
         if response.status != 200:
-            raise _Fail(f"HTTP {response.status}")
+            fail = _Fail(f"HTTP {response.status}")
+            fail.status = response.status
+            raise fail
         return response
 
     @staticmethod
@@ -281,10 +285,12 @@ class _Run:
         if row is not None:
             self._existing(entry, row)
             return
+        if self._is_rejected(entry.repo):
+            return  # a rejected repo or account is neither a note nor evidence for a row
         self._mentions(entry)
         self._gguf(entry)
         if (
-            entry.repo in self.known or self._is_rejected(entry.repo) or R.is_quantization(entry.tags, entry.repo)
+            entry.repo in self.known or R.is_quantization(entry.tags, entry.repo)
             or owner_class(entry.owner, catalog=self.catalog, listed_packagers=self.packagers) != "publisher"
             or any(base.split("/", 1)[0] != entry.owner for base in R.base_repos(entry.tags))
         ):
@@ -330,9 +336,9 @@ class _Run:
                 return False, url, used, newest
             try:
                 data, following = self._list(url, account)
-            except _Fail:
-                if resume and used == 0:
-                    raise _Lost() from None
+            except _Fail as fail:
+                if resume and used == 0 and fail.status is not None and 400 <= fail.status < 500 and fail.status != 429:
+                    raise _Lost() from None  # only a refused cursor is a lost one; any other failure keeps the position
                 raise
             used += 1
             hit = False
@@ -349,8 +355,8 @@ class _Run:
                 return True, None, used, newest
             url = following
 
-    def _lose(self, account: str) -> None:
-        self.notes.append(f"{account}: resume position lost, catching up again")
+    def _flag(self, account: str, note: str) -> None:
+        self.notes.append(note)
         self.problem = True
         self.incomplete.add(account)
 
@@ -360,7 +366,7 @@ class _Run:
         threshold, limit, top = covered - R.OVERLAP, R.MAX_PAGES, R.list_url(account)
         try:
             if pending is not None and not R.next_url_ok(pending.get("next_url"), account):
-                self._lose(account)
+                self._flag(account, f"{account}: resume position lost, catching up again")
                 pending = None
             if pending is None:
                 done, following, _, newest = self._walk(account, top, lambda t: t < threshold, limit)
@@ -378,16 +384,17 @@ class _Run:
                         done, following, _, older = self._walk(account, pending["next_url"], lambda t: t < threshold, limit - used, resume=True)
                         state = (max(covered, latest, older or covered), None) if done else (covered, {"next_url": following, "newest_seen": R.stamp(latest)})
                     except _Lost:
-                        self._lose(account)
+                        self._flag(account, f"{account}: resume position lost, catching up again")
                         state = (covered, None)
         except BudgetExhaustedError:
             self.budget_end = True
             self.unread["accounts"].append(account)
             return
         except _Fail as fail:
-            self.notes.append(f"{account}: page error ({fail}), not advanced")
-            self.problem = True
-            self.incomplete.add(account)
+            self._flag(account, f"{account}: page error ({fail}), not advanced")
+            return
+        if state[1] is not None and account not in self.oldest:
+            self._flag(account, f"{account}: no usable time on the pages read, not advanced")
             return
         self.new_marks[account] = state
         if state[1] is not None:
@@ -434,14 +441,10 @@ class _Run:
         return []
 
     def _candidate(self, kind: str, account: str, entries: list[R.Entry], extra: dict) -> None:
-        top, before = entries[0], self.cands.get((kind, account))
-        self.cands[(kind, account)] = {
-            "candidate": kind, "account": account, "hf_repo": top.repo, "likes": sum(e.likes for e in entries) if kind == "B2" else top.likes,
-            "downloads": top.downloads, "created_at": R.stamp(top.created) if top.created else None,
-            "open_since": before["open_since"] if before else self.today,
-            "repos": [{"hf_repo": e.repo, "likes": e.likes, "downloads": e.downloads} for e in entries[:10]],
-            "evidence": [f"{R.HUB}/{e.repo}" for e in entries[:10]], **extra,
-        }
+        if account in self.done_accounts:
+            return
+        before = self.cands.get((kind, account))
+        self.cands[(kind, account)] = R.open_candidate(kind, account, entries, extra, before["open_since"] if before else self.today)
 
     def _collections(self, owners: list[str]) -> dict[str, dict[str, str]]:
         """`GET /api/collections?owner=<account>`, once per account: which collection of the publisher holds which repo."""
@@ -451,6 +454,8 @@ class _Run:
 
     def _put(self, key: tuple, change: dict) -> None:
         """A change of this run; one already carried for the same row and field keeps its first date."""
+        if key[1:] in self.done_fields:
+            return
         before = self.changes.get(key)
         if before is not None:
             change["open_since"] = before["open_since"]
@@ -468,10 +473,15 @@ class _Run:
         owners = [a for a in self.publishers if any(e.owner == a and e.repo in latest for e, _, _ in fresh) or any(m.publisher == a for m in plain)]
         collections = self._collections(owners)
         for entry, result, open_since in fresh:
+            family = R.family_for(entry.repo, result.kind, rows, entry.parameters_b)
+            if family is None:
+                self.notes.append(f"{entry.repo}: no family word in the name, not proposed")
+                self.fresh.pop(entry.repo)
+                continue
             source = collections.get(entry.owner, {}).get(entry.repo) or f"{R.HUB}/{entry.owner}"
-            row = R.build_row(entry, result, family=R.family_for(entry.repo, result.kind, rows), today=self.today,
-                              latest=entry.repo in latest, latest_source=source)
+            row = R.build_row(entry, result, family=family, today=self.today, latest=entry.repo in latest, latest_source=source)
             row["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:50]
+            rows.append(CatalogModel.model_validate(row))  # the next new row sees this one: one family, one publisher
             self.changes[("new_row", entry.repo)] = R.new_row_change(row, result, open_since)
         for base, found in sorted(self.gguf.items()):
             row = self.rows.get(base)
@@ -548,7 +558,7 @@ class _Run:
         state = {"schema": STATE_SCHEMA, "accounts": {a: {"covered_until": R.stamp(c), "pending": p} for a, (c, p) in marks.items()}}
         folder = self.out / self.today
         self.files.write(folder / "proposal.json", data)
-        self.files.write(folder / "proposal.md", R.render_proposal(proposal, hashlib.sha256(data).hexdigest()).encode("utf-8"))
+        self.files.write(folder / "proposal.md", R.render_proposal(proposal).encode("utf-8"))
         self.files.write(self.out / "scan-state.json", R.dump_json(state))
         return ScanResult(int(self.budget_end or self.problem), None, proposal, self.main.used, self.sub.used, self.kind_check)
 

@@ -12,6 +12,7 @@ own (`search_release`, `relation`, `search`, `catalog`); this module adds no sec
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 import urllib.parse
@@ -63,7 +64,6 @@ FIRST_RUN_BACK = timedelta(days=30)
 CONFIG_MAX_BYTES, API_MAX_BYTES = 64 * 1024, 1024 * 1024
 
 _TASK_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-_FAMILY_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
 _LIST_EXPAND = ("cardData", "createdAt", "downloads", "likes", "pipeline_tag", "safetensors", "tags")
 _B1_EXPAND = ("createdAt", "likes", "downloads", "tags")
 _B2_EXPAND = ("createdAt", "downloads", "likes", "tags")
@@ -232,12 +232,8 @@ def kind_from_config(config: object) -> tuple[str, str] | None:
     architectures = config.get("architectures")
     if "architectures" in config and not (isinstance(architectures, list) and all(isinstance(a, str) for a in architectures)):
         return None
-    marked = {}
-    for key in VISION_CONFIG_KEYS + AUDIO_CONFIG_KEYS:
-        if key in config:
-            if not (isinstance(config[key], dict) and config[key]):
-                return None  # a key without an object proves no modality, and spoils the stage
-            marked[key] = config[key]
+    # a key counts only with a non-empty object; any other value is no proof of a modality and spoils nothing
+    marked = {key: config[key] for key in VISION_CONFIG_KEYS + AUDIO_CONFIG_KEYS if isinstance(config.get(key), dict) and config[key]}
     vision = [key for key in VISION_CONFIG_KEYS if key in marked]
     audio = [key for key in AUDIO_CONFIG_KEYS if key in marked]
     if vision and audio:
@@ -258,26 +254,26 @@ def _key(repo: str, parameters_b: float | None):
     return line_key(repo, parameters_b)
 
 
-def stands_over(repo: str, kind: str, other: CatalogModel | tuple) -> bool:
-    """`repo` of `kind` stands over `other` (a row, or `(repo, kind, parameters_b)`) inside one group of
+def stands_over(repo: str, kind: str, other: CatalogModel | tuple, size: float | None = None) -> bool:
+    """`repo` of `kind` and `size` stands over `other` (a row, or `(repo, kind, parameters_b)`) inside one group of
     (publisher, kind, family, line)."""
     o_repo, o_kind, o_size = (other.hf_repo, other.kind, other.parameters_b) if isinstance(other, CatalogModel) else other
-    mine, theirs = _key(repo, None), _key(o_repo, o_size)
+    mine, theirs = _key(repo, size), _key(o_repo, o_size)
     return bool(mine and theirs and kind == o_kind and mine.group == theirs.group and mine.stands_over(theirs))
 
 
-def family_for(repo: str, kind: str, rows: list[CatalogModel]) -> str:
-    """The family of a new row: the one its group's rows share, else the family rule of `search_release`."""
-    key = _key(repo, None)
-    own = key.family if key else re.sub(r"[^a-z0-9.-]+", "-", repo.split("/", 1)[1].split("-", 1)[0].lower()).strip("-.")
-    owner = repo.split("/", 1)[0]
-    if key is not None:
-        shared = {r.family for r in rows if r.kind == kind and (rk := _key(r.hf_repo, r.parameters_b)) and rk.group == key.group}
-        if len(shared) == 1:
-            return shared.pop()
-    own = own if _FAMILY_RE.fullmatch(own) else "model"
+def family_for(repo: str, kind: str, rows: list[CatalogModel], size: float | None = None) -> str | None:
+    """The family of a new row: the one its group's rows share, else the family rule of `search_release`; `None`
+    when the name has no family word (no row is proposed then)."""
+    key = _key(repo, size)
+    if key is None:
+        return None
+    shared = {r.family for r in rows if r.kind == kind and (rk := _key(r.hf_repo, r.parameters_b)) and rk.group == key.group}
+    if len(shared) == 1:
+        return shared.pop()
+    own, owner = key.family, repo.split("/", 1)[0]
     if any(r.family == own and r.publisher != owner for r in rows):
-        own = f"{own}-{re.sub(r'[^a-z0-9.-]+', '-', owner.lower()).strip('-.')}"
+        own = f"{own}-{re.sub(r'[^a-z0-9.-]+', '-', owner.lower()).strip('-.')}"  # a family belongs to one publisher
     return own[:CATALOG_MAX_TEXT_LEN]
 
 
@@ -285,8 +281,8 @@ def latest_among(fresh: list[tuple[str, str, float | None]], rows: list[CatalogM
     """The new repos that stand over a `latest` row of their group and under no other new repo of it."""
     out = set()
     for repo, kind, size in fresh:
-        over_latest = any(r.latest and stands_over(repo, kind, r) for r in rows)
-        under_new = any(other != repo and stands_over(other, k, (repo, kind, size)) for other, k, _ in fresh)
+        over_latest = any(r.latest and stands_over(repo, kind, r, size) for r in rows)
+        under_new = any(other != repo and stands_over(other, k, (repo, kind, size), o_size) for other, k, o_size in fresh)
         if over_latest and not under_new:
             out.add(repo)
     return out
@@ -337,6 +333,17 @@ def b3_candidate(entry: Entry, result: KindResult, open_since: str) -> dict:
     }
 
 
+def open_candidate(kind: str, account: str, entries: list[Entry], extra: dict, open_since: str) -> dict:
+    """A B1 or B2 candidate: the account, its best repo and the repos that make the case (at most ten)."""
+    top = entries[0]
+    return {
+        "candidate": kind, "account": account, "hf_repo": top.repo, "likes": sum(e.likes for e in entries) if kind == "B2" else top.likes,
+        "downloads": top.downloads, "created_at": stamp(top.created) if top.created else None, "open_since": open_since,
+        "repos": [{"hf_repo": e.repo, "likes": e.likes, "downloads": e.downloads} for e in entries[:10]],
+        "evidence": [f"{HUB}/{e.repo}" for e in entries[:10]], **extra,
+    }
+
+
 def entry_of_candidate(candidate: dict) -> Entry:
     """The `Entry` a B3 candidate was made from, for the second check of a candidate that waited for budget."""
     license_name = candidate.get("license")
@@ -352,7 +359,6 @@ def entry_of_candidate(candidate: dict) -> Entry:
 
 # The states of a `decision.json` that count as decided: everything from `approved` on.
 DECISION_STATES = ("approved", "applied", "committed", "pushed", "uploaded", "published")
-PENDING_STATES = DECISION_STATES[:-1]  # decided, not yet published
 
 
 def parse_rejected(raw: bytes) -> tuple[set[str], set[str]]:
@@ -395,21 +401,30 @@ def _sound_change(change: dict) -> bool:
     )
 
 
-def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], rejected) -> tuple[dict, dict, set[str]]:
-    """What of the newest earlier proposal is still open: `(changes, candidates, repos already decided on)`.
+def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], rejected) -> tuple[dict, dict, set[str], set[tuple], set[str]]:
+    """What of the newest earlier proposal is still open: `(changes, candidates, known repos, decided field pairs,
+    decided accounts)`.
 
     Dropped: what the decision of that folder took (a number or a `Kk` in `approved`, `rejected` or `admitted`, from
     state `approved` on), what the rejection list now holds, a new row the table now has, a field change the table
-    already carries, an account that is listed now. Unreadable entries are skipped, never an error.
+    already carries, an account that is listed now. What the decision took is returned too, for the whole run: the
+    repos of its new rows and B3 candidates (in `known`), the `(repo, field)` pairs of its field changes and the
+    accounts of its B1 and B2 candidates. Unreadable entries are skipped, never an error.
     """
     taken = decision if isinstance(decision, dict) and decision.get("state") in DECISION_STATES else {}
     decided = {str(x) for key in ("approved", "rejected", "admitted") for x in taken.get(key, [])}
+    done_repos: set[str] = set()
+    done_fields: set[tuple] = set()
+    done_accounts: set[str] = set()
     changes: dict[tuple, dict] = {}
     candidates: dict[tuple, dict] = {}
     for change in _entries(proposal, "changes"):
         try:
             repo, row = change["hf_repo"], rows.get(change["hf_repo"])
-            if str(change.get("n")) in decided or rejected(repo) or not _sound_change(change):
+            if str(change.get("n")) in decided:
+                done_repos.add(repo) if change["change"] == "new_row" else done_fields.add((repo, change["field"]))
+                continue
+            if rejected(repo) or not _sound_change(change):
                 continue
             if change["change"] == "new_row" and row is None:
                 changes[("new_row", repo)] = change
@@ -421,7 +436,10 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
         try:
             kind = cand["candidate"]
             key = cand["hf_repo"] if kind == "B3" else cand["account"]
-            if kind not in ("B1", "B2", "B3") or cand.get("k") in decided or rejected(f"{cand['account']}/x") or rejected(key):
+            if kind in ("B1", "B2", "B3") and cand.get("k") in decided:
+                done_repos.add(key) if kind == "B3" else done_accounts.add(key)
+                continue
+            if kind not in ("B1", "B2", "B3") or rejected(f"{cand['account']}/x") or rejected(key):
                 continue
             if not isinstance(cand["open_since"], str) or (kind != "B3" and not isinstance(cand["likes"], int)):
                 continue
@@ -430,8 +448,8 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
             candidates[(kind, key)] = cand
         except (KeyError, TypeError, AttributeError):
             continue
-    known = {key[1] for key in changes if key[0] == "new_row"} | {key for kind, key in candidates if kind == "B3"}
-    return changes, candidates, known
+    known = {key[1] for key in changes if key[0] == "new_row"} | {key for kind, key in candidates if kind == "B3"} | done_repos
+    return changes, candidates, known, done_fields, done_accounts
 
 
 def collection_members(data: list, owner: str) -> dict[str, str]:
@@ -567,7 +585,6 @@ def render_proposal(data: dict, sha256: str | None = None) -> str:
         shown = {"k", "candidate", "evidence", "open_since", "kind"}
         lines += [f"  {name}: {json.dumps(cand[name], sort_keys=True)}" for name in sorted(cand) if name not in shown]
     lines += ["", "## Notes", ""] + [f"- {note}" for note in data["notes"]]
-    if sha256 is not None:
-        lines += ["", f"proposal.json sha256: {sha256}"]
+    lines += ["", f"proposal.json sha256: {sha256 or hashlib.sha256(dump_json(data)).hexdigest()}"]
     return "\n".join(lines) + "\n"
 

@@ -7,6 +7,7 @@ this table -- are written out here word for word, so a change to either shows up
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import sys
@@ -97,12 +98,14 @@ def test_a_vision_and_an_audio_key_together_decide_nothing():
 @pytest.mark.parametrize("key", ["vision_config", "vision_encoder", "audio_config"])
 @pytest.mark.parametrize("value", NOT_AN_OBJECT, ids=repr)
 def test_a_modality_key_without_an_object_decides_nothing(key, value):
-    assert rules.kind_from_config({key: value, "architectures": ["XForConditionalGeneration"]}) is None
+    assert rules.kind_from_config({key: value}) is None
 
 
-def test_an_invalid_modality_key_next_to_a_valid_proof_stays_undecided():
-    assert rules.kind_from_config({"vision_config": False, "audio_config": SOME_OBJECT}) is None
-    assert rules.kind_from_config({"vision_config": 42, "architectures": ["XForCausalLM"]}) is None
+def test_a_key_that_does_not_count_lets_a_valid_proof_next_to_it_stand():
+    assert rules.kind_from_config({"vision_config": SOME_OBJECT, "audio_config": {}}) == ("vision", "vision_config")
+    assert rules.kind_from_config({"vision_config": False, "audio_config": SOME_OBJECT}) == ("audio", "audio_config")
+    assert rules.kind_from_config({"vision_config": 42, "architectures": ["XForCausalLM"]}) == ("text", "architectures")
+    assert rules.kind_from_config({"vision_config": None}) is None
 
 
 def test_causal_architectures_decide_text_and_a_mixed_list_does_not():
@@ -171,8 +174,7 @@ def test_the_rendering_shows_every_field_whole_and_ends_on_the_checksum_of_the_j
     assert "K1 | B1 | newlab | kind - | evidence  | open since 2026-10-04" in text
     assert "  likes: 120\n" in text and "packone: page error (HTTP 500), not advanced" in text
     assert text.endswith("proposal.json sha256: " + "c" * 64 + "\n")
-    assert rules.render_proposal(data) == rules.render_proposal(data, None)
-    assert "sha256: c" not in rules.render_proposal(data)
+    assert rules.render_proposal(data).endswith(f"proposal.json sha256: {hashlib.sha256(rules.dump_json(data)).hexdigest()}\n")
 
 
 def test_a_change_of_one_new_value_changes_the_rendering_at_that_place_only():
@@ -182,9 +184,9 @@ def test_a_change_of_one_new_value_changes_the_rendering_at_that_place_only():
         "changes": [{"n": 1, "change": "field", "field": "successor", "stage": "A3", "hf_repo": "acme/Atlas-2-9B", "kind": "text",
                      "open_since": "2026-10-04", "evidence": [], "fields": {"successor": {"old": None, "new": "acme/Atlas-3-9B"}}}],
     }
-    before = rules.render_proposal(data).splitlines()
+    before = rules.render_proposal(data, "0" * 64).splitlines()
     data["changes"][0]["fields"]["successor"]["new"] = "acme/Atlas-4-9B"
-    after = rules.render_proposal(data).splitlines()
+    after = rules.render_proposal(data, "0" * 64).splitlines()
     assert [i for i, (a, b) in enumerate(zip(before, after)) if a != b] == [before.index("  successor: null -> \"acme/Atlas-3-9B\"")]
 
 # --- the kind of a repo, decided by a whole run -----------------------------------------------------------------------
@@ -192,7 +194,7 @@ def test_a_change_of_one_new_value_changes_the_rendering_at_that_place_only():
 from modelroom.catalog import PIPELINE_TAG_TO_KIND  # noqa: E402
 from test_catalog_scan import (  # noqa: E402,F401  (the recorded Hub, the run and the readers of a proposal)
     BASELINE_CALLS, LATEST_TEXT_VISION, b1_entry, FIX, MISSING, NOW, TABLE, TODAY, YESTERDAY, Hub, applied, asked, b3, cands, ent, env, go, new_of, new_rows,
-    stage_calls, stamp,
+    stage_calls, stamp, Env, digest, pg, quantized,
 )
 from datetime import timedelta  # noqa: E402
 
@@ -475,3 +477,139 @@ def test_a_fine_tune_of_an_unlisted_account_appears_nowhere(env):
     hub.page("packone", [ent("other/Atlas-2-9B-Merge", stamp(1), tags=["base_model:merge:acme/Atlas-2-9B"])])
     p, _, _ = go(env, hub)
     assert p["changes"] == [] and p["candidates"] == []
+
+
+# --- the fixes after the first review round (t1) ---------------------------------------------------------------------
+
+
+def carried_row(repo: str, n: int = 1, family: str = "zeta") -> dict:
+    """A new-row change as an earlier proposal holds it, built with the rules of the scanner."""
+    entry = rules.parse_entry(ent(repo, stamp(3)))
+    result = rules.cheap_kind(entry)
+    row = rules.build_row(entry, result, family=family, today=YESTERDAY, latest=False, latest_source=None)
+    return {**rules.new_row_change(row, result, YESTERDAY), "n": n}
+
+
+def test_a_change_that_would_not_validate_alone_is_left_out_and_named_and_the_rest_is_written(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+    env.prev(YESTERDAY, changes=[{**carried_row("acme/Bad-1-3B"), "fields": {"hf_repo": {"old": None, "new": "acme/Bad-1-3B"}}}])
+    p, result, _ = go(env, hub)
+    assert result.exit_code == 0 and list(new_rows(p)) == ["acme/Atlas-3-9B"] and applied(p)
+    assert [n for n in p["notes"] if n.startswith("acme/Bad-1-3B: left out, it would not validate (")]
+    assert (env.out / TODAY / "proposal.md").exists() and (env.out / "scan-state.json").exists()
+
+
+def test_changes_that_do_not_validate_together_end_the_run_with_exit_two_and_write_nothing(env):
+    env.prev(YESTERDAY, changes=[carried_row("acme/Zeta-1-3B", 1), carried_row("nova/Zeta-1-3B", 2)])  # one family, two publishers
+    result, _ = env.run(Hub())
+    assert result.exit_code == 2 and "does not validate against schema 2" in result.error
+    assert not (env.out / TODAY).exists() and not (env.out / "scan-state.json").exists()
+
+
+@pytest.mark.parametrize("decided", [False, True])
+def test_what_a_decision_took_stays_out_for_the_whole_run_and_without_one_it_all_comes_back(tmp_path, decided):
+    def hub() -> Hub:
+        found = Hub()
+        found.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+        found.page("packone", [quantized("packone/Atlas-2-9B-GGUF", "acme/Atlas-2-9B")])
+        found.put(rules.b1_url("text-generation"), [b1_entry("newlab")])
+        return found
+
+    env = Env(tmp_path / "e")
+    first, _, _ = go(env, hub())
+    assert [(c["n"], c["hf_repo"]) for c in first["changes"]] == [(1, "acme/Atlas-3-9B"), (2, "acme/Atlas-2-9B")] and [c["k"] for c in first["candidates"]] == ["K1"]
+    if decided:
+        decision = {"state": "approved", "date": TODAY, "approved": [1], "rejected": [2], "admitted": ["K1"]}
+        (env.out / TODAY / "decision.json").write_bytes(json.dumps(decision).encode("utf-8"))
+    p, _, _ = go(env, hub(), now=NOW + timedelta(days=1))
+    if decided:
+        assert p["changes"] == [] and p["candidates"] == []
+    else:
+        assert [c["hf_repo"] for c in p["changes"]] == ["acme/Atlas-3-9B", "acme/Atlas-2-9B"] and [c["account"] for c in p["candidates"]] == ["newlab"]
+        assert {c["open_since"] for c in p["changes"] + p["candidates"]} == {TODAY}
+
+
+@pytest.mark.parametrize("extra, owner, page", [
+    ({"hf_repo": "packone/Atlas-2-9B-GGUF"}, "packone", "packone"), ({"account": "packtwo"}, "packtwo", "packtwo"), ({"account": "spamlabs"}, "spamlabs", "packone"),
+])
+def test_a_rejected_gguf_repo_or_one_of_a_rejected_account_is_no_evidence_for_a_row(env, extra, owner, page):
+    env.rejected.write_bytes(json.dumps(json.loads(env.rejected.read_bytes()) + [extra]).encode("utf-8"))
+    hub = Hub()
+    hub.page(page, [quantized(f"{owner}/Atlas-2-9B-GGUF", "acme/Atlas-2-9B")])
+    assert go(env, hub)[0]["changes"] == []
+
+
+def test_the_size_of_a_new_model_goes_into_its_key_and_the_size_changes_no_decision_of_the_line(tmp_path):
+    assert rules._key("acme/Atlas-Next", 9.1).size == 9.1 and rules._key("acme/Atlas-2-9B", 1.0).size == 9.0  # the name's own size comes first
+    other = ("acme/Atlas-2-9B", "text", 9.0)
+    assert rules.stands_over("acme/Atlas-3", "text", other, 9.1) and rules.stands_over("acme/Atlas-3", "text", other, 1.0)
+    assert rules.family_for("acme/Atlas-3", "text", [], 9.1) == "atlas"
+    for index, total in enumerate((9_100_000_000, 1_000_000_000)):  # the order of a line ignores the size (decided 2026-09-25)
+        hub = Hub()
+        hub.page("acme", [ent("acme/Atlas-3", stamp(2), safetensors={"total": total})])
+        new = new_of(new_rows(go(Env(tmp_path / str(index)), hub)[0])["acme/Atlas-3"])
+        assert new["latest"] is True and new["parameters_b"] == total / 1e9
+
+
+def test_ten_linked_pages_without_a_usable_time_are_a_page_error_and_the_mark_does_not_move(env):
+    hub = Hub()
+    hub.chain("acme", [[ent(f"acme/Blank{i:02d}-3B", createdAt="never" if i % 2 else MISSING)] for i in range(1, 12)])
+    p, result, _ = go(env, hub)
+    assert "acme: no usable time on the pages read, not advanced" in p["notes"] and result.exit_code == 1 and p["summary"]["incomplete"] == 1
+    assert env.state()["accounts"]["acme"] == {"covered_until": "2026-08-30T00:00:00.000Z", "pending": None}
+
+
+@pytest.mark.parametrize("status, body, headers", [
+    (500, b"", None), (429, b"", None), (200, b"{}", None),
+    (200, b"[]", {"Link": '<https://evil.example/api/models?author=acme&cursor=x>; rel="next"'}),
+])
+def test_a_stored_position_that_fails_for_another_reason_than_a_lost_cursor_is_kept_as_it_was(env, status, body, headers):
+    pending = {"next_url": pg(11), "newest_seen": stamp(5)}
+    env.put_state({"acme": {"covered_until": "2026-09-01T00:00:00.000Z", "pending": pending}})
+    hub = Hub()
+    hub.page("acme", [ent("acme/Zeta-1-3B", stamp(1)), ent("acme/Old-1-3B", stamp(6))])
+    hub.put(pg(11), body, status=status, headers=headers)
+    p, result, _ = go(env, hub)
+    assert [n for n in p["notes"] if n.startswith("acme: page error (") and n.endswith("), not advanced")] and result.exit_code == 1
+    assert "acme: resume position lost, catching up again" not in p["notes"]
+    assert env.state()["accounts"]["acme"] == {"covered_until": "2026-09-01T00:00:00.000Z", "pending": pending}
+
+
+def test_the_rendering_of_the_data_alone_carries_the_checksum_of_the_json_bytes_and_so_does_the_file(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+    p, _, _ = go(env, hub)
+    raw = (env.out / TODAY / "proposal.json").read_bytes()
+    assert rules.render_proposal(p).endswith(f"proposal.json sha256: {digest(raw)}\n")
+    assert (env.out / TODAY / "proposal.md").read_bytes().decode("utf-8") == rules.render_proposal(json.loads(raw))
+
+
+def test_a_decision_before_approved_shows_as_pending_publication_and_decides_none_of_its_entries(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Zeta-1-3B", stamp(2))])
+    go(env, hub)
+    decision = {"state": "shown", "date": TODAY, "approved": [1], "rejected": [2], "admitted": []}
+    (env.out / TODAY / "decision.json").write_bytes(json.dumps(decision).encode("utf-8"))
+    nxt, _, _ = go(env, Hub(), now=NOW + timedelta(days=1))
+    assert nxt["summary"]["pending_publication"] == {"date": TODAY, "state": "shown"}
+    assert sorted(new_rows(nxt)) == ["acme/Atlas-3-9B", "acme/Zeta-1-3B"]
+
+
+def test_a_name_without_a_family_word_is_not_proposed_and_is_named_in_the_notes(env):
+    assert rules.family_for("acme/7B-Instruct-2509", "text", []) is None
+    hub = Hub()
+    hub.page("acme", [ent("acme/7B-Instruct-2509", stamp(1))])
+    p, result, _ = go(env, hub)
+    assert p["changes"] == [] and p["candidates"] == [] and result.exit_code == 0
+    assert "acme/7B-Instruct-2509: no family word in the name, not proposed" in p["notes"]
+
+
+def test_two_new_models_of_two_publishers_with_one_family_word_in_one_run_get_two_families_and_validate_together(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Zeta-1-3B", stamp(1))])
+    hub.page("nova", [ent("nova/Zeta-1-3B", stamp(1))])
+    p, result, _ = go(env, hub)
+    rows = new_rows(p)
+    assert result.exit_code == 0 and (new_of(rows["acme/Zeta-1-3B"])["family"], new_of(rows["nova/Zeta-1-3B"])["family"]) == ("zeta", "zeta-nova")
+    assert applied(p).model_for("nova/Zeta-1-3B").family == "zeta-nova" and not [n for n in p["notes"] if "left out" in n]
