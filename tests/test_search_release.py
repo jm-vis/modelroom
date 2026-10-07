@@ -33,7 +33,7 @@ def _mmdd(value: str) -> LineDate:
 # (hf_repo, family, line, variant, size, version, date) -- the family without its publisher: its first
 # word (GF F3, AP9-UX2 U5); the line a word of `LINE_WORDS`/`LINE_COUNTERS`; every other word a variant.
 KEYS = [
-    # --- the shipped catalog, all 62 rows ---
+    # --- the shipped catalog, the 62 rows of the first publication ---
     ("mistralai/Ministral-3-14B-Instruct-2512", "ministral", "", set(), 14, (3,), _yymm("2512")),
     ("mistralai/Ministral-3-8B-Instruct-2512", "ministral", "", set(), 8, (3,), _yymm("2512")),
     ("mistralai/Ministral-3-3B-Instruct-2512", "ministral", "", set(), 3, (3,), _yymm("2512")),
@@ -96,6 +96,25 @@ KEYS = [
     ("tencent/Hy-MT2-30B-A3B", "hy", "", {"mt"}, 30, (2,), None),
     ("baidu/ERNIE-4.5-21B-A3B-Thinking", "ernie", "", {"thinking"}, 21, (4, 5), None),
     ("MiniMaxAI/MiniMax-H3", "minimax", "", {"h3"}, None, (), None),
+    # --- rows added by the catalog publication of 2026-10-07 ---
+    ("CohereLabs/tiny-aya-en-thinker", "tiny", "", {"aya", "en", "thinker"}, None, (), None),
+    ("CohereLabs/tiny-aya-l2-thinker", "tiny", "", {"aya", "l2", "thinker"}, None, (), None),
+    ("LiquidAI/LFM2.5-VL-3B-DSpark", "lfm", "", {"vl", "dspark"}, 3, (2, 5), None),
+    ("Qwen/Qwen-Image-2.1", "qwen", "", {"image"}, None, (2, 1), None),
+    ("Qwen/Qwen-Image-2.1-PE-I2I", "qwen", "", {"image", "pe", "i2i"}, None, (2, 1), None),
+    ("Qwen/Qwen-Image-2.1-PE-T2I", "qwen", "", {"image", "pe", "t2i"}, None, (2, 1), None),
+    ("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp", "deepseek", "", {"flash", "vision", "exp"}, None, (4,), None),
+    ("deepseek-ai/DeepSeek-V4.1-Flash", "deepseek", "", {"flash"}, None, (4, 1), None),
+    ("google/embeddinggemma-2", "embeddinggemma", "", set(), None, (2,), None),
+    ("microsoft/FrogNano-4B-2609", "frognano", "", set(), 4, (), _yymm("2609")),
+    ("microsoft/VibeVoice-ASR-Streaming-1.5B", "vibevoice", "", {"asr", "streaming"}, 1.5, (), None),
+    ("microsoft/VibeVoice-ASR-Streaming-7B", "vibevoice", "", {"asr", "streaming"}, 7, (), None),
+    ("openbmb/MiniCPM5-2B-DSpark", "minicpm", "", {"dspark"}, 2, (5,), None),
+    ("openbmb/MiniCPM5-2B-Midtrain", "minicpm", "", {"midtrain"}, 2, (5,), None),
+    ("tencent/EVIE-4.5B", "evie", "", set(), 4.5, (), None),
+    ("tencent/EVIE-8B", "evie", "", set(), 8, (), None),
+    ("tencent/WeVisDoc-2B", "wevisdoc", "", set(), 2, (), None),
+    ("tencent/WeVisDoc-4B", "wevisdoc", "", set(), 4, (), None),
     # --- the recorded answers and the cases the grammar was written for ---
     ("Qwen/Qwen3.8-2.4T-A95B", "qwen", "", set(), 2400, (3, 8), None),
     ("Qwen/Qwen3-VL-4B-Instruct", "qwen", "", {"vl"}, 4, (3,), None),
@@ -111,6 +130,10 @@ KEYS = [
     # `16e` and `bf16` are read and ignored.
     ("acme/Nova-2-7B-16E-BF16", "nova", "", set(), 7, (2,), None),
 ]
+
+# Shipped rows the grammar has no reading for (`line_key` is `None`): each one a name with a reason.
+# Empty as of the publication of 2026-10-07: every added name has a reading.
+SHIPPED_WITHOUT_READING: list[str] = []
 
 NOT_INTERPRETABLE = [
     "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",  # `735` has no class
@@ -138,8 +161,7 @@ def test_the_key_of_a_name(repo, family, line, variant, size, version, dated):
 def test_the_table_covers_every_row_of_the_shipped_catalog():
     catalog_repos = {model.hf_repo for family in load_catalog().families for model in family.models}
 
-    assert len(catalog_repos) == 62
-    assert catalog_repos <= {row[0] for row in KEYS}
+    assert catalog_repos <= {row[0] for row in KEYS} | set(SHIPPED_WITHOUT_READING)
 
 
 @pytest.mark.parametrize("repo", NOT_INTERPRETABLE)

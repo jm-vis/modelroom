@@ -170,17 +170,21 @@ DECISION_ONLY_REPOS = frozenset(
 )
 
 
-def test_the_shipped_catalog_has_a_task_or_an_evidence_stage_on_every_one_of_its_sixty_two_rows():
+def test_the_shipped_catalog_has_a_task_or_an_evidence_stage_on_every_one_of_its_rows():
     rows = [model for family in load_catalog().families for model in family.models]
-    assert len(rows) == 62
     for model in rows:
         if model.hf_repo in OFF_TABLE_ROWS:
             task, source, note = OFF_TABLE_ROWS[model.hf_repo]
             assert (model.hub_pipeline_tag, model.kind_source, model.note) == (task, source, note), model.hf_repo
-        else:
+        elif model.kind_source is None:
             assert model.hub_pipeline_tag in TABLE_KIND_OF_TASK, model.hf_repo
             assert model.kind == TABLE_KIND_OF_TASK[model.hub_pipeline_tag], model.hf_repo
-            assert model.kind_source is None, model.hf_repo
+        else:
+            # A row added by a later publication, kind from a stage of scripts/catalog_scan.py
+            # (`tags`, `base_model`, `config`); the task is missing or outside the table.
+            assert model.kind_source in {"tags", "base_model", "config"}, model.hf_repo
+            assert model.hub_pipeline_tag is None or model.hub_pipeline_tag not in TABLE_KIND_OF_TASK, model.hf_repo
+            assert model.kind is not None, model.hf_repo
 
 
 def test_only_the_seven_listed_repos_of_the_shipped_catalog_carry_a_decision():

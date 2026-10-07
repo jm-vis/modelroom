@@ -22,7 +22,7 @@
  ── Step 2 of 5  Packages ───────────────────────────────────────────────
  ? What are you looking for?  qwen
  ? Show only repositories of a publisher or a listed packager?  Yes
-   catalog: shipped 2026-09-29
+   catalog: shipped <day>
    searched Hugging Face at the publisher Qwen and the five listed packagers
    4 repositories, 2 of them models you can pick from
  ? Which of these models should the result cover?  nothing

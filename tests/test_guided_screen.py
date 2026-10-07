@@ -87,9 +87,11 @@ def _screen(tmp_path: Path, answers: dict, *, daemon=None, servers=None) -> str:
 
 
 def _masked(text: str, results: Path) -> str:
-    """Replace what a golden file may not depend on: the folder, an id, a measured speed."""
+    """Replace what a golden file may not depend on: the folder, an id, a measured speed, the day the
+    catalog shipped by `<day>` (it changes with every publication)."""
     text = text.replace(str(results), "<results>")
     text = re.sub(r"\b[0-9a-f]{16}\b", "<profile>", text)
+    text = re.sub(r"catalog: shipped \d{4}-\d{2}-\d{2}", "catalog: shipped <day>", text)
     text = re.sub(r"\d+\.\d tok/s \(\d+\.\d–\d+\.\d\)", "<speed>", text)
     return re.sub(r"\d+\.\d tok/s", "<speed>", text)
 

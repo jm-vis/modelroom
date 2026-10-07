@@ -7,6 +7,7 @@ import hashlib
 import json
 from datetime import date
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
@@ -21,6 +22,7 @@ from modelroom.catalog import (
     CatalogError,
     CatalogFamily,
     CatalogModel,
+    Kind,
     load_catalog,
 )
 from modelroom.catalog_schema import (
@@ -401,12 +403,15 @@ def test_shipped_catalog_is_schema_2_with_the_fixed_license_and_attribution():
     assert catalog.attribution == CATALOG_ATTRIBUTION
 
 
-def test_the_shipped_catalog_keeps_every_one_of_the_sixty_two_v1_rows():
-    """Every row of the schema-1 catalog survives the move to schema 2, including the embedding
-    rows and the large-model rows."""
+def test_the_shipped_catalog_keeps_every_v1_row():
+    """Every row of the schema-1 catalog survives the move to schema 2 and later publications,
+    including the embedding rows and the large-model rows."""
     catalog = load_catalog()
-    repos = [model.hf_repo for family in catalog.families for model in family.models]
-    assert len(repos) == 62
+    reference = load_catalog(FIXTURES / "catalog_v1_reference.toml")
+    reference_repos = [model.hf_repo for family in reference.families for model in family.models]
+    assert len(reference_repos) == 62
+    for repo in reference_repos:
+        assert catalog.model_for(repo) is not None, repo
     for repo in EMBEDDING_REPOS:
         model = catalog.model_for(repo)
         assert model is not None and model.kind == "embedding", repo
@@ -899,14 +904,20 @@ def test_the_v1_fields_cover_every_field_a_schema_1_row_reads():
 
 
 def test_the_shipped_catalog_matches_the_v1_reference_value_by_value_for_every_row():
-    """All 62 rows, in the same order, under the same family and publisher, with every schema-1
-    field (`source` included) unchanged."""
+    """The 62 reference rows, in the same order, under the same family and publisher, with every
+    schema-1 field (`source` included) unchanged; every row added later carries its `added` day."""
     reference = _rows_in_order(load_catalog(FIXTURES / "catalog_v1_reference.toml"))
-    shipped = _rows_in_order(load_catalog())
+    shipped_all = _rows_in_order(load_catalog())
     assert len(reference) == 62
+    reference_repos = {row[2]["hf_repo"] for row in reference}
+    shipped = [row for row in shipped_all if row[2]["hf_repo"] in reference_repos]
     assert [row[2]["hf_repo"] for row in shipped] == [row[2]["hf_repo"] for row in reference]
     for before, after in zip(reference, shipped, strict=True):
         assert after == before, before[2]["hf_repo"]
+    for family in load_catalog().families:
+        for model in family.models:
+            if model.hf_repo not in reference_repos:
+                assert isinstance(model.added, date), model.hf_repo
     magistral = load_catalog().model_for("mistralai/Magistral-Small-2509")
     assert magistral.source == "https://huggingface.co/mistralai/Magistral-Small-2509"
     assert magistral.successor_source == "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603"
@@ -961,6 +972,8 @@ def test_every_reasoned_missing_statement_of_the_schema_1_file_is_a_note():
 # `kind` per row, from the Hub: `pipeline_tag` through the table where it is one of the fifteen
 # values; otherwise from the tags and the model card (image and text in, text out is `vision`).
 # `MiniMaxAI/MiniMax-H3` (`image-text-to-video`) makes video with sound.
+# The three lists below hold for the 62 reference rows only; a row added later is checked for a
+# valid `kind` alone (its evidence is in `kind_source`, see tests/test_catalog_task.py).
 VIDEO_REPOS = frozenset({"MiniMaxAI/MiniMax-H3"})
 VISION_REPOS = frozenset(
     {
@@ -989,10 +1002,20 @@ VISION_REPOS = frozenset(
 )
 
 
-def test_every_shipped_row_carries_the_kind_its_hub_evidence_gives():
+def test_reference_rows_carry_the_kind_their_hub_evidence_gives_and_added_rows_a_valid_kind():
     catalog = load_catalog()
+    reference_repos = {
+        model.hf_repo
+        for family in load_catalog(FIXTURES / "catalog_v1_reference.toml").families
+        for model in family.models
+    }
+    allowed_kinds = set(get_args(Kind))
     for family in catalog.families:
         for model in family.models:
+            if model.hf_repo not in reference_repos:
+                # A row that came after the reference: its kind is set, and one the model allows.
+                assert model.kind in allowed_kinds, model.hf_repo
+                continue
             if model.hf_repo in VISION_REPOS:
                 expected = "vision"
             elif model.hf_repo in VIDEO_REPOS:
@@ -1004,7 +1027,7 @@ def test_every_shipped_row_carries_the_kind_its_hub_evidence_gives():
             assert model.kind == expected, model.hf_repo
 
 
-def test_the_shipped_display_list_matches_the_v1_reference_order_exactly():
-    reference = load_catalog(FIXTURES / "catalog_v1_reference.toml")
-    shipped = load_catalog()
-    assert latest_model_names(shipped) == latest_model_names(reference)
+def test_the_shipped_display_list_keeps_the_v1_reference_order_as_a_subsequence():
+    reference = latest_model_names(load_catalog(FIXTURES / "catalog_v1_reference.toml"))
+    shipped = latest_model_names(load_catalog())
+    assert [name for name in shipped if name in reference] == reference
