@@ -758,6 +758,21 @@ def test_this_machine_is_named_with_its_class(tmp_path: Path):
     assert "? Which machines should the result cover?  this machine (laptop)" in [line.strip() for line in lines]
 
 
+def test_step_one_counts_the_machines_chosen_and_not_the_ones_the_configuration_holds(tmp_path: Path):
+    """AP9-KA-T3: three machines in the configuration, one chosen -- the balance of step 1 says `1 machine`."""
+    assert _run(tmp_path)[0] == 0
+    path = _config_file(tmp_path)
+    extra = "".join(f"\n[machines.{name}]\nreserve_ram_gib = 8.0\nreserve_vram_gib = 1.0\nwriter = false\n" for name in ("other-1", "other-2"))
+    path.write_text(path.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    assert len(load_config(path).machines) == 3
+
+    answers = {**_answers_without_folder(FULL_ANSWERS), "machines": ["this-machine"]}
+    code, lines = _run(tmp_path, answers, now=RUN2)
+
+    assert code == 0
+    assert any(line.endswith(f"{_results(tmp_path)}, 1 machine") for line in _summaries(lines))
+
+
 def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_path: Path):
     asked: dict[str, list] = {}
 
@@ -2724,8 +2739,8 @@ def test_a_machine_entered_by_hand_is_a_profile_file_and_an_entry_of_its_own_and
         config.defaults.reserve_vram_gib,
     )
     assert "entered workstation-cccccccc: workstation, 64 GiB memory, graphics card 24 GiB" in [line.strip() for line in lines]
-    # Step 1's balance counts it: this machine's own entry and the one entered by hand.
-    assert any(line.endswith(", 2 machines") for line in _summaries(lines))
+    # Step 1's balance counts the machines chosen (AP9-KA-T3): only the one entered by hand.
+    assert any(line.endswith(", 1 machine") for line in _summaries(lines))
 
 
 @pytest.mark.parametrize(

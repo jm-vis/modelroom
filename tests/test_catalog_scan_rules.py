@@ -479,6 +479,124 @@ def test_a_fine_tune_of_an_unlisted_account_appears_nowhere(env):
     assert p["changes"] == [] and p["candidates"] == []
 
 
+# --- AP9-KA-T3: a build of the publisher's own model counts -----------------------------------------------------------
+
+KOLIBRI_TAGS = ["vllm", "safetensors", "text-generation", "base_model:Aleph-Alpha/Kolibri-1-BF16",
+                "base_model:quantized:Aleph-Alpha/Kolibri-1-BF16", "fp8"]
+
+
+def own_build(repo: str, tags) -> "rules.Entry":
+    return rules.parse_entry(ent(repo, stamp(10), likes=760, downloads=5800, tags=list(tags)))
+
+
+def test_the_fp8_build_a_publisher_made_of_its_own_model_passes_the_thresholds_of_b1():
+    assert rules.b1_ok(own_build("Aleph-Alpha/Kolibri-1", KOLIBRI_TAGS), NOW)
+
+
+def test_the_same_tags_with_a_target_of_another_account_are_a_quantization_of_another():
+    tags = [t.replace("Aleph-Alpha/Kolibri-1-BF16", "other/Kolibri-1-BF16") for t in KOLIBRI_TAGS]
+    entry = own_build("Aleph-Alpha/Kolibri-1", tags)
+    assert not rules.b1_ok(entry, NOW) and rules.packaging_of_another(entry) and not rules.own_bases(entry)
+
+
+def test_the_owner_of_a_target_is_compared_in_any_case():
+    tags = [t.replace("Aleph-Alpha/", "aleph-alpha/") for t in KOLIBRI_TAGS]
+    assert rules.b1_ok(own_build("Aleph-Alpha/Kolibri-1", tags), NOW)
+
+
+def test_a_name_ending_on_fp8_stays_a_package_even_with_an_own_target():
+    entry = own_build("Aleph-Alpha/Kolibri-1-FP8", KOLIBRI_TAGS)
+    assert rules.packaging_of_another(entry) and not rules.b1_ok(entry, NOW)
+    assert not rules.packaging_of_another(own_build("Aleph-Alpha/Kolibri-1", KOLIBRI_TAGS))
+
+
+def test_a_listed_tag_stays_a_package_even_with_an_own_target():
+    assert rules.packaging_of_another(own_build("Aleph-Alpha/Kolibri-1", [*KOLIBRI_TAGS, "gguf"]))  # the raw `base_model:quantized:` tag switches the export exception off, so it stays a package
+    assert rules.packaging_of_another(own_build("acme/Zeta-1-3B", ["awq", "safetensors", "base_model:quantized:acme/Zeta-1-3B-Base"]))
+    assert not rules.packaging_of_another(own_build("acme/Zeta-1-3B", ["onnx", "safetensors"]))
+
+
+def test_own_bases_needs_every_target_to_belong_to_the_owner_and_holds_without_a_base_tag():
+    mixed = own_build("acme/Zeta-1", ["base_model:acme/Zeta-0", "base_model:merge:other/Thing-7B"])
+    own = own_build("acme/Zeta-1", ["base_model:acme/Zeta-0", "base_model:finetune:acme/Zeta-0"])
+    assert not rules.own_bases(mixed) and rules.own_bases(own)
+    assert rules.own_bases(own_build("acme/Zeta-1", ["safetensors"]))
+
+
+ARCTIC_TAGS = ["sentence-transformers", "onnx", "safetensors", "xlm-roberta", "feature-extraction"]
+
+
+def test_a_model_that_ships_an_onnx_output_next_to_safetensors_is_no_package():
+    assert not rules.packaging_of_another(own_build("Snowflake/snowflake-arctic-embed-l-v2.0", ARCTIC_TAGS))
+    assert rules.is_quantization(ARCTIC_TAGS, "Snowflake/snowflake-arctic-embed-l-v2.0")  # the base rule stays as it was
+
+
+def test_the_original_with_an_onnx_and_a_gguf_export_and_no_quantized_tag_is_no_package():
+    tags = ["sentence-transformers", "onnx", "safetensors", "openvino", "gguf", "bert", "feature-extraction"]
+    assert not rules.packaging_of_another(own_build("mixedbread-ai/mxbai-embed-large-v1", tags))
+
+
+@pytest.mark.parametrize("repo, tags", [
+    ("acme/Foo", ["onnx", "safetensors", "base_model:quantized:acme/Foo-Base"]),  # r5: any quantized tag takes the exception away
+    ("acme/Foo", ["gguf", "safetensors", "base_model:quantized:acme/Foo-Base"]),
+    ("acme/Foo", [t for t in ARCTIC_TAGS if t != "safetensors"]),  # no safetensors: only the onnx output
+    ("acme/Foo", ["gguf", "safetensors", "base_model:quantized:other/X"]),  # a quantization of another model
+    ("acme/Foo-ONNX", ["safetensors", "onnx"]),  # the suffix rule stays
+    ("acme/Foo-GGUF", ["safetensors", "gguf"]),
+])
+def test_a_listed_tag_still_makes_a_package_without_safetensors_with_a_foreign_target_or_with_a_suffix(repo, tags):
+    assert rules.packaging_of_another(own_build(repo, tags))
+
+
+def test_the_thresholds_of_b1_pass_a_fine_tune_of_the_own_account_and_not_one_of_another():
+    own = b1_entry("acme", tags=["base_model:finetune:acme/Atlas-2-9B"])
+    foreign = b1_entry("acme", tags=["base_model:finetune:other/Atlas-2-9B"])
+    assert rules.b1_ok(rules.parse_entry(own), NOW) and not rules.b1_ok(rules.parse_entry(foreign), NOW)
+
+
+def test_with_limit_sets_only_the_limit_and_the_next_url_stays_valid():
+    url = rules.list_url("acme")
+    smaller = rules.with_limit(url, 50)
+    assert rules.limit_of(url) == 100 and rules.limit_of(smaller) == 50 and rules.with_limit(smaller, 100) == url
+    assert smaller.count("expand=") == url.count("expand=") and "author=acme" in smaller and "sort=createdAt" in smaller
+    assert rules.next_url_ok(smaller, "acme") and rules.with_limit("https://huggingface.co/api/models?author=a", 5).endswith("author=a")
+
+
+@pytest.mark.parametrize("repo, family", [
+    ("black-forest-labs/FLUX.1-dev", "flux"), ("01-ai/Yi-6B-200K", "yi"), ("Skywork/SkyReels-V2-DF-14B-540P", "skyreels"),
+    ("Wan-AI/Wan2.1-I2V-14B-480P", "wan"),
+])
+def test_a_name_the_grammar_does_not_read_takes_its_first_run_of_letters_as_the_family(repo, family):
+    assert not rules.has_reading(repo)
+    assert rules.family_for(repo, "image-generation", []) == family
+
+
+def test_a_first_word_family_next_to_a_readable_one_of_the_same_name_never_stands_over_nor_is_latest():
+    readable = "black-forest-labs/Flux-2-9B"
+    fallback = "black-forest-labs/FLUX.1-dev"
+    assert rules.has_reading(readable) and not rules.has_reading(fallback)
+    rows = []
+    for repo in (readable, fallback):
+        entry = rules.parse_entry(ent(repo, stamp(1), pipeline_tag="text-to-image", safetensors=MISSING))
+        row = rules.build_row(entry, rules.cheap_kind(entry), family="flux", today=TODAY, latest=False, latest_source=None)
+        rows.append(row)
+    models = [rules.CatalogModel.model_validate(r) for r in rows]
+    assert not rules.stands_over(fallback, "image-generation", models[0]) and not rules.stands_over(readable, "image-generation", models[1])
+    assert rules.latest_among([(fallback, "image-generation", None)], models[:1]) == set()
+    document = json.loads((FIX / "scan_catalog.json").read_bytes())
+    document["publishers"] = sorted(document["publishers"] + [{"account": "black-forest-labs", "name": "BFL", "region": "EU"}], key=lambda p: p["account"])
+    document["models"] += rows
+    from modelroom.catalog_schema import build_catalog_v2
+    build_catalog_v2(json.dumps(document), Path("catalog.json"))
+
+
+def test_the_first_word_family_gets_the_publisher_suffix_on_a_clash_and_a_leading_digit_gives_none(env):
+    assert rules.family_for("acme/7B-foo", "text", []) is None
+    other = rules.build_row(rules.parse_entry(ent("zed/FLUX.1-dev", stamp(1))), rules.cheap_kind(rules.parse_entry(ent("zed/FLUX.1-dev", stamp(1)))), family="flux", today=TODAY, latest=False, latest_source=None)
+    clash = [rules.CatalogModel.model_validate(other)]
+    assert rules.family_for("black-forest-labs/FLUX.1-dev", "text", clash) == "flux-black-forest-labs"
+
+
 # --- the fixes after the first review round (t1) ---------------------------------------------------------------------
 
 

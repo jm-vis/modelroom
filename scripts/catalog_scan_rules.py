@@ -36,6 +36,7 @@ SCHEMA = 1
 # A repo is a quantization or a package (a) with a tag `base_model:quantized:...`, (b) with one of these tags,
 # or (c) when its name ends on one of these suffixes in any case (brief, "Quantisierungsregel, endlich").
 QUANTIZATION_TAGS = ("gguf", "mlx", "awq", "gptq", "exl2", "onnx")
+OUTPUT_FORMAT_TAGS = ("onnx", "gguf")  # an export a model ships next to its `safetensors`; the other tags name a method
 QUANTIZATION_SUFFIXES = (
     "-gguf", "-awq", "-gptq", "-mlx", "-exl2", "-onnx", "-fp8", "-fp4", "-nvfp4", "-mxfp4", "-int4", "-int8",
     "-w4a16", "-w8a8", "-4bit", "-8bit", "-bnb-4bit",
@@ -57,6 +58,9 @@ TEXT_ARCHITECTURE_SUFFIX = "ForCausalLM"
 
 B1_MIN_LIKES, B1_MIN_DOWNLOADS, B1_MAX_AGE = 100, 1000, timedelta(days=30)
 B2_MIN_ROWS = 3
+SMALLEST_PAGE = 5  # a list page too long for `API_MAX_BYTES` is asked again with half its `limit`, down to this
+SEED_PAGES = 4  # pages of one seed: twenty entries over pages of at least `SMALLEST_PAGE`
+SEED_ROWS, SEED_PAGE = 5, 20# a listed account without a row: its first five repos by downloads, read from a page of twenty
 MAX_CANDIDATES = 10  # for B1 and B2 together; B3 has no limit
 MAX_PAGES = 10  # pages per account and run, all steps together
 MAX_GGUF_REPOS = CATALOG_MAX_GGUF_REPOS  # a row's list of GGUF repos is cut here; what the cut takes is no change
@@ -82,6 +86,27 @@ def _models(query: dict, expand: tuple[str, ...]) -> str:
 def list_url(account: str) -> str:
     """The first page of one account: its newest repos, 100 to a page, with the fields the rules read."""
     return _models({"author": account, "sort": "createdAt", "direction": -1, "limit": 100}, _LIST_EXPAND)
+
+
+def seed_url(account: str) -> str:
+    """The seed page of an account without a row: its twenty most downloaded repos, with the fields the rules read."""
+    return _models({"author": account, "sort": "downloads", "direction": -1, "limit": SEED_PAGE}, _LIST_EXPAND)
+
+
+def with_limit(url: str, limit: int) -> str:
+    """`url` with its query parameter `limit` set to `limit`; nothing else changes (no `limit`: the url as it is)."""
+    parts = urllib.parse.urlsplit(url)
+    pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    if not any(name == "limit" for name, _ in pairs):
+        return url
+    query = urllib.parse.urlencode([(name, str(limit) if name == "limit" else value) for name, value in pairs])
+    return urllib.parse.urlunsplit(parts._replace(query=query))
+
+
+def limit_of(url: str) -> int | None:
+    """The `limit` of a list url, or `None` when it has none or no number."""
+    found = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("limit")
+    return int(found[0]) if found and found[0].isdigit() else None
 
 
 def b1_url(task: str) -> str:
@@ -185,6 +210,29 @@ def base_repos(tags) -> list[str]:
     return sorted(bases | {repo for _, repo in relations})
 
 
+def _owned_by(repo: str, owner: str) -> bool:
+    return repo.split("/", 1)[0].lower() == owner.lower()
+
+
+def own_bases(entry: Entry) -> bool:
+    """Every repo the `base_model:` tags name belongs to the entry's own owner (any case); true without such a tag."""
+    return all(_owned_by(base, entry.owner) for base in base_repos(entry.tags))
+
+
+def packaging_of_another(entry: Entry) -> bool:
+    """The quantization rule of the brief, except that a `base_model:quantized:` tag whose target belongs to the
+    entry's own owner does not count: a build a publisher made of its own model is a model of the table. A listed
+    tag or a listed suffix of the name stays a package (`Aleph-Alpha/Kolibri-1-FP8` yes, `Aleph-Alpha/Kolibri-1` no).
+    `onnx` and `gguf` (`OUTPUT_FORMAT_TAGS`: containers, an export next to the original) do not make a package when
+    the repo also carries `safetensors` and no `base_model:quantized:` tag at all; `awq`, `gptq`, `exl2` and `mlx` name
+    a method and stay proof. This holds in the daily walk (`_see`) as in the seed."""
+    prefix = "base_model:quantized:"
+    tags = [t for t in entry.tags if not (t.startswith(prefix) and _owned_by(t[len(prefix):], entry.owner))]
+    if "safetensors" in entry.tags and not any(t.startswith(prefix) for t in entry.tags):  # no quantized tag at all, own target or not
+        tags = [t for t in tags if t not in OUTPUT_FORMAT_TAGS]
+    return is_quantization(tags, entry.repo)
+
+
 # --- the kind, in stages ----------------------------------------------------------------------------------------------
 
 
@@ -256,6 +304,12 @@ def _key(repo: str, parameters_b: float | None):
     return line_key(repo, parameters_b)
 
 
+def has_reading(repo: str, size: float | None = None) -> bool:
+    """Whether the grammar of `search_release` reads the name (a family, a line and a version); `family_for` takes the
+    first word of a name it does not read."""
+    return _key(repo, size) is not None
+
+
 def stands_over(repo: str, kind: str, other: CatalogModel | tuple, size: float | None = None) -> bool:
     """`repo` of `kind` and `size` stands over `other` (a row, or `(repo, kind, parameters_b)`) inside one group of
     (publisher, kind, family, line)."""
@@ -265,11 +319,18 @@ def stands_over(repo: str, kind: str, other: CatalogModel | tuple, size: float |
 
 
 def family_for(repo: str, kind: str, rows: list[CatalogModel], size: float | None = None) -> str | None:
-    """The family of a new row: the one its group's rows share, else the family rule of `search_release`; `None`
-    when the name has no family word (no row is proposed then)."""
+    """The family of a new row: the one its group's rows share, else the family rule of `search_release`; where the
+    grammar has no reading of the name, its first run of letters (`FLUX.1-dev` -> `flux`); `None` when the name starts
+    with no such run (no row is proposed then)."""
     key = _key(repo, size)
     if key is None:
-        return None
+        word = re.match(r"[a-z]{2,}", repo.split("/", 1)[1].lower())
+        if word is None:
+            return None
+        own, owner = word.group(0), repo.split("/", 1)[0]
+        if any(r.family == own and r.publisher != owner for r in rows):
+            own = f"{own}-{re.sub(r'[^a-z0-9.-]+', '-', owner.lower()).strip('-.')}"
+        return own[:CATALOG_MAX_TEXT_LEN]
     shared = {r.family for r in rows if r.kind == kind and (rk := _key(r.hf_repo, r.parameters_b)) and rk.group == key.group}
     if len(shared) == 1:
         return shared.pop()
@@ -575,8 +636,7 @@ def b1_ok(entry: Entry, now: datetime) -> bool:
     """The thresholds of B1 on one repo: young enough, liked and downloaded enough, own base model, no quantization."""
     return (
         entry.created is not None and now - entry.created <= B1_MAX_AGE and entry.likes >= B1_MIN_LIKES
-        and entry.downloads >= B1_MIN_DOWNLOADS and not any(t.startswith("base_model:") for t in entry.tags)
-        and not is_quantization(entry.tags, entry.repo)
+        and entry.downloads >= B1_MIN_DOWNLOADS and own_bases(entry) and not packaging_of_another(entry)
     )
 
 

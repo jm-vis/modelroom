@@ -650,6 +650,37 @@ All notable changes to this project are documented in this file. The format foll
   and a GGUF repo of such a row, both from the list data alone. An entry without `createdAt` counts as inside. The
   proposal gains the note `watermark: entries created before <day> are read for existing rows only`. The first live run
   had classified the whole history of 22 accounts (569 new rows, 286 candidates of open kind).
+- **A build a publisher made of its own model is a model of the table** (AP9-KA-T3; `scripts/catalog_scan_rules.py`,
+  `scripts/catalog_scan.py`). A tag `base_model:quantized:<repo>` no longer makes a repo a package when `<repo>` belongs to the
+  repo's own owner (any case), so `Aleph-Alpha/Kolibri-1` (FP8, built from `Kolibri-1-BF16`) is proposed and passes B1, while a
+  listed tag or a listed suffix (`...-FP8`) and a base model of another account still keep a repo out.
+- **A listed publisher without a row gets a seed** (AP9-KA-T3; `scripts/catalog_scan.py`, `_seed`). The watermark hid every older
+  repo of an account the table has no row for (bge-m3, FLUX.1, Yi); the scanner now reads one page of that account's twenty most
+  downloaded repos and proposes the first five that count, whatever their age, until the maintainer decides; a note names
+  `<account>: seeded, no row in the table: <n> of the <m> repos read proposed`.
+- **The seed is five open proposals per account** (AP9-KA-T3, round 2; `scripts/catalog_scan.py`): the open proposals of an
+  account (fresh rows, carried new rows, candidates of open kind) take the five places first; with none free no page is
+  asked (`<account>: seeded earlier, <n> proposals open, nothing read`), else only as many new ones as there are free
+  places, and a repo already proposed, decided or rejected uses none.
+- **A list page longer than the answer limit is asked again with half its `limit`** (AP9-KA-T3, round 2;
+  `scripts/catalog_scan.py`, `with_limit`): 100, 50, 25, 12, 6 for an account page, 20, 10, 5 for a seed page, each try a
+  request of the budget, with a note; `nomic-ai`, `jinaai` and `Snowflake` had failed whole on their `model-index` blocks.
+- **A name the grammar cannot read gets its first word as the family** (AP9-KA-T3, round 2; `family_for`): `FLUX.1-dev`
+  is family `flux`, with the note `family <x> taken from its first word` instead of `not proposed`.
+- **A model with an ONNX or GGUF export next to its safetensors is no package** (AP9-KA-T3, rounds 3 to 5;
+  `packaging_of_another`, `OUTPUT_FORMAT_TAGS`): the tags `onnx` and `gguf` no longer count when the repo also carries
+  `safetensors` and no `base_model:quantized:` tag at all (sentence-transformers models of Snowflake, nomic-ai, jinaai and
+  mixedbread-ai, among them `mxbai-embed-large-v1`, had been thrown away); `awq`, `gptq`, `exl2`, `mlx` and the suffix rule stay
+  proof. Changed against round 4: `onnx` + `safetensors` + a `base_model:quantized:` tag of the own account is a package again. This holds in the daily walk as in the seed, as does
+  the family taken from the first word of a name the grammar cannot read (`FLUX.1-dev`): wanted, no top publisher is lost.
+- **The seed is guarded** (AP9-KA-T3, round 4; `_seed`): at most four pages and twenty entries looked at per account (an
+  unreadable entry counts), a repeated next-page link or a page without an entry ends it with the note
+  `<account>: seed stopped after <n> pages (<reason>)`.
+- **The seed follows the next page** (AP9-KA-T3, round 3; `_seed`): while a place is free it reads page after page until
+  twenty entries are read or the list ends, so a smaller first page full of unwanted repos hides nothing; the note reads
+  `<n> open before, <m> added from <k> repos read`.
+- **Step 1 of the guided mode counts the machines chosen** (AP9-KA-T3; `modelroom/guided.py`): the balance said how many machines
+  the configuration holds (`3 machines`), not how many the run covers (`1 machine`).
 - **`modelroom remote hello` names the version of the package** (AP9-FR-N2, b; `modelroom/remote_server.py`):
   `version` was a fixed `0.2.0`; it is `modelroom.__version__` now, and the unused constant
   `cli_remote.MIN_VERSION_TEXT` is gone. The laptop reads no version; `protocol` alone decides.

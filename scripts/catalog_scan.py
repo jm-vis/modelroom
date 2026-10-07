@@ -13,6 +13,12 @@ when the call or a file is wrong or the proposal cannot be made (nothing is writ
 The watermark holds per entry: one created before the account's threshold (`covered_until` minus two days) is seen for the
 rows of the table only (their kind and card, and the GGUF repos of one, all from the list data); it is no new row, no
 candidate and no card request. An entry with no creation time counts as inside.
+
+A listed publisher with no row in the table gets a seed all the same (`_seed`): five places for open proposals over the
+whole account; while one is free, its most downloaded repos are read page after page (a page too long is asked again with
+half its `limit`) and the first that count are proposed whatever their age. They stay proposed until the maintainer decides.
+The family taken from the first word of a name the grammar cannot read (`FLUX.1-dev`) and the rule that `onnx` next to
+`safetensors` is no package hold in the daily walk too, not only in the seed.
 """
 
 from __future__ import annotations
@@ -59,6 +65,10 @@ class _Fail(Exception):
     """One answer that cannot be used; its text is the reason in the proposal, `status` the HTTP status if there was one."""
 
     status: int | None = None
+
+
+class _TooLong(_Fail):
+    """The answer is longer than the limit the caller set: a list page is asked again with a smaller `limit`."""
 
 
 class _Lost(Exception):
@@ -154,7 +164,7 @@ class _Run:
         self.notes: list[str] = []
         self.marks, self.new_marks, self.oldest = {}, {}, {}  # per account: (covered_until, pending), the same after the run, oldest time read
         self.incomplete: set[str] = set()
-        self.unread: dict[str, list] = {"accounts": [], "B1": [], "B2": [], "collections": []}
+        self.unread: dict[str, list] = {"accounts": [], "seed": [], "B1": [], "B2": [], "collections": []}
         self.problem = self.budget_end = False
         self.seen: set[str] = set()
         self.known: set[str] = set()  # repos already decided on: carried over, or checked again in this run
@@ -216,6 +226,8 @@ class _Run:
     def _get(self, layer, url: str, limit: int):
         try:
             response = layer("GET", url, None, max_bytes=limit)
+        except ResponseTooLargeError as exc:
+            raise _TooLong(_clean(exc)) from exc
         except _FAILURES as exc:
             raise _Fail(_clean(exc)) from exc
         if response.status != 200:
@@ -231,9 +243,27 @@ class _Run:
         except ValueError as exc:  # includes a body that is no UTF-8
             raise _Fail("the answer is no JSON") from exc
 
-    def _list(self, url: str, account: str | None = None):
+    def _page(self, url: str, what: str | None):
+        """One list answer; one longer than `API_MAX_BYTES` is asked again with half its `limit` (down to `SMALLEST_PAGE`),
+        every try a request of the budget; the page that was read leaves a note."""
+        tried = url
+        while True:
+            try:
+                response = self._get(self.t_list, tried, R.API_MAX_BYTES)
+                break
+            except _TooLong:
+                limit = R.limit_of(tried)
+                if limit is None or limit // 2 < R.SMALLEST_PAGE:
+                    raise
+                tried = R.with_limit(url, limit // 2)
+                failed = limit
+        if tried != url:
+            self.notes.append(f"{what or url}: page read with limit {R.limit_of(tried)}, the answer with {failed} was longer than {R.API_MAX_BYTES} bytes")
+        return response
+
+    def _list(self, url: str, account: str | None = None, what: str | None = None):
         """One list answer and the next page it announces (`None` at the end); a next page elsewhere is a fault."""
-        response = self._get(self.t_list, url, R.API_MAX_BYTES)
+        response = self._page(url, what or account)
         data = self._body(response)
         if not isinstance(data, list):
             raise _Fail("the answer is no list")
@@ -315,9 +345,9 @@ class _Run:
         self._mentions(entry)
         self._gguf(entry)
         if (
-            entry.repo in self.known or R.is_quantization(entry.tags, entry.repo)
+            entry.repo in self.known or R.packaging_of_another(entry)
             or owner_class(entry.owner, catalog=self.catalog, listed_packagers=self.packagers) != "publisher"
-            or any(base.split("/", 1)[0] != entry.owner for base in R.base_repos(entry.tags))
+            or not R.own_bases(entry)
         ):
             return
         self._classify(entry, self._determine(entry), self.today)
@@ -457,10 +487,80 @@ class _Run:
                 everything = {e.repo: e for es in per_row.values() for e in es}  # a GGUF repo that answers for three rows counts once
                 self._candidate("B2", account, sorted(everything.values(), key=lambda e: (-e.likes, e.repo)), {"rows": len(per_row), "bases": sorted(per_row)})
 
+    def _seed(self) -> None:
+        """A listed publisher with no row in the table, not rejected: the seed adds proposals until the account has
+        `SEED_ROWS` open ones in all (fresh rows, carried new rows and candidates of open kind); the daily walk (`_see`)
+        may have made more before. With no place free no page is asked; else its most downloaded repos are read, page
+        after page (a page too long is asked again with a smaller `limit`, the next-page link must stay on the account,
+        a repeated link, a page without an entry and a fifth page end it with a note), until `SEED_PAGE` entries are
+        looked at (an unreadable one counts), the places are full or the list ends, every request in the budget. A repo that counts is judged like in `_see`, without the watermark
+        and without `self.seen`; one proposed, decided on, judged or rejected already uses no place."""
+        for account in self.publishers:
+            if any(m.publisher == account for m in self.rows.values()) or account in self.rejected_accounts:
+                continue
+            before = len(self._open_of(account))
+            slots = R.SEED_ROWS - before
+            if slots <= 0:  # the five places are taken by proposals nobody decided: no request
+                self.notes.append(f"{account}: seeded earlier, {before} proposals open, nothing read")
+                continue
+            what, url, read, added = f"seed {account}", R.seed_url(account), 0, 0
+            visited, pages = {url}, 0
+            while url is not None and added < slots and read < R.SEED_PAGE:
+                if pages >= R.SEED_PAGES:
+                    self.notes.append(f"{account}: seed stopped after {pages} pages (page limit)")
+                    break
+                try:
+                    data, url = self._list(url, account, what)
+                except BudgetExhaustedError:
+                    self.budget_end = True
+                    self.unread["seed"].append(what)
+                    break
+                except _Fail as fail:
+                    self.notes.append(f"{what}: page error ({fail})")
+                    self.problem = True
+                    break
+                pages += 1
+                parsed = 0
+                for raw in data:
+                    if read >= R.SEED_PAGE:  # at most twenty entries are looked at per account, over every page
+                        break
+                    read += 1  # an entry that cannot be read was read all the same
+                    entry = R.parse_entry(raw)
+                    if entry is None:
+                        continue
+                    parsed += 1
+                    if added >= slots:
+                        continue
+                    if (
+                        self._is_rejected(entry.repo) or entry.owner.lower() != account.lower() or entry.repo in self.rows
+                        or entry.repo in self.known or entry.repo in self.fresh  # proposed, decided on or judged already: no place
+                        or R.packaging_of_another(entry) or not R.own_bases(entry)
+                    ):
+                        continue
+                    self._mentions(entry)
+                    self._gguf(entry)
+                    result = self._determine(entry)
+                    self._classify(entry, result, self.today)
+                    added += not result.excluded
+                if url is not None and added < slots and read < R.SEED_PAGE:  # it would go on: guard the way
+                    reason = "page without entries" if parsed == 0 else "repeated link" if url in visited else None
+                    if reason:
+                        self.notes.append(f"{account}: seed stopped after {pages} pages ({reason})")
+                        break
+                    visited.add(url)
+            if read:
+                self.notes.append(f"{account}: seeded, no row in the table: {before} open before, {added} added from {read} repos read")
+
+    def _open_of(self, account: str) -> set[str]:
+        """The proposals of one account nobody decided, whoever made them (the walk or the seed): fresh rows, carried new
+        rows and B3 candidates (any case). The seed fills the account up to `SEED_ROWS` of them, no more."""
+        repos = set(self.fresh) | {key[1] for key in self.changes if key[0] == "new_row"} | {key[1] for key in self.cands if key[0] == "B3"}
+        return {repo for repo in repos if repo.split("/", 1)[0].lower() == account.lower() and not self._is_rejected(repo)}
+
     def _step(self, name: str, url: str, what: str) -> list:
         """One request of an open step: the list, or nothing (a note for a fault, a count for the end of the budget)."""
         try:
-            return self._list(url)[0]
+            return self._list(url, what=what)[0]
         except BudgetExhaustedError:
             self.budget_end = True
             self.unread[name].append(what)
@@ -532,6 +632,8 @@ class _Run:
                 self.notes.append(f"{entry.repo}: no family word in the name, not proposed")
                 self.fresh.pop(entry.repo)
                 continue
+            if not R.has_reading(entry.repo, entry.parameters_b):
+                self.notes.append(f"{entry.repo}: no family word in the name, family {family} taken from its first word")
             trial = R.build_row(entry, result, family=family, today=self.today, latest=False, latest_source=None)
             trial["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:R.MAX_GGUF_REPOS]
             if self._takes(entry.repo, R.new_row_change(trial, result, open_since)):
@@ -596,7 +698,7 @@ class _Run:
     def _unread_notes(self) -> None:
         if self.unread["accounts"]:
             self.notes.append(f"budget ended: {len(self.unread['accounts'])} accounts not read: {', '.join(self.unread['accounts'])}")
-        for name in ("B1", "B2", "collections"):
+        for name in ("seed", "B1", "B2", "collections"):
             if self.unread[name]:
                 self.notes.append(f"budget ended: {len(self.unread[name])} {name} pages not read")
         self.incomplete.update(self.unread["accounts"])
@@ -610,6 +712,7 @@ class _Run:
                 self.unread["accounts"].append(account)
             else:
                 self._account(account)
+        self._seed()
         self._open_pages()
         self._build()
         self._unread_notes()

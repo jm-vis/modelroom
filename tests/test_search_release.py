@@ -1,14 +1,16 @@
 """Tests for `search_release`: a release computed from the version numbers of one family.
 
-The key table covers every `hf_repo` of the shipped catalog plus the names of the recorded answers
-and the cases the grammar was written for; a name the table does not name is a name the grammar
-was not checked against (CONTRACTS.md, "Latest and legacy evidence", "Computed release").
+The key table covers every reference row of the shipped catalog (`catalog_v1_reference.toml`) plus the
+names of the recorded answers, hand samples and the cases the grammar was written for; any other shipped
+row must give a `LineKey` unless it is listed with a reason in `SHIPPED_WITHOUT_READING`; a name the table
+does not name is a name the grammar was not checked against (CONTRACTS.md, "Latest and legacy evidence", "Computed release").
 """
 
 from __future__ import annotations
 
 import itertools
 from datetime import date
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -16,7 +18,7 @@ from pydantic import ValidationError
 from modelroom.catalog import Catalog, load_catalog
 from modelroom.guided_contracts import SearchHit
 from modelroom.search_age import AgeVerdict
-from modelroom.search_release import LineDate, Release, compute_release, line_key, with_release
+from modelroom.search_release import LineDate, LineKey, Release, compute_release, line_key, with_release
 
 MISTRAL_SMALL_3 = "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
 MISTRAL_SMALL_4 = "mistralai/Mistral-Small-4-119B-2603"
@@ -131,8 +133,9 @@ KEYS = [
     ("acme/Nova-2-7B-16E-BF16", "nova", "", set(), 7, (2,), None),
 ]
 
-# Shipped rows the grammar has no reading for (`line_key` is `None`): each one a name with a reason.
-# Empty as of the publication of 2026-10-07: every added name has a reading.
+# `KEYS` = the reference rows plus hand samples. This list: names that deliberately have no reading (`line_key` is
+# `None`), each with a reason; every other shipped row outside the reference must give a `LineKey` (coverage test).
+# Empty as of the publication of 2026-10-07.
 SHIPPED_WITHOUT_READING: list[str] = []
 
 NOT_INTERPRETABLE = [
@@ -159,9 +162,34 @@ def test_the_key_of_a_name(repo, family, line, variant, size, version, dated):
 
 
 def test_the_table_covers_every_row_of_the_shipped_catalog():
-    catalog_repos = {model.hf_repo for family in load_catalog().families for model in family.models}
+    """The rows of the first publication (`catalog_v1_reference.toml`) are in `KEYS`; every other shipped row gives a
+    `LineKey` too, unless it stands with a reason in `SHIPPED_WITHOUT_READING`: a lost reading is a decision, never a
+    side effect."""
+    reference = load_catalog(Path(__file__).parent / "fixtures" / "catalog_v1_reference.toml")
+    reference_repos = {model.hf_repo for family in reference.families for model in family.models}
+    assert reference_repos <= {row[0] for row in KEYS} | set(SHIPPED_WITHOUT_READING)
+    assert unread_rows(load_catalog(), reference_repos, line_key) == []
 
-    assert catalog_repos <= {row[0] for row in KEYS} | set(SHIPPED_WITHOUT_READING)
+
+def unread_rows(catalog, reference_repos, reading) -> list[str]:
+    """The shipped rows outside the reference that `reading` gives no `LineKey` and that are not listed, with a reason, in
+    `SHIPPED_WITHOUT_READING`: a reading lost is a decision, never a side effect (AP9-KA-T3, round 5)."""
+    lost = []
+    for family in catalog.families:
+        for model in family.models:
+            if model.hf_repo in reference_repos or model.hf_repo in SHIPPED_WITHOUT_READING:
+                continue
+            if not isinstance(reading(model.hf_repo, model.parameters_b), LineKey):
+                lost.append(model.hf_repo)
+    return lost
+
+
+def test_a_shipped_row_that_loses_its_reading_is_named():
+    catalog = load_catalog()
+    reference = load_catalog(Path(__file__).parent / "fixtures" / "catalog_v1_reference.toml")
+    reference_repos = {model.hf_repo for family in reference.families for model in family.models}
+    extra = next(m.hf_repo for f in catalog.families for m in f.models if m.hf_repo not in reference_repos)
+    assert unread_rows(catalog, reference_repos, lambda repo, size: None if repo == extra else line_key(repo, size)) == [extra]
 
 
 @pytest.mark.parametrize("repo", NOT_INTERPRETABLE)

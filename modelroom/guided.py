@@ -184,7 +184,7 @@ def _configuration_step(run: GuidedRun, config_arg: Path | None) -> tuple[Path, 
     config_file = _config_file(run, config_arg)
     config = _configuration(run, config_file)
     config = _machines_step(run, config_file, config)
-    run.screen.done(1, f"{config_file.parent}, {machines_summary(len(config.machines))}")
+    run.screen.done(1, f"{config_file.parent}, {machines_summary(len(run.selection.machines))}")
     return config_file, config
 
 

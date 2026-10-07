@@ -789,7 +789,7 @@ def test_the_recorded_list_page_of_the_fixture_files_is_read_through_its_link(en
 
 @pytest.mark.parametrize("name, tags", [
     ("acme/Zeta-1-3B-FP8", []), ("acme/Zeta-1-3B-GGUF", []), ("acme/Zeta-1-3B-bnb-4bit", []), ("acme/Zeta-1-3B", ["awq"]),
-    ("acme/Zeta-1-3B", ["base_model:quantized:acme/Zeta-1-3B-Base"]),
+    ("acme/Zeta-1-3B", ["base_model:quantized:other/Zeta-1-3B-Base"]),  # AP9-KA-T3: a target of the own account is a row now
 ])
 def test_a_quantization_of_a_publisher_is_never_a_row_but_a_name_that_only_contains_a_suffix_is(env, name, tags):
     hub = Hub()
@@ -823,3 +823,389 @@ def test_damaged_files_of_earlier_runs_cost_their_entries_and_never_the_run(env)
     p, result, _ = go(env, Hub())
     assert result.exit_code == 0 and p["changes"] == [] and p["candidates"] == [] and p["summary"]["pending_publication"] is None
     assert env.state()["accounts"]["acme"]["covered_until"] == "2026-08-30T00:00:00.000Z"
+
+
+# --- AP9-KA-T3: a build of the publisher's own model counts, and an account without a row gets its seed ---------------
+
+
+def test_the_fp8_build_and_the_bf16_original_of_a_listed_account_are_both_proposed(env):
+    hub = Hub()
+    fp8_tags = ["safetensors", "base_model:acme/Kolibri-1-BF16", "base_model:quantized:acme/Kolibri-1-BF16", "fp8"]
+    hub.page("acme", [ent("acme/Kolibri-1", stamp(2), tags=fp8_tags), ent("acme/Kolibri-1-BF16", stamp(2))])
+    p, _, _ = go(env, hub)
+    rows = new_rows(p)
+    assert sorted(rows) == ["acme/Kolibri-1", "acme/Kolibri-1-BF16"] and {c["stage"] for c in rows.values()} == {"A1"}
+
+
+SEED_DAY = "2024-03-01T00:00:00.000Z"  # long before the watermark of any account
+
+
+def with_fresh(env) -> None:
+    """The fixture catalog plus the publisher `fresh`, who has no row."""
+    raw = json.loads(CATALOG_BYTES)
+    raw["publishers"].insert(1, {"account": "fresh", "name": "Fresh Labs", "region": "EU"})
+    env.catalog.write_bytes(json.dumps(raw).encode("utf-8"))
+
+
+def seed_entry(number: int, **over) -> dict:
+    return ent(f"fresh/Lumen-{number}-7B", SEED_DAY, downloads=10_000 - number, **over)
+
+
+def seed_hub(entries: list, account_page: list | None = None) -> Hub:
+    hub = Hub()
+    hub.page("fresh", account_page if account_page is not None else [])
+    hub.put(rules.seed_url("fresh"), entries)
+    return hub
+
+
+def test_the_seed_request_is_the_top_twenty_of_the_account_by_downloads():
+    url = rules.seed_url("fresh")
+    assert (rules.SEED_ROWS, rules.SEED_PAGE) == (5, 20)
+    assert url.startswith("https://huggingface.co/api/models?author=fresh&sort=downloads&direction=-1&limit=20")
+    assert url.endswith("".join(f"&expand={name}" for name in rules._LIST_EXPAND))
+
+
+def test_an_account_without_a_row_gets_its_top_repos_even_when_they_are_older_than_the_watermark(env):
+    with_fresh(env)
+    p, result, transport = go(env, seed_hub([seed_entry(1), seed_entry(2)]))
+    assert sorted(new_rows(p)) == ["fresh/Lumen-1-7B", "fresh/Lumen-2-7B"] and {c["stage"] for c in new_rows(p).values()} == {"A1"}
+    assert "fresh: seeded, no row in the table: 0 open before, 2 added from 2 repos read" in p["notes"]
+    assert len(asked(transport, rules.seed_url("fresh"))) == 1 and result.exit_code == 0
+    assert any(n.startswith("watermark:") for n in p["notes"])
+
+
+def test_an_account_with_rows_gets_no_seed_request(env):
+    p, _, transport = go(env, Hub())
+    assert len(transport.calls) == BASELINE_CALLS and asked(transport, "author=acme&sort=downloads") == []
+    assert not [n for n in p["notes"] if "seeded" in n]
+
+
+def test_a_rejected_repo_a_package_of_another_and_a_foreign_base_are_skipped_and_the_next_one_counts(env):
+    with_fresh(env)
+    env.rejected.write_bytes(json.dumps([{"date": "2026-09-30", "hf_repo": "fresh/Lumen-1-7B"}]).encode("utf-8"))
+    entries = [
+        seed_entry(1),
+        seed_entry(2, tags=["base_model:quantized:other/Thing-7B"]),
+        seed_entry(3, tags=["base_model:finetune:other/Thing-7B"]),
+        ent("fresh/Lumen-4-7B-GGUF", SEED_DAY, downloads=9000),
+        seed_entry(5),
+    ]
+    p, _, _ = go(env, seed_hub(entries))
+    assert list(new_rows(p)) == ["fresh/Lumen-5-7B"]
+    assert "fresh: seeded, no row in the table: 0 open before, 1 added from 5 repos read" in p["notes"]
+
+
+def test_at_most_five_repos_of_the_account_are_proposed_out_of_the_page(env):
+    with_fresh(env)
+    p, _, _ = go(env, seed_hub([seed_entry(n) for n in range(1, 9)]))
+    assert sorted(new_rows(p)) == [f"fresh/Lumen-{n}-7B" for n in range(1, 6)]
+    assert "fresh: seeded, no row in the table: 0 open before, 5 added from 8 repos read" in p["notes"]
+
+
+def carried(repo: str) -> dict:
+    entry = rules.parse_entry(ent(repo, SEED_DAY))
+    result = rules.cheap_kind(entry)
+    row = rules.build_row(entry, result, family="lumen", today=YESTERDAY, latest=False, latest_source=None)
+    return {**rules.new_row_change(row, result, YESTERDAY), "n": 1}
+
+
+def test_proposals_of_an_earlier_run_count_toward_the_five_and_the_seed_does_not_grow(env):
+    with_fresh(env)
+    env.prev(YESTERDAY, changes=[{**carried("fresh/Lumen-3-7B"), "n": 1}, {**carried("fresh/Lumen-4-7B"), "n": 2}])
+    p, _, _ = go(env, seed_hub([seed_entry(n) for n in range(1, 9)]))
+    rows = new_rows(p)
+    assert sorted(rows) == [f"fresh/Lumen-{n}-7B" for n in range(1, 6)]
+    assert [rows[f"fresh/Lumen-{n}-7B"]["open_since"] for n in range(1, 6)] == [TODAY, TODAY, YESTERDAY, YESTERDAY, TODAY]
+
+
+def test_a_budget_that_ends_on_the_seed_page_is_named_and_the_run_exits_with_one(env):
+    with_fresh(env)
+    p, result, _ = go(env, seed_hub([seed_entry(1)]), budget=6)  # the six lists are read, the seed page is not
+    assert result.exit_code == 1 and "budget ended: 1 seed pages not read" in p["notes"] and new_rows(p) == {}
+
+
+def test_a_repo_the_account_run_has_seen_before_its_watermark_is_still_made_a_row_by_the_seed(env):
+    with_fresh(env)
+    entries = [seed_entry(1), seed_entry(2)]
+    p, _, _ = go(env, seed_hub(entries, account_page=entries))
+    assert sorted(new_rows(p)) == ["fresh/Lumen-1-7B", "fresh/Lumen-2-7B"]
+
+
+# --- AP9-KA-T3 round 2: the seed is five open proposals per account, whatever the page says -----------------------------
+
+
+def lumen(*numbers: int) -> list[str]:
+    return [f"fresh/Lumen-{n}-7B" for n in numbers]
+
+
+def test_a_second_run_with_a_changed_order_reads_no_seed_page_and_keeps_the_five_open(env):
+    with_fresh(env)
+    go(env, seed_hub([seed_entry(n) for n in range(1, 6)]))
+    hub = Hub()
+    hub.page("fresh", [])  # the seed page is not recorded: asking for it is a KeyError
+    p, _, transport = go(env, hub, now=NOW + timedelta(days=1))
+    assert sorted(new_rows(p)) == lumen(1, 2, 3, 4, 5) and len(transport.calls) == BASELINE_CALLS + 1
+    assert asked(transport, rules.seed_url("fresh")) == []
+    assert "fresh: seeded earlier, 5 proposals open, nothing read" in p["notes"]
+
+
+def test_open_proposals_missing_from_the_seed_page_still_use_their_places(env):
+    with_fresh(env)
+    env.prev(YESTERDAY, changes=[carried("fresh/Lumen-3-7B")])
+    p, _, _ = go(env, seed_hub([seed_entry(n) for n in (1, 2, 4, 5, 6, 7)]))
+    assert sorted(new_rows(p)) == lumen(1, 2, 3, 4, 5)
+
+
+def test_two_rejected_repos_make_room_for_exactly_two_more(env):
+    with_fresh(env)
+    go(env, seed_hub([seed_entry(n) for n in range(1, 6)]))
+    env.rejected.write_bytes(json.dumps([{"date": "2026-10-04", "hf_repo": r} for r in lumen(1, 2)]).encode("utf-8"))
+    p, _, transport = go(env, seed_hub([seed_entry(n) for n in range(1, 9)]), now=NOW + timedelta(days=1))
+    assert sorted(new_rows(p)) == lumen(3, 4, 5, 6, 7) and len(asked(transport, rules.seed_url("fresh"))) == 1
+
+
+def test_a_repo_decided_but_not_yet_in_the_catalog_uses_no_place_and_is_not_judged_again(env):
+    with_fresh(env)
+    env.prev(YESTERDAY, changes=[carried("fresh/Lumen-1-7B")], decision={"state": "approved", "date": YESTERDAY, "approved": [1], "rejected": [], "admitted": []})
+    hub = seed_hub([seed_entry(1, pipeline_tag=None, tags=[])] + [seed_entry(n) for n in range(2, 9)])
+    p, _, transport = go(env, hub)  # a new judgement of Lumen-1 would ask for its config.json: a KeyError
+    assert sorted(new_rows(p)) == lumen(2, 3, 4, 5, 6) and asked(transport, "Lumen-1-7B/resolve") == []
+
+
+def test_a_carried_candidate_of_open_kind_uses_a_place_and_is_not_determined_again(env):
+    with_fresh(env)
+    env.prev(YESTERDAY, candidates=[b3("fresh/Lumen-1-7B", YESTERDAY)])
+    hub = seed_hub([seed_entry(1, pipeline_tag=None, tags=[])] + [seed_entry(n) for n in range(2, 9)])
+    p, _, transport = go(env, hub)
+    assert [c["hf_repo"] for c in cands(p, "B3")] == lumen(1) and sorted(new_rows(p)) == lumen(2, 3, 4, 5)
+    assert asked(transport, "Lumen-1-7B/resolve") == []
+
+
+def test_a_repo_the_account_run_classified_this_run_and_the_seed_page_holds_too_counts_once(env):
+    with_fresh(env)
+    recent = seed_entry(1, createdAt=stamp(1))
+    p, _, _ = go(env, seed_hub([recent] + [seed_entry(n) for n in range(2, 9)], account_page=[recent]))
+    assert sorted(new_rows(p)) == lumen(1, 2, 3, 4, 5)
+
+
+def test_a_repo_of_an_excluded_kind_uses_no_place(env):
+    with_fresh(env)
+    p, _, _ = go(env, seed_hub([seed_entry(1, pipeline_tag="text-classification")] + [seed_entry(n) for n in range(2, 9)]))
+    assert sorted(new_rows(p)) == lumen(2, 3, 4, 5, 6)
+
+
+def test_a_budget_that_ends_inside_the_kind_decision_leaves_a_candidate_with_the_budget_as_evidence(env):
+    with_fresh(env)
+    p, result, _ = go(env, seed_hub([seed_entry(1, pipeline_tag=None, tags=[])]), sub=0)
+    assert result.exit_code == 1 and [c["kind_evidence"]["stage"] for c in cands(p, "B3")] == ["budget"]
+
+
+# --- round 2: a page longer than the limit is asked again with half its `limit` ------------------------------------------
+
+
+def too_long() -> bytes:
+    return b"x" * (rules.API_MAX_BYTES + 1)
+
+
+def test_an_account_page_over_the_limit_is_asked_again_with_half_the_limit(env):
+    hub = Hub()
+    hub.put(rules.list_url("acme"), too_long())
+    hub.put(rules.with_limit(rules.list_url("acme"), 50), [ent("acme/Zeta-1-3B", stamp(1))])
+    p, result, transport = go(env, hub)
+    assert list(new_rows(p)) == ["acme/Zeta-1-3B"] and len(transport.calls) == BASELINE_CALLS + 1 and result.exit_code == 0
+    assert f"acme: page read with limit 50, the answer with 100 was longer than {rules.API_MAX_BYTES} bytes" in p["notes"]
+
+
+def test_a_seed_page_over_the_limit_is_asked_again_with_ten(env):
+    with_fresh(env)
+    hub = seed_hub([])
+    hub.put(rules.seed_url("fresh"), too_long())
+    hub.put(rules.with_limit(rules.seed_url("fresh"), 10), [seed_entry(1)])
+    p, _, transport = go(env, hub)
+    assert list(new_rows(p)) == lumen(1) and len(asked(transport, "author=fresh&sort=downloads")) == 2
+    assert any(n.startswith("seed fresh: page read with limit 10, the answer with 20 was longer") for n in p["notes"])
+
+
+def test_every_step_too_long_leaves_the_account_not_advanced_after_one_request_per_step(env):
+    hub = Hub()
+    for limit in (100, 50, 25, 12, 6):
+        hub.put(rules.with_limit(rules.list_url("acme"), limit), too_long())
+    p, result, transport = go(env, hub)
+    assert len(asked(transport, "author=acme")) == 5 and len(transport.calls) == BASELINE_CALLS + 4
+    assert result.exit_code == 1 and any(n.startswith("acme: page error") for n in p["notes"])
+    assert env.state()["accounts"]["acme"]["covered_until"] == "2026-08-30T00:00:00.000Z"
+
+
+def test_every_seed_step_too_long_ends_after_three_requests(env):
+    with_fresh(env)
+    hub = seed_hub([])
+    for limit in (20, 10, 5):
+        hub.put(rules.with_limit(rules.seed_url("fresh"), limit), too_long())
+    p, result, transport = go(env, hub)
+    assert len(asked(transport, "author=fresh&sort=downloads")) == 3 and result.exit_code == 1 and new_rows(p) == {}
+
+
+# --- round 3 ---------------------------------------------------------------------------------------------------------------
+
+
+def test_a_sentence_transformers_model_with_an_onnx_output_becomes_a_row_by_the_seed(env):
+    with_fresh(env)
+    entry = seed_entry(1, tags=["sentence-transformers", "onnx", "safetensors"], pipeline_tag="sentence-similarity")
+    p, _, _ = go(env, seed_hub([entry]))
+    assert list(new_rows(p)) == lumen(1) and new_rows(p)[lumen(1)[0]]["kind"] == "embedding"
+
+
+def test_the_seed_follows_the_next_page_when_the_smaller_first_page_holds_nothing_to_choose(env):
+    with_fresh(env)
+    nxt = "https://huggingface.co/api/models?author=fresh&cursor=s2&limit=10&sort=downloads"
+    hub = seed_hub([])
+    hub.put(rules.seed_url("fresh"), too_long())
+    unwanted = [ent(f"fresh/Lumen-{n}-7B-GGUF", SEED_DAY, downloads=20_000 - n) for n in range(10)]
+    hub.put(rules.with_limit(rules.seed_url("fresh"), 10), unwanted, headers={"Link": f'<{nxt}>; rel="next"'})
+    hub.put(nxt, [seed_entry(7)])
+    p, _, transport = go(env, hub)
+    assert list(new_rows(p)) == lumen(7) and len(transport.calls) == BASELINE_CALLS + 1 + 3
+    assert "fresh: seeded, no row in the table: 0 open before, 1 added from 11 repos read" in p["notes"]
+
+
+def test_the_account_run_the_seed_and_the_open_pages_work_in_one_run_with_their_requests_counted(env):
+    with_fresh(env)
+    old = seed_entry(1)
+    hub = seed_hub([old, seed_entry(2)], account_page=[old])
+    hub.put(rules.b1_url("text-generation"), [b1_entry("newlab", 150, 2000)])
+    p, _, transport = go(env, hub)
+    assert sorted(new_rows(p)) == lumen(1, 2) and [c["account"] for c in cands(p, "B1")] == ["newlab"]
+    assert len(transport.calls) == BASELINE_CALLS + 2  # the list page of `fresh` and its seed page
+
+
+def test_a_budget_that_ends_between_two_tries_of_a_page_leaves_the_account_unread(env):
+    hub = Hub()
+    for limit in (100, 50):
+        hub.put(rules.with_limit(rules.list_url("acme"), limit), too_long())
+    p, result, _ = go(env, hub, budget=2)
+    assert result.exit_code == 1 and any(n.startswith("budget ended:") and "acme" in n and "not read" in n for n in p["notes"])
+
+
+def test_the_main_budget_that_ends_inside_the_kind_decision_of_the_seed_leaves_a_candidate_with_the_budget_as_evidence(env):
+    with_fresh(env)
+    p, result, _ = go(env, seed_hub([seed_entry(1, pipeline_tag=None, tags=[])]), budget=7)  # six lists and the seed page
+    assert result.exit_code == 1 and [c["kind_evidence"]["stage"] for c in cands(p, "B3")] == ["budget"]
+
+
+# --- round 4 ---------------------------------------------------------------------------------------------------------------
+
+
+def unwanted(start: int, count: int = 3) -> list[dict]:
+    return [ent(f"fresh/Skip-{n}-7B-GGUF", SEED_DAY, downloads=5000 - n) for n in range(start, start + count)]
+
+
+def cursor(n: int) -> str:
+    return f"https://huggingface.co/api/models?author=fresh&cursor=c{n}&limit=20&sort=downloads"
+
+
+def link(n: int) -> dict:
+    return {"Link": f'<{cursor(n)}>; rel="next"'}
+
+
+def test_a_repeated_next_link_ends_the_seed_with_a_note(env):
+    with_fresh(env)
+    hub = seed_hub([])
+    hub.put(rules.seed_url("fresh"), unwanted(0), headers=link(2))
+    hub.put(cursor(2), unwanted(10), headers=link(2))
+    p, _, transport = go(env, hub)
+    assert len(transport.calls) == BASELINE_CALLS + 1 + 2 and new_rows(p) == {}
+    assert "fresh: seed stopped after 2 pages (repeated link)" in p["notes"]
+
+
+def test_a_next_page_without_an_entry_ends_the_seed_with_a_note(env):
+    with_fresh(env)
+    hub = seed_hub([])
+    hub.put(rules.seed_url("fresh"), unwanted(0), headers=link(2))
+    hub.put(cursor(2), [], headers=link(3))
+    p, _, transport = go(env, hub)
+    assert len(transport.calls) == BASELINE_CALLS + 1 + 2
+    assert "fresh: seed stopped after 2 pages (page without entries)" in p["notes"]
+
+
+def test_the_seed_reads_four_pages_at_most_and_never_asks_for_a_fifth(env):
+    with_fresh(env)
+    hub = seed_hub([])
+    hub.put(rules.seed_url("fresh"), unwanted(0), headers=link(2))
+    for n in (2, 3, 4):
+        hub.put(cursor(n), unwanted(n * 10), headers=link(n + 1))  # the page behind cursor(5) is not recorded
+    p, _, transport = go(env, hub)
+    assert len(transport.calls) == BASELINE_CALLS + 1 + 4
+    assert "fresh: seed stopped after 4 pages (page limit)" in p["notes"]
+
+
+def test_the_first_choosable_entry_at_position_twenty_is_proposed_and_one_at_twenty_one_is_not(env):
+    with_fresh(env)
+    p, _, _ = go(env, seed_hub(unwanted(0, 19) + [seed_entry(20), seed_entry(21)]))
+    assert list(new_rows(p)) == lumen(20)
+    other = Env(env.root / "b")
+    with_fresh(other)
+    p, _, _ = go(other, seed_hub(unwanted(0, 20) + [seed_entry(21)]))
+    assert new_rows(p) == {}
+
+
+def test_the_limit_of_twenty_holds_across_a_page_border_and_an_unreadable_entry_counts(env):
+    with_fresh(env)
+    hub = seed_hub([])
+    hub.put(rules.seed_url("fresh"), unwanted(0, 18) + [{"id": 5}], headers=link(2))  # 19 read, one of them unreadable
+    hub.put(cursor(2), [seed_entry(20), seed_entry(21), seed_entry(22)])
+    p, _, _ = go(env, hub)
+    assert list(new_rows(p)) == lumen(20)
+    assert "fresh: seeded, no row in the table: 0 open before, 1 added from 20 repos read" in p["notes"]
+
+
+def test_a_kind_from_the_base_model_and_one_from_the_config_cost_one_request_each_in_both_budgets(env, tmp_path):
+    with_fresh(env)
+    base = seed_hub([seed_entry(1)])
+    plain = go(env, base)[1]
+    second = Env(tmp_path / "stage3")
+    with_fresh(second)
+    hub = seed_hub([seed_entry(1, pipeline_tag=None, tags=["base_model:finetune:fresh/Lumen-base"])])
+    hub.put(rules.base_url("fresh/Lumen-base"), {"pipeline_tag": "text-generation"})
+    p3, three, _ = go(second, hub)
+    assert (three.main_used, three.sub_used) == (plain.main_used + 1, plain.sub_used + 1)
+    row3 = new_rows(p3)["fresh/Lumen-1-7B"]
+    assert (row3["kind"], new_of(row3)["kind_source"], row3["kind_evidence"]) == ("text", "base_model", {"stage": "base_model", "value": "fresh/Lumen-base"})
+    assert cands(p3, "B3") == []
+    third = Env(tmp_path / "stage4")
+    with_fresh(third)
+    hub = seed_hub([seed_entry(1, pipeline_tag=None, tags=[])])
+    hub.config("fresh/Lumen-1-7B", {"architectures": ["LlamaForCausalLM"]})
+    p4, four, _ = go(third, hub)
+    assert (four.main_used, four.sub_used) == (plain.main_used + 1, plain.sub_used + 1)
+    row4 = new_rows(p4)["fresh/Lumen-1-7B"]
+    assert (row4["kind"], new_of(row4)["kind_source"], row4["kind_evidence"]) == ("text", "config", {"stage": "config", "value": "architectures"})
+    assert cands(p4, "B3") == []
+
+
+def test_a_gguf_repo_in_the_account_answer_and_in_the_seed_answer_is_listed_once(env):
+    """The seed drops a package before `_gguf` runs, so only the account run lists the repo; it stands once."""
+    with_fresh(env)
+    gguf = quantized("fresh/Lumen-1-7B-GGUF", "fresh/Lumen-1-7B")
+    p, _, _ = go(env, seed_hub([seed_entry(1), gguf], account_page=[seed_entry(1, createdAt=stamp(1)), gguf]))
+    assert new_of(new_rows(p)["fresh/Lumen-1-7B"])["gguf_repos"] == ["fresh/Lumen-1-7B-GGUF"]
+
+
+def test_a_page_of_the_seed_with_nothing_readable_ends_it_and_its_entries_count_toward_the_twenty(env):
+    with_fresh(env)
+    hub = seed_hub([])
+    hub.put(rules.seed_url("fresh"), [{"id": 5}, {"x": 1}, {"id": 7}], headers=link(2))  # the page behind cursor(2) is not recorded
+    p, _, transport = go(env, hub)
+    assert len(transport.calls) == BASELINE_CALLS + 1 + 1 and new_rows(p) == {}
+    assert "fresh: seed stopped after 1 pages (page without entries)" in p["notes"]
+    assert "fresh: seeded, no row in the table: 0 open before, 0 added from 3 repos read" in p["notes"]
+
+
+# --- round 2: a name without a reading takes its first word as the family -----------------------------------------------
+
+
+def test_a_name_the_grammar_does_not_read_becomes_a_row_with_its_first_word_as_the_family_and_a_note(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/FLUX.1-dev", stamp(1), pipeline_tag="text-to-image")])
+    p, _, _ = go(env, hub)
+    assert new_of(new_rows(p)["acme/FLUX.1-dev"])["family"] == "flux"
+    assert "acme/FLUX.1-dev: no family word in the name, family flux taken from its first word" in p["notes"]
