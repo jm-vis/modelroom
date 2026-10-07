@@ -1960,113 +1960,113 @@
   "publishers": [
     {
       "account": "mistralai",
-      "name": "mistralai",
-      "region": null
+      "name": "Mistral AI",
+      "region": "EU"
     },
     {
       "account": "utter-project",
-      "name": "utter-project",
-      "region": null
+      "name": "UTTER (EU project)",
+      "region": "EU"
     },
     {
       "account": "openGPT-X",
-      "name": "openGPT-X",
-      "region": null
+      "name": "OpenGPT-X (Fraunhofer)",
+      "region": "EU"
     },
     {
       "account": "Qwen",
-      "name": "Qwen",
-      "region": null
+      "name": "Alibaba Cloud (Qwen)",
+      "region": "CN"
     },
     {
       "account": "deepseek-ai",
-      "name": "deepseek-ai",
-      "region": null
+      "name": "DeepSeek",
+      "region": "CN"
     },
     {
       "account": "meta-llama",
-      "name": "meta-llama",
-      "region": null
+      "name": "Meta",
+      "region": "US"
     },
     {
       "account": "google",
-      "name": "google",
-      "region": null
+      "name": "Google DeepMind",
+      "region": "US"
     },
     {
       "account": "microsoft",
-      "name": "microsoft",
-      "region": null
+      "name": "Microsoft",
+      "region": "US"
     },
     {
       "account": "openai",
-      "name": "openai",
-      "region": null
+      "name": "OpenAI",
+      "region": "US"
     },
     {
       "account": "zai-org",
-      "name": "zai-org",
-      "region": null
+      "name": "Z.ai (Zhipu AI)",
+      "region": "CN"
     },
     {
       "account": "moonshotai",
-      "name": "moonshotai",
-      "region": null
+      "name": "Moonshot AI (Kimi)",
+      "region": "CN"
     },
     {
       "account": "ibm-granite",
-      "name": "ibm-granite",
-      "region": null
+      "name": "IBM (Granite)",
+      "region": "US"
     },
     {
       "account": "nvidia",
-      "name": "nvidia",
-      "region": null
+      "name": "NVIDIA",
+      "region": "US"
     },
     {
       "account": "allenai",
-      "name": "allenai",
-      "region": null
+      "name": "Ai2 (Allen Institute for AI)",
+      "region": "US"
     },
     {
       "account": "tiiuae",
-      "name": "tiiuae",
-      "region": null
+      "name": "Technology Innovation Institute (Falcon)",
+      "region": "AE"
     },
     {
       "account": "CohereLabs",
-      "name": "CohereLabs",
-      "region": null
+      "name": "Cohere",
+      "region": "CA"
     },
     {
       "account": "LiquidAI",
-      "name": "LiquidAI",
-      "region": null
+      "name": "Liquid AI",
+      "region": "US"
     },
     {
       "account": "HuggingFaceTB",
-      "name": "HuggingFaceTB",
-      "region": null
+      "name": "Hugging Face (SmolLM)",
+      "region": "US"
     },
     {
       "account": "openbmb",
-      "name": "openbmb",
-      "region": null
+      "name": "OpenBMB (ModelBest, Tsinghua)",
+      "region": "CN"
     },
     {
       "account": "tencent",
-      "name": "tencent",
-      "region": null
+      "name": "Tencent (Hunyuan)",
+      "region": "CN"
     },
     {
       "account": "baidu",
-      "name": "baidu",
-      "region": null
+      "name": "Baidu (ERNIE)",
+      "region": "CN"
     },
     {
       "account": "MiniMaxAI",
-      "name": "MiniMaxAI",
-      "region": null
+      "name": "MiniMax",
+      "region": "CN"
     }
   ],
   "schema_version": 2
