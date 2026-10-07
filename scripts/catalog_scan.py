@@ -9,6 +9,10 @@ in between leaves the old state and the next run reads the same pages again. It 
 `catalog-rejected.json`; taking a proposal into the table is `catalog_publish.py`, after the maintainer's word. Exit 0;
 exit 1 when the budget ended, a page failed or a stored position was lost (the proposal is written all the same); exit 2
 when the call or a file is wrong or the proposal cannot be made (nothing is written). The rules are in `catalog_scan_rules.py`.
+
+The watermark holds per entry: one created before the account's threshold (`covered_until` minus two days) is seen for the
+rows of the table only (their kind and card, and the GGUF repos of one, all from the list data); it is no new row, no
+candidate and no card request. An entry with no creation time counts as inside.
 """
 
 from __future__ import annotations
@@ -291,7 +295,9 @@ class _Run:
 
     # --- reading the lists ------------------------------------------------------------------------------------
 
-    def _see(self, entry: R.Entry) -> None:
+    def _see(self, entry: R.Entry, before_mark: bool = False) -> None:
+        """`before_mark`: the entry was created before the account's threshold; it still checks a row of the table
+        and a GGUF repo of one (both from the list data, no request), and starts nothing else."""
         if entry.repo in self.seen:
             return
         self.seen.add(entry.repo)
@@ -300,6 +306,11 @@ class _Run:
         row = self.rows.get(entry.repo)
         if row is not None:
             self._existing(entry, row)
+            return
+        if before_mark:
+            bases = R.base_repos(entry.tags)
+            if len(bases) == 1 and bases[0] in self.rows:
+                self._gguf(entry)
             return
         self._mentions(entry)
         self._gguf(entry)
@@ -343,9 +354,9 @@ class _Run:
             if entry.owner in self.packagers or entry.owner == bases[0].split("/", 1)[0]:
                 self.gguf.setdefault(bases[0], set()).add(entry.repo)
 
-    def _walk(self, account: str, url: str, until, pages: int, resume: bool = False):
-        """Pages from `url` until an entry satisfies `until` or the list ends:
-        `(done, next url, pages used, newest time, entries seen)`."""
+    def _walk(self, account: str, url: str, until, pages: int, threshold, resume: bool = False):
+        """Pages from `url` until an entry satisfies `until` or the list ends; an entry created before `threshold` is
+        seen for the rows of the table only: `(done, next url, pages used, newest time, entries seen)`."""
         newest, used, entries = None, 0, 0
         while True:
             if used >= pages:
@@ -367,7 +378,7 @@ class _Run:
                     newest = entry.created if newest is None else max(newest, entry.created)
                     self.oldest[account] = min(self.oldest.get(account, entry.created), entry.created)
                     hit = hit or until(entry.created)
-                self._see(entry)
+                self._see(entry, entry.created is not None and entry.created < threshold)
             if hit or following is None:
                 return True, None, used, newest, entries
             url = following
@@ -386,11 +397,11 @@ class _Run:
                 self._flag(account, f"{account}: resume position lost, catching up again")
                 pending = None
             if pending is None:
-                done, following, _, newest, entries = self._walk(account, top, lambda t: t < threshold, limit)
+                done, following, _, newest, entries = self._walk(account, top, lambda t: t < threshold, limit, threshold)
                 state = (max(covered, newest) if newest else covered, None) if done else (covered, {"next_url": following, "newest_seen": R.stamp(newest or covered)})
             else:
                 seen = R.parse_time(pending.get("newest_seen")) or covered
-                done, following, used, newest, entries = self._walk(account, top, lambda t: t <= seen, limit)
+                done, following, used, newest, entries = self._walk(account, top, lambda t: t <= seen, limit, threshold)
                 latest = max(seen, newest) if newest else seen
                 if not done:
                     state = (covered, {"next_url": following, "newest_seen": R.stamp(latest)})
@@ -398,7 +409,7 @@ class _Run:
                     state = (covered, {"next_url": pending["next_url"], "newest_seen": R.stamp(latest)})
                 else:
                     try:
-                        done, following, _, older, more = self._walk(account, pending["next_url"], lambda t: t < threshold, limit - used, resume=True)
+                        done, following, _, older, more = self._walk(account, pending["next_url"], lambda t: t < threshold, limit - used, threshold, resume=True)
                         entries += more
                         state = (max(covered, latest, older or covered), None) if done else (covered, {"next_url": following, "newest_seen": R.stamp(latest)})
                     except _Lost:
@@ -602,6 +613,8 @@ class _Run:
         self._open_pages()
         self._build()
         self._unread_notes()
+        oldest = min(covered for covered, _ in self.marks.values()) - R.OVERLAP
+        self.notes.append(f"watermark: entries created before {oldest.date().isoformat()} are read for existing rows only")
         try:
             changes, left_out = R.check_changes(self.document, list(self.changes.values()))
         except ValueError as exc:

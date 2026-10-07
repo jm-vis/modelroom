@@ -644,6 +644,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- **The catalog scanner applies the watermark to every entry, not only to the page walk** (AP9-KA-T2;
+  `scripts/catalog_scan.py`). An entry created before the account's threshold (`covered_until` minus two days) no longer
+  starts a card request, a candidate or a new row; it still checks a row of the table (kind, `new_version`, collections)
+  and a GGUF repo of such a row, both from the list data alone. An entry without `createdAt` counts as inside. The
+  proposal gains the note `watermark: entries created before <day> are read for existing rows only`. The first live run
+  had classified the whole history of 22 accounts (569 new rows, 286 candidates of open kind).
 - **`modelroom remote hello` names the version of the package** (AP9-FR-N2, b; `modelroom/remote_server.py`):
   `version` was a fixed `0.2.0`; it is `modelroom.__version__` now, and the unused constant
   `cli_remote.MIN_VERSION_TEXT` is gone. The laptop reads no version; `protocol` alone decides.

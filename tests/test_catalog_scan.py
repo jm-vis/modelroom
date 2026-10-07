@@ -403,7 +403,7 @@ def test_a_list_of_three_pages_stops_in_the_page_where_the_mark_is_reached_and_m
     hub = Hub()
     hub.chain("acme", [[ent("acme/N1-1B", stamp(1)), ent("acme/N2-1B", stamp(2))], [ent("acme/N3-1B", "2026-09-29T00:00:00.000Z"), ent("acme/N4-1B", "2026-09-20T00:00:00.000Z")], [ent("acme/N5-1B", stamp(40))]])
     p, _, transport = go(env, hub)
-    assert len(asked(transport, "author=acme")) == 2 and sorted(new_rows(p)) == ["acme/N1-1B", "acme/N2-1B", "acme/N3-1B", "acme/N4-1B"]
+    assert len(asked(transport, "author=acme")) == 2 and sorted(new_rows(p)) == ["acme/N1-1B", "acme/N2-1B", "acme/N3-1B"]  # N4 is on the page but before the threshold: no row
     assert env.state()["accounts"]["acme"] == {"covered_until": stamp(1), "pending": None}
 
 
@@ -412,7 +412,74 @@ def test_a_page_is_read_on_until_an_entry_is_two_days_older_than_the_mark(env):
     hub = Hub()
     hub.chain("acme", [[ent("acme/N1-1B", stamp(1)), ent("acme/N2-1B", "2026-09-29T00:00:00.000Z")], [ent("acme/N3-1B", "2026-09-27T23:59:59.000Z"), ent("acme/N4-1B", "2026-09-01T00:00:00.000Z")], [ent("acme/N5-1B", "2026-08-01T00:00:00.000Z")]])
     p, _, transport = go(env, hub)
-    assert len(asked(transport, "author=acme")) == 2 and "acme/N3-1B" in new_rows(p)  # the second page is read: the first holds nothing older than 2026-09-28
+    assert len(asked(transport, "author=acme")) == 2 and sorted(new_rows(p)) == ["acme/N1-1B", "acme/N2-1B"]  # the second page is read: the first holds nothing older than 2026-09-28; N3 on it is before the threshold, so no row
+
+
+MARK_30_09 = {"covered_until": "2026-09-30T00:00:00.000Z", "pending": None}  # the threshold of the account is 2026-09-28
+UNDECIDED = {"pipeline_tag": None, "tags": []}  # no cheap kind: deciding it would ask for `config.json`
+
+
+def test_an_entry_before_the_threshold_starts_no_card_request_and_no_row_while_a_younger_one_does(env):
+    env.put_state({"acme": MARK_30_09})
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-4-9B", stamp(1)), ent("acme/Atlas-0-9B", "2026-09-20T00:00:00.000Z", **UNDECIDED)])
+    hub.config("acme/Atlas-0-9B", {})
+    p, _, transport = go(env, hub)
+    assert list(new_rows(p)) == ["acme/Atlas-4-9B"] and cands(p, "B3") == []
+    assert asked(transport, "Atlas-0-9B") == [] and stage_calls(transport) == 0
+
+
+def test_a_row_of_the_table_before_the_threshold_is_still_checked_on_its_card(env):
+    env.put_state({"acme": MARK_30_09})
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-4-9B", stamp(1)), ent("acme/Atlas-1-9B", "2026-09-01T00:00:00.000Z", cardData={"license": "mit", "new_version": "acme/Atlas-2-9B"})])
+    p, _, _ = go(env, hub)
+    change = fields_of(p, "acme/Atlas-1-9B", "successor")
+    assert change["stage"] == "A3" and change["evidence"] == ["https://huggingface.co/acme/Atlas-1-9B"]
+
+
+def test_a_gguf_repo_before_the_threshold_of_a_row_of_the_table_is_still_proposed_and_asks_for_nothing(env):
+    env.put_state({"packone": MARK_30_09})
+    hub = Hub()
+    hub.page("packone", [quantized("packone/Atlas-2-9B-GGUF", "acme/Atlas-2-9B", createdAt="2026-09-01T00:00:00.000Z"), ent("packone/Young-1-1B", stamp(1))])
+    p, _, transport = go(env, hub)
+    change = fields_of(p, "acme/Atlas-2-9B", "gguf_repos")
+    assert change["stage"] == "A2" and change["fields"]["gguf_repos"]["new"] == ["packone/Atlas-2-9B-GGUF"]
+    assert stage_calls(transport) == 0 and asked(transport, "Atlas-2-9B-GGUF") == []  # the tags and the card of the list decide it
+
+
+def test_an_entry_without_a_creation_time_counts_as_inside_the_threshold(env):
+    env.put_state({"acme": MARK_30_09})
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-4-9B", stamp(1)), ent("acme/Atlas-5-9B", createdAt=MISSING)])
+    p, _, _ = go(env, hub)
+    assert sorted(new_rows(p)) == ["acme/Atlas-4-9B", "acme/Atlas-5-9B"]
+
+
+def test_the_threshold_holds_in_the_pending_part_of_a_catch_up_too(env):
+    env.put_state({"acme": {"covered_until": "2026-09-01T00:00:00.000Z", "pending": {"next_url": pg(11), "newest_seen": stamp(5)}}})
+    hub = Hub()
+    hub.page("acme", [ent("acme/Zeta-1-3B", stamp(1)), ent("acme/Old-1-3B", stamp(6))])
+    hub.put(pg(11), [ent("acme/Mid-1-3B", "2026-09-10T00:00:00.000Z"), ent("acme/Ancient-1-3B", "2026-08-10T00:00:00.000Z", **UNDECIDED)])  # the threshold is 2026-08-30
+    hub.config("acme/Ancient-1-3B", {})
+    p, _, transport = go(env, hub)
+    assert sorted(new_rows(p)) == ["acme/Mid-1-3B", "acme/Old-1-3B", "acme/Zeta-1-3B"] and cands(p, "B3") == []
+    assert asked(transport, "Ancient-1-3B") == [] and stage_calls(transport) == 0
+
+
+def test_the_proposal_names_the_oldest_threshold_of_the_run_in_a_note(env):
+    p, _, _ = go(env, Hub())
+    assert "watermark: entries created before 2026-08-28 are read for existing rows only" in p["notes"]
+    env.put_state({a: MARK_30_09 for a in PUBLISHERS + PACKAGERS})
+    p, _, _ = go(env, Hub(), now=NOW + timedelta(days=1))
+    assert "watermark: entries created before 2026-09-28 are read for existing rows only" in p["notes"]
+
+
+def test_the_note_names_the_older_threshold_when_the_accounts_have_different_marks(env):
+    env.put_state({a: {"covered_until": "2026-09-20T00:00:00.000Z" if a == "nova" else "2026-09-30T00:00:00.000Z", "pending": None} for a in PUBLISHERS + PACKAGERS})
+    p, _, _ = go(env, Hub())
+    marks = [n for n in p["notes"] if n.startswith("watermark:")]
+    assert marks == ["watermark: entries created before 2026-09-18 are read for existing rows only"]
 
 
 def test_a_next_link_to_another_host_rejects_the_page_names_the_account_and_does_not_advance_it(env):
