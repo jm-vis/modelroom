@@ -25,5 +25,5 @@ docs/rfc/  docs/adr/  docs/plans/  docs/slo/  docs/runbooks/  docs/postmortems/
 
 An ADR is immutable; a changed situation gets a new ADR that supersedes the old one.
 
-Entries so far: [`adr/`](adr/README.md). `assets/` holds the repository images (banner, social
+Entries so far: [`adr/`](adr/README.md), [`runbooks/`](runbooks/README.md). `assets/` holds the repository images (banner, social
 preview) and is not a genre.

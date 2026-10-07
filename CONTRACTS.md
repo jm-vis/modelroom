@@ -3982,6 +3982,10 @@ controls the dataset. The protection against that is validation, the limits, the
 comparison of the published file with the Hub, never fetching a URL a downloaded file names, and the
 switch above.
 
+**Maintenance guarantees**: the background run has no publication path (it scans and verifies, nothing
+else). An approval binds to the SHA-256 of the proposal that was shown and to the numbers named. The
+upload sends the bytes of the recorded commit, verified against the dataset afterwards.
+
 ### CatalogModel
 
 ```json

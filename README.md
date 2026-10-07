@@ -611,6 +611,11 @@ with the newer of the copy and the catalog shipped in the package, and step 2 sa
 written, every run makes its one attempt (three requests at most, counted against the shared budget) and the
 choice stays the same.
 
+Maintenance: a daily background run proposes changes from the Hub (`scripts/catalog_scan.py`), the maintainer
+approves them by number in conversation, and `scripts/catalog_publish.py` commits and uploads exactly the bytes of
+that commit. Nothing is published without the maintainer's word, and the published file is compared with the
+repository every day.
+
 ## What the fit class means
 
 For a judged fit, the cell reads `<class> (<mode>, need <n> / pool <n> GiB)`. The class is
