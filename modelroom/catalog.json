@@ -2067,6 +2067,166 @@
       "account": "MiniMaxAI",
       "name": "MiniMax",
       "region": "CN"
+    },
+    {
+      "account": "Aleph-Alpha",
+      "name": "Aleph Alpha (Kolibri)",
+      "region": "EU"
+    },
+    {
+      "account": "BAAI",
+      "name": "Beijing Academy of Artificial Intelligence (bge)",
+      "region": "CN"
+    },
+    {
+      "account": "nomic-ai",
+      "name": "Nomic",
+      "region": "US"
+    },
+    {
+      "account": "mixedbread-ai",
+      "name": "Mixedbread",
+      "region": "EU"
+    },
+    {
+      "account": "jinaai",
+      "name": "Jina AI",
+      "region": "EU"
+    },
+    {
+      "account": "Snowflake",
+      "name": "Snowflake (Arctic)",
+      "region": "US"
+    },
+    {
+      "account": "kyutai",
+      "name": "Kyutai (Moshi)",
+      "region": "EU"
+    },
+    {
+      "account": "black-forest-labs",
+      "name": "Black Forest Labs (FLUX)",
+      "region": "EU"
+    },
+    {
+      "account": "stabilityai",
+      "name": "Stability AI",
+      "region": "GB"
+    },
+    {
+      "account": "Wan-AI",
+      "name": "Alibaba (Wan)",
+      "region": "CN"
+    },
+    {
+      "account": "Lightricks",
+      "name": "Lightricks (LTX)",
+      "region": "IL"
+    },
+    {
+      "account": "XiaomiMiMo",
+      "name": "Xiaomi (MiMo)",
+      "region": "CN"
+    },
+    {
+      "account": "stepfun-ai",
+      "name": "StepFun",
+      "region": "CN"
+    },
+    {
+      "account": "inclusionAI",
+      "name": "Ant Group (Ling, Ming)",
+      "region": "CN"
+    },
+    {
+      "account": "ByteDance-Seed",
+      "name": "ByteDance (Seed)",
+      "region": "CN"
+    },
+    {
+      "account": "internlm",
+      "name": "Shanghai AI Laboratory (InternLM)",
+      "region": "CN"
+    },
+    {
+      "account": "OpenGVLab",
+      "name": "Shanghai AI Laboratory (InternVL)",
+      "region": "CN"
+    },
+    {
+      "account": "LGAI-EXAONE",
+      "name": "LG AI Research (EXAONE)",
+      "region": "KR"
+    },
+    {
+      "account": "upstage",
+      "name": "Upstage (Solar)",
+      "region": "KR"
+    },
+    {
+      "account": "inception42",
+      "name": "Inception (Jais)",
+      "region": "AE"
+    },
+    {
+      "account": "bigcode",
+      "name": "BigCode (StarCoder)",
+      "region": "EU"
+    },
+    {
+      "account": "apple",
+      "name": "Apple",
+      "region": "US"
+    },
+    {
+      "account": "Edge0",
+      "name": "Edge0",
+      "region": null
+    },
+    {
+      "account": "m-a-p",
+      "name": "Multimodal Art Projection (YuE)",
+      "region": null
+    },
+    {
+      "account": "Cactus-Compute",
+      "name": "Cactus Compute",
+      "region": null
+    },
+    {
+      "account": "yandex",
+      "name": "Yandex (AliceAI)",
+      "region": "RU"
+    },
+    {
+      "account": "Skywork",
+      "name": "Kunlun (Skywork)",
+      "region": "CN"
+    },
+    {
+      "account": "baichuan-inc",
+      "name": "Baichuan",
+      "region": "CN"
+    },
+    {
+      "account": "01-ai",
+      "name": "01.AI (Yi)",
+      "region": "CN"
+    },
+    {
+      "account": "sbintuitions",
+      "name": "SB Intuitions (SoftBank)",
+      "region": "JP"
+    },
+    {
+      "account": "elyza",
+      "name": "ELYZA",
+      "region": "JP"
+    },
+    {
+      "account": "sarvamai",
+      "name": "Sarvam AI",
+      "region": "IN"
     }
   ],
   "schema_version": 2
