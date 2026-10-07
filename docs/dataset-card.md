@@ -26,7 +26,7 @@ configs:
     data_files: catalog-v2.json
 ---
 
-![Open Model Catalog](assets/catalog-banner.png)
+![Open Model Catalog](catalog-banner.png)
 
 # Open Model Catalog
 
