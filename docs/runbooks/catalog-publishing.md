@@ -53,6 +53,16 @@ it uploads to the probe dataset only. The second runs **without** the token vari
 starts: try it once. Write the date and the result of both calls (and whether the token could be limited to the two
 datasets) into the entry that records the set-up.
 
+### Set-up record
+
+- **2026-10-07.** Both datasets exist and are public. The token is fine-grained and limited to the two datasets
+  (write access to their contents only; the service offers that for a personal account). Probe upload with
+  `huggingface_hub==1.28.0`: commit `132b0b9566ae0b7d75e4fa166dd20d1e72531ba9` on the probe dataset; `--verify --probe`
+  without the token variables: `catalog: published file equals the probe file`, exit 0. The upload without
+  `HF_TOKEN_PATH` stopped with exit 2 and `HF_TOKEN_PATH is not set or names no readable file` before any process. Note
+  for the caller: the hygiene check runs before the probe upload as well, so `MODELROOM_RELEASE_PRIVATE_WORDS` must be
+  set for it too; without it the call ends with exit 2 and nothing is uploaded.
+
 ## A publication
 
 1. **See the proposal.** `python scripts/catalog_publish.py --show <out>` names every pending publication first (day, state,
