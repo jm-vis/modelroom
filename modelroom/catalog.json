@@ -5,7 +5,9 @@
     {
       "added": "2026-09-25",
       "family": "mistral",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "mistralai/Ministral-3-14B-Instruct-2512-GGUF"
+      ],
       "hf_repo": "mistralai/Ministral-3-14B-Instruct-2512",
       "hub_created": null,
       "hub_pipeline_tag": null,
@@ -28,7 +30,9 @@
     {
       "added": "2026-09-25",
       "family": "mistral",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "mistralai/Ministral-3-8B-Instruct-2512-GGUF"
+      ],
       "hf_repo": "mistralai/Ministral-3-8B-Instruct-2512",
       "hub_created": null,
       "hub_pipeline_tag": null,
@@ -51,7 +55,9 @@
     {
       "added": "2026-09-25",
       "family": "mistral",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "mistralai/Ministral-3-3B-Instruct-2512-GGUF"
+      ],
       "hf_repo": "mistralai/Ministral-3-3B-Instruct-2512",
       "hub_created": null,
       "hub_pipeline_tag": null,
@@ -74,7 +80,9 @@
     {
       "added": "2026-09-25",
       "family": "mistral",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "lmstudio-community/Mistral-Small-4-119B-2603-GGUF"
+      ],
       "hf_repo": "mistralai/Mistral-Small-4-119B-2603",
       "hub_created": null,
       "hub_pipeline_tag": null,
@@ -97,7 +105,9 @@
     {
       "added": "2026-09-25",
       "family": "mistral",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/Devstral-Small-2-24B-Instruct-2512-GGUF"
+      ],
       "hf_repo": "mistralai/Devstral-Small-2-24B-Instruct-2512",
       "hub_created": null,
       "hub_pipeline_tag": null,
@@ -120,7 +130,9 @@
     {
       "added": "2026-09-25",
       "family": "mistral",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "mistralai/Magistral-Small-2509-GGUF"
+      ],
       "hf_repo": "mistralai/Magistral-Small-2509",
       "hub_created": null,
       "hub_pipeline_tag": null,
@@ -281,7 +293,9 @@
     {
       "added": "2026-09-25",
       "family": "qwen3.5",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "lmstudio-community/Qwen3.5-9B-GGUF"
+      ],
       "hf_repo": "Qwen/Qwen3.5-9B",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -304,7 +318,9 @@
     {
       "added": "2026-09-25",
       "family": "qwen3.5",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "lmstudio-community/Qwen3.5-4B-GGUF"
+      ],
       "hf_repo": "Qwen/Qwen3.5-4B",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -350,7 +366,9 @@
     {
       "added": "2026-09-25",
       "family": "qwen3.5",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/Qwen3.5-35B-A3B-GGUF"
+      ],
       "hf_repo": "Qwen/Qwen3.5-35B-A3B",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -396,7 +414,11 @@
     {
       "added": "2026-09-25",
       "family": "qwen3.6",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/Qwen3.6-27B-GGUF",
+        "ggml-org/Qwen3.6-27B-MTP-GGUF",
+        "lmstudio-community/Qwen3.6-27B-GGUF"
+      ],
       "hf_repo": "Qwen/Qwen3.6-27B",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -419,7 +441,11 @@
     {
       "added": "2026-09-25",
       "family": "qwen3.6",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/Qwen3.6-35B-A3B-GGUF",
+        "ggml-org/Qwen3.6-35B-A3B-MTP-GGUF",
+        "lmstudio-community/Qwen3.6-35B-A3B-GGUF"
+      ],
       "hf_repo": "Qwen/Qwen3.6-35B-A3B",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -442,7 +468,12 @@
     {
       "added": "2026-09-25",
       "family": "qwen3.8",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "bartowski/Qwen3.8-27B-GGUF",
+        "ggml-org/Qwen3.8-27B-GGUF",
+        "lmstudio-community/Qwen3.8-27B-GGUF",
+        "unsloth/Qwen3.8-27B-GGUF"
+      ],
       "hf_repo": "Qwen/Qwen3.8-27B",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -465,7 +496,9 @@
     {
       "added": "2026-09-25",
       "family": "qwen3-coder",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/Qwen3-Coder-Next-GGUF"
+      ],
       "hf_repo": "Qwen/Qwen3-Coder-Next",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -603,7 +636,12 @@
     {
       "added": "2026-09-25",
       "family": "deepseek-v4",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "bartowski/DeepSeek-V4-Flash-0731-GGUF",
+        "ggml-org/DeepSeek-V4-Flash-0731-GGUF",
+        "lmstudio-community/DeepSeek-V4-Flash-0731-GGUF",
+        "unsloth/DeepSeek-V4-Flash-0731-GGUF"
+      ],
       "hf_repo": "deepseek-ai/DeepSeek-V4-Flash-0731",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -718,7 +756,10 @@
     {
       "added": "2026-09-25",
       "family": "gemma",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/gemma-4-31B-it-GGUF",
+        "lmstudio-community/gemma-4-31B-it-GGUF"
+      ],
       "hf_repo": "google/gemma-4-31B-it",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -741,7 +782,10 @@
     {
       "added": "2026-09-25",
       "family": "gemma",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/gemma-4-26B-A4B-it-GGUF",
+        "lmstudio-community/gemma-4-26B-A4B-it-GGUF"
+      ],
       "hf_repo": "google/gemma-4-26B-A4B-it",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -764,7 +808,10 @@
     {
       "added": "2026-09-25",
       "family": "gemma",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/gemma-4-12B-it-GGUF",
+        "lmstudio-community/gemma-4-12B-it-GGUF"
+      ],
       "hf_repo": "google/gemma-4-12B-it",
       "hub_created": null,
       "hub_pipeline_tag": "any-to-any",
@@ -787,7 +834,10 @@
     {
       "added": "2026-09-25",
       "family": "gemma",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/gemma-4-E4B-it-GGUF",
+        "lmstudio-community/gemma-4-E4B-it-GGUF"
+      ],
       "hf_repo": "google/gemma-4-E4B-it",
       "hub_created": null,
       "hub_pipeline_tag": "any-to-any",
@@ -902,7 +952,9 @@
     {
       "added": "2026-09-25",
       "family": "glm",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "unsloth/GLM-5.3-Flash-GGUF"
+      ],
       "hf_repo": "zai-org/GLM-5.3-Flash",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-text",
@@ -925,7 +977,9 @@
     {
       "added": "2026-09-25",
       "family": "glm",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/GLM-4.7-Flash-GGUF"
+      ],
       "hf_repo": "zai-org/GLM-4.7-Flash",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -971,7 +1025,11 @@
     {
       "added": "2026-09-25",
       "family": "granite",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "bartowski/granite-4.2-30b-GGUF",
+        "ibm-granite/granite-4.2-30b-GGUF",
+        "lmstudio-community/granite-4.2-30b-GGUF"
+      ],
       "hf_repo": "ibm-granite/granite-4.2-30b",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -994,7 +1052,11 @@
     {
       "added": "2026-09-25",
       "family": "granite",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "bartowski/granite-4.2-8b-GGUF",
+        "ibm-granite/granite-4.2-8b-GGUF",
+        "lmstudio-community/granite-4.2-8b-GGUF"
+      ],
       "hf_repo": "ibm-granite/granite-4.2-8b",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1017,7 +1079,11 @@
     {
       "added": "2026-09-25",
       "family": "granite",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "bartowski/granite-4.2-3b-GGUF",
+        "ibm-granite/granite-4.2-3b-GGUF",
+        "lmstudio-community/granite-4.2-3b-GGUF"
+      ],
       "hf_repo": "ibm-granite/granite-4.2-3b",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1040,7 +1106,11 @@
     {
       "added": "2026-09-25",
       "family": "nemotron",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+        "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+        "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+      ],
       "hf_repo": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1109,7 +1179,9 @@
     {
       "added": "2026-09-25",
       "family": "falcon",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "tiiuae/Falcon-H1-34B-Instruct-GGUF"
+      ],
       "hf_repo": "tiiuae/Falcon-H1-34B-Instruct",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1155,7 +1227,9 @@
     {
       "added": "2026-09-25",
       "family": "falcon",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "tiiuae/Falcon-H1-7B-Instruct-GGUF"
+      ],
       "hf_repo": "tiiuae/Falcon-H1-7B-Instruct",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1247,7 +1321,9 @@
     {
       "added": "2026-09-25",
       "family": "aya",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "CohereLabs/tiny-aya-global-GGUF"
+      ],
       "hf_repo": "CohereLabs/tiny-aya-global",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1270,7 +1346,9 @@
     {
       "added": "2026-09-25",
       "family": "lfm",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "LiquidAI/LFM2.5-8B-A1B-GGUF"
+      ],
       "hf_repo": "LiquidAI/LFM2.5-8B-A1B",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1293,7 +1371,11 @@
     {
       "added": "2026-09-25",
       "family": "lfm",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "LiquidAI/LFM2.5-2.6B-GGUF",
+        "bartowski/LiquidAI_LFM2.5-2.6B-GGUF",
+        "lmstudio-community/LFM2.5-2.6B-GGUF"
+      ],
       "hf_repo": "LiquidAI/LFM2.5-2.6B",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1339,7 +1421,9 @@
     {
       "added": "2026-09-25",
       "family": "minicpm",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "bartowski/MiniCPM5-2B-GGUF"
+      ],
       "hf_repo": "openbmb/MiniCPM5-2B",
       "hub_created": null,
       "hub_pipeline_tag": "text-generation",
@@ -1408,7 +1492,9 @@
     {
       "added": "2026-09-25",
       "family": "minimax",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "unsloth/MiniMax-H3-GGUF"
+      ],
       "hf_repo": "MiniMaxAI/MiniMax-H3",
       "hub_created": null,
       "hub_pipeline_tag": "image-text-to-video",
@@ -1427,6 +1513,440 @@
       "successor": null,
       "successor_checked": null,
       "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "aya",
+      "gguf_repos": [],
+      "hf_repo": "CohereLabs/tiny-aya-en-thinker",
+      "hub_created": "2026-09-02",
+      "hub_pipeline_tag": "text-generation",
+      "kind": "text",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "cc-by-nc-4.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 3.350243328,
+      "publisher": "CohereLabs",
+      "source": "https://huggingface.co/CohereLabs/tiny-aya-en-thinker",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "aya",
+      "gguf_repos": [],
+      "hf_repo": "CohereLabs/tiny-aya-l2-thinker",
+      "hub_created": "2026-09-02",
+      "hub_pipeline_tag": "text-generation",
+      "kind": "text",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "cc-by-nc-4.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 3.350243328,
+      "publisher": "CohereLabs",
+      "source": "https://huggingface.co/CohereLabs/tiny-aya-l2-thinker",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "lfm",
+      "gguf_repos": [
+        "LiquidAI/LFM2.5-VL-3B-DSpark-GGUF"
+      ],
+      "hf_repo": "LiquidAI/LFM2.5-VL-3B-DSpark",
+      "hub_created": "2026-09-18",
+      "hub_pipeline_tag": "image-text-to-text",
+      "kind": "vision",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "other",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 0.279468801,
+      "publisher": "LiquidAI",
+      "source": "https://huggingface.co/LiquidAI/LFM2.5-VL-3B-DSpark",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "qwen",
+      "gguf_repos": [
+        "unsloth/Qwen-Image-2.1-GGUF"
+      ],
+      "hf_repo": "Qwen/Qwen-Image-2.1",
+      "hub_created": "2026-09-14",
+      "hub_pipeline_tag": "text-to-image",
+      "kind": "image-generation",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "other",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 7.115124736,
+      "publisher": "Qwen",
+      "source": "https://huggingface.co/Qwen/Qwen-Image-2.1",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "qwen",
+      "gguf_repos": [],
+      "hf_repo": "Qwen/Qwen-Image-2.1-PE-I2I",
+      "hub_created": "2026-09-20",
+      "hub_pipeline_tag": null,
+      "kind": "vision",
+      "kind_source": "config",
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "other",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 9.409813744,
+      "publisher": "Qwen",
+      "source": "https://huggingface.co/Qwen/Qwen-Image-2.1-PE-I2I",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "qwen",
+      "gguf_repos": [],
+      "hf_repo": "Qwen/Qwen-Image-2.1-PE-T2I",
+      "hub_created": "2026-09-20",
+      "hub_pipeline_tag": "text-to-image",
+      "kind": "image-generation",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "other",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 9.409813744,
+      "publisher": "Qwen",
+      "source": "https://huggingface.co/Qwen/Qwen-Image-2.1-PE-T2I",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "deepseek",
+      "gguf_repos": [
+        "ggml-org/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+        "unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF"
+      ],
+      "hf_repo": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+      "hub_created": "2026-08-31",
+      "hub_pipeline_tag": "image-text-to-text",
+      "kind": "vision",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "mit",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 304.646824126,
+      "publisher": "deepseek-ai",
+      "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "deepseek",
+      "gguf_repos": [],
+      "hf_repo": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "hub_created": "2026-09-10",
+      "hub_pipeline_tag": "image-text-to-text",
+      "kind": "vision",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "mit",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 763.205315794,
+      "publisher": "deepseek-ai",
+      "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "embeddinggemma",
+      "gguf_repos": [
+        "ggml-org/embeddinggemma-2-GGUF",
+        "unsloth/embeddinggemma-2-GGUF"
+      ],
+      "hf_repo": "google/embeddinggemma-2",
+      "hub_created": "2026-09-14",
+      "hub_pipeline_tag": "feature-extraction",
+      "kind": "embedding",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 0.744371512,
+      "publisher": "google",
+      "source": "https://huggingface.co/google/embeddinggemma-2",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "frognano",
+      "gguf_repos": [
+        "bartowski/FrogNano-4B-2609-GGUF",
+        "mradermacher/FrogNano-4B-2609-GGUF",
+        "mradermacher/FrogNano-4B-2609-i1-GGUF"
+      ],
+      "hf_repo": "microsoft/FrogNano-4B-2609",
+      "hub_created": "2026-09-17",
+      "hub_pipeline_tag": null,
+      "kind": "vision",
+      "kind_source": "config",
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "mit",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 4.659865088,
+      "publisher": "microsoft",
+      "source": "https://huggingface.co/microsoft/FrogNano-4B-2609",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "vibevoice",
+      "gguf_repos": [],
+      "hf_repo": "microsoft/VibeVoice-ASR-Streaming-1.5B",
+      "hub_created": "2026-09-02",
+      "hub_pipeline_tag": "automatic-speech-recognition",
+      "kind": "speech-recognition",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "mit",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 2.814116321,
+      "publisher": "microsoft",
+      "source": "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "vibevoice",
+      "gguf_repos": [],
+      "hf_repo": "microsoft/VibeVoice-ASR-Streaming-7B",
+      "hub_created": "2026-09-02",
+      "hub_pipeline_tag": "automatic-speech-recognition",
+      "kind": "speech-recognition",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "mit",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 8.674021857,
+      "publisher": "microsoft",
+      "source": "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "minicpm",
+      "gguf_repos": [],
+      "hf_repo": "openbmb/MiniCPM5-2B-DSpark",
+      "hub_created": "2026-09-06",
+      "hub_pipeline_tag": "text-generation",
+      "kind": "text",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 0.323776001,
+      "publisher": "openbmb",
+      "source": "https://huggingface.co/openbmb/MiniCPM5-2B-DSpark",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "minicpm",
+      "gguf_repos": [],
+      "hf_repo": "openbmb/MiniCPM5-2B-Midtrain",
+      "hub_created": "2026-09-01",
+      "hub_pipeline_tag": "text-generation",
+      "kind": "text",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 2.51675648,
+      "publisher": "openbmb",
+      "source": "https://huggingface.co/openbmb/MiniCPM5-2B-Midtrain",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "evie",
+      "gguf_repos": [],
+      "hf_repo": "tencent/EVIE-4.5B",
+      "hub_created": "2026-09-04",
+      "hub_pipeline_tag": "visual-document-retrieval",
+      "kind": "vision",
+      "kind_source": "config",
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 4.544510464,
+      "publisher": "tencent",
+      "source": "https://huggingface.co/tencent/EVIE-4.5B",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "evie",
+      "gguf_repos": [],
+      "hf_repo": "tencent/EVIE-8B",
+      "hub_created": "2026-09-04",
+      "hub_pipeline_tag": "visual-document-retrieval",
+      "kind": "vision",
+      "kind_source": "config",
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 8.409476336,
+      "publisher": "tencent",
+      "source": "https://huggingface.co/tencent/EVIE-8B",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "wevisdoc",
+      "gguf_repos": [
+        "mradermacher/WeVisDoc-2B-GGUF",
+        "mradermacher/WeVisDoc-2B-i1-GGUF"
+      ],
+      "hf_repo": "tencent/WeVisDoc-2B",
+      "hub_created": "2026-09-16",
+      "hub_pipeline_tag": null,
+      "kind": "vision",
+      "kind_source": "config",
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 2.43869696,
+      "publisher": "tencent",
+      "source": "https://huggingface.co/tencent/WeVisDoc-2B",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-07",
+      "family": "wevisdoc",
+      "gguf_repos": [
+        "mradermacher/WeVisDoc-4B-GGUF",
+        "mradermacher/WeVisDoc-4B-i1-GGUF"
+      ],
+      "hf_repo": "tencent/WeVisDoc-4B",
+      "hub_created": "2026-09-16",
+      "hub_pipeline_tag": null,
+      "kind": "vision",
+      "kind_source": "config",
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 4.437815808,
+      "publisher": "tencent",
+      "source": "https://huggingface.co/tencent/WeVisDoc-4B",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
     }
   ],
   "packagers": [
@@ -1436,7 +1956,7 @@
     "lmstudio-community",
     "ggml-org"
   ],
-  "published": "2026-09-29",
+  "published": "2026-10-07",
   "publishers": [
     {
       "account": "mistralai",

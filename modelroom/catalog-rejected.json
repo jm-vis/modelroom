@@ -1,1 +1,58 @@
-[]
+[
+  {
+    "date": "2026-10-07",
+    "hf_repo": "nvidia/NVIDIA-NemotronLabs-AI-for-Media-Sports-Tennis"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "nvidia/Nemotron-3-Labs-Ultra-Math-RL"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "nvidia/Nemotron-3-Labs-Ultra-Math-SFT"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "openbmb/JustRL-II-base-model"
+  },
+  {
+    "account": "HauhauCS",
+    "date": "2026-10-07"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "allenai/ACE2S-SHiELD-plus-supplemental-checkpoints"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "google/gnm-v3"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "ibm-granite/ensemble-forecasting-with-ibm-granite-time-series"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "microsoft/rho-libero"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "microsoft/rho-roboeval"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "nvidia/EgoHand-v1"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "nvidia/Kumo-Tabular"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "nvidia/PixelDiT2-ImageNet"
+  },
+  {
+    "date": "2026-10-07",
+    "hf_repo": "openbmb/UltraData-Code-L2-Classifier"
+  }
+]
