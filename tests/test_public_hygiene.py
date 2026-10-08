@@ -14,6 +14,11 @@ SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".t
 # The placeholders a recording's `cpu_name` may carry instead of the processor it was taken on.
 NEUTRAL_CPU_NAMES = {"", "x86 CPU", "arm64 CPU", "Apple Silicon CPU"}
 
+# For the printable runs of a binary file only: random bytes of a picture read as `A@j.PG`, so two
+# characters before the `@`, two in the first label and an alphabetic ending. A text file and the
+# metadata keep the full pattern of `FORBIDDEN`.
+EMAIL_IN_BINARY = re.compile(r"[\w.+-]{2,}@[\w-]{2,}(?:\.[\w-]+)*\.[A-Za-z]{2,}")
+
 FORBIDDEN = {
     "absolute user path": re.compile(r"(?i)(?:[a-z]:[\\/]+users[\\/]|/home/[a-z]|/Users/[A-Za-z])"),
     "e-mail address": re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),
@@ -155,6 +160,15 @@ def test_negative_list_catches_a_planted_leak(tmp_path):
     """The guard has to go red on a real leak, otherwise its green means nothing."""
     planted = "notes for the maintainer at C:\\Users\\someone\\workspace\\file.md"
     assert any(p.search(planted) for p in FORBIDDEN.values())
+
+
+def test_the_e_mail_pattern_reads_addresses_and_not_the_bytes_of_a_picture():
+    """`A@j.PG` stood in the random bytes of a screenshot and was no address."""
+    assert not EMAIL_IN_BINARY.search("xx A@j.PG xx")
+    for address in ("ab@cd.ef", "noreply@anthropic.com", "first.last+tag@sub.example.co.uk"):
+        assert EMAIL_IN_BINARY.search(f"write to {address} today"), address
+    for address in ("a@example.org", "ab@c.example.org"):  # text and metadata keep the full pattern
+        assert FORBIDDEN["e-mail address"].search(f"write to {address} today"), address
 
 
 def test_the_global_ipv4_check_catches_a_planted_address_and_nothing_else():

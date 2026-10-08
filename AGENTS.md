@@ -8,7 +8,7 @@ ever appear) import this one and stay thin; the truth lives here.
 `modelroom` finds the local packages (GGUF and tensor builds) that exist for an allow-list of
 model families on Hugging Face and in the Ollama registry, and computes whether each package
 fits a measured machine. It is a command-line tool and a small library, published under MIT.
-Status: alpha, first release 0.1.0; the data shapes are versioned contracts (`CONTRACTS.md`),
+Status: alpha, release 0.2.0; the data shapes are versioned contracts (`CONTRACTS.md`),
 layout and fit rules may still change.
 
 The commands:

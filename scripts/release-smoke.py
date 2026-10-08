@@ -5,9 +5,10 @@
 Steps, each reported with its exit code and output: build the wheel; create a fresh venv in
 the system temp directory (outside any git repository) and `pip install` the wheel there (not
 editable, not from the tree; pip fetches `pydantic` from the package index); write a customer
-configuration derived from `modelroom.example.toml` (one machine `kunde`, reserves 0, no rating
-source); `modelroom hardware`, which must write exactly one schema-4 profile; name that profile
-in `[machines.<name>].profile`, the one write the guided mode would do; place a snapshot
+configuration derived from `modelroom.example.toml` (it starts with one machine `kunde`, reserves 0,
+no rating source); `modelroom hardware`, which must write exactly one schema-4 profile and renames
+the machine to its neutral name (no host names in files); from there on every step follows the new
+name: name that profile in `[machines.<name>].profile`, the one write the guided mode would do; place a snapshot
 built from the recorded fixtures in `tests/`
 (no live data); `modelroom fetch` with the network blocked through an unreachable proxy (the
 contract honors `HTTPS_PROXY`), which must end every area incomplete with exit 1, keep the
@@ -304,7 +305,16 @@ def bind_profile_in_config(text: str, machine: str, profile_id: str) -> str:
     return "\n".join([*lines[: index + 1], f'profile = "{profile_id}"', *lines[index + 1 :]])
 
 
-def step_bind_profile(config: Path) -> Step:
+def configured_machine(config: Path) -> str:
+    """The one machine of the configuration, by the name it has now: `modelroom hardware` renames the
+    configured machine to its neutral name (CONTRACTS.md, "Neutral names")."""
+    machines = tomllib.loads(config.read_text(encoding="utf-8")).get("machines", {})
+    if len(machines) != 1:
+        raise ValueError(f"expected exactly one machine in the configuration, found {sorted(machines)}")
+    return next(iter(machines))
+
+
+def step_bind_profile(config: Path, machine: str) -> Step:
     """Name the profile `modelroom hardware` just wrote in `[machines.<machine>].profile`."""
     written = sorted((config.parent / "state" / "hardware").glob("*.json"))
     profiles = [json.loads(path.read_text(encoding="utf-8")) for path in written]
@@ -314,12 +324,12 @@ def step_bind_profile(config: Path) -> Step:
                     f"expected exactly one schema-4 profile, found {len(schema_four)}")
     profile = schema_four[0]
     config.write_text(
-        bind_profile_in_config(config.read_text(encoding="utf-8"), MACHINE, profile["profile_id"]),
+        bind_profile_in_config(config.read_text(encoding="utf-8"), machine, profile["profile_id"]),
         encoding="utf-8",
         newline="\n",
     )
     return Step("bind the profile in the configuration", 0, 0,
-                f"{MACHINE}.profile = {profile['profile_id']}, gpu_state {profile['gpu_state']}")
+                f"{machine}.profile = {profile['profile_id']}, gpu_state {profile['gpu_state']}")
 
 
 def step_place_snapshot(config: Path) -> Step:
@@ -331,11 +341,11 @@ def step_place_snapshot(config: Path) -> Step:
     return Step("place fixture snapshot", 0, 0, f"{len(snapshot['packages'])} packages, run_at {snapshot['run_at']}")
 
 
-def step_fetch_offline(python: Path, config: Path) -> Step:
+def step_fetch_offline(python: Path, config: Path, machine: str) -> Step:
     snapshot_file = config.parent / "state" / "modelroom.json"
     before = json.loads(snapshot_file.read_text(encoding="utf-8"))["packages"]
     proxy = {"HTTPS_PROXY": BLOCKING_PROXY, "HTTP_PROXY": BLOCKING_PROXY}
-    code, output = modelroom(python, "fetch", "--config", str(config), "--machine", MACHINE, env=clean_env(**proxy))
+    code, output = modelroom(python, "fetch", "--config", str(config), "--machine", machine, env=clean_env(**proxy))
     after = json.loads(snapshot_file.read_text(encoding="utf-8"))
     area_issues = area_problems(after["areas"], expected_areas(tomllib.loads(config.read_text(encoding="utf-8"))))
     problems = ([] if code == 1 else [f"expected exit 1, got {code}"]) + area_issues
@@ -353,7 +363,7 @@ def step_fetch_offline(python: Path, config: Path) -> Step:
                 "\n".join(problems + [summary, f"first area error: {first_error}", tail(output, 6)]))
 
 
-def step_render(python: Path, config: Path) -> Step:
+def step_render(python: Path, config: Path, machine: str) -> Step:
     """`modelroom render`: the ranking of the profile this machine just measured, in both views."""
     code, output = modelroom(python, "render", "--config", str(config))
     document = config.parent / "docs" / "models.md"
@@ -366,10 +376,10 @@ def step_render(python: Path, config: Path) -> Step:
         problems.append("no JSON view written next to it")
     else:
         text = document.read_text(encoding="utf-8")
-        problems += render_problems(text, MACHINE)
-        problems += json_problems(json.loads(json_view.read_text(encoding="utf-8")), text, MACHINE)
-        ranked = markdown_table(text, f"Ranking: {MACHINE}")
-        not_covered = markdown_table(text, f"Not covered: {MACHINE}")
+        problems += render_problems(text, machine)
+        problems += json_problems(json.loads(json_view.read_text(encoding="utf-8")), text, machine)
+        ranked = markdown_table(text, f"Ranking: {machine}")
+        not_covered = markdown_table(text, f"Not covered: {machine}")
         detail = [f"#{row.get('#')} {row.get('Packager')} {row.get('Quant')}: {row.get('Fit (computed)')}"
                   for row in ranked]
         detail += [f"not covered: {row.get('Packager')} {row.get('Quant')}: {row.get('Reason')}"
@@ -398,10 +408,17 @@ def run_steps(work: Path) -> list[Step]:
     except (SetupError, OSError, KeyError, ValueError, TypeError) as exc:
         return steps + [Step("setup", None, 2, f"{type(exc).__name__}: {exc}")]
     steps.append(guarded("modelroom hardware", lambda: step_hardware(python, config)))
-    steps.append(guarded("bind the profile in the configuration", lambda: step_bind_profile(config)))
+    machine = MACHINE  # `hardware` renames it to the neutral name; every later step follows the new one
+    try:
+        machine = configured_machine(config)
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+        steps.append(Step("machine name after hardware", None, 1, f"{type(exc).__name__}: {exc}"))
+    if machine != MACHINE:
+        steps[-1] = steps[-1]._replace(detail=f"{steps[-1].detail}\nmachine renamed by hardware: {MACHINE} -> {machine}")
+    steps.append(guarded("bind the profile in the configuration", lambda: step_bind_profile(config, machine)))
     steps.append(guarded("place fixture snapshot", lambda: step_place_snapshot(config)))
-    steps.append(guarded("modelroom fetch, network blocked", lambda: step_fetch_offline(python, config)))
-    steps.append(guarded("modelroom render", lambda: step_render(python, config)))
+    steps.append(guarded("modelroom fetch, network blocked", lambda: step_fetch_offline(python, config, machine)))
+    steps.append(guarded("modelroom render", lambda: step_render(python, config, machine)))
     return steps
 
 

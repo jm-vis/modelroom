@@ -229,6 +229,37 @@ def test_binary_file_in_history_is_still_scanned(tmp_path):
     assert any(finding.endswith("notes.txt:1: e-mail address") for finding in history_only(repo))
 
 
+def test_random_bytes_of_a_picture_that_read_as_an_address_are_no_finding_in_head_or_history(tmp_path):
+    repo = make_repo(tmp_path)
+    commit_blob(repo, "shot.png", b"\x89PNG\x00\x01 xx A" + b"@" + b"j.PG xx \x02\x03\n", "docs: picture")
+    # the file exists in the index only, so the work tree reads as not clean: that is no subject here
+    assert [finding for finding in source(repo) if not finding.startswith("worktree:")] == []
+    git(repo, "rm", "-q", "--cached", "shot.png")
+    git(repo, "commit", "-q", "-m", "docs: drop picture")
+    assert source(repo) == []  # gone from HEAD, still in the history: no finding there either
+
+
+def test_an_address_in_the_bytes_of_a_picture_is_still_a_finding(tmp_path):
+    repo = make_repo(tmp_path)
+    commit_blob(repo, "shot.png", b"\x89PNG\x00\x01 xx ab" + b"@" + b"cd.ef xx \x02\x03\n", "docs: picture")
+    assert any(finding.endswith("shot.png:1: e-mail address") for finding in source(repo) if finding.startswith("ref:"))
+    git(repo, "rm", "-q", "--cached", "shot.png")
+    git(repo, "commit", "-q", "-m", "docs: drop picture")
+    history = [finding for finding in source(repo) if finding.startswith("history:")]
+    assert any(":shot.png:1: e-mail address" in finding for finding in history)  # gone from HEAD, kept in the history
+
+
+def test_a_short_address_stays_a_finding_in_a_text_file_and_in_a_commit_message(tmp_path):
+    repo = make_repo(tmp_path)
+    short = "a" + "@" + "example.org"
+    (repo / "notes.md").write_text(f"# notes\nwrite to {short}\n", encoding="utf-8")
+    commit_all(repo, f"docs: notes\n\nasked by {short}")
+    findings = source(repo)
+    assert "ref:notes.md:2: e-mail address" in findings
+    meta = [finding for finding in findings if finding.startswith("meta:")]
+    assert len(meta) == 1 and meta[0].endswith(":message:3: e-mail address")
+
+
 def test_quoted_file_name_in_history_is_still_scanned(tmp_path):
     repo = make_repo(tmp_path)
     commit_blob(repo, 'odd "name".md', f"see {LEAK_PATH}\n".encode(), "docs: odd")

@@ -88,6 +88,10 @@ EMAIL_CLASS = "e-mail address"
 ALLOWED_META_FINDINGS = {
     # accepted: names the internal workspace only, no path or data; decided 2026-09-23
     ("e87a208f07a01632d918fe0672f136a41da3a06b", "message", 18, "internal workspace name"),
+    # accepted: the acceptance role in two merge-era messages, persona names are public by the owner's
+    # decision 2026-09-29, the history is not rewritten
+    ("252c0cf6ecfba4c3ada7a7306f5201bb6e50c8ac", "message", 6, "persona name"),
+    ("00ba08c6f3c37f8416b5b299abd67a7296ed6857", "message", 20, "persona name"),
 }
 
 
@@ -108,6 +112,9 @@ class NegativeList(NamedTuple):
     # The private words as byte sequences in UTF-8, UTF-16 LE/BE and latin-1 (Codex r4-1): found in
     # any file as they are stored, short and non-ASCII words included, without a text reading.
     word_bytes: re.Pattern[bytes] | None = None
+    # The e-mail check for the printable runs of a binary file (`EMAIL_IN_BINARY`); text and metadata
+    # keep the full pattern in `forbidden`.
+    email_in_binary: Callable[[str], object] | None = None
 
 
 def load_negative_list() -> NegativeList:
@@ -115,7 +122,16 @@ def load_negative_list() -> NegativeList:
     spec = importlib.util.spec_from_file_location("public_hygiene", HYGIENE_MODULE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return NegativeList(module.LINE_CHECKS, module.ALLOWED, module.SKIP_SUFFIXES, module.DOCUMENT_CHECKS)
+    return NegativeList(module.LINE_CHECKS, module.ALLOWED, module.SKIP_SUFFIXES, module.DOCUMENT_CHECKS,
+                        email_in_binary=module.EMAIL_IN_BINARY.search)
+
+
+def reading_lists(path: str, lists: NegativeList) -> NegativeList:
+    """The list for one reading of a file: a binary one (a skipped suffix) checks `e-mail address`
+    with the stricter pattern, since random bytes of a picture read as a short address."""
+    if lists.email_in_binary is None or EMAIL_CLASS not in lists.forbidden or not skipped(path, lists):
+        return lists
+    return lists._replace(forbidden={**lists.forbidden, EMAIL_CLASS: lists.email_in_binary})
 
 
 def private_words_pattern(repo: Path = REPO) -> re.Pattern[str]:
@@ -303,7 +319,7 @@ def scan_data(place: str, path: str, data: bytes, lists: NegativeList) -> list[s
     in every file, whatever its reading (Codex r4-1)."""
     found: dict[str, None] = {}
     for text in text_variants(data, binary=skipped(path, lists)):
-        found.update(dict.fromkeys(scan_text(place, path, text, lists)))
+        found.update(dict.fromkeys(scan_text(place, path, text, reading_lists(path, lists))))
     found.update(dict.fromkeys(word_byte_findings(place, data, lists)))
     return list(found)
 
@@ -437,7 +453,7 @@ class _PatchScanner:
             if self.path:  # every reading HEAD gets, a skipped suffix in its printable runs (Codex r3-6, r4-2)
                 place = f"history:{self.commit}:{shown(self.path, self.names)}:{self.line_no}"
                 for text in text_variants(content, binary=skipped(self.path, self.lists)):
-                    for name in leak_classes(text, self.lists, self.path):
+                    for name in leak_classes(text, reading_lists(self.path, self.lists), self.path):
                         self.findings[f"{place}: {name}"] = None
             self.new_left -= 1
             self.line_no += 1
