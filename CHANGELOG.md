@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
+The README now documents LM Studio: the list entries per GGUF package, the printed `lms get`
+command, the disk check at LM Studio's model folder, the limits, and the three local addresses
+under "Network access". LM Studio is detected, not measured yet. The guided screen names one
+machine with one name on every line: the profile's `display_name`, as on the card, the table
+heads and step 1. No schema version changes.
+
 ### Changed
 
 - **README documents LM Studio** (AP9-LS-D): the list entries per GGUF package, the printed
