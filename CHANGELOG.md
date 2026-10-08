@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **The card follows the catalog** (AP9-KA-C; `scripts/catalog_card.py`): `--check` reports every number on the dataset card and in the banner and social image that differs from `catalog.json`; `--write`, `--render` and `--upload` bring card, pictures and the hub copy to it.
 - **The catalog scanner** (AP9-KA-T; `scripts/catalog_scan.py`, `scripts/catalog_scan_rules.py`; a maintainer tool, not in the
   wheel). `python scripts/catalog_scan.py --catalog modelroom/catalog.json --rejected modelroom/catalog-rejected.json --out <folder>`
   reads the catalog, the rejection list and the Hub's list pages (read-only `GET`, 300 requests a run, no token) and writes a

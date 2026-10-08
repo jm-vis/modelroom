@@ -38,6 +38,8 @@ the setup test below.
    the tool removes it from the environment of the upload in any case.
 7. Make sure `uvx` is available. The upload runs `uvx --from huggingface_hub==<version> hf upload ...` with the version
    pinned in `scripts/catalog_publish_rules.py` (`HF_HUB_VERSION`); the package has no dependency on it.
+8. Chrome for the card's pictures: set `MODELROOM_CHROME` to the browser's executable, or leave it unset for the standard
+   path under Program Files. Without a Chrome the card is only checked (`--check`), not rendered.
 
 ## Setup test (once, and again after a change of the pinned version or the token)
 
@@ -82,13 +84,13 @@ datasets) into the entry that records the set-up.
    side of admitting, not of rejecting; a rejected trending account comes back as a candidate after 30 days if the
    trend holds.
    - **Admit** an account with its own architecture or product line, several models or versions, at least 1000 likes
-     or an established history, an open licence, and a region that can be named.
+     or an established history, an open license, and a region that can be named.
    - **Reject** single persons, one-model accounts younger than 30 days, packagers (B2: only fine-tunes or
      quantisations of other makers' base models), and parts without a catalog kind (B3: VAEs, CLIP variants, bert
      implementations, rerankers).
    - **In doubt, reject**; the 30-day resubmission decides.
    What admitting risks: the reputation of the list (thin accounts dilute it), `custom_code` repos that the list then
-   implicitly recommends, licences such as `other` that mislead commercial users, the daily request budget (every
+   implicitly recommends, licenses such as `other` that mislead commercial users, the daily request budget (every
    watched account eats part of it), and a region that cannot be named (the publisher record then needs a later
    change by hand).
 3. **A candidate of open kind** becomes a row only through the kind the maintainer names:
@@ -102,8 +104,13 @@ datasets) into the entry that records the set-up.
 6. **Publish.** `python scripts/catalog_publish.py --publish-pending <out>/<day> [--remote forgejo]` pushes that commit to
    the remote (`git push <remote> <commit>:refs/heads/main`, no force), uploads its `catalog.json` bytes after the hygiene
    check, then compares the published file with the commit (`published`). Each step is repeatable.
+6a. **The card follows the catalog.** `python scripts/catalog_card.py --write --render --upload` brings the numbers of
+   `docs/dataset-card.md` and of the two pictures to the catalog (models, accounts, size in KB), renders the PNGs, and uploads
+   the card and the banner to the dataset in one process (same token path and private words as step 6). Then commit and push
+   `docs/dataset-card.md`, `docs/assets/catalog-*.svg` and `docs/assets/catalog-*.png`. The script never commits.
 7. **Check later.** `python scripts/catalog_publish.py --verify [--commit <hash>]` compares the published file with the
    working tree or a commit and needs no token. A difference prints a line starting `ALARM` and exits 1.
+   `python scripts/catalog_card.py --check` does the same for the card and the pictures; the daily run carries it.
 
 ## Resuming
 
