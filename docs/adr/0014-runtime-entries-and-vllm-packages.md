@@ -50,6 +50,8 @@ is AP9-SV2-L's and AP9-SV2-F's work, staged after this one (`wartet_auf` in the 
 Rejecting a dynamic mechanism here, before any code exists that could tempt one, is deliberate:
 see "Alternatives and why not".
 
+AP9-LS adds `lmstudio` as the third entry; GGUF only; no new package class, no schema step.
+
 ### 2. Snapshot schema steps to 2 -- a real version, not an additive extension
 
 Three earlier decisions (ADR 0006, 0010, 0011) extended a schema *without* a version step,

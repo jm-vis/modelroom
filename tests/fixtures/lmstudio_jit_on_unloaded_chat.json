@@ -1,0 +1,8 @@
+{
+    "error": {
+        "message": "Failed to load model \"qwen3.5-4b\". Error: Operation canceled.",
+        "type": "invalid_request_error",
+        "param": "model",
+        "code": null
+    }
+}

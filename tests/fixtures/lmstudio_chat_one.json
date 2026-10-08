@@ -1,0 +1,33 @@
+{
+  "id": "chatcmpl-mw9xlig2dqbu7p3avdlql",
+  "object": "chat.completion",
+  "created": 1791437596,
+  "model": "qwen3.5-4b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Describe how a public library shelves a new book.\n    *   Constraint: \"Request 1.\" (This likely means \"Provide one response\" or it's a label indicating this is the first request in a series, but usually, it implies a single, well-structured response). I will treat it as a standard instruction to provide a detailed description.\n\n2.  **Identify Key Steps:**\n    Shelling out a book involves several distinct phases:\n    *   Arrival/Intake (Receiving the book).\n",
+        "tool_calls": []
+      },
+      "logprobs": null,
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 24,
+    "completion_tokens": 128,
+    "total_tokens": 152,
+    "completion_tokens_details": {
+      "reasoning_tokens": 128
+    }
+  },
+  "stats": {
+    "total_draft_tokens_count": 134,
+    "accepted_draft_tokens_count": 82,
+    "rejected_draft_tokens_count": 52
+  },
+  "system_fingerprint": "qwen3.5-4b"
+}

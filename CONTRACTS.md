@@ -103,6 +103,8 @@ measurement 2 stay. What changes is which values they may hold ("Neutral names")
 export, a profile and a configuration carry a neutral `display_name` and neutral machine keys, and a
 record the forms of its fields the sink allows. The file of the user account `remote.json` is new
 ("Remote machines").
+AP9-LS changes no schema version: `lmstudio` is a new value of `runtimes` and an allowed value of
+`Fit.runtime`, which no render writes in 0.2.0 ("Local servers and the vLLM load test", LM Studio).
 AP9-SV2-0 (ADR 0014, 2026-09-29, E8) steps snapshot schema to 2: a Hugging Face `tensor` package
 may now be `from_metadata`/`approved` (Ollama's own `tensor` packages, an MLX tag included, stay
 locked to `unresolved`/`format`, see "Package" below), `Package` gains `quantization_source`
@@ -5860,6 +5862,57 @@ is a file that is not there. **Limit:** Docker started with another volume than 
 place; the check does not apply. A link swapped between the `realpath` and the `stat` is not caught (no
 directory handle or `O_NOFOLLOW`: not portable to Windows); that window reads metadata only, never content,
 in a cache that belongs to the user.
+
+**LM Studio (AP9-LS, GGUF only).** The third runtime of the table, one entry and no new package class. The
+entry `lmstudio` is a new value of `RuntimeKey` and of `Fit.runtime`; the value becomes effective with the
+entry (AP9-LS-E), and no render writes it in 0.2.0, because a package has one fit, the one of the first
+runtime that accepts it. The fields: name `LM Studio`; origin `http://127.0.0.1:1234`, fixed, no setting;
+`hello_field` `lmstudio` (a computer reached over SSH reads `absent`, no remote operation exists for it);
+`accepts` and `shown_only_with` the Hugging Face GGUF packages, never an Ollama or a tensor package; `fit`
+the fit rule of Ollama (both run llama.cpp); `install_name` `<owner>/<repo>@<quant>` where the command is
+safe; `command` `lms get --gguf <owner>/<repo>@<quant>`, **printed and never run**; `model_place` the
+standard model folder under the home folder; `on_disk` a file of the declared size in it (`stat` only);
+words without a prefix or a key hint, the question `Which package should be installed?`.
+
+**The transport and the reader** (`modelroom/lmstudio_server.py`). `LocalLmStudioServer` reaches exactly one
+origin, `http://127.0.0.1:1234`, judged by the very function the vLLM transport uses
+(`vllm_server.check_origin`): another scheme, host or port, a path, a query, a fragment or user info is
+refused in the constructor. The opener is `daemon.py`'s: no proxy handler, no redirect following. The whole
+surface in 0.2.0 is **one call**, `GET /api/v1/models`, checked before a connection; a chat
+(`POST /v1/chat/completions`), `/api/v1/models/load`, `/unload`, `/download`, `/api/v1/chat`, `/v1/models`,
+`/api/v0/*` and `/metrics` are refused like any other call (see "Measurement" below: the transport cannot
+send a chat). The time limit is 10 s; an answer above 4 MiB is a fault. A `401` or a `403` is the reason `the LM Studio server asks for an API token;
+modelroom reads an open local server only`: no `Authorization` header is ever sent. `read_lmstudio_models`
+reads the list in three steps: (1) `keys`, the `key` of every entry that is an object, before any filter;
+(2) the structure, which is the version gate (no version number is read): an entry is valid when it is an
+object with a `key` string, a `type` string, a `size_bytes` whole number and a `loaded_instances` list; `models`
+that is no list, or a non-empty list without one valid entry, is no LM Studio list and the server is not
+`serving`, an empty list or one of embedding and MLX entries only is `serving` with nothing to measure;
+(3) the measurable instances: only `type` `llm` with `format` `gguf` and names matching
+`^[A-Za-z0-9][A-Za-z0-9._@/:-]{0,127}$`, as `LoadedModel(instance_id, key, context_length, parallel)`. The
+reader gives no package identity: REST names no repository and no file, and `lms` is never called.
+
+**Detection** (`detect_lmstudio`). `serving` when the list reads, `asks_key` on a `401` or `403`, `installed`
+when `lms` is in the `PATH` or at `~/.lmstudio/bin/lms` (`lms.exe` on Windows), else `absent`; only the
+`PATH` search and a file test, **never an `lms` call**. `lms_call` says `path`, `home` or `None` for the form
+of a later command and starts nothing.
+
+**Measurement: LM Studio is not measured (the measuring switch stands on its negative branch, decided
+2026-10-08).** A chat to the id of a model that was loaded a moment ago may make LM Studio load it again
+(just-in-time loading is on by default), and the recording of a chat to an unloaded id ended in a failed load,
+`Failed to load model ... Operation canceled.`, which proves neither a refusal nor a load. Because that is
+open, step 4 offers no LM Studio row, sends no chat, shows no number and says `LM Studio is not measured: it
+may load a model on request`. The start screen still names the server: `server  LM Studio  <k> loaded: <id>,
+context <n>`, `<k> models loaded`, or `127.0.0.1:1234  asks for an API token`. Nothing is written. **Limits:**
+port 1234 only; the standard model folder only; a server with the version 1 list of `GET /api/v1/models`, no
+minimum version; LM Studio on another computer is not read.
+
+**`modelroom` never runs `lms`.** No module starts a process for LM Studio, `lms ls` included: it starts the
+application in the background and opens the port (recording of 2026-10-08), so it is no read. A static test
+reads the modules of LM Studio for any process call -- the ordinary import, an alias, a star import and a
+dynamic import with a constant module name. In the acceptance test a trap on `subprocess.Popen` and
+`os.system` fails the test that starts a process through either of the two; `os.exec*` and `os.spawn*` are
+guarded by the static test within those import and call forms.
 
 ## Guided mode
 
