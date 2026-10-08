@@ -691,6 +691,8 @@ newest first; where two of them name a schema version or a number, the one neare
   and matches a final segment of at least two ASCII letters, because random bytes of a picture read as an address; text files and
   the metadata keep the full pattern. Two commit-message findings of the persona name used as the acceptance
   role are accepted, bound to full commit hash, field, line and finding class.
+- **The smoke test follows the neutral machine name** (`scripts/release-smoke.py`): `hardware` renames the configured
+  machine to its neutral name, and the binding, the fetch and the render checks now use that name.
 - **The catalog scanner applies the watermark to every entry, not only to the page walk** (AP9-KA-T2;
   `scripts/catalog_scan.py`). An entry created before the account's threshold (`covered_until` minus two days) no longer
   starts a card request, a candidate or a new row; it still checks a row of the table (kind, `new_version`, collections)
