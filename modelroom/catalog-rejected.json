@@ -54,5 +54,69 @@
   {
     "date": "2026-10-07",
     "hf_repo": "openbmb/UltraData-Code-L2-Classifier"
+  },
+  {
+    "account": "canberkkkkkk",
+    "date": "2026-10-08"
+  },
+  {
+    "account": "NaiveAI",
+    "date": "2026-10-08"
+  },
+  {
+    "account": "paradigma-inc",
+    "date": "2026-10-08"
+  },
+  {
+    "account": "AmarettoLabs",
+    "date": "2026-10-08"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "apple/DFN2B-CLIP-ViT-B-16"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "jinaai/jina-bert-flash-implementation"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "jinaai/jina-reranker-v2-base-multilingual"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "kyutai/moshiko-pytorch-bf16"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "kyutai/pocket-tts-without-voice-cloning"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "mixedbread-ai/mxbai-rerank-xsmall-v1"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "stabilityai/sd-vae-ft-mse"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "stabilityai/sdxl-vae"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "yandex/AliceAI-T5-35B-A0.6B"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "yandex/YandexGPT-5-Lite-8B-instruct"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "yandex/YandexGPT-5-Lite-8B-pretrain"
+  },
+  {
+    "date": "2026-10-08",
+    "hf_repo": "yandex/yalm-100b"
   }
 ]
