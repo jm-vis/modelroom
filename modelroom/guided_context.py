@@ -52,6 +52,7 @@ from .guided_write import combined, with_context, with_requests
 from .importer import scan_profiles
 from .measurements import Scenario
 from .profile import HardwareProfile, fit_block_reason
+from .screen_names import profile_name
 from .state import UnreadableStateFileError, read_snapshot
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -63,7 +64,7 @@ STEP = 3
 QUESTION = "How much text should a model handle at once?"
 # What the last column of the list means, in the instruction line of the question rather than as a
 # line of the run (decided 2026-09-24): it explains the list, so it belongs to the list and goes
-# away with it. `<machine>` is the machine the column was computed against.
+# away with it. `<machine>` is the machine the column was computed against, by its profile's name (FR-N3).
 EXPLANATION = "last column: how many fetched packages fit {machine}"
 NUMBER_VALUE = "number"
 NUMBER_LABEL = "enter a number"
@@ -132,6 +133,7 @@ class Checked:
     profile: HardwareProfile | None = None
     machine_config: MachineConfig | None = None
     reason: str | None = None
+    shown: str | None = None  # the name the screen says (`screen_names.profile_name`); `name` stays the key (FR-N3)
 
 
 @dataclass(frozen=True)
@@ -290,7 +292,7 @@ def machine_checked(pointer_path: Path, config: Configuration, results_dir: Path
     if entry is None:
         return Checked(reason=NO_ENTRY_LINE.format(profile_id=profile.profile_id))
     name, machine_config = entry
-    return Checked(name=name, profile=profile, machine_config=machine_config)
+    return Checked(name=name, profile=profile, machine_config=machine_config, shown=profile_name(profile))
 
 
 def chosen_runtimes(run: "GuidedRun", config: Configuration) -> list[tuple[HardwareProfile | None, object]]:
@@ -491,7 +493,7 @@ def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked,
     contexts = [level.tokens for level in LEVELS] + [default_context]
     fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts, requests)
     choices = scale_choices(LEVELS, default_context, fits, context_cap(base_models))
-    instruction = EXPLANATION.format(machine=checked.name) if fits else None
+    instruction = EXPLANATION.format(machine=checked.shown) if fits else None
     answered = run.asker.select_or_text(
         "context", QUESTION, choices, NUMBER_VALUE, NUMBER_QUESTION, instruction
     ).strip()

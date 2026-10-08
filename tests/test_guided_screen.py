@@ -174,3 +174,115 @@ def test_a_reason_of_step_four_breaks_before_the_longest_name_of_the_catalog():
         for line in lines:
             # A line is at most 100 columns wide, unless it holds a name that is longer on its own.
             assert len(f"   {line}") <= 100 or line.startswith(longest.partition("/")[2]) or line.endswith(longest), line
+
+
+# --- AP9-FR-N3: one name for one machine, on every line that names it --------------------------------------
+
+
+class _Instructions(FileAsker):
+    """An answer file that keeps the instruction line each scale or list was asked with, and the choices (headings
+    included) of every list."""
+
+    def __init__(self, answers: dict) -> None:
+        super().__init__(answers)
+        self.instructions: dict[str, str | None] = {}
+        self.lists: dict[str, list] = {}
+
+    def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
+        self.instructions[key] = instruction
+        return super().select_or_text(key, question, choices, text_value, text_question, instruction)
+
+    def select(self, key, question, choices, instruction=None):
+        self.lists[key] = list(choices)
+        return super().select(key, question, choices, instruction)
+
+
+def _go(tmp_path: Path, asker: FileAsker) -> list[str]:
+    results = tmp_path / "results"
+    results.mkdir(exist_ok=True)
+    lines: list[str] = []
+    run_guided(
+        asker,
+        here=results,
+        pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(host="workstation", ids=["a" * 16]),
+        daemon=offline_daemon(),
+        servers=offline_servers(),
+        now=RUN_AT,
+        out=lines.append,
+        colored=False,
+    )
+    return lines
+
+
+def _each_machine_holds_its_packages(monkeypatch) -> None:
+    """Controlled live readings for the second run. Step 5 reads a disk for this computer and for the active SSH
+    computer only, and an SSH computer is called by its alias (key = alias = name), so a `local` line of a machine
+    whose key differs from its name does not come up in a run by itself. The one seam is `guided.active_room`, whose
+    result the run lays over its own reading of this computer: here every machine of the document has a disk read
+    on which Ollama holds every package of its own table."""
+    from modelroom import guided
+    from modelroom.room import Disk, LiveRoom
+
+    def rooms(run, document, packages=()):
+        return {
+            block.machine: LiveRoom(disk=Disk(10**12, "C:", held=frozenset(tuple(entry.package_identity) for entry in block.ranked)))
+            for block in document.machines
+        }
+
+    monkeypatch.setattr(guided, "active_room", rooms)
+
+
+def _table_of(text: list[str], head: str) -> list[str]:
+    """The lines of the table that begins at `head`, up to the head of the next table."""
+    heads = [index for index, line in enumerate(text) if " · context " in line]
+    begin = text.index(head)
+    return text[begin : next((index for index in heads if index > begin), len(text))]
+
+
+def test_a_run_with_two_machines_says_each_of_them_by_its_name_and_never_by_its_key(tmp_path: Path, monkeypatch):
+    """Two machines whose keys (`computer-<8 hex>`) differ from the names of their profiles. The first run
+    writes the configuration; the entered machine is then renamed to a fixed key in it, and the second run
+    over the same folder -- with a controlled disk reading for each machine -- is the one held here, line by line."""
+    import tomllib
+
+    _go(tmp_path, FileAsker(ENTERED))
+    config = tmp_path / "results" / "modelroom.toml"
+    first = tomllib.loads(config.read_text(encoding="utf-8"))["machines"]
+    entered_key = next(key for key, machine in first.items() if machine["profile"] == "0000000000000002")
+    config.write_text(config.read_text(encoding="utf-8").replace(entered_key, "computer-aaaaaaaa"), encoding="utf-8")
+    keys = set(tomllib.loads(config.read_text(encoding="utf-8"))["machines"])
+    assert "computer-aaaaaaaa" in keys and len(keys) == 2 and all(key.startswith("computer-") for key in keys)
+
+    pull = "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
+    asker = _Instructions(
+        {**ENTERED, "machines": ["this-machine", "profile:0000000000000002"], "pull_other": f"computer-aaaaaaaa {pull}"}
+    )
+    _each_machine_holds_its_packages(monkeypatch)
+    lines = _go(tmp_path, asker)
+
+    start = next(index for index, line in enumerate(lines) if line.startswith(" machine   workstation "))  # the host name of the probe
+    after = lines[start + 1 :]  # everything from the line after the start line on
+    for key in keys:  # no line after the start line names a machine by its key
+        assert not any(key in line for line in after), key
+    text = [line.strip() for line in after]
+    # Step 1, the answer to the machine list; step 3, the instruction line of the scale.
+    assert any("Which machines should the result cover?  this machine (laptop), workstation-00000000" in line for line in text)
+    assert asker.instructions["context"] == "last column: how many fetched packages fit laptop-00000000"
+    # Step 5, the card, one row per machine, and the head of each table.
+    assert any(line.startswith("machine   laptop-00000000 ") for line in text)
+    assert any(line.startswith("machine   workstation-00000000 (entered) ") for line in text)
+    here_head, other_head = "laptop-00000000 · context L 32k", "workstation-00000000 (entered) · another computer · context L 32k"
+    assert here_head in text and other_head in text
+    # The `local` line of each table, one by one: this computer in its contextual words, the other machine by its name.
+    here_local = [line for line in _table_of(text, here_head) if line.startswith("local")]
+    other_local = [line for line in _table_of(text, other_head) if line.startswith("local")]
+    assert len(here_local) == 1 and here_local[0].endswith("already in Ollama on this computer")
+    assert len(other_local) == 1 and other_local[0].endswith("already in Ollama on workstation-00000000")
+    # The list for another computer: its headings (the value of a row stays the key), the answer to it and the handover.
+    choices = asker.lists["pull_other"]
+    assert [choice.label for choice in choices if choice.heading] == ["workstation-00000000"]
+    assert [choice.value for choice in choices if not choice.heading][0].startswith("computer-aaaaaaaa ")
+    assert f"? Which package should go onto another computer?  workstation-00000000  #1  {pull}" in text
+    assert any(line.startswith("install   #1 on workstation-00000000  modelroom pull ") and pull in line for line in text)
