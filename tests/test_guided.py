@@ -667,7 +667,7 @@ def test_a_first_run_offers_to_measure_this_machine_first_and_marks_nothing(tmp_
     """Nothing is marked in advance (AP9-UX C): `Enter` alone takes the first row, which measures."""
     rows = _recorded_machines(tmp_path, RUN1, FULL_ANSWERS)
 
-    assert (rows[0].value, rows[0].label) == ("this-machine", f"this machine ({THIS_MACHINE}, measure now)")
+    assert (rows[0].value, rows[0].label) == ("this-machine", "this machine (measure now)")  # FR-N2: no profile, no name yet
     assert not any(choice.checked for choice in rows)
 
 
@@ -699,8 +699,8 @@ def test_the_machine_list_keeps_its_order(tmp_path: Path):
         "enter",
         "broken:broken.json",
     ]
-    assert rows[0].label == f"this machine ({THIS_MACHINE}, laptop, as measured 2026-09-23)"
-    assert rows[1].label == f"this machine ({THIS_MACHINE}, measure again)"
+    assert rows[0].label == "this machine (laptop-00000000, as measured 2026-09-23)"  # FR-N2: the profile's display_name; its class is in it
+    assert rows[1].label == "this machine (laptop-00000000, measure again)"
     assert not any(choice.checked for choice in rows)
 
     for folder in ("results", "home"):
@@ -709,6 +709,57 @@ def test_the_machine_list_keeps_its_order(tmp_path: Path):
     values = [choice.value for choice in asker.choices["machines"]]
     assert values[0] == "this-machine"
     assert values.index(f"profile:{'c' * 16}") < values.index("import")
+
+
+def test_the_machine_list_and_the_result_name_the_same_machine_alike(tmp_path: Path):
+    """FR-N2: one name for one machine in one run. The list used to print the configuration key
+    (`computer-<8 hex>`) where the result printed the profile's `display_name` (`<class>-<8 hex>`)."""
+    bound = _bound_run(tmp_path)
+    stored = json.loads((_results(tmp_path) / "state" / "hardware" / f"{bound}.json").read_text(encoding="utf-8"))
+    name = stored["display_name"]
+    assert name != THIS_MACHINE  # precondition: the two namespaces differ for this machine
+
+    rows = _recorded_machines(tmp_path, RUN2, _answers_without_folder({**FULL_ANSWERS, "machines": ["this-machine"]}))
+
+    assert [row.label for row in rows[:2]] == [
+        f"this machine ({name}, as measured 2026-09-23)",
+        f"this machine ({name}, measure again)",
+    ]
+    assert not any(THIS_MACHINE in row.label for row in rows)  # the key stays the selection token, never a name
+    payload = json.loads((_results(tmp_path) / "docs" / "models.json").read_text(encoding="utf-8"))
+    assert [block["profile"]["display_name"] for block in payload["machines"]] == [name]
+    assert name in (_results(tmp_path) / "docs" / "models.md").read_text(encoding="utf-8")
+
+
+def _own_row(name: str, machine_class: str) -> str:
+    """Row 1 of the machine list for a profile measured here, named `name`, of class `machine_class`."""
+    from types import SimpleNamespace
+
+    from modelroom.guided_machines import _machine_choices
+
+    profile = v2_profile(profile_id="a" * 16, display_name=name, recorded_at=RUN1).model_copy(update={"machine_class": machine_class})
+    empty = SimpleNamespace(profiles={}, legacy=[], unreadable=[])  # no other profile: row 1 stands on `bound` alone
+    return _machine_choices(empty, profile, [], "set up a shared folder for profiles")[0].label
+
+
+def test_the_class_is_said_in_row_one_only_where_the_name_does_not_carry_it():
+    """FR-N2: `laptop-<8 hex>` says `laptop` itself; an alias, or another class in the prefix, keeps the detail."""
+    assert _own_row("laptop-aaaaaaaa", "laptop") == "this machine (laptop-aaaaaaaa, as measured 2026-09-23)"
+    assert _own_row("gpu-box", "server") == "this machine (gpu-box, server, as measured 2026-09-23)"
+    assert _own_row("laptop-aaaaaaaa", "server") == "this machine (laptop-aaaaaaaa, server, as measured 2026-09-23)"
+    assert _own_row("computer-aaaaaaaa", "laptop") == "this machine (computer-aaaaaaaa, laptop, as measured 2026-09-23)"
+
+
+def test_the_longest_name_in_row_one_stays_within_the_width_of_the_screen():
+    """FR-N: a name is `<class>-<8 hex>` or an alias of at most 31 characters (`neutral.ALIAS_RE`); the longest
+    row 1 (alias, class kept, date) with the five columns of the pointer stays inside the 100 of the screen."""
+    from modelroom.guided_models import LABEL_LIMIT
+
+    longest_alias = "a" + "b" * 30
+    for name, machine_class in ((longest_alias, "workstation"), ("workstation-aaaaaaaa", "server")):
+        label = _own_row(name, machine_class)
+        assert len(label) <= LABEL_LIMIT, f"{len(label)}: {label}"
+    assert len(_own_row(longest_alias, "workstation")) == 83  # measured, 2026-10-08
 
 
 class _EnterAsker(FileAsker):
@@ -748,7 +799,7 @@ def test_enter_alone_keeps_the_profile_of_a_machine_measured_here(tmp_path: Path
 
 
 def test_this_machine_is_named_with_its_class(tmp_path: Path):
-    """AP9-UX F: its key as the configuration names it (neutral, FR-N), and the class of its profile where known."""
+    """AP9-UX F: the answer line names it by the class of its profile where known (the list: its `display_name`, FR-N2)."""
     code, lines = _run(tmp_path, probes=windows_probes(host="GPU Server"))
     assert code == 0
     assert "? Which machines should the result cover?  this machine" in [line.strip() for line in lines]
@@ -1027,7 +1078,8 @@ def test_a_configuration_that_moved_on_leaves_the_measured_profile_unrecorded(tm
 
     out.clear()
     _record_profile(run, _config_file(tmp_path), config, "gone-machine", _results(tmp_path))
-    assert any("is gone from the configuration" in line for line in out)
+    assert any("this machine is gone from the configuration" in line for line in out)
+    assert not any("gone-machine" in line for line in out)  # FR-N2: the key is no name on the screen
 
 
 # What a second run leaves in a new results folder: settings this run must not replace.
@@ -2971,7 +3023,7 @@ def test_a_home_binding_on_a_machine_entered_by_hand_offers_to_measure_now_first
     asker, _lines = _bound_by_hand_to_an_entered_profile(tmp_path)
 
     rows = asker.choices["machines"]
-    assert (rows[0].value, rows[0].label) == ("this-machine", f"this machine ({THIS_MACHINE}, measure now)")
+    assert (rows[0].value, rows[0].label) == ("this-machine", "this machine (measure now)")
     assert not any(choice.checked for choice in rows)
     assert f"profile:{'c' * 16}" in [choice.value for choice in rows[1:]]
 
@@ -3123,7 +3175,7 @@ def test_a_profile_no_machine_names_stays_grayed_with_its_reason(tmp_path: Path)
     scan = scan_profiles(_results(tmp_path) / "state" / "hardware")
     named = [key for key in scan.profiles if key != TWO_L4_ID]
 
-    rows = _machine_choices(scan, None, "workstation", named, "set up a shared folder for profiles")
+    rows = _machine_choices(scan, None, named, "set up a shared folder for profiles")
 
     grayed = next(choice for choice in rows if choice.value == f"profile:{TWO_L4_ID}")
     assert grayed.disabled == NO_MACHINE_NAMES

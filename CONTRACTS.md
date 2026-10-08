@@ -6242,10 +6242,15 @@ of the list: `another computer: pick its profile below, or import the file made 
 from the top, nothing marked:
 
 1. the profile this folder binds this machine to, where it was measured here (value
-   `profile:<profile_id>`, `this machine (computer-5c1e9a07, server, as measured 2026-09-28)`);
-2. `this machine (computer-5c1e9a07, measure again)` with row 1, else `this machine
-   (computer-5c1e9a07, measure now)` (value `this-machine`); the name is this computer's key
-   `this_machine` (never its host name, "Neutral names"), the class that of the profile where it is known;
+   `profile:<profile_id>`, `this machine (server-5c1e9a07, as measured 2026-09-28)`);
+2. `this machine (server-5c1e9a07, measure again)` with row 1, else `this machine (measure now)`
+   (value `this-machine`); the name is the `display_name` of the profile -- the one name the result
+   shows for this machine (FR-N2), never its host name ("Neutral names") and not this computer's key
+   `this_machine`, which stays the run's internal token and is not printed; where no profile was
+   measured here -- none yet, or the binding is to a profile entered by hand -- there is no name and the
+   row says `this machine (measure now)`. Row 1 adds the class of the profile only where the name does
+   not carry it (`laptop-5c1e9a07` says `laptop`; an alias, or another class in the prefix, keeps it:
+   `this machine (gpu-box, server, as measured ...)`);
 3. every other profile of the folder a `[machines.<name>]` names, one row each (value
    `profile:<profile_id>`, `<label>  <hardware>`: the label as the import forms it, with the short
    id where two carry one name; the hardware as `2 x NVIDIA L4 44.98 GiB VRAM / 94.29 GiB RAM`, a
@@ -6266,9 +6271,9 @@ machine(s) naming it into the selection of this run (`RunSelection.machines`); n
 or written for it. The marked entries run in this order: measure, import, enter. The key and the
 answers `this-machine`, `import`, `enter` stay the same, so an answer file is unaffected; the answer
 line names this machine by its class (`this machine (server)`, without a known class `this machine`;
-its key stands in the list only) and a marked profile by its label.
+its profile's name stands in the list only) and a marked profile by its label.
 
-`this machine (<name>, measure now)` makes sure `[machines.<this_machine>]` exists and is a writer -- this
+`this machine (measure now)` (or `this machine (<name>, measure again)`) makes sure `[machines.<this_machine>]` exists and is a writer -- this
 machine is the one that fetches -- and then measures through `cli.hardware_with_config` with the
 results folder as the binding key. The takeover rule decides which profile is written
 (`resolve_profile_target`, "Profile binding"); its `ask_clone` case is the `clone` question, and

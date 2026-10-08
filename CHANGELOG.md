@@ -407,6 +407,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **One name for one machine in the guided run** (AP9-FR, FR-N2; `modelroom/guided_machines.py`, `modelroom/screen.py`;
+  CONTRACTS.md, "Guided mode", step 1). The machine list named this computer by its configuration key
+  (`computer-<8 hex>`) where the result names the same machine by the `display_name` of its profile
+  (`<class>-<8 hex>`). The list now shows the `display_name` (`this machine (laptop-9a12748b, measure again)`); the key
+  stays the run's internal token and is not printed. Where there is no profile of this machine yet the row says
+  `this machine (measure now)`: the name comes with the measurement. Row 1 leaves the class out where the name says it
+  (`laptop-9a12748b`). The note for a profile found in the folder (`machine '<name>' added ...`) names the profile's
+  `display_name` as well, and the message `this machine is gone from the configuration; run again` no longer carries the key.
 - **Tensor parallel takes the smallest size at which the package fits** (AP9-SV2-D, GF 2026-10-03;
   `modelroom/fit_vllm.py`, `modelroom/install_vllm.py`; CONTRACTS.md, "Fit for vLLM"). `--tensor-parallel-size` was the
   largest of 1, 2, 4, 8 that the equal cards and the head count allow; it is now the smallest of them at which the

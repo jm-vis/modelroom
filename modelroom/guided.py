@@ -514,7 +514,7 @@ def _machines_step(run: GuidedRun, config_file: Path, config: Configuration) -> 
     # product-visible double display, not the "always in the list" the row asks for).
     share_label = machine_list_row(run.room.environ, read_remote(remote_path_for(run.pointer_path)))
     aliases = ssh_aliases_of(remote_path_for(run.pointer_path))
-    choices = _machine_choices(scan, bound, name, configured, share_label, aliases)
+    choices = _machine_choices(scan, bound, configured, share_label, aliases)
     picked = run.asker.checkbox("machines", QUESTIONS["machines"], choices)
     run.screen.answer(QUESTIONS["machines"], machines_words(picked, machine_answer_words(scan, bound)))
     if "this-machine" in picked:
