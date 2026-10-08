@@ -135,8 +135,41 @@ KEYS = [
 
 # `KEYS` = the reference rows plus hand samples. This list: names that deliberately have no reading (`line_key` is
 # `None`), each with a reason; every other shipped row outside the reference must give a `LineKey` (coverage test).
-# Empty as of the publication of 2026-10-07.
-SHIPPED_WITHOUT_READING: list[str] = []
+# Empty as of the publication of 2026-10-07; the publication of 2026-10-08 (231 rows) added the 24 below. None of them
+# is a grammar fault: 16 names contain an unclassified token and eight produce two version tokens under the current
+# grammar (see `NOT_INTERPRETABLE`). Reading them would extend the grammar, which is a product contract for the computed
+# release; until then such a name stays out of the line comparison. Each entry is checked to stay unread (test below).
+SHIPPED_WITHOUT_READING: list[str] = [
+    # a token with no class: a context length (`200k`, `32k`)
+    "01-ai/Yi-6B-200K",
+    "CohereLabs/tiny-aya-base-32K",
+    # a token with no class: a video resolution (`720p`, `480p`)
+    "Skywork/SkyReels-V2-DF-14B-720P",
+    "Skywork/SkyReels-V2-I2V-14B-720P",
+    "Skywork/SkyReels-V2-T2V-14B-720P",
+    "Wan-AI/Wan2.1-I2V-14B-480P",
+    # a token with no class: a bare number (`378`), a dimension (`2d`), a dotted word (`flux.1`, `flux.2`)
+    "apple/DFN5B-CLIP-ViT-H-14-378",
+    "mixedbread-ai/mxbai-embed-2d-large-v1",
+    "black-forest-labs/FLUX.1-Kontext-dev",
+    "black-forest-labs/FLUX.1-dev",
+    "black-forest-labs/FLUX.1-schnell",
+    "black-forest-labs/FLUX.2-dev",
+    "black-forest-labs/FLUX.2-klein-4B",
+    # a token with no class: a size written with `p` for the point (`1p3b`) or a precision written `16bit`
+    "inception42/jais-family-1p3b-chat",
+    "inception42/jais-family-2p7b-chat",
+    "upstage/SOLAR-0-70b-16bit",
+    # two version tokens under the current grammar (e.g. `3` and `1`, or `1` and `v0.5`)
+    "Aleph-Alpha/llama-3_1-8b-tfree-hat-dpo",
+    "Aleph-Alpha/llama-3_1-8b-tfree-hat-sft",
+    "OpenGVLab/InternVL2_5-4B-MPO",
+    "internlm/internlm2_5-7b-chat",
+    "sarvamai/sarvam-1-v0.5",
+    "sbintuitions/sarashina2.2-0.5b-instruct-v0.1",
+    "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+    "stepfun-ai/GOT-OCR2_0",
+]
 
 NOT_INTERPRETABLE = [
     "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",  # `735` has no class
@@ -192,7 +225,7 @@ def test_a_shipped_row_that_loses_its_reading_is_named():
     assert unread_rows(catalog, reference_repos, lambda repo, size: None if repo == extra else line_key(repo, size)) == [extra]
 
 
-@pytest.mark.parametrize("repo", NOT_INTERPRETABLE)
+@pytest.mark.parametrize("repo", NOT_INTERPRETABLE + SHIPPED_WITHOUT_READING)
 def test_a_name_the_grammar_has_no_reading_for_is_none(repo):
     assert line_key(repo, None) is None
 

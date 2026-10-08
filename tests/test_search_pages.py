@@ -137,9 +137,10 @@ def test_a_word_in_a_publisher_account_asks_that_publisher():
 
 
 def test_a_word_only_a_model_id_carries_asks_that_familys_publisher():
-    # `r1` is in no family name and in no publisher account; only
-    # `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B` carries it.
-    assert publisher_accounts(_catalog(), "r1") == ["deepseek-ai"]
+    # `r1` is in no family name and in no publisher account; only model ids carry it:
+    # `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B` and, since the publication of 2026-10-08,
+    # `Skywork/Skywork-R1V-38B` (the word is a substring match). Catalog order.
+    assert publisher_accounts(_catalog(), "r1") == ["deepseek-ai", "Skywork"]
 
 
 def test_a_name_with_blanks_asks_the_publisher_of_the_model_it_names():
