@@ -72,6 +72,12 @@ def upload_args(dataset: str, path: object, message: str) -> list[str]:
             "--repo-type", "dataset", "--commit-message", message]
 
 
+def upload_folder_args(dataset: str, folder: object, message: str) -> list[str]:
+    """The card's upload process: a fixed argument list, the pinned tool, a folder of its own sent to the root of the dataset."""
+    return ["uvx", "--from", f"huggingface_hub=={HF_HUB_VERSION}", "hf", "upload", dataset, str(folder), ".",
+            "--repo-type", "dataset", "--commit-message", message]
+
+
 # --- what the maintainer named ----------------------------------------------------------------------------------------
 
 
