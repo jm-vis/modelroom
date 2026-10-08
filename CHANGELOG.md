@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-08
+
+The second release of modelroom. The guided mode sizes for several machines and many users: step 3
+asks for a head count before the context scale, and the scale grays out a level only beyond the
+window of every model of the run; a machine is read over SSH or from profile exports in a shared
+folder, and no file carries a machine name. A started vLLM server is measured. The catalog is a
+public dataset on the Hugging Face Hub, with scanning and publishing tools and a dataset card. LM
+Studio is a third runtime for GGUF packages; its README section comes with a later release. The
+README documents a guided run on a rented machine with one L40S, with nine screenshots and a row
+under "Tested on". Schema versions: profile 4, render document 3, configuration 3. Entries stand
+newest first; where two of them name a schema version or a number, the one nearer the top is what ships.
+
 ### Added
 
 - **LM Studio as the third local runtime, GGUF only** (AP9-LS-E; `modelroom/lmstudio_install.py`, `modelroom/runtimes.py`;
