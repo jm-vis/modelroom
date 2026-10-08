@@ -5705,13 +5705,13 @@
     },
     {
       "account": "XingChen-AGI",
-      "name": "XingChen-AGI",
-      "region": null
+      "name": "TeleAI (China Telecom)",
+      "region": "CN"
     },
     {
       "account": "moondream",
-      "name": "moondream",
-      "region": null
+      "name": "Moondream (M87 Labs)",
+      "region": "US"
     }
   ],
   "schema_version": 2
