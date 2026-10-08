@@ -56,17 +56,18 @@ package an installer fetches.
 ## Tested on
 
 Every machine a version really ran its self-test on (`scripts/selftest.py`), one line each. The
-two-card fixtures are recorded on the two rented machines below; the fixtures of three graphics
+two-card fixtures were recorded on the Verda and Scaleway instances listed below; the fixtures of three graphics
 cards and more, and of cards of mixed sizes, are synthetic (`tests/fixtures/README.md`). The load
 test is the speed the self-test measured for `hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M`
-at context 8192, one request. The Class column is what the profile says: the chassis of the two
-rented machines names no class, so the run answered `server` there.
+at context 8192, one request. The Class column is what the profile says: `server (entered)` means
+the run supplied the machine class.
 
 | Machine | Class | Graphics cards | Memory | Date | Self-test | Load test |
 |---|---|---|---|---|---|---|
 | a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` | 56.9 tok/s |
 | a rented instance at Verda (Helsinki) | server (entered) | 2 x NVIDIA A100-SXM4-80GB, 80.00 GiB each | 235.92 GiB | 2026-09-27 | `SELFTEST: OK` | 143.5 tok/s |
 | a rented instance at Scaleway (Paris) | server (entered) | 2 x NVIDIA L4, 22.49 GiB each | 94.29 GiB | 2026-09-27 | `SELFTEST: OK` | 48.2 tok/s |
+| a rented instance at Seeweb (Frosinone) | server (entered) | 1 x NVIDIA L40S, 44.99 GiB | 31.27 GiB | 2026-10-08 | `SELFTEST: OK` | 122.8 tok/s |
 
 ## Installation
 
@@ -106,26 +107,33 @@ measured and the context you chose.
 
 ## A guided run, step by step
 
-The pictures are one run on a laptop with one 12 GB graphics card and 127 GB of memory, in a
-folder named `C:\models`, chosen for the pictures; any folder does (Windows Terminal; the run
-looks the same on Linux and macOS). Your numbers, and so the fit of every package, will differ.
+The pictures come from three runs on a rented server at Seeweb with one NVIDIA L40S graphics card
+(44.99 GiB) and 31 GiB of memory, in a folder named `/srv/models`, chosen for the pictures; any
+folder does. (These pictures were taken on Linux; modelroom treats the local computer as having
+no vLLM on native Windows and macOS.) Ollama 0.40.1 runs there without a package of the model the run looks for,
+and a vLLM server serves `Qwen/Qwen3.5-4B` at context 4096. The first picture is from the initial
+run in a fresh folder, pictures 2 to 8 are from the second run, and the last picture shows a
+separate run with an empty search word in the same folder. Your numbers, and so the fit of every
+package, will differ.
 
 ### Start
 
-![The start screen: the mark, three facts about this folder, the daemon and this machine, and the first question](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/1-start.png)
+![The start screen: the mark, four facts about this folder, the daemon, the vLLM server and this machine, and the first question](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/1-start.png)
 
-Three facts before the first question: the **folder** (none chosen yet), the local **daemon**
-(Ollama is reachable, with 19 models, 7 of them local and the rest cloud entries) and this
-**machine** (its name, and that no measurement is stored in this folder yet). The first question
-of step 1 is where the results should live: the folder you are in, or another path.
+Four facts before the first question: the **folder** (none chosen yet), the local **daemon**
+(Ollama 0.40.1 is reachable, with one model), the vLLM **server** (context 4096, and the model it
+states it serves) and this **machine** (its name, and that no measurement is stored in this folder
+yet). The first question of step 1 is where the results should live: the folder you are in, or
+another path. The second run started in the folder the first one chose and was not asked again.
 
 ### Step 1, Configuration
 
-![Step 1: which machines the result covers, with this machine's measurement under the first row](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/2-machines.png)
+![Step 1: which machines the result covers, with this machine's stored measurement as the first row](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/2-machines.png)
 
-Which machines the result covers. **this machine** is measured right here, once the question is
-answered; the gray line under it lists the machine profiles this folder already holds, here the
-one an earlier run left, with the graphics card, its memory and the system memory. Measuring asks
+Which machines the result covers. Choosing **this machine** with `measure now` or `measure again`
+measures this computer right here, once the question is answered. In the picture the first row
+reuses the profile measured in the first run, and the start screen sums it up (`server, one
+graphics card, 45 GB, 31 GB memory`). The gray line above the question says where another computer's profile comes in. Measuring asks
 what kind of machine this is, laptop, workstation or server, with the class the chassis reports
 already marked: keeping it keeps the chassis as its source, another answer is `entered`. A **profile
 file** measured on another machine can be imported instead, so one folder can rank the same
@@ -139,8 +147,8 @@ every number of such a machine is computed, none measured. The measurement is cr
 
 Nothing in the list is marked in advance: the arrow keys move, the space bar marks a row, and Enter
 takes what is marked or, with nothing marked, the row under the pointer. Where this machine was
-measured in this folder before, its profile is the first row (`this machine (server-5c1e9a07,
-as measured 2026-09-28)`, the name the result shows for it), so Enter alone keeps it and
+measured in this folder before, its profile is the first row (`this machine (server-d4944767,
+as measured 2026-10-08)`, the name the result shows for it), so Enter alone keeps it and
 measures nothing; `measure again` is the row under it. The result covers exactly the machines you marked in this run.
 
 **Machine names** (FR-N). No result file (`modelroom.toml`, `docs/`, `state/`) and no export file
@@ -154,7 +162,8 @@ either: it gets a neutral name the same way. A folder of 0.1.0 is renamed once, 
 the first command that writes to it (`machine renamed to server-3f9a0c21`); a script calling `fetch
 --machine <old name>` takes the new key. Only the start screen names this computer's host name, live.
 
-Where the results live is the first question of the step. A folder the last run used is offered
+When the current folder is not already configured, step 1 first asks where the results should
+live. A folder the last run used is offered
 first when you start in another one, with the pointer on it; the start screen already says `the
 folder of the last run, not this one`. Started in your home folder or at the top of a drive, the
 run asks before it writes anything there -- `modelroom.toml`, `docs` and `state` would land in it --
@@ -259,10 +268,10 @@ the alias you named yourself.
 
 ### Step 2, Packages
 
-![Step 2: the search word](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/3-search.png)
+![Step 2: the search word](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/3-search.png)
 
-What you are looking for. You can answer in four ways, and none of them has to be the exact
-spelling of anything:
+What you are looking for; in the picture `qwen 3.5 4b`. You can answer in four ways, and none of
+them has to be the exact spelling of anything:
 
 | What you type | What happens |
 |---|---|
@@ -274,7 +283,7 @@ spelling of anything:
 A word close to something the catalog knows that finds nothing to pick (`qwn`) ends in a short
 list of what you may have meant; picking one searches again.
 
-![Step 2: the owner filter, yes or no](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/4-filter.png)
+![Step 2: the owner filter, yes or no](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/4-filter.png)
 
 The owner filter. **Yes** (the default) keeps the list to the publisher of what you searched for
 and the packagers configured for the folder, by default these five (`unsloth`, `bartowski`,
@@ -283,7 +292,7 @@ downloaded repositories. **No** adds the twenty
 most downloaded and the ten newest repositories for that word, whoever owns them, and lets a model
 of a publisher the catalog does not know be picked as well.
 
-![Step 2: the list of models, one row per model that can be picked](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/5-models.png)
+![Step 2: the list of models, one row per model that can be picked](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/5-models.png)
 
 The list of models, one row per model that can really be picked: what fits into the graphics card
 first, a model with a named successor (`legacy`) last, and otherwise the largest model first --
@@ -302,7 +311,9 @@ GGUF build of it (the first one and how many more, `unsloth +3`, where they do n
 **Downl.** the downloads of all of them together, **Ollama** the name of the same model in the
 Ollama registry when the catalog or your configuration knows one; a name longer than its 14
 characters is cut, and the install line at the end carries it whole. `Space` marks a row, `Enter` takes the
-marked rows or, with nothing marked, the row under the pointer. Here `Qwen3.5-4B` is marked. The
+marked rows or, with nothing marked, the row under the pointer. In the picture the search found 8
+repositories and one model to pick, `Qwen3.5-4B`, and it is marked: `fits` at the folder's 4k,
+`legacy*` because a higher version of the family is known, `unsloth +2` and `qwen3.5:4b`. The
 repositories that are no model of the list, and why, are counted in `state/search.json` rather
 than shown as rows nobody can choose. After the choice the run fetches, per model, the packages of
 the publisher's own repository and of the first listed packager that has it: their sizes,
@@ -314,7 +325,7 @@ the origins; the origin stands with each row at the package name (`<packager> ·
 
 ### Step 3, Context
 
-![Step 3: the context scale from XS to XXL, with how many of the fetched packages fit at each level](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/6-context.png)
+![Step 3: the context scale from XS to XXL, with how many of the fetched packages fit at each level](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/6-context.png)
 
 First, how many people use it on a typical day: 1, 5, 10, 25, 100 or a number of your own. The
 ranking assumes that 1 in 10 of them send a request at the same moment -- a rule of thumb, not
@@ -326,11 +337,13 @@ Then how much text a model should handle at once, as a scale from XS to XXL with
 that are and an example. The last column is the point of the question: how many of the packages
 just fetched still fit this machine at that context and for those requests, because the memory a
 model needs grows with the text it holds. **L** (32k, a report or a long contract) is the default for a new folder; a
-folder keeps the level it chose last time, and a number of tokens can be typed instead.
+folder keeps the level it chose last time, and a number of tokens can be typed instead. In the
+picture the folder offers what the first run chose, 25 people (3 requests) and **XS** (4k, the
+context the vLLM server runs at); on the L40S all 26 fetched packages fit at every level.
 
 ### Step 4, Measurement
 
-![Step 4: measure the speed of the chosen models the local daemon already has](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/7-measurement.png)
+![Step 4: the vLLM server measured with 3 requests at once, and the fit computed for it](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/7-measurement.png)
 
 One question for every local server: **Measure the speed on this machine now?** First each server
 says what it has -- the packages of this run's models your Ollama daemon already has, and, where a
@@ -339,25 +352,39 @@ counts when it serves a model you chose, at the context you chose). **Yes** show
 installed packages and the vLLM server, nothing marked, and you pick what to measure. An Ollama
 measurement runs a short prompt through the package and records tokens per second; it never
 downloads anything. **No** skips new measurements; a measurement stored earlier for the same package
-content at the same context stays in the ranking, and a row without one shows `–` for speed. A
-measurement always runs one request; when the ranking assumes more, the step says so first, and a
+content at the same context stays in the ranking, and a row without one shows `–` for speed. An
+Ollama measurement always runs one request; when the ranking assumes more, the step says so first, and a
 measured row then names why its speed does not count there. The balance says `vLLM measured` only
 where the number counts, else `vLLM ran, not counted`. A run that ends before the 128 tokens of the
 protocol is invalid, and a second line says how far it got (`run 1 ended after 2 of 128 tokens`) and what
 the protocol counts; such a package stays without a speed.
 
+In the picture Ollama has no package of the run's model, so the list holds only the vLLM server.
+It states that it serves `Qwen/Qwen3.5-4B`, but not which revision (`revision unknown (not
+stated)`). One warm-up request, then three batches of 3 requests of 128 tokens each give `204.7
+tok/s total`, 68.5 per request. The lines under it are computed, not measured: one card of 44.99
+GiB, of which vLLM takes 0.92, holds the weights (8.68 GiB), its runtime (1.50 GiB) and 179
+requests of context 4k at once. In modelroom 0.2.0, vLLM measurements are shown for the current run only; they are not assigned to ranking rows
+or saved (`identity stated by the server; not ranked, nothing written`).
+
 ### Step 5, Results
 
-![Step 5: the card of the run, the ranking table and the notes under it](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/8-results.png)
+![Step 5: the card of the run, one ranking table per runtime and the notes under them](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/8-results.png)
 
 The card of the whole run: folder, machine, models, context, speed, and where the result went.
 The context row carries the whole scenario: the context, the KV cache and the requests with where
 they came from (`3 requests (from 25 users)`); beyond eight requests a `load` row adds that the fit
-says nothing about throughput. The
-folder here already held a configuration from an earlier run naming `Qwen3.5-9B`; the run added
-`Qwen3.5-4B` to it. Under the card, the ranking for this machine at the chosen context: rank,
-model, package (packager and quantization), fit, measured speed, memory need. The notes under the
-table say what is **shown** (ten of 45, one no fit), which rows fit into graphics **memory** and
+says nothing about throughput. In the picture the run chose `Qwen3.5-4B`, 26 packages from Qwen,
+unsloth and RedHatAI, all ranked, none without a fit. No Ollama package was measured (`speed  not
+measured`); the vLLM server's number stands in the **server** row instead: `204.7 tok/s total, 3
+requests at once, counts for this run`, and under it the fit computed for it (`179 at once,
+ample`). Under the card, the ranking for this machine at the chosen context, one section per
+runtime (`with Ollama`, `with vLLM`: alternatives on the same card, not both at once): rank,
+model, package (packager and quantization), fit, measured speed, memory need. Every speed cell
+here reads `–`. For the Ollama rows nothing was measured. For the vLLM rows, modelroom 0.2.0 does
+not assign server measurements to individual packages; the measured total appears only on the run
+card. The notes under the
+tables say what is **shown** (10 of 22 for Ollama, 4 of 4 for vLLM), which rows fit into graphics **memory** and
 which need system memory, which rows have their fit computed from the package size as its
 **basis** rather than from the architecture (the line appears only when there are such rows) and
 what was measured for **speed**, and, where that computer's Ollama was asked (this computer, or the
@@ -370,12 +397,15 @@ stays where the fit puts it, but lies on red, carries ` ×` behind its download 
 `docs/models.md`), and a red **disk** line under **memory** names those rows; the **install** line
 then takes the best row that also fits the disk, or says in red that no package fits and space
 must be freed first. Where the local Ollama daemon answered,
-the run lists the rows shown and asks **Which package should be pulled into Ollama?** -- any row,
-not only #1; a row without an Ollama name, or whose name more than one file answers to, is locked,
-and so is a row too large for the free disk, shown in red with what it needs.
-The command of the choice follows, the disk is checked again, and **Pull #3 into Ollama now?** with
-the size of the package: **Yes** pulls it into the daemon and shows the progress, **No** leaves it
-at the line to paste; step 4 of the next run measures it. Too little disk says so and asks nothing.
+the run lists the rows shown and asks **Which package should be pulled into Ollama?**, or **Which
+package should be installed?** where the table has vLLM rows, as in the picture -- any row,
+not only #1; an Ollama row without an Ollama name is locked, as is any row whose pull name is not
+unique or whose download is too large for the free disk; the latter is shown in red with what it
+needs.
+The command of the choice follows, the disk is checked again, and **Pull #1 into Ollama now?** with
+the size of the package (7.8 GB in the picture): **Yes** pulls it into the daemon and shows the
+progress, **No**, the answer in the picture, leaves the command for you to run. After the package
+has been installed, step 4 of a later run offers to measure it. Too little disk says so and asks nothing.
 A row the daemon already has gets a note instead of the question. Rows that look alike name their
 repository under the table. A machine that is not this computer -- imported, entered by hand, or
 another profile of the folder -- says so on the card and in its table head, and gets its command to
@@ -397,12 +427,15 @@ at the end with its place. The result shows only the machines and models this ru
 
 ### Nothing in mind
 
-![Step 2 with an empty search word: the catalog's current models, one page each, ranked by fit](https://raw.githubusercontent.com/jm-vis/modelroom/v0.1.0/docs/screenshots/9-anything.png)
+![Step 2 with an empty search word: the catalog's current models, one page each, ranked by fit](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/9-anything.png)
 
 Press Enter on an empty search word and the run looks up the current models of the shipped
 catalog, one page each, and lists them by the rule of the result: what fits into the graphics card
 first, the largest model that fits and has no named successor at the top, then what needs system
-memory. This is the answer to "I have no model in mind, show me what fits this machine".
+memory. This is the answer to "I have no model in mind, show me what fits this machine". In the
+picture the run searched for the 22 current models of the catalog and found 214 repositories, 35
+of them models to pick: on the L40S everything from 32B down `fits`, the two models of about 120B
+are `no_fit`, and two rows whose size the list does not know stay `unknown`.
 
 ### Without a terminal
 
@@ -654,7 +687,8 @@ labeled "fit (computed, v1)" in the output for that reason.
   `ample`. The KV cache in that formula is one fixed assumption, not a bound: a mixture
   architecture usually needs less, a dense model with many layers more, so a `fits (from size)`
   is coarser than a `fits` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
-- Only complete GGUF packages are judged; other formats are `unknown`.
+- The Ollama fit rule covers complete GGUF packages. vLLM safetensors packages use the separate
+  fit rule described under "vLLM"; other formats remain `unknown`.
 - A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
 - Unified memory is computed as one pool -- the memory minus both reserves, since the system and
   the model share it. Apple Silicon is read as such a pool (its memory from `sysctl hw.memsize`);
@@ -683,9 +717,10 @@ own: see `CONTRACTS.md`, "`modelroom pull`".
 
 ## Network access
 
-Requests go only to `huggingface.co`, `ollama.com` and `registry.ollama.ai` over HTTPS and to
-the local Ollama daemon at `127.0.0.1:11434` over HTTP; every redirect and pagination link is
-checked against the same list before it is followed. `HTTP_PROXY`, `HTTPS_PROXY` and
+Registry requests use HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`; local
+runtime requests use HTTP to Ollama at `127.0.0.1:11434` and vLLM at `127.0.0.1:8000`. Registry
+redirects and pagination links are checked against the same registry allowlist before they are
+followed. `HTTP_PROXY`, `HTTPS_PROXY` and
 `NO_PROXY` from the environment are honored for the registries, but a proxy only changes how an
 allowed request travels, never which targets are allowed; the local daemon is reached directly. Details: `CONTRACTS.md`, "Transport security and
 proxying".
