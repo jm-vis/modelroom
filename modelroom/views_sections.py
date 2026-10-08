@@ -5,7 +5,10 @@ alternatives on the same cards, never one list. The document keeps one block per
 continuous numbers (`render._rankings_by_runtime`, Ollama's rows first); `runtime_sections` splits
 it for the two views, which then draw each part exactly as they draw a machine of one runtime --
 its heading, its table, its `memory` line and its key. A block of one runtime is one part, the
-block itself, so every Ollama-only output stays byte-identical.
+block itself, so every Ollama-only output stays byte-identical. LM Studio forms no section of its own
+(AP9-LS-E: a package has one table row, the fit of Ollama); where a machine has LM Studio and vLLM and no
+Ollama, the part of the GGUF rows is titled `with LM Studio` (`gguf_section_key`) and the ranking rule says so
+(`gguf_rule_name`).
 
 Also the `shown` line's pieces for the rows set aside (`set_aside_pieces`), moved out of `views.py`
 (size guard) and read by it unchanged.
@@ -15,7 +18,8 @@ from __future__ import annotations
 
 from .document import MachineRanking, SetAsideEntry
 from .intro import LABEL_COLUMN
-from .runtimes import RUNTIMES, runtime_of
+from .profile import HardwareProfile
+from .runtimes import RUNTIMES, present_runtimes, runtime_of
 from .screen import JOIN_WIDTH, Line
 from .views_runtime import block_runtimes, packager_cell
 
@@ -35,6 +39,24 @@ def section_title(runtime_key: str) -> str:
 def section_head(title: str) -> list[Line]:
     """F6: a blank line, then the section title on the muted blue of `screen.head_line`."""
     return [[], [("class:label", title)]]
+
+
+def gguf_section_key(profile: HardwareProfile | None) -> str:
+    """The key of the section that holds the GGUF rows (the rows whose `Fit.runtime` is `ollama`): `lmstudio`
+    on a machine that has LM Studio and no Ollama (AP9-LS-E, S4), else `ollama` -- every machine with Ollama
+    keeps the words it always had. Only the profile counts: live detection adds vLLM and nothing else."""
+    present = present_runtimes(profile, None)
+    return "lmstudio" if "lmstudio" in present and "ollama" not in present else "ollama"
+
+
+def gguf_rule_name(blocks: list[MachineRanking]) -> str | None:
+    """The name the ranking rule gives the runtime of the GGUF rows (S4): `Ollama` on every machine that has it,
+    `LM Studio` on one that has LM Studio and no Ollama, `Ollama or LM Studio` where the machines of the document
+    differ; `None` where no machine shows rows of two runtimes (the rule then says nothing of them)."""
+    sides = {gguf_section_key(block.profile) for block in blocks if len(block_runtimes(block)) > 1}
+    if not sides:
+        return None
+    return "Ollama" if sides == {"ollama"} else "LM Studio" if sides == {"lmstudio"} else "Ollama or LM Studio"
 
 
 def runtime_sections(block: MachineRanking) -> list[tuple[str, MachineRanking]]:
@@ -57,7 +79,7 @@ def runtime_sections(block: MachineRanking) -> list[tuple[str, MachineRanking]]:
             "not_covered": [entry for entry in block.not_covered if entry.fit.runtime == key],
             "no_fit": [entry for entry in block.no_fit if entry.fit.runtime == key],
         }
-        parts.append((key, block.model_copy(update=update)))
+        parts.append((gguf_section_key(block.profile) if key == "ollama" else key, block.model_copy(update=update)))
     later = sum(part.ranked_total for _key, part in parts[1:])
     first_key, first = parts[0]
     parts[0] = (first_key, first.model_copy(update={"ranked_total": block.ranked_total - later}))
@@ -104,4 +126,4 @@ def _named(names: list[str], room: int) -> str:
     return ""
 
 
-__all__ = ["ALTERNATIVES", "NOTE_WIDTH", "runtime_sections", "section_head", "section_title", "set_aside_pieces"]
+__all__ = ["ALTERNATIVES", "NOTE_WIDTH", "gguf_rule_name", "gguf_section_key", "runtime_sections", "section_head", "section_title", "set_aside_pieces"]

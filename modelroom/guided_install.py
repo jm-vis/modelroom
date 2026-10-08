@@ -25,6 +25,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Sequence, TextIO
 
+from . import lmstudio_install
 from .contracts import InstalledModel, Package
 from .daemon import PULL_PATH, Daemon, DaemonError
 from .dialog import AnswerMissingError, Asker, Choice, FileAsker
@@ -38,7 +39,7 @@ from .pull_choice import PullRow, default_row, package_of, pull_rows, weights_by
 from .quantization import package_identity_key
 from .room import Disk, free_disk, gb, pull_need_bytes
 from .install_vllm import install_block_lines, vllm_install
-from .runtimes import OLLAMA, VLLM, runtime_of
+from .runtimes import LMSTUDIO, OLLAMA, VLLM, runtime_of
 from .screen import PULL_CANCELED as CANCELED_LINE
 from .screen import Screen
 from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
@@ -180,7 +181,17 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
     if row.runtime == VLLM.key:
         _show_vllm(run, context, row, package, disk, (row.runtime, row.identity) in locals_)
         return
+    if row.runtime == LMSTUDIO.key:
+        _show_lmstudio(run, context, row, (row.runtime, row.identity) in locals_)
+        return
     command = runtime_of(row.runtime).command(str(row.name))
+    if row.runtime != OLLAMA.key:
+        # No runtime but Ollama's daemon is pulled through: its command is printed, nothing is asked or run (G7; S1).
+        if (row.runtime, row.identity) in locals_:
+            run.screen.write(label_line(INSTALL_LABEL, install_local_note(row.rank, run.screen.glyphs.dot)))
+        else:
+            run.screen.write(label_line(INSTALL_LABEL, install_pull_line(row.rank, str(row.name), command=command)))
+        return
     first = FirstRow(row.rank, str(row.name), row.weights_gib, package, weights_bytes_of(package), command)
     pull_chosen(run, first, local=(row.runtime, row.identity) in locals_)
 
@@ -201,6 +212,21 @@ def _show_vllm(run: "GuidedRun", context: PullContext, row: PullRow, package: Pa
     served = run.servers.found.get("vllm")
     for line in install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=served, on_disk=local):
         run.screen.write(line)
+
+
+def _show_lmstudio(run: "GuidedRun", context: PullContext, row: PullRow, local: bool) -> None:
+    """A chosen LM Studio row: its command and what to do in LM Studio, nothing else -- no yes/no question and
+    no pull, and modelroom runs no `lms` (G7; AP9-LS-E, S1). The call form follows where the program is
+    (`lmstudio_install.lms_form`); a package that is on disk already says so in place of the command."""
+    name, system = str(row.name), run.room.system
+    form = lmstudio_install.lms_form(run.room)
+    if local:
+        first = [("class:note", lmstudio_install.on_disk_text(row.rank))]
+    else:
+        first = install_pull_line(row.rank, name, command=lmstudio_install.command_for(form, name, system))
+    run.screen.write(label_line(INSTALL_LABEL, first))
+    for text in lmstudio_install.hint_rows(form, system, context.document.scenario.context_requested, not local):
+        run.screen.write(label_line("", [("class:note", text)]))
 
 
 def held_by_runtime(

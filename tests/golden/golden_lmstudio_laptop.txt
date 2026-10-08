@@ -1,0 +1,31 @@
+ ── Step 5 of 5  Results ────────────────────────────────────────────────
+
+ laptop · context S 8k
+ room      graphics 7.0 GB for models (8.0 GB card minus reserve)
+           memory 23.6 GB for models (31.6 GB minus reserve)
+           disk unknown (modelroom render reads no machine live)
+ runtime   Ollama · LM Studio (from its profile)
+ #    Model                   Package                Fit          Speed         Memory    Download
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+ 1    Qwen3-8B                unsloth · Q4_K_M       tight        –             6.8 GB    4.7 GB
+ 2    Qwen3-8B                unsloth · Q8_0         fits (RAM)   –             10.5 GB   8.1 GB
+ shown     2 of 2 packages
+ memory    #1 fits into graphics memory, budget 7.0 GB (card minus reserve, from the profile)
+           #2 needs system memory, the graphics card helps, budget 23.6 GB
+           (memory minus reserve, from the profile)
+           memory reserve 8.0 GB is set in modelroom.toml;
+           computed from this machine it would be 7.9 GB
+ speed     nothing measured in the rows shown · say Yes in step 4 to measure an installed package
+ key       Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool
+           fits: up to 85 % · tight: up to 98 % · no fit: more
+           the pool is what the mode names, minus its reserve (per card) · gpu: one card
+           gpu_split: all cards together · cpu_gpu, cpu (RAM): the system memory
+           system memory keeps a quarter as reserve, 2 to 16 GB, unless modelroom.toml sets it
+           one memory shared by system and card counts as gpu, a quarter kept, no upper limit
+           off the card, and for a fit from size the highest class is fits
+           best: the least compression of the same model that fits
+           modelroom rates no model family against another
+           Speed is measured, see its column.
+
+ install   #1  ollama pull hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M
+ Quality of these models for your task: https://artificialanalysis.ai

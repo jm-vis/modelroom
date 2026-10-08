@@ -20,7 +20,11 @@ only reads what the render wrote.
   the one Ollama row it always was. Since AP9-SV2-I a vLLM row is a row of the list as well
   (`Fit.runtime` says it is one): named by its repo (`vllm <repo>`), judged against vLLM's own
   disk place (`disk_fit.place`), locked `no safe command` or `computed only: ...` where
-  `install_vllm.vllm_install` has no line for it.
+  `install_vllm.vllm_install` has no line for it. Since AP9-LS-E a Hugging Face GGUF package of a machine
+  that names LM Studio has a second entry, `lmstudio <owner>/<repo>@<quant>`, of the same rank: judged against
+  LM Studio's own place (`Disk.lmstudio`), locked `no safe command` or `computed only: lms get for ...`
+  where `lmstudio_install.lms_reason` says so. Each entry reads the disk of its own runtime
+  (`disk_fit.entry_over_disk(..., runtime=key)`); the table row stays one.
 - `repo_lines` names the repository of every shown row whose `packager · quant` another shown row
   of the same block has too (F7), with the file form where one repository has both.
 """
@@ -33,9 +37,10 @@ from typing import Mapping, Sequence
 
 from . import runtimes
 from .contracts import Package
-from .disk_fit import entry_download_gib, entry_over_disk, place, too_big_words
+from .disk_fit import entry_download_gib, entry_over_disk, entry_place, too_big_words
 from .document import MachineRanking, RankedEntry, RenderDocument
 from .install_vllm import NO_SAFE_COMMAND, safe_repo, vllm_install
+from .lmstudio_install import lms_reason
 from .profile import HardwareProfile
 from .quantization import package_identity_key
 from .room import Disk
@@ -225,13 +230,16 @@ def runtime_disk(runtime: str, disk: Disk | None, held: Mapping[str, frozenset] 
     """`disk` as the rows of the runtime with key `runtime` see it: `disk.held` is what the Ollama
     daemon holds (the guided run reads it there), so it counts for Ollama's rows alone. vLLM's rows
     read the disk nested in it (`Disk.vllm`, the Hugging Face cache; `None` where it was not read),
-    holding what it found itself and what its own `on_disk` found (`held`, by runtime key); any other
-    runtime sees the same free disk holding what its own `on_disk` found."""
+    holding what it found itself and what its own `on_disk` found (`held`, by runtime key); LM Studio's read
+    the disk nested in it too (`Disk.lmstudio`, AP9-LS-E); any other runtime sees the same free disk holding
+    what its own `on_disk` found."""
     if disk is None or runtime == runtimes.OLLAMA.key:
         return disk
     own = frozenset((held or {}).get(runtime, frozenset()))
     if runtime == runtimes.VLLM.key:
         return None if disk.vllm is None else replace(disk, vllm=replace(disk.vllm, held=disk.vllm.held | own))
+    if runtime == runtimes.LMSTUDIO.key:
+        return None if disk.lmstudio is None else replace(disk, lmstudio=replace(disk.lmstudio, held=disk.lmstudio.held | own))
     return replace(disk, held=own)
 
 
@@ -275,10 +283,10 @@ def block_rows(
         cell = f"{entry.packager} {dot} {entry.quantization}"
         for key, name in row_names(entry, package, block.profile):
             own = runtime_disk(key, disk, held)
-            too_big = entry_over_disk(entry, own)  # a package held already is never over (U11c)
+            too_big = entry_over_disk(entry, own, runtime=key)  # a package held already is never over (U11c)
             locked = _name_lock(key, name, entry, package, block.profile, ambiguous)
             over = locked is None and too_big
-            locked = too_big_words(entry_download_gib(entry, own), place(entry.fit.runtime, own)) if over else locked
+            locked = too_big_words(entry_download_gib(entry, own, runtime=key), entry_place(entry, own, key)) if over else locked
             identity = tuple(entry.package_identity)
             shown = cell if key == runtimes.OLLAMA.key else f"{runtimes.runtime_of(key).name} {dot} {cell}"
             rows.append(PullRow(entry.rank, shown, entry.weights_gib, name, locked, identity, over, key, too_big))
@@ -291,9 +299,15 @@ def _name_lock(
 ) -> str | None:
     """Why a row cannot be chosen for its name, or `None`. Ollama's: no safe name, then a name more
     than one package answers to. vLLM's: no safe command (name, revision, cards), then `computed
-    only` where its cards are not `nvidia-smi`'s (`install_vllm.vllm_install`), then the same collision."""
+    only` where its cards are not `nvidia-smi`'s (`install_vllm.vllm_install`), then the same collision.
+    LM Studio's: `no safe command`, or the `computed only: lms get for ...` of its package
+    (`lmstudio_install.lms_reason`), then the same collision."""
     if key == runtimes.VLLM.key:
         reason = NO_SAFE_COMMAND if name is None else vllm_install(package, entry.fit, profile).reason
+        if reason is not None:
+            return reason
+    elif key == runtimes.LMSTUDIO.key:
+        reason = NO_SAFE_COMMAND if package is None else lms_reason(package)  # `computed only: ...` or `no safe command`
         if reason is not None:
             return reason
     elif name is None:
@@ -348,7 +362,7 @@ def rank_over(block: MachineRanking, rows: Sequence[PullRow], disk: Disk | None)
     over = []
     for entry in block.ranked:
         group = [row for row in rows if row.rank == entry.rank]
-        if all(row.too_big for row in group) if group else entry_over_disk(entry, runtime_disk(entry.fit.runtime, disk)):
+        if all(row.too_big for row in group) if group else entry_over_disk(entry, runtime_disk(entry.fit.runtime, disk), runtime=entry.fit.runtime):
             over.append(entry.rank)
     return over
 

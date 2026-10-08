@@ -105,6 +105,7 @@ record the forms of its fields the sink allows. The file of the user account `re
 ("Remote machines").
 AP9-LS changes no schema version: `lmstudio` is a new value of `runtimes` and an allowed value of
 `Fit.runtime`, which no render writes in 0.2.0 ("Local servers and the vLLM load test", LM Studio).
+Every output of a machine without LM Studio stays byte for byte what it was.
 AP9-SV2-0 (ADR 0014, 2026-09-29, E8) steps snapshot schema to 2: a Hugging Face `tensor` package
 may now be `from_metadata`/`approved` (Ollama's own `tensor` packages, an MLX tag included, stay
 locked to `unresolved`/`format`, see "Package" below), `Package` gains `quantization_source`
@@ -2767,9 +2768,9 @@ reads as "Ollama only" as ever. A machine reached over SSH writes the field too 
 answers or `ollama` is in the `PATH`, vLLM through `detect_vllm` on the server's own platform, so a Windows or
 macOS server never lists it) and puts them in the profile it sends, literals only.
 
-`RuntimeKey` (`modelroom/profile.py`) names only `"ollama"` and `"vllm"` today; a later runtime
-(LM Studio, AP9-LS) is a new value in the same list, additive again -- never a plug-in, "Laufzeit
-als Eintrag" (AP9-SV2-L builds the `RUNTIMES` table this field feeds).
+`RuntimeKey` (`modelroom/profile.py`) names `"ollama"`, `"vllm"` and, since AP9-LS-E, `"lmstudio"`: the
+third runtime is a new value in the same list, additive again -- never a plug-in, "Laufzeit als Eintrag"
+(AP9-SV2-L builds the `RUNTIMES` table this field feeds).
 
 ### Scenario
 
@@ -5893,9 +5894,9 @@ directory handle or `O_NOFOLLOW`: not portable to Windows); that window reads me
 in a cache that belongs to the user.
 
 **LM Studio (AP9-LS, GGUF only).** The third runtime of the table, one entry and no new package class. The
-entry `lmstudio` is a new value of `RuntimeKey` and of `Fit.runtime`; the value becomes effective with the
-entry (AP9-LS-E), and no render writes it in 0.2.0, because a package has one fit, the one of the first
-runtime that accepts it. The fields: name `LM Studio`; origin `http://127.0.0.1:1234`, fixed, no setting;
+entry `lmstudio` is a new value of `RuntimeKey` and of `Fit.runtime`; the value is effective since the
+entry is registered (AP9-LS-E), and no render writes it in 0.2.0, because a package has one fit, the one of the
+first runtime that accepts it (Ollama's). The fields: name `LM Studio`; origin `http://127.0.0.1:1234`, fixed, no setting;
 `hello_field` `lmstudio` (a computer reached over SSH reads `absent`, no remote operation exists for it);
 `accepts` and `shown_only_with` the Hugging Face GGUF packages, never an Ollama or a tensor package; `fit`
 the fit rule of Ollama (both run llama.cpp); `install_name` `<owner>/<repo>@<quant>` where the command is
@@ -5935,6 +5936,46 @@ may load a model on request`. The start screen still names the server: `server  
 context <n>`, `<k> models loaded`, or `127.0.0.1:1234  asks for an API token`. Nothing is written. **Limits:**
 port 1234 only; the standard model folder only; a server with the version 1 list of `GET /api/v1/models`, no
 minimum version; LM Studio on another computer is not read.
+
+**One table row, two list entries (AP9-LS-E, F7 a).** A Hugging Face GGUF package has one fit and so one row
+of the table, shown once with Ollama's fit in one table without a section, a prefix or a legend of its own. On a
+machine whose profile names Ollama and LM Studio the pull list gives it two entries of the same rank, Ollama's and
+`LM Studio · <packager> · <quant>`, with the list values `hf.co/<repo>:<quant>` and `lmstudio <owner>/<repo>@<quant>`;
+a machine with LM Studio alone sees the GGUF packages and the one entry. An Ollama-library package and a tensor
+package have no LM Studio entry. A section `with LM Studio` exists only where a machine has LM Studio and vLLM and
+no Ollama (its GGUF rows would otherwise be titled `with Ollama`), and the ranking rule then names LM Studio in
+place of Ollama; every machine with Ollama keeps its words.
+
+**A choice in the list prints, it never installs (G7, S1).** Choosing an LM Studio entry prints
+`lms get --gguf <owner>/<repo>@<quant>` and two lines of what to do in LM Studio (load it with the context length
+of the run, start the server; the last line says that LM Studio is found and not measured), asks nothing and calls
+no `/api/pull`; so does the choice of any entry of a runtime but Ollama (the daemon pull is Ollama's alone). The notes
+break between words to what a labeled row has left of the 100 characters; a command to copy is never broken. Where `lms` is only in `~/.lmstudio/bin` the line is the fixed shell expression
+(`& "$env:USERPROFILE\.lmstudio\bin\lms.exe" ...` in PowerShell, `"$HOME/.lmstudio/bin/lms" ...` elsewhere) with a
+hint line; where the program is not found, the `PATH` form with the hint that it lives in `.lmstudio/bin`. Only a
+package with exactly one weight file in the root of its repository and a stage of the GGUF stages without `UD-`
+has a command; a split package, a file in a subfolder or another stage is locked `computed only: lms get for ...
+is not checked`, an unsafe name or stage `no safe command` (the same texts under the table). A package that lies
+in `~/.lmstudio/models/<owner>/<repo>/<file>` with the size of the catalog revision (`stat` only; a link that
+leaves the folder makes it unknown) is `local already`; the choice and the line under the table then say
+`#<n> is on disk already (size checked)` in place of the command. A package chosen for another computer is handed
+over as the `PATH` line with the machine named, never run.
+
+**The disk (F6 a, S3, S7).** An LM Studio entry is checked against the free disk of LM Studio's model folder, read
+now at the nearest existing folder above `~/.lmstudio/models` (`Disk.lmstudio`, after vLLM's `Disk.vllm`; this
+computer only, never over SSH): the download of the catalog revision plus the margin of 1 GB, as for the other
+two. Each entry of the list reads the place of its own runtime. The Markdown file has the disk alone, so a
+Hugging Face GGUF row of a machine that names LM Studio (`Disk.runtimes`, the runtimes of its profile) is marked
+there, as in the terminal, only where it is too big at the place of every one of Ollama and LM Studio that the
+machine has; any other row is judged at the place of its own runtime. The `room` line names the places:
+`disk 41.2 GB free on C: (Ollama and LM Studio models)` on one drive, `(Ollama, LM Studio and vLLM models)` for
+three, one piece for each drive otherwise; a machine with LM Studio and no Ollama names LM Studio's place. A
+machine with LM Studio keeps Ollama's budgets and its table form (the `speed` line and the reserve hint) and gets
+a `runtime` row naming its runtimes in table order: `LM Studio (from its profile)` where Ollama is not among them,
+`Ollama · LM Studio (from its profile)` with Ollama, and more names with vLLM (`Ollama · vLLM · LM Studio`). The
+second list entry of a package (the LM Studio one) exists only where Ollama is there at the same time. An entry of
+the list reads the place of exactly the runtime it names (`disk_fit.entry_place`); a runtime of the table with no
+place of its own is judged at none, and falls back to the row's own `Fit.runtime` only where no runtime is named.
 
 **`modelroom` never runs `lms`.** No module starts a process for LM Studio, `lms ls` included: it starts the
 application in the background and opens the port (recording of 2026-10-08), so it is no read. A static test

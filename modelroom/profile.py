@@ -21,8 +21,8 @@ Schema 4 is extended again without a step (AP9-SV2-0, decided 2026-09-29, the pr
 installed at the last measurement (F6's GF decision -- a run without a live connection, an
 import or the sharing point included, still sees a remembered machine's vLLM packages). Empty
 by default and excluded when empty, so a profile written before it reads unchanged, byte for
-byte. `RuntimeKey` names only `"ollama"` and `"vllm"` here; a later runtime (LM Studio, AP9-LS)
-is a new value in the same list, additive again.
+byte. `RuntimeKey` names `"ollama"`, `"vllm"` and, since AP9-LS-E, `"lmstudio"` (GGUF only): a new value
+in the same list, additive again, and no schema step.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ MachineClass = Literal["laptop", "workstation", "server", "unknown"]
 MACHINE_CLASSES: tuple[str, ...] = ("laptop", "workstation", "server")
 # The local-server runtimes a machine's profile may remember (AP9-SV2-0, `HardwareProfile.runtimes`
 # below). A new runtime is a new value here, never a plug-in -- "Laufzeit als Eintrag" (AP9-SV2-L).
-RuntimeKey = Literal["ollama", "vllm"]
+RuntimeKey = Literal["ollama", "vllm", "lmstudio"]
 # The GPU states the fit computes for: no GPU at all (CPU), one measured GPU, one GPU entered by
 # hand, two graphics cards or more (decided 2026-09-26), and unified memory (one pool shared by
 # the system and the model; decided 2026-09-25).

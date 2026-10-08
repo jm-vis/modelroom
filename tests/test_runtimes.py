@@ -66,8 +66,8 @@ def test_every_runtime_has_every_field():
             assert getattr(runtime, field.name) is not None, f"{runtime.key}.{field.name} is unset"
 
 
-def test_runtime_keys_are_ollama_and_vllm_in_that_order():
-    assert [runtime.key for runtime in runtimes.RUNTIMES] == ["ollama", "vllm"]
+def test_runtime_keys_are_ollama_vllm_and_lmstudio_in_that_order():
+    assert [runtime.key for runtime in runtimes.RUNTIMES] == ["ollama", "vllm", "lmstudio"]
 
 
 def test_each_runtimes_server_is_local_servers_own_entry():
@@ -131,8 +131,10 @@ def test_vllm_refuses_a_gguf_package_and_an_ollama_tensor_package():
     assert runtimes.VLLM.accepts(mlx) is False
 
 
-def test_accepting_runtimes_names_ollama_alone_for_a_gguf_package():
-    assert [runtime.key for runtime in runtimes.accepting_runtimes(_package(format="gguf"))] == ["ollama"]
+def test_accepting_runtimes_names_ollama_and_lmstudio_for_a_hugging_face_gguf_package():
+    """AP9-LS-E: LM Studio takes the Hugging Face GGUF packages beside Ollama, in the order of the table."""
+    assert [runtime.key for runtime in runtimes.accepting_runtimes(_package(format="gguf"))] == ["ollama", "lmstudio"]
+    assert [runtime.key for runtime in runtimes.accepting_runtimes(_ollama_package())] == ["ollama"]
 
 
 def test_accepting_runtimes_names_vllm_alone_for_a_hugging_face_tensor_package():
@@ -442,8 +444,8 @@ def _held_by_ollama(q4):
 
 def test_what_ollama_holds_frees_no_row_of_another_runtime_in_the_pull_list(monkeypatch):
     """`pull_rows` with a disk and no map of holdings: `disk.held` is the Ollama daemon's, so the
-    Ollama row needs no disk, while the third runtime's row of the same package, which holds
-    nothing itself, is locked for its download."""
+    Ollama row needs no disk. The third runtime has no place of its own (`disk_fit.place`), so its
+    row is judged at none: what Ollama's full disk holds is not its disk (AP9-LS-E, S7)."""
     from modelroom.pull_choice import pull_rows
 
     from fixture_rows import document, package
@@ -454,15 +456,15 @@ def test_what_ollama_holds_frees_no_row_of_another_runtime_in_the_pull_list(monk
 
     rows = pull_rows(doc, "workstation", disk=_held_by_ollama(q4), packages=[q4])
 
-    assert [(row.runtime, row.over_disk, row.locked is None) for row in rows] == [("ollama", False, True), ("third", True, False)]
+    assert [(row.runtime, row.over_disk, row.locked is None) for row in rows] == [("ollama", False, True), ("third", False, True)]
     assert [(row.runtime, row.over_disk) for row in pull_rows(doc, "workstation", disk=_held_by_ollama(q4))] == [("ollama", False)]
 
 
 def test_the_install_line_checks_the_disk_against_its_own_runtimes_holdings(monkeypatch):
     """The install line under the table decides the row's runtime before the disk: on a machine
-    with the third runtime alone, what the Ollama daemon holds does not make its download fit, so
-    no command is offered -- the line says no package fits. With Ollama on the machine, the same
-    holding frees the row and the line is Ollama's, as before."""
+    with the third runtime alone, that runtime has no place of its own, so its row is judged at none and
+    the line offers its command (AP9-LS-E, S7). With Ollama on the machine, the same holding frees
+    Ollama's row and the line is Ollama's, as before."""
     from modelroom.room import LiveRoom
     from modelroom.screen import plain
     from modelroom.views import RunView, terminal_blocks
@@ -477,7 +479,7 @@ def test_the_install_line_checks_the_disk_against_its_own_runtimes_holdings(monk
         lines = [plain(line).strip() for line in terminal_blocks(_on_machine(document([q4]), keys), "workstation", view=view)]
         return [line for line in lines if line.startswith("install")]
 
-    assert len(install(["third"])) == 1 and install(["third"])[0].startswith("install   no package fits")
+    assert install(["third"]) == ["install   #1  third get acme/nova:Q4_K_M"]
     assert install(["ollama"]) == ["install   #1  ollama pull hf.co/unsloth/Nova-7B-GGUF:Q4_K_M"]
 
 
@@ -545,7 +547,8 @@ def _expected(machine, holder, disk_gib, names):
     runtime holds the package itself. None fits: no package fits. Else the first that fits and has
     a name of its own is offered; where every one that fits has none, the first of them says why."""
     keys = [key for key in ("ollama", "third") if key in machine]
-    fitting = [key for key in keys if disk_gib == 100 or holder == key]
+    # The third runtime keeps its models at no place of its own (`disk_fit.place`): it is judged at none, so it always fits.
+    fitting = [key for key in keys if disk_gib == 100 or holder == key or key == "third"]
     if not fitting:
         return "no package fits", None
     free = next((key for key in fitting if names[key] == "unique"), None)

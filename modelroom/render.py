@@ -42,10 +42,9 @@ from .quantization import package_identity_key
 from .parameters import parameter_count
 from .reserve import ram_reserve
 from .runtimes import MachineRuntimes, fit_for, runtimes_among, visible_packages
-from .views_runtime import block_runtimes
+from .views_sections import gguf_rule_name
 from .vllm_words import is_vllm, reason_sentence as vllm_reason_sentence, row_note as vllm_row_note
 from .ranking import (
-    BOTH_RUNTIMES_RULE,
     RANKING_RULE,
     RANKING_RULE_PER_MODEL,
     ModelFacts,
@@ -53,6 +52,7 @@ from .ranking import (
     Ranking,
     SetAside,
     ShownRow,
+    both_runtimes_rule,
     rank_packages,
     row_sentence,
     shown_rows,
@@ -618,7 +618,8 @@ def build_render_document(
     rule = RANKING_RULE_PER_MODEL if per_model else RANKING_RULE
     # F5 (Codex r5-1): the rule says the per-runtime selection wherever a machine ranks both.
     # The same predicate as the sections and the whole vLLM ranking, over every row shown (Codex r6-1).
-    rule += BOTH_RUNTIMES_RULE if any(len(block_runtimes(block)) > 1 for block in blocks) else ""
+    gguf_name = gguf_rule_name(blocks)  # S4: the runtime of the GGUF rows; `None` where no machine shows rows of two
+    rule += both_runtimes_rule(gguf_name) if gguf_name else ""
     return RenderDocument(
         schema_version=DOCUMENT_SCHEMA_VERSION,
         snapshot_run_at=snapshot.run_at,

@@ -1,0 +1,7 @@
+ ── Step 5 of 5  Results ────────────────────────────────────────────────
+
+ server · context L 32k
+ room      graphics up to 82.8 GB for vLLM (4 x 22.5 GB cards, 0.92 of each)
+ runtime   vLLM (from its profile)
+ no package of the configured base models is ranked here
+ shown     0 of 0 packages

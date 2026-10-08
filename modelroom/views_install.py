@@ -23,6 +23,7 @@ from .disk_fit import block_place, known, none_fits_words, skipped_words, vllm_o
 from .document import MachineRanking, RankedEntry
 from .install_vllm import COMPUTED_ONLY, NO_SAFE_COMMAND, install_block_lines, vllm_install
 from .intro import label_line
+from .lmstudio_install import is_lms_lock, on_disk_text
 from .pull_choice import NOT_UNIQUE, Offered, PullRow, block_rows, offered, package_of, rank_over
 from .room import Disk
 from .screen import Line, install_pull_line
@@ -134,10 +135,17 @@ def install_lines(
         note = f"#{stop.rank} {NOT_UNIQUE_INSTALL}" if stop is not None and stop.locked == NOT_UNIQUE else None
         note = f"#{stop.rank} {COMPUTED_ONLY}" if stop is not None and stop.locked == COMPUTED_ONLY else note
         note = f"#{stop.rank} {NO_SAFE_COMMAND}" if stop is not None and stop.locked == NO_SAFE_COMMAND else note
+        note = f"#{stop.rank} {stop.locked}" if stop is not None and stop.runtime == runtimes.LMSTUDIO.key and is_lms_lock(stop.locked) else note
         return [] if note is None else [[], label_line(INSTALL_LABEL, [("class:note", note)])]
     row, runtime = offer.row, runtimes.runtime_of(offer.row.runtime)
     if runtime.key == runtimes.VLLM.key:
         return _vllm_lines(block, row, own, disk, packages, held, live_vllm, offer.skipped if reads else (), dash)
+    lms = disk.lmstudio if disk is not None else None
+    if runtime.key == runtimes.LMSTUDIO.key and own and (
+        row.identity in (held or {}).get(runtime.key, frozenset()) or (lms is not None and row.identity in lms.held)
+    ):
+        # LM Studio holds the package already (S8): the line says so in place of a download that is not needed.
+        return [[], label_line(INSTALL_LABEL, [("class:note", on_disk_text(row.rank))])]
     command = runtime.command(str(row.name))
     if own:
         # The one line of this view that may pass 100 characters: it is a command to copy, and a

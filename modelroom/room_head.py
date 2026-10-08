@@ -19,10 +19,10 @@ from typing import Literal
 
 from .document import MachineRanking
 from .fit_vllm import NO_CARD_REASON, SHARED_MEMORY_REASON, VLLM_GPU_MEMORY_UTILIZATION, largest_pool
-from .hf_cache import shared_disk_words, vllm_disk_words
+from .hf_cache import lmstudio_disk_words, shared_disk_words, vllm_disk_words
 from .intro import LABEL_COLUMN
 from .reserve import old_default_hint
-from .room import UNCLEAR_REASON, LiveRoom, LoadedModel, disk_words, gb, graphics_words
+from .room import UNCLEAR_REASON, Disk, LiveRoom, LoadedModel, disk_words, gb, graphics_words
 from .screen import JOIN_WIDTH
 
 Where = Literal["this", "other", "render", "ssh", "ssh_inactive"]
@@ -48,19 +48,71 @@ def head_pieces(
     `runtime_keys` are the machine's runtimes (`runtimes.machine_runtime_keys`, F5, Codex r5-2):
     Ollama's budgets and its disk only where Ollama is one of them -- named `for Ollama` beside vLLM,
     `for models` alone, word for word as before -- and vLLM's pool where vLLM is. vLLM has no
-    system-memory fallback, so it adds no memory piece; its disk is `_disk_pieces`'s.
+    system-memory fallback, so it adds no memory piece; its disk is `_disk_pieces`'s. LM Studio runs the
+    same llama.cpp under the same fit, so its machine has the same budgets (AP9-LS-E): beside vLLM they are
+    named for the runtimes of the GGUF rows, `for LM Studio` or `for Ollama and LM Studio`.
     """
     profile = block.profile
     ollama, vllm = "ollama" in runtime_keys, "vllm" in runtime_keys and profile is not None
-    whom = "Ollama" if vllm else "models"
+    lmstudio = "lmstudio" in runtime_keys
+    whom = _gguf_names(ollama, lmstudio) if vllm else "models"
     if profile is None:
         pieces = ["graphics unknown", "memory unknown"]
     elif profile.gpu_state == "unified_memory":
         pieces = [_shared_piece(block, whom)]
     else:
         pieces = [_graphics_piece(block, whom), _memory_piece(block, whom)]
-    pieces = (pieces if ollama else []) + ([_vllm_piece(block)] if vllm else [])
+    pieces = (pieces if ollama or lmstudio else []) + ([_vllm_piece(block)] if vllm else [])
+    if lmstudio:
+        return [*pieces, *_disk_pieces_with_lmstudio(live, where, block.machine, ollama, vllm)]
     return [*pieces, *_disk_pieces(live, where, block.machine, ollama, vllm)]
+
+
+def _gguf_names(ollama: bool, lmstudio: bool) -> str:
+    """`Ollama`, `LM Studio` or `Ollama and LM Studio`: whom the budgets of the GGUF rows are for beside vLLM."""
+    return "Ollama and LM Studio" if ollama and lmstudio else "LM Studio" if lmstudio else "Ollama"
+
+
+def _disk_pieces_with_lmstudio(live: LiveRoom | None, where: Where, machine: str, ollama: bool, vllm: bool) -> list[str]:
+    """The disk piece(s) of a machine that names LM Studio (AP9-LS-E, S3): one place per runtime that has one
+    read (`Disk.lmstudio`, `Disk.vllm`; this machine only), in the order Ollama, LM Studio, vLLM, the places on
+    one drive together in one piece named for all of them, `disk 41.2 GB free on C: (Ollama and LM Studio
+    models)`. Ollama's place keeps its own words where it is alone on its drive (`_disk_piece`, also when it
+    was not read). A place that was not read says nothing beside Ollama's; a machine with LM Studio and no
+    Ollama whose place was not read says that the disk is not known, never Ollama's."""
+    disk = live.disk if live is not None else None
+    read = disk is not None and disk.known
+    places: list[tuple[str, Disk]] = []
+    if ollama and read:
+        places.append(("Ollama", disk))
+    if disk is not None and disk.lmstudio is not None and disk.lmstudio.known:
+        places.append(("LM Studio", disk.lmstudio))
+    if vllm and disk is not None and disk.vllm is not None and disk.vllm.known:
+        places.append(("vLLM", disk.vllm))
+    pieces: list[str] = [_disk_piece(live, where, machine)] if ollama and not read else []
+    drives: dict[str | None, list[tuple[str, Disk]]] = {}
+    for name, place in places:
+        drives.setdefault(place.drive, []).append((name, place))
+    for members in drives.values():
+        names = [name for name, _place in members]
+        if len(members) > 1:
+            pieces.append(shared_disk_words(members[0][1], names))
+        elif names == ["Ollama"]:
+            pieces.append(_disk_piece(live, where, machine))
+        else:
+            words = lmstudio_disk_words if names == ["LM Studio"] else vllm_disk_words
+            pieces.append(words(members[0][1]))
+    if not ollama and not places:
+        pieces.append(_unread_disk_piece(where, machine))
+    return pieces
+
+
+def _unread_disk_piece(where: Where, machine: str) -> str:
+    """The words for a place nobody read on a machine without Ollama: what `_disk_piece` says when no disk was
+    read, and never Ollama's."""
+    if where == "ssh_inactive":
+        return f"disk unknown ({machine} not connected in this run)"
+    return RENDER_DISK if where == "render" else ANOTHER_COMPUTER_DISK if where == "other" else DISK_UNKNOWN
 
 
 def _disk_pieces(live: LiveRoom | None, where: Where, machine: str, ollama: bool, vllm: bool) -> list[str]:

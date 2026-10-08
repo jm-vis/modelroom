@@ -318,10 +318,10 @@ def test_a_profile_with_runtimes_round_trips_through_write_and_read():
 def test_an_unknown_runtime_key_is_rejected():
     """Control test, for a reason worth stating: `runtimes` itself was an unknown field at
     `a1ca1a2` (`extra="forbid"`), so this already raised `ValidationError` there -- the right
-    outcome for the wrong reason. After this sub-package it raises because `"lmstudio"` is
-    outside `RuntimeKey` (`"ollama" | "vllm"`), which is the rule this test exists to check."""
+    outcome for the wrong reason. After this sub-package it raises because `"mlx"` is outside
+    `RuntimeKey` (`"ollama" | "vllm" | "lmstudio"`, AP9-LS-E), which is the rule this test exists to check."""
     with pytest.raises(ValidationError):
-        HardwareProfile.model_validate(_profile_payload(runtimes=["lmstudio"]))
+        HardwareProfile.model_validate(_profile_payload(runtimes=["mlx"]))
 
 
 # --- Fit.runtime / at_once / cards (AP9-SV2-F): additive, excluded at the Ollama default ----------
@@ -356,8 +356,8 @@ def test_a_vllm_fit_writes_its_own_runtime_at_once_and_cards():
 def test_an_unknown_fit_runtime_is_rejected():
     """`Fit.runtime` is checked against `profile.RuntimeKey` at validation time (a deferred import,
     `contracts_fit.py`'s own docstring): a value outside it is refused the same way `runtimes`
-    refuses `"lmstudio"` above, not silently accepted as a third kind of row."""
+    refuses `"mlx"` above, not silently accepted as a fourth kind of row."""
     payload = json.loads(json.dumps(EXAMPLES["Fit"]))
-    payload.update(runtime="lmstudio")
+    payload.update(runtime="mlx")
     with pytest.raises(ValidationError):
         Fit.model_validate(payload)
