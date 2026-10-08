@@ -252,16 +252,22 @@ def yes_no(answer: bool) -> str:
 def machines_words(picked: Sequence[str], words: Mapping[str, str] | None = None) -> str:
     """What was marked in the machine list, in the words of its own entries.
 
-    `words` names what the list alone knows: this machine with its name and class, a profile of the
-    folder with its label (AP9-UX F and C1); every other value takes the list's fixed words.
+    `words` names what the list alone knows: this machine with its class (not its name, FR-N2), a
+    profile of the folder with its label (AP9-UX F and C1); every other value takes the list's fixed words.
     """
     named = {**_MACHINE_WORDS, **(words or {})}
     return ", ".join(named.get(value, value) for value in picked) or NO_MACHINE
 
 
-def this_machine_words(name: str, *details: str) -> str:
-    """`this machine (gpu-server, server, as measured 2026-09-28)`: the name, then what is known (AP9-UX F)."""
-    return f"{THIS_MACHINE} ({', '.join([name, *(detail for detail in details if detail)])})"
+def this_machine_words(name: str | None, *details: str) -> str:
+    """`this machine (server-9a12748b, server, as measured 2026-09-28)`: the name, then what is known (AP9-UX F).
+
+    `name` is the `display_name` of the profile of this machine -- the one name the result shows for it
+    (FR-N2) -- or `None` where no profile was measured here (none yet, or the binding is to a profile
+    entered by hand): `this machine (measure now)`. The configuration key is never a name here.
+    """
+    words = [word for word in (name, *details) if word]
+    return f"{THIS_MACHINE} ({', '.join(words)})" if words else THIS_MACHINE
 
 
 def clone_words(answer: str) -> str:

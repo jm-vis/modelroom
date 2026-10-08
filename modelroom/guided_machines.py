@@ -2,12 +2,13 @@
 
 Moved out of `modelroom/guided.py` (AP9-UX, size guard): `_hardware_class`, `_gib`,
 `_profile_choices`, `_machine_choices` and `_measured_here`. This module never imports `guided`;
-the machine's own name comes in as an argument (`guided._machine_key` stays there).
+the machine's key (`guided._machine_key`) stays there and is not printed by this module (FR-N2).
 
 The list, from the top (CONTRACTS.md, "Guided mode", step 1; AP9-UX C and C1):
 
 1. the bound profile of this machine, where it was measured here (`profile:<profile_id>`);
-2. `this machine (<name>, measure again)` with row 1, else `(<name>, measure now)` (`this-machine`);
+2. `this machine (<name>, measure again)` with row 1, else `this machine (measure now)` (`this-machine`);
+   `<name>` is the `display_name` of the profile (FR-N2), never the configuration key;
 3. every other profile of the folder a machine of the configuration names, by class, then label;
 4. `import a profile file`; 5. the shared folder (`share`, `modelroom/guided_share.py`, FR-S) --
    always there, its label carried in from outside since this module never touches `remote.json` or
@@ -28,6 +29,7 @@ from .guided_entered import entered_class
 from .guided_remote import SSH_ROW
 from .importer import ProfileScan, _label
 from .intro import card_names, class_words, graphics_words
+from .neutral import is_neutral
 from .profile import HardwareProfile
 from .screen import THIS_MACHINE, this_machine_words
 
@@ -70,6 +72,15 @@ def _class_word(profile: HardwareProfile | None) -> str:
     return "" if profile is None or profile.machine_class == _UNKNOWN else profile.machine_class
 
 
+def _class_detail(profile: HardwareProfile) -> str:
+    """The class for row 1, unless the name says it already: `laptop-<8 hex>` of a laptop (FR-N2).
+
+    An alias, or a neutral name whose prefix is another class than the profile's now, keeps the detail.
+    """
+    word = _class_word(profile)
+    return "" if is_neutral(profile.display_name) and profile.display_name.partition("-")[0] == word else word
+
+
 def _profile_choices(
     scan: ProfileScan, configured: set[str], skip: str | None = None, ssh_aliases: Mapping[str, str] = _NO_ALIASES
 ) -> tuple[list[Choice], list[Choice]]:
@@ -105,15 +116,16 @@ def _profile_choices(
 def _machine_choices(
     scan: ProfileScan,
     bound: HardwareProfile | None,
-    name: str,
     configured: Iterable[str],
     share_label: str,
     ssh_aliases: Mapping[str, str] = _NO_ALIASES,
 ) -> list[Choice]:
     """The machine list of step 1, rows 1 to 8 (module docstring); nothing is marked.
 
-    `bound` is the profile this folder binds this machine to, `name` this machine's key in
-    `[machines.<name>]`, `configured` every `profile` a machine of the configuration names. A binding
+    `bound` is the profile this folder binds this machine to, `configured` every `profile` a machine
+    of the configuration names. This machine is named by the `display_name` of that profile -- the
+    name the result shows (FR-N2); its key in `[machines.<name>]` stays the run's internal token and
+    is not printed, and without a profile of this machine there is no name yet. A binding
     to a profile entered by hand is no row 1: nothing of this machine was measured here, so its row
     says `measure now` and the profile stands among the others (decided 2026-09-26, Review r3-N3).
     `share_label` is row 5's own text (FR-S, `guided_share.machine_list_row`): always there, whatever
@@ -122,11 +134,12 @@ def _machine_choices(
     (`a computer over SSH`) always stands, right after `import`.
     """
     here = bound if _measured_here(bound) else None
+    shown = here.display_name if here is not None else None  # FR-N2: the name the result shows, not the key
     rows = []
     if here is not None:
         measured = f"as measured {here.recorded_at.date().isoformat()}"
-        rows.append(Choice(f"{PROFILE_PREFIX}{here.profile_id}", this_machine_words(name, _class_word(here), measured)))
-    rows.append(Choice("this-machine", this_machine_words(name, "measure again" if here is not None else "measure now")))
+        rows.append(Choice(f"{PROFILE_PREFIX}{here.profile_id}", this_machine_words(shown, _class_detail(here), measured)))
+    rows.append(Choice("this-machine", this_machine_words(shown, "measure again" if here is not None else "measure now")))
     chosen, blocked = _profile_choices(scan, set(configured), here.profile_id if here is not None else None, ssh_aliases)
     tail = [
         Choice("import", "import a profile file"),
@@ -141,7 +154,7 @@ def machine_answer_words(scan: ProfileScan, bound: HardwareProfile | None) -> di
     """The words of the answer line for each row that has words of its own (`screen.machines_words`)."""
     here = bound if _measured_here(bound) else None
     # The answer line names this machine by its class alone: its neutral key says nothing to a reader
-    # and would push the line over the width of the screen (FR-N); the list itself shows the key.
+    # and would push the line over the width of the screen (FR-N); the list shows the profile's name.
     own = f"{THIS_MACHINE} ({_class_word(here)})" if _class_word(here) else THIS_MACHINE
     words = {"this-machine": own}
     for key, profile in scan.profiles.items():

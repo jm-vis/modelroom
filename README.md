@@ -139,9 +139,9 @@ every number of such a machine is computed, none measured. The measurement is cr
 
 Nothing in the list is marked in advance: the arrow keys move, the space bar marks a row, and Enter
 takes what is marked or, with nothing marked, the row under the pointer. Where this machine was
-measured in this folder before, its profile is the first row (`this machine (computer-5c1e9a07,
-server, as measured 2026-09-28)`), so Enter alone keeps it and measures nothing; `measure again` is
-the row under it. The result covers exactly the machines you marked in this run.
+measured in this folder before, its profile is the first row (`this machine (server-5c1e9a07,
+as measured 2026-09-28)`, the name the result shows for it), so Enter alone keeps it and
+measures nothing; `measure again` is the row under it. The result covers exactly the machines you marked in this run.
 
 **Machine names** (FR-N). No result file (`modelroom.toml`, `docs/`, `state/`) and no export file
 carries a host name; the neutral key of this computer and your SSH aliases are the only values from

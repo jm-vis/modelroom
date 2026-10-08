@@ -29,7 +29,7 @@ from modelroom.guided_write import (
     with_requests,
     with_writer,
 )
-from modelroom.neutral import is_neutral
+from modelroom.neutral import is_neutral, neutral_profile
 from modelroom.search_apply import ConfigChangedError, apply_hits, write_configuration
 from modelroom.state import atomic_write_json
 
@@ -208,7 +208,7 @@ def test_the_checks_of_the_profile_record_hold_again_after_the_reload(tmp_path: 
     written = update_config(path, change, now=NOW)
 
     assert "workstation" not in written.machines
-    assert said.problems == [f"{path}: the machine 'workstation' is gone from the configuration; run again"]
+    assert said.problems == [f"{path}: this machine is gone from the configuration; run again"]  # FR-N2: no key as a name
 
 
 def test_the_context_is_kept_on_top_of_the_other_runs_change(tmp_path: Path):
@@ -310,7 +310,11 @@ def test_the_found_profiles_are_worked_out_again_on_the_new_file(tmp_path: Path)
 
     assert written.machines[f"computer-{'5' * 8}"].profile is None, "the other run's machine was written over"
     [name] = [name for name, machine in written.machines.items() if machine.profile == "5" * 16]
-    assert is_neutral(name) and said.notes == [f"machine '{name}' added for the profile {'5' * 16} found in this folder"]
+    # FR-N2: the note names the machine as the list and the result do (the profile's `display_name`), not by the
+    # key `key_for` gave it when the wanted one was taken.
+    shown = neutral_profile(v2_profile(profile_id="5" * 16, display_name="server")).display_name
+    assert is_neutral(name) and name != shown
+    assert said.notes == [f"machine '{shown}' added for the profile {'5' * 16} found in this folder"]
 
 
 def test_the_second_attempt_scans_again_and_takes_the_reserves_the_file_holds_then(tmp_path: Path):

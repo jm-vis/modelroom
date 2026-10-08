@@ -163,7 +163,7 @@ def with_profile(name: str, profile_id: str | None, measured_paths: PathsConfig,
             said.problems.append(f"{config_file}: [paths] changed while this machine was measured; run again")
             return None
         if name not in current.machines:
-            said.problems.append(f"{config_file}: the machine {name!r} is gone from the configuration; run again")
+            said.problems.append(f"{config_file}: this machine is gone from the configuration; run again")  # no key as a name (FR-N2)
             return None
         if profile_id is None or current.machines[name].profile == profile_id:
             return None
@@ -244,7 +244,9 @@ def with_found_profiles(said: Said) -> Change:
             profile = neutral_profile(found)
             name = key_for(profile.profile_id, profile.machine_class, profile.display_name, set(data["machines"]))
             data["machines"][name] = new_machine_entry(current, writer=False, profile=profile.profile_id)
-            said.notes.append(f"machine {name!r} added for the profile {profile.profile_id} found in this folder")
+            # The note names the machine as the list and the result do -- the profile's `display_name`;
+            # `name` is only the key of the entry, which `key_for` may have had to vary (FR-N2).
+            said.notes.append(f"machine {profile.display_name!r} added for the profile {profile.profile_id} found in this folder")
         return Configuration.from_dict(data) if said.notes else None
 
     return change
