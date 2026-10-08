@@ -76,6 +76,21 @@ datasets) into the entry that records the set-up.
    decision that exists already, another publication pending. A rejected number puts its repo on the rejection list, a
    rejected candidate its account (a candidate of open kind: its repo). An admitted publisher is entered with its account
    as name and no region: fill in both by hand in a later change.
+   **Deciding on candidates (rule of 2026-10-08).** The catalog is the public list of sources the maintainer trusts;
+   admitting an account says "we watch this maker, its models appear by themselves". A name that is not in the catalog
+   costs the user nothing: a typed name is never hidden and modelroom measures every model. So the risk sits on the
+   side of admitting, not of rejecting; a rejected trending account comes back as a candidate after 30 days if the
+   trend holds.
+   - **Admit** an account with its own architecture or product line, several models or versions, at least 1000 likes
+     or an established history, an open licence, and a region that can be named.
+   - **Reject** single persons, one-model accounts younger than 30 days, packagers (B2: only fine-tunes or
+     quantisations of other makers' base models), and parts without a catalog kind (B3: VAEs, CLIP variants, bert
+     implementations, rerankers).
+   - **In doubt, reject**; the 30-day resubmission decides.
+   What admitting risks: the reputation of the list (thin accounts dilute it), `custom_code` repos that the list then
+   implicitly recommends, licences such as `other` that mislead commercial users, the daily request budget (every
+   watched account eats part of it), and a region that cannot be named (the publisher record then needs a later
+   change by hand).
 3. **A candidate of open kind** becomes a row only through the kind the maintainer names:
    `... --complete <proposal.json> --proposal-sha <checksum> --admit K3 --kind vision`. It rewrites `proposal.json` and
    `proposal.md` with new numbers and prints the new checksum; show it again and apply with the new checksum.
