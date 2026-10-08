@@ -569,3 +569,46 @@ Machine paths and user names are blacked out (`tests/test_public_hygiene.py`).
   every `.gguf` file but the `Q4_K_M` one dropped; the remaining LFS `oid` is the digest the
   daemon shows. The cards keep only the fields the fetch reads (`siblings`, `spaces` and
   `widgetData` removed).
+
+## LM Studio (AP9-LS)
+
+Recorded on **2026-10-08** by the maintainer against one LM Studio installation (the app that ships `lms`),
+with just-in-time loading switched on, and only on `127.0.0.1:1234`. Each recording is the **body** of an
+answer, byte for byte after the anonymization below; the status and the transport error of each call are
+stated here and not kept in a file (every transport error was `null`). Names are replaced, sizes are as
+recorded: the publisher of the model entry is `unsloth`, its key and every instance `id` equal to it
+`qwen3.5-4b`, its display name `Qwen3.5 4B`; `size_bytes` 2783446304 is the recorded size. Every other field
+(architecture, quantization, context values, capabilities) is as recorded. The bundled embedding entry
+(`nomic-ai`, `text-embedding-nomic-embed-text-v1.5`) is unchanged: it ships with the application, names no
+person and exists for the test that skips it. The chat texts are the model's answers to the fixed prompt.
+
+- `lmstudio_v1_models_loaded.json` -- `GET /api/v1/models`, status 200, one model loaded: instance
+  `qwen3.5-4b`, `context_length` 8192, `parallel` 4, plus the embedding entry with no instance.
+- `lmstudio_chat_one.json` -- `POST /v1/chat/completions` with the request body of the load test
+  (`Request 1.`), status 200, `finish_reason` `length`, 24 prompt and 128 completion tokens (all 128 are
+  `reasoning_tokens`). Kept as a recording only: the transport of 0.2.0 has no chat call, so no test uses
+  it; it is the evidence for a later measurement.
+- `lmstudio_jit_on_unloaded_chat.json` -- the same call to the id of an instance that was unloaded just
+  before, status **400**: `Failed to load model "qwen3.5-4b". Error: Operation canceled.` A repeat answered
+  byte for byte the same. It proves neither a refusal nor a load; that is why LM Studio is not measured.
+- `lmstudio_jit_on_after.json` -- `GET /api/v1/models` after that chat, status 200, nothing loaded
+  (`loaded_instances` empty in both entries). Also the recording of a server with no model loaded.
+- `lmstudio_jit_on_identifier_chat.json` -- the chat to an unloaded instance that had been loaded under an
+  identifier of its own, status **400**: `No models loaded. Please load a model in the developer page or use
+  the 'lms load' command.` The identifier is not named in the answer.
+- `lmstudio_jit_on_identifier_after.json` -- `GET /api/v1/models` after it, status 200, nothing loaded.
+- `lmstudio_openai_models_jit_on.json` -- `GET /v1/models` (the OpenAI-style list), status 200: three
+  entries, loaded or not, one a bundled speech entry. Information only: modelroom never makes this call;
+  the test that reads it expects the answer of a foreign shape.
+
+The three chat recordings (`lmstudio_chat_one.json`, `lmstudio_jit_on_unloaded_chat.json`,
+`lmstudio_jit_on_identifier_chat.json`) stay in the folder as the record of what LM Studio answered, and as
+the proof a later sub-package needs to bring the chat call back. The regression test of the unloaded case
+uses the lists recorded after it and asserts that no POST of any kind reaches the server.
+
+Not taken over: the raw output of `lms ls --json` (a command-line recording, no answer body) and the
+listings of the port checks; modelroom never runs `lms`.
+
+Synthetic, no recording: `lmstudio_v1_models_empty.json` (`{"models": []}`),
+`lmstudio_v1_models_embedding_only.json` (the recorded embedding entry alone) and
+`lmstudio_v1_models_no_valid_entry.json` (`{"models": [{}]}`).
