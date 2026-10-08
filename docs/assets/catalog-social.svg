@@ -30,12 +30,12 @@
   <text x="520" y="324" class="tl" font-size="29" fill="#CFE1EC">and what replaced it. One row per model.</text>
   <text x="520" y="372" class="tl" font-size="22" fill="#8CACC9">Text, vision, embedding, speech, image and video generation.</text>
   <g class="chip" font-size="19">
-    <rect x="520" y="410" width="131" height="46" rx="8" fill="#C32F27"/>
-    <text x="585.5" y="440.36" fill="#FFFFFF" text-anchor="middle">80 models</text>
-    <rect x="665" y="410" width="259" height="46" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
-    <text x="794.5" y="440.36" fill="#FFFFFF" text-anchor="middle">54 publishers watched</text>
-    <rect x="938" y="410" width="131" height="46" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
-    <text x="1003.5" y="440.36" fill="#FFFFFF" text-anchor="middle">CC BY 4.0</text>
+    <rect x="520" y="410" width="142" height="46" rx="8" fill="#C32F27"/>
+    <text x="591" y="440.36" fill="#FFFFFF" text-anchor="middle">231 models</text>
+    <rect x="676" y="410" width="259" height="46" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
+    <text x="805.5" y="440.36" fill="#FFFFFF" text-anchor="middle">56 publishers watched</text>
+    <rect x="949" y="410" width="131" height="46" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
+    <text x="1014.5" y="440.36" fill="#FFFFFF" text-anchor="middle">CC BY 4.0</text>
   </g>
   <text x="520" y="500" class="tl" font-size="22" fill="#8CACC9">Swept every morning. Approved by a person. One file.</text>
   <text x="520" y="548" class="tl" font-size="22" fill="#CFE1EC">huggingface.co/datasets/jm-vis/modelroom-catalog</text>
