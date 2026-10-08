@@ -4750,6 +4750,35 @@ and `search.json`, never the catalog, the configuration or the document.
   note `<name>: the successor statements around it contradict each other`. No status falls for a
   cycle.
 
+**Since AP9-KA-G (decided 2026-10-08; `modelroom/search_release.py`).** `line_key` reads 19 more catalog names. The
+contract has three levels:
+
+- **Token patterns**, exactly these and each only for a token no earlier class took (a reading that stood stays):
+  `\d+k` (`200k`, `32K`, `4K`, `8K`) is read as a syntactic `k` attribute and ignored, with no reading as a context length
+  or a resolution; `\d{3,4}p` (`720p`, `1080p`) is a resolution and ignored; `\d+bit` (`16bit`) joins the precisions and is
+  ignored; `\d+p\d+[bmt]` (`1p3b`) is a size token and so a boundary, while `parameters_from_name` stays as it was (it does
+  not read `1p3b`, and `OpenELM-1_1B` stays 1); a word of two letters or more with a dotted version,
+  `[a-z]{2,}\.\d+(\.\d+)*` as a whole token (`flux.1`), is a word with a version: at the boundary it gives the family and
+  the version, behind it the whole token is a variation (like `qwen3`); a number too long for `int` is no reading and no
+  crash. `1M` and `7B` stay sizes; `1080i`, a three-digit number, `\d+d` and a dotted word of one letter (`r.1`) stay
+  without a class; `r1` remains a plain word token and is read as a line counter.
+- **The underscore between digits** (limit N): `A_B` is read as `A.B` only if all four hold: `B` is one or two digits, no
+  unit; `A` is one or two digits or a word of two letters or more with digits, and no precision; nothing in front of `A` is a
+  size, a date, a version or a word with a version; `B` does not start a month-year date with the part behind it. So
+  `llama-3_1-8b` is (3, 1), `InternVL2_5` is (2, 5), `GOT-OCR2_0` is (2, 0); and `Nova-08_2025`, `Nova-BF16_8B`,
+  `Nova-7B-Qwen3_5`, `OpenELM-1_1B`, `Nova-2_08-2025` and `Nova-08-2025-Qwen3_5` read as before.
+- **Name composition**: a name with such a token gets a key only if the existing rules hold (a family word first, at most one
+  version, at most one date). There is no promise that every name with a new token can be read. More than one version token
+  stays rejected, including a trailing `v` revision (`sarvam-1-v0.5`, `sarashina2.2-...-v0.1`).
+- **Promised cases**: the keys of the 19 names in `KEYS` (block `AP9-KA-G`) and the cases of the tests of that block. No
+  promise for search hits outside the catalog. The rules of AP9-UX2 above are unchanged.
+
+Not read in AP9-KA-G, by decision: a bare number (`apple/DFN5B-CLIP-ViT-H-14-378`), a dimension
+(`mixedbread-ai/mxbai-embed-2d-large-v1`) and the trailing `v` revision; these five names stay in
+`SHIPPED_WITHOUT_READING`. New token classes, like new line words, come only with a decision and a test. The readings
+give a status computed under assumptions, not a statement of the publisher: a successor may change the task (SkyReels-V2
+to V3-A2V, Wan2.1-I2V to TI2V-5B or T2V-A14B depending on the size of the hit).
+
 **Until AP9-UX2**, as decided 2026-09-25 (kept for the record):
 
 - **A name as a key** (`line_key`). The name half of the repository id is lowercased and split at

@@ -407,6 +407,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **The release comparison reads more catalog names** (AP9-KA-G; `modelroom/search_release.py`; CONTRACTS.md, "Computed
+  release", "Since AP9-KA-G"). Of the 24 catalog names the comparison left out, 19 now have a line key: a `k` attribute
+  (`200k`, `32K`), a resolution (`720p`), the precision `16bit`, a size written `1p3b`, a dotted word (`FLUX.1`) and an
+  underscore between digits (`3_1`, `InternVL2_5`) under a narrow rule that leaves every earlier reading as it was. In the
+  catalog of 231 rows no key that was read changes and no status or successor of such a row; 19 names go from no reading to a
+  computed status (13 `legacy`, 6 `latest`). Five names stay out by decision: a bare number (`378`), a dimension (`2d`) and a
+  trailing `v` revision (three names). A computed successor may change the task (SkyReels-V2 to V3-A2V, Wan2.1-I2V to
+  TI2V-5B or T2V-A14B); it is a computation under assumptions, not a statement of the publisher.
 - **One name for one machine in the guided run** (AP9-FR, FR-N2; `modelroom/guided_machines.py`, `modelroom/screen.py`;
   CONTRACTS.md, "Guided mode", step 1). The machine list named this computer by its configuration key
   (`computer-<8 hex>`) where the result names the same machine by the `display_name` of its profile
