@@ -131,44 +131,43 @@ KEYS = [
     ("acme/Nova-A0.6B", "nova", "", set(), None, (), None),
     # `16e` and `bf16` are read and ignored.
     ("acme/Nova-2-7B-16E-BF16", "nova", "", set(), 7, (2,), None),
+    # --- AP9-KA-G: names the extended grammar reads ---
+    ("01-ai/Yi-6B-200K", "yi", "", set(), 6, (), None),
+    ("CohereLabs/tiny-aya-base-32K", "tiny", "", {"aya", "base"}, None, (), None),
+    ("Skywork/SkyReels-V2-DF-14B-720P", "skyreels", "", {"df"}, 14, (2,), None),
+    ("Skywork/SkyReels-V2-I2V-14B-720P", "skyreels", "", {"i2v"}, 14, (2,), None),
+    ("Skywork/SkyReels-V2-T2V-14B-720P", "skyreels", "", {"t2v"}, 14, (2,), None),
+    ("Wan-AI/Wan2.1-I2V-14B-480P", "wan", "", {"i2v"}, 14, (2, 1), None),
+    ("black-forest-labs/FLUX.1-Kontext-dev", "flux", "", {"kontext", "dev"}, None, (1,), None),
+    ("black-forest-labs/FLUX.1-dev", "flux", "", {"dev"}, None, (1,), None),
+    ("black-forest-labs/FLUX.1-schnell", "flux", "", {"schnell"}, None, (1,), None),
+    ("black-forest-labs/FLUX.2-dev", "flux", "", {"dev"}, None, (2,), None),
+    ("black-forest-labs/FLUX.2-klein-4B", "flux", "", {"klein"}, 4, (2,), None),
+    ("inception42/jais-family-1p3b-chat", "jais", "", {"family"}, None, (), None),
+    ("inception42/jais-family-2p7b-chat", "jais", "", {"family"}, None, (), None),
+    ("upstage/SOLAR-0-70b-16bit", "solar", "", set(), 70, (0,), None),
+    ("Aleph-Alpha/llama-3_1-8b-tfree-hat-dpo", "llama", "", {"tfree", "hat", "dpo"}, 8, (3, 1), None),
+    ("Aleph-Alpha/llama-3_1-8b-tfree-hat-sft", "llama", "", {"tfree", "hat", "sft"}, 8, (3, 1), None),
+    ("OpenGVLab/InternVL2_5-4B-MPO", "internvl", "", {"mpo"}, 4, (2, 5), None),
+    ("internlm/internlm2_5-7b-chat", "internlm", "", set(), 7, (2, 5), None),
+    ("stepfun-ai/GOT-OCR2_0", "got", "", {"ocr"}, None, (2, 0), None),
 ]
 
-# `KEYS` = the reference rows plus hand samples. This list: names that deliberately have no reading (`line_key` is
-# `None`), each with a reason; every other shipped row outside the reference must give a `LineKey` (coverage test).
-# Empty as of the publication of 2026-10-07; the publication of 2026-10-08 (231 rows) added the 24 below. None of them
-# is a grammar fault: 16 names contain an unclassified token and eight produce two version tokens under the current
-# grammar (see `NOT_INTERPRETABLE`). Reading them would extend the grammar, which is a product contract for the computed
-# release; until then such a name stays out of the line comparison. Each entry is checked to stay unread (test below).
+# `KEYS` = the reference rows plus hand samples. This list: shipped names that deliberately have no reading (`line_key`
+# is `None`), each with a reason; every other shipped row outside the reference must give a `LineKey` (coverage test).
+# Empty as of the publication of 2026-10-07; the publication of 2026-10-08 (231 rows) added 24. AP9-KA-G (decided 2026-10-08)
+# reads 19 of them (see the last block of `KEYS`); these five stay out of the line comparison, each a decision of the
+# owner and not a grammar fault: reading them would extend the grammar, which is a product contract for the computed
+# release. Each entry is checked to stay unread (test below).
 SHIPPED_WITHOUT_READING: list[str] = [
-    # a token with no class: a context length (`200k`, `32k`)
-    "01-ai/Yi-6B-200K",
-    "CohereLabs/tiny-aya-base-32K",
-    # a token with no class: a video resolution (`720p`, `480p`)
-    "Skywork/SkyReels-V2-DF-14B-720P",
-    "Skywork/SkyReels-V2-I2V-14B-720P",
-    "Skywork/SkyReels-V2-T2V-14B-720P",
-    "Wan-AI/Wan2.1-I2V-14B-480P",
-    # a token with no class: a bare number (`378`), a dimension (`2d`), a dotted word (`flux.1`, `flux.2`)
+    # a bare number (`378`): the patch size of ViT-H/14, no version (class 3, rejected in KA-G)
     "apple/DFN5B-CLIP-ViT-H-14-378",
+    # a dimension (`2d`): reading it as a variation gives a wrong successor (class 4, rejected in KA-G)
     "mixedbread-ai/mxbai-embed-2d-large-v1",
-    "black-forest-labs/FLUX.1-Kontext-dev",
-    "black-forest-labs/FLUX.1-dev",
-    "black-forest-labs/FLUX.1-schnell",
-    "black-forest-labs/FLUX.2-dev",
-    "black-forest-labs/FLUX.2-klein-4B",
-    # a token with no class: a size written with `p` for the point (`1p3b`) or a precision written `16bit`
-    "inception42/jais-family-1p3b-chat",
-    "inception42/jais-family-2p7b-chat",
-    "upstage/SOLAR-0-70b-16bit",
-    # two version tokens under the current grammar (e.g. `3` and `1`, or `1` and `v0.5`)
-    "Aleph-Alpha/llama-3_1-8b-tfree-hat-dpo",
-    "Aleph-Alpha/llama-3_1-8b-tfree-hat-sft",
-    "OpenGVLab/InternVL2_5-4B-MPO",
-    "internlm/internlm2_5-7b-chat",
+    # a version and a trailing `v` revision: two version tokens, no evidence which one counts (class 9, rejected in KA-G)
     "sarvamai/sarvam-1-v0.5",
     "sbintuitions/sarashina2.2-0.5b-instruct-v0.1",
     "sbintuitions/sarashina2.2-3b-instruct-v0.1",
-    "stepfun-ai/GOT-OCR2_0",
 ]
 
 NOT_INTERPRETABLE = [
@@ -181,6 +180,15 @@ NOT_INTERPRETABLE = [
     "acme/Nova-13-2025",  # month 13: no MM-YYYY date, and `2025` alone has no class
     "acme/Nova--7B",  # an empty token
     "acme/3-7B",  # no family word in front of the boundary
+    # AP9-KA-G: near misses of the new token patterns and the cases it rejects
+    "acme/Nova-7B-378",  # a bare number
+    "acme/Nova-2d-7B",  # a dimension
+    "acme/Nova-2-v0.5",  # a version and a `v` revision
+    "acme/Nova-r.1-7B",  # a dotted word of one letter
+    "acme/Nova-1080i",  # not a resolution in `p`
+    "acme/Nova-7B-16bits",  # not a `bit` precision
+    "acme/Nova-1p3-7B",  # a `p` size without a unit
+    "acme/Nova-2.5_1",  # the underscore joins no part with a dot
 ]
 
 
@@ -741,3 +749,162 @@ def test_a_computed_basis_needs_a_known_age():
 def test_a_stated_basis_or_none_goes_with_any_age():
     assert _hit("acme/Nova-7B").release_basis is None
     assert _hit("acme/Nova-7B", age="latest").release_basis == "stated"
+
+
+# --- AP9-KA-G: the grammar reads more catalog names -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "repo, size, version, variant",
+    [
+        ("acme/Nova-7B-8K", 7, (), set()),  # `8K` is a k attribute, no size and no boundary
+        ("acme/Nova-1080p", None, (), set()),  # a resolution is ignored
+        ("acme/Nova-1p3b-Qwen2", None, (), {"qwen2"}),  # the `p` size sets the boundary: `qwen2` stays a variation
+        ("acme/Nova_2_5-7B", 7, (2, 5), set()),
+        ("acme/Nova-7B-1M", 7, (), set()),  # `1M` stays a size
+        ("acme/Nova-R1", None, (1,), set()),  # `r1` stays a line counter
+    ],
+)
+def test_ka_g_edge_cases(repo, size, version, variant):
+    key = line_key(repo, None)
+
+    assert key is not None
+    assert (key.version, set(key.variant)) == (version, variant)
+    assert key.size == (pytest.approx(size) if size is not None else None)
+
+
+def test_ka_g_a_one_m_stays_a_size_and_a_resolution_is_not_a_size():
+    assert line_key("acme/Nova-7B-1M", None).line == ""
+    assert line_key("acme/Nova-R1", None).line == "r"
+    assert line_key("acme/Nova-1080p", None).family == "nova"
+
+
+@pytest.mark.parametrize(
+    "repo, family, version, variant",
+    [
+        ("acme/Nova.2-7B", "nova", (2,), set()),  # at the boundary the dotted word gives its word and its version
+        ("acme/Nova-7B-Qwen.3", "nova", (), {"qwen.3"}),  # behind the boundary it is a variation, whole
+    ],
+)
+def test_ka_g_a_dotted_word(repo, family, version, variant):
+    key = line_key(repo, None)
+
+    assert key is not None
+    assert (key.family, key.version, set(key.variant)) == (family, version, variant)
+
+
+def test_ka_g_a_dotted_word_with_a_number_too_long_is_no_reading_and_no_crash():
+    assert line_key("acme/Nova." + "9" * 5000, None) is None
+
+
+@pytest.mark.parametrize(
+    "repo, version, dated, variant",
+    [
+        ("apple/OpenELM-1_1B-Instruct", (1,), None, set()),
+        ("acme/Nova-08_2025", (), LineDate("mm-yyyy", 2025, 8, None), set()),
+        ("acme/Nova-BF16_8B", (), None, set()),
+        ("acme/Nova-7B-Qwen3_5", (5,), None, {"qwen3"}),
+        ("acme/Nova-2_08-2025", (2,), LineDate("mm-yyyy", 2025, 8, None), set()),
+        ("acme/Nova-08-2025-Qwen3_5", (5,), LineDate("mm-yyyy", 2025, 8, None), {"qwen3"}),
+    ],
+)
+def test_a_reading_that_stood_stays(repo, version, dated, variant):
+    """The underscore between digits changes no reading that stood before (AP9-KA-G, rule N)."""
+    key = line_key(repo, None)
+
+    assert key is not None
+    assert (key.version, key.date, set(key.variant)) == (version, dated, variant)
+
+
+def test_a_reading_that_stood_stays_with_its_size():
+    assert line_key("apple/OpenELM-1_1B-Instruct", None).size == 1
+    assert line_key("acme/Nova-BF16_8B", None).size == 8
+
+
+# --- the comparison over the real catalog and over fixtures (compute_release) ------------------------
+
+
+def _publisher_hit(repo: str, parameters_b: float | None = None) -> SearchHit:
+    return SearchHit(
+        repo=repo,
+        publisher_status="publisher",
+        base_model=[repo],
+        base_model_relation="quantized",
+        resolved=True,
+        resolved_base_model=repo,
+        age="unknown",
+        parameters_b=parameters_b,
+    )
+
+
+def _compare(catalog: Catalog, repos: list[str], sizes: dict[str, float] | None = None):
+    hits = [_publisher_hit(repo, (sizes or {}).get(repo)) for repo in repos]
+    ages = {repo: AgeVerdict(*catalog.age_of(repo), "catalog") for repo in repos}
+    return compute_release(hits, catalog, ages)
+
+
+WAN = {
+    "Wan-AI/Wan2.1-I2V-14B-480P": 16.394878784,
+    "Wan-AI/Wan2.1-T2V-1.3B-Diffusers": 1.4189968,
+    "Wan-AI/Wan2.2-I2V-A14B-Diffusers": 14.288901184,
+    "Wan-AI/Wan2.2-T2V-A14B-Diffusers": 14.288491584,
+    "Wan-AI/Wan2.2-TI2V-5B-Diffusers": 4.999787712,
+}
+FLUX = {
+    "black-forest-labs/FLUX.1-Kontext-dev": 11.90140832,
+    "black-forest-labs/FLUX.1-dev": 11.90140832,
+    "black-forest-labs/FLUX.1-schnell": 11.89117856,
+    "black-forest-labs/FLUX.2-dev": 32.223281152,
+    "black-forest-labs/FLUX.2-klein-4B": 3.875544576,
+}
+
+
+def _fixture_catalog(rows: dict[str, float], publisher: str) -> Catalog:
+    return _catalog(*(_row(repo) for repo in rows), publisher=publisher)
+
+
+def test_ka_g_flux_one_is_legacy_to_a_flux_two_by_the_size_of_the_hit():
+    catalog = _fixture_catalog(FLUX, "black-forest-labs")
+    repos = list(FLUX)
+
+    by_name = _compare(catalog, repos)
+    by_hit = _compare(catalog, repos, FLUX)
+
+    for result, successor in ((by_name, "black-forest-labs/FLUX.2-klein-4B"), (by_hit, "black-forest-labs/FLUX.2-dev")):
+        assert result["black-forest-labs/FLUX.1-dev"] == Release("legacy", successor)
+        assert result["black-forest-labs/FLUX.1-Kontext-dev"].age == "legacy"
+        assert result["black-forest-labs/FLUX.1-schnell"].age == "legacy"
+        assert result["black-forest-labs/FLUX.2-dev"] == Release("latest", None)
+        assert result["black-forest-labs/FLUX.2-klein-4B"] == Release("latest", None)
+
+
+def test_ka_g_wan_two_one_is_legacy_to_a_wan_two_two_by_the_size_of_the_hit():
+    catalog = _fixture_catalog(WAN, "Wan-AI")
+    repos = list(WAN)
+
+    by_name = _compare(catalog, repos)
+    by_hit = _compare(catalog, repos, WAN)
+
+    assert by_name["Wan-AI/Wan2.1-I2V-14B-480P"] == Release("legacy", "Wan-AI/Wan2.2-TI2V-5B-Diffusers")
+    assert by_hit["Wan-AI/Wan2.1-I2V-14B-480P"] == Release("legacy", "Wan-AI/Wan2.2-T2V-A14B-Diffusers")
+
+
+def test_ka_g_internvl_two_five_is_legacy_to_internvl_three_and_no_three_is_legacy():
+    catalog = load_catalog()
+    repos = [m.hf_repo for f in catalog.families for m in f.models if m.hf_repo.lower().startswith("opengvlab/")]
+    assert "OpenGVLab/InternVL2_5-4B-MPO" in repos
+
+    result = _compare(catalog, repos)
+
+    assert result["OpenGVLab/InternVL2_5-4B-MPO"] == Release("legacy", "OpenGVLab/InternVL3-8B")
+    assert [r for r in repos if "InternVL3" in r and result.get(r, Release("latest", None)).age == "legacy"] == []
+
+
+def test_ka_g_yi_200k_is_legacy_to_yi_one_five():
+    catalog = load_catalog()
+    repos = [m.hf_repo for f in catalog.families for m in f.models if m.hf_repo.lower().startswith("01-ai/")]
+    assert "01-ai/Yi-6B-200K" in repos
+
+    result = _compare(catalog, repos)
+
+    assert result["01-ai/Yi-6B-200K"] == Release("legacy", "01-ai/Yi-1.5-9B-Chat")

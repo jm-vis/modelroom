@@ -1205,7 +1205,7 @@ def test_a_page_of_the_seed_with_nothing_readable_ends_it_and_its_entries_count_
 
 def test_a_name_the_grammar_does_not_read_becomes_a_row_with_its_first_word_as_the_family_and_a_note(env):
     hub = Hub()
-    hub.page("acme", [ent("acme/FLUX.1-dev", stamp(1), pipeline_tag="text-to-image")])
+    hub.page("acme", [ent("acme/Flux-7B-378", stamp(1), pipeline_tag="text-to-image")])
     p, _, _ = go(env, hub)
-    assert new_of(new_rows(p)["acme/FLUX.1-dev"])["family"] == "flux"
-    assert "acme/FLUX.1-dev: no family word in the name, family flux taken from its first word" in p["notes"]
+    assert new_of(new_rows(p)["acme/Flux-7B-378"])["family"] == "flux"
+    assert "acme/Flux-7B-378: no family word in the name, family flux taken from its first word" in p["notes"]

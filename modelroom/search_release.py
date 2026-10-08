@@ -29,6 +29,13 @@ no request of their own:
   `latest` gives way to a higher version; a fault's `unknown` becomes `legacy` where a higher version
   is seen, and says its fault as a note (`release_notes`); a stated `legacy` stays.
 
+What the grammar promises has three levels (AP9-KA-G): the **token patterns** it reads (precision, number of experts,
+active size, size, a `k` attribute, a resolution, a size written with `p`, date forms, version, word with version, dotted
+word with version, word, and `A_B` between digits under the limit of `_split_name`); the **name composition** (a name gets
+a key only if a family word comes first, at most one version and at most one date follow -- no promise that every name with
+a new token reads); and the **promised cases** (the names of the `KEYS` table in the tests). A new token class, like a new
+line word, is a decision of the owner with a test.
+
 What the search does not see and the catalog does not know is not compared: each account answers
 two pages of twenty repositories, filtered by the search word. That is why the status says
 `computed` and never stands in for a statement.
@@ -53,8 +60,13 @@ _LINE_COUNTER = re.compile(r"([a-z])(\d+(?:\.\d+)*)")
 # A note of step 2 is cut to this many characters (the 100 columns of the table, less the indent).
 NOTE_WIDTH = 97
 
-# The token classes, in the order they are tried; the first that matches a lowercase token wins.
-_PRECISION = re.compile(r"(?:bf|fp|int|q|iq)\d+")
+# The token classes, in the order they are tried; the first that matches a lowercase token wins. A pattern added
+# later (AP9-KA-G: `_K_ATTRIBUTE`, `_RESOLUTION`, `_P_SIZE`, `_DOTTED_WORD`, `bit` in `_PRECISION`) only takes tokens
+# no earlier class took: a reading that stood stays.
+_PRECISION = re.compile(r"(?:bf|fp|int|q|iq)\d+|\d+bit")
+_K_ATTRIBUTE = re.compile(r"\d+k")  # `200k`, `32K`, `4K`: read as an attribute, never interpreted (AP9-KA-G)
+_RESOLUTION = re.compile(r"\d{3,4}p")  # `720p`, `1080p`; `1080i` has no class (AP9-KA-G)
+_P_SIZE = re.compile(r"\d+p\d+[bmt]")  # a size written with `p` for the point (`1p3b`): a boundary, no size
 _EXPERTS = re.compile(r"\d+e")
 _ACTIVE = re.compile(r"a\d+(?:\.\d+)?[bm]")
 _SIZE = re.compile(r"e?\d+(?:\.\d+)?[bmt]")
@@ -64,8 +76,11 @@ _YEAR = re.compile(r"20\d{2}")
 # A plain number counts as a version only with one or two digits: `735` or `2025` alone say nothing.
 _VERSION = re.compile(r"v(\d+(?:\.\d+)*)|(\d{1,2}(?:\.\d+)*)")
 _WORD_VERSION = re.compile(r"([a-z]{2,})(\d+(?:\.\d+)*)")
+_DOTTED_WORD = re.compile(r"([a-z]{2,})\.(\d+(?:\.\d+)*)")  # `flux.1`, `flux.2.1`
 _WORD = re.compile(r"[a-z][a-z0-9]*")
-_TOKEN_SPLIT = re.compile(r"[-_]")
+# The two parts of an underscore between digits (`3_1`, `internvl2_5`), see `_split_name`.
+_UNDERSCORE_LEFT = re.compile(r"\d{1,2}|[a-z]{2,}\d+")
+_UNDERSCORE_RIGHT = re.compile(r"\d{1,2}")
 # The instruction-tuned model is the ordinary one of a family, so these words make no variant --
 # and no family either, before the boundary (`Mistral-Small-Instruct-2409` is a Mistral Small).
 _PLAIN_WORDS = frozenset({"instruct", "it", "chat"})
@@ -150,10 +165,14 @@ def line_key(hf_repo: str, parameters_b: float | None) -> LineKey | None:
     """The key of one repository name, or `None` when the grammar has no reading for it.
 
     `parameters_b` is the size the search read for this very repository; the name's own size
-    (`parameters.parameters_from_name`, the one size rule of the package) comes first.
+    (`parameters.parameters_from_name`, the one size rule of the package) comes first; it reads the unchanged name,
+    so a size written `1p3b` is a boundary here and no size there.
+
+    The name is split by `_split_name` (AP9-KA-G): at `-` and `_`, with `3_1` between digits read as `3.1` under four
+    conditions. Several version tokens, including a trailing `v` revision, stay no reading.
     """
     owner, _, name = hf_repo.partition("/")
-    tokens = _classified(_TOKEN_SPLIT.split(name.lower()))
+    tokens = _classified(_split_name(name.lower()))
     if not tokens or tokens[0].kind not in (_PLAIN, _WORD_NUMBER):
         # A name that starts with a size, a version, a date or a precision has no family word.
         return None
@@ -229,10 +248,21 @@ def _classified(texts: list[str]) -> list[_Token] | None:
 
 
 def _early_class(text: str) -> _Token | None:
-    """Classes 1 to 6: precision, experts and active size (all ignored), size, the two date forms."""
-    if _PRECISION.fullmatch(text) or _EXPERTS.fullmatch(text) or _ACTIVE.fullmatch(text):
+    """Classes 1 to 6: precision (`bf16`, `16bit`), experts, active size, a `k` attribute and a resolution (all
+    ignored), size (`7b`, and `1p3b` with `p` for the point), the two date forms.
+
+    `4k`, `8K` and `32k` are one syntactic `k` attribute with no reading as context length or resolution; `1M` stays a
+    size, `1080i` and three-digit numbers stay without a class (AP9-KA-G).
+    """
+    if (
+        _PRECISION.fullmatch(text)
+        or _EXPERTS.fullmatch(text)
+        or _ACTIVE.fullmatch(text)
+        or _K_ATTRIBUTE.fullmatch(text)
+        or _RESOLUTION.fullmatch(text)
+    ):
         return _Token(_IGNORED, text)
-    if _SIZE.fullmatch(text):
+    if _SIZE.fullmatch(text) or _P_SIZE.fullmatch(text):
         return _Token(_BOUNDARY_SIZE, text)
     if _FOUR_DIGITS.fullmatch(text):
         first, second = int(text[:2]), int(text[2:])
@@ -244,7 +274,8 @@ def _early_class(text: str) -> _Token | None:
 
 
 def _late_class(text: str) -> _Token | None:
-    """Classes 8 to 10: a version, a word with its version, a word -- else no class at all."""
+    """Classes 8 to 11: a version, a word with its version (`qwen3`), a word with a dotted version (`flux.1`), a word --
+    else no class at all."""
     version = _VERSION.fullmatch(text)
     if version:
         number = _numbers(version.group(1) or version.group(2))
@@ -253,9 +284,58 @@ def _late_class(text: str) -> _Token | None:
     if word_version:
         number = _numbers(word_version.group(2))
         return _Token(_WORD_NUMBER, text, number=number, word=word_version.group(1)) if number is not None else None
+    dotted = _DOTTED_WORD.fullmatch(text)
+    if dotted:
+        number = _numbers(dotted.group(2))
+        return _Token(_WORD_NUMBER, text, number=number, word=dotted.group(1)) if number is not None else None
     if _WORD.fullmatch(text):
         return _Token(_PLAIN, text)
     return None
+
+
+def _split_name(text: str) -> list[str]:
+    """The tokens of a lowercase name: split at `-` and `_`, except that `A_B` becomes the one token `A.B`
+    (`3_1` is `3.1`, `internvl2_5` is `internvl2.5`) where all four of these hold (AP9-KA-G, limit N):
+
+    1. `B` is one or two digits, no unit;
+    2. `A` is one or two digits, or a word of two letters or more with digits, and no precision;
+    3. nothing in front of `A` is a size, a date, a version or a word with a version: `A` is at or before the boundary;
+    4. `B` does not start a month-year date with the part behind it (`2_08-2025` keeps its date).
+
+    A prefix holding a token of no class at all (`nova-378-3_1`) also prevents the join: a conservative stop, since such
+    a name has no reading either way.
+
+    Everything else stays split as before (`08_2025`, `bf16_8b`, `qwen3_5` behind a size, `1_1b`).
+    """
+    parts = re.split(r"([-_])", text)
+    pieces, separators = parts[0::2], parts[1::2]
+    tokens: list[str] = []
+    index = 0
+    while index < len(pieces):
+        piece = pieces[index]
+        if (
+            index + 1 < len(pieces)
+            and separators[index] == "_"
+            and _joins(tokens, piece, pieces[index + 1], pieces[index + 2] if index + 2 < len(pieces) else None)
+        ):
+            tokens.append(f"{piece}.{pieces[index + 1]}")
+            index += 2
+            continue
+        tokens.append(piece)
+        index += 1
+    return tokens
+
+
+def _joins(before: list[str], left: str, right: str, behind: str | None) -> bool:
+    """Whether the underscore between `left` and `right` is a decimal point (the four conditions of `_split_name`)."""
+    if not _UNDERSCORE_LEFT.fullmatch(left) or not _UNDERSCORE_RIGHT.fullmatch(right) or _PRECISION.fullmatch(left):
+        return False
+    if _MONTH.fullmatch(right) and behind is not None and _YEAR.fullmatch(behind):
+        return False
+    classified = _classified(before)
+    return classified is not None and not any(
+        token.kind in (_BOUNDARY_SIZE, _DATE, _NUMBER, _WORD_NUMBER) for token in classified
+    )
 
 
 def _numbers(text: str) -> tuple[int, ...] | None:

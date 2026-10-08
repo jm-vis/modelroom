@@ -563,8 +563,8 @@ def test_with_limit_sets_only_the_limit_and_the_next_url_stays_valid():
 
 
 @pytest.mark.parametrize("repo, family", [
-    ("black-forest-labs/FLUX.1-dev", "flux"), ("01-ai/Yi-6B-200K", "yi"), ("Skywork/SkyReels-V2-DF-14B-540P", "skyreels"),
-    ("Wan-AI/Wan2.1-I2V-14B-480P", "wan"),
+    ("apple/DFN5B-CLIP-ViT-H-14-378", "dfn"), ("sarvamai/sarvam-1-v0.5", "sarvam"), ("mixedbread-ai/mxbai-embed-2d-large-v1", "mxbai"),
+    ("sbintuitions/sarashina2.2-3b-instruct-v0.1", "sarashina"),
 ])
 def test_a_name_the_grammar_does_not_read_takes_its_first_run_of_letters_as_the_family(repo, family):
     assert not rules.has_reading(repo)
@@ -573,7 +573,7 @@ def test_a_name_the_grammar_does_not_read_takes_its_first_run_of_letters_as_the_
 
 def test_a_first_word_family_next_to_a_readable_one_of_the_same_name_never_stands_over_nor_is_latest():
     readable = "black-forest-labs/Flux-2-9B"
-    fallback = "black-forest-labs/FLUX.1-dev"
+    fallback = "black-forest-labs/Flux-7B-378"
     assert rules.has_reading(readable) and not rules.has_reading(fallback)
     rows = []
     for repo in (readable, fallback):
@@ -592,9 +592,10 @@ def test_a_first_word_family_next_to_a_readable_one_of_the_same_name_never_stand
 
 def test_the_first_word_family_gets_the_publisher_suffix_on_a_clash_and_a_leading_digit_gives_none(env):
     assert rules.family_for("acme/7B-foo", "text", []) is None
-    other = rules.build_row(rules.parse_entry(ent("zed/FLUX.1-dev", stamp(1))), rules.cheap_kind(rules.parse_entry(ent("zed/FLUX.1-dev", stamp(1)))), family="flux", today=TODAY, latest=False, latest_source=None)
+    other = rules.build_row(rules.parse_entry(ent("zed/Flux-7B-378", stamp(1))), rules.cheap_kind(rules.parse_entry(ent("zed/Flux-7B-378", stamp(1)))), family="flux", today=TODAY, latest=False, latest_source=None)
     clash = [rules.CatalogModel.model_validate(other)]
-    assert rules.family_for("black-forest-labs/FLUX.1-dev", "text", clash) == "flux-black-forest-labs"
+    assert not rules.has_reading("black-forest-labs/Flux-7B-378")
+    assert rules.family_for("black-forest-labs/Flux-7B-378", "text", clash) == "flux-black-forest-labs"
 
 
 # --- the fixes after the first review round (t1) ---------------------------------------------------------------------
