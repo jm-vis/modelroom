@@ -65,7 +65,11 @@ def answer_line_problems(lines: list[str]) -> list[str]:
 def card_problems(lines: list[str]) -> list[str]:
     """Criterion 7: the run closes with the card -- six kinds of row, each with its own note."""
     labels = ("folder", "machine", "models", "context", "speed", "result")
-    tail = [line.strip() for line in lines[-40:]]
+    # The card is what follows its own first row (`folder`, the last one the run printed): a window of the last
+    # lines would grow with every row the table above it gains and could take an old row for a missing one.
+    stripped = [line.strip() for line in lines]
+    starts = [index for index, line in enumerate(stripped) if line.startswith("folder ")]
+    tail = stripped[starts[-1] :] if starts else []
     missing = [label for label in labels if not any(line.startswith(f"{label} ") for line in tail)]
     if missing:
         return [f"the card of step 5 has no {', '.join(missing)} row"]
@@ -98,7 +102,8 @@ _ROOM_PIECES = {
     "graphics": rf"graphics (?:{_BUDGET} \({_CARDS} minus reserve\)|none counted|unknown)",
     "memory": rf"memory (?:{_BUDGET} \(\d+\.\d GB minus reserve\)|unknown)",
     "shared": rf"shared memory (?:{_BUDGET} \(\d+\.\d GB minus both reserves\)|unknown)",
-    "disk": r"disk (?:\d+\.\d GB free on .+ \(Ollama models\)|unknown(?: .+)?)",
+    # AP9-LS-E: a machine that names LM Studio (or vLLM) says whose models the place holds, one name or several.
+    "disk": r"disk (?:\d+\.\d GB free on .+ \((?:Ollama|LM Studio|vLLM)(?:(?:, | and )(?:Ollama|LM Studio|vLLM))* models\)|unknown(?: .+)?)",
 }
 
 

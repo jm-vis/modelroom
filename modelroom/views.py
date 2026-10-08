@@ -634,7 +634,7 @@ def _runtime_lines(block: MachineRanking, view: RunView) -> list[Line]:
     if text is None:
         return []
     texts = [text]
-    note = unequal_cards_note(block.profile)
+    note = unequal_cards_note(block.profile, view.live_vllm.get(block.machine))
     if note is not None:
         texts.append(note)
     return _labeled_rows(RUNTIME_LABEL, texts)

@@ -239,7 +239,7 @@ def test_ollama_list_values_and_answers_are_unchanged(monkeypatch):
     or not `packages` is passed, Ollama's own rows, names and lock reasons are exactly today's."""
     from modelroom import runtimes
 
-    assert [runtime.key for runtime in runtimes.RUNTIMES] == ["ollama", "vllm"]
+    assert [runtime.key for runtime in runtimes.RUNTIMES] == ["ollama", "vllm", "lmstudio"]  # the document names no LM Studio
     rows = pull_rows(document([BF16_FILE, Q4, BF16_FOLDER]), "workstation", ambiguous_names([BF16_FILE, Q4, BF16_FOLDER]))
     with_packages = pull_rows(
         document([BF16_FILE, Q4, BF16_FOLDER]),
@@ -299,12 +299,14 @@ def _held_list(tmp_path: Path, monkeypatch, third_holds: bool, ollama_held_befor
 def test_each_runtime_counts_only_what_it_holds_itself(tmp_path: Path, monkeypatch):
     """One package, two runtimes, a disk too small for its download. What the second runtime holds
     marks its own row "local already" and frees it from the disk -- never Ollama's row; what the
-    Ollama daemon held when the render read the disk frees Ollama's row -- never the other one."""
+    Ollama daemon held when the render read the disk frees Ollama's row -- never marks the other one
+    "local already". The second runtime has no place of its own (`disk_fit.place`), so its row is
+    judged at no disk and is never locked for one (AP9-LS-E, S7)."""
     third_holds = _held_list(tmp_path / "a", monkeypatch, third_holds=True, ollama_held_before=False)
     ollama_holds = _held_list(tmp_path / "b", monkeypatch, third_holds=False, ollama_held_before=True)
 
     assert third_holds[:2] == [("#1 locked", True, False), (f"third {NAME}:Q4_K_M", False, True)]
-    assert ollama_holds[:2] == [(f"{NAME}:Q4_K_M", False, False), ("#1 locked", True, False)]
+    assert ollama_holds[:2] == [(f"{NAME}:Q4_K_M", False, False), (f"third {NAME}:Q4_K_M", False, False)]
 
 
 def test_a_missing_answer_with_an_ambiguous_row_one_pulls_nothing(tmp_path: Path):

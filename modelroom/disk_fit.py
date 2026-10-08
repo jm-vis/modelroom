@@ -13,6 +13,11 @@ the download plus the margin of 1 GB against the free disk (decided 2026-09-29, 
 row is offered that the check then refuses. The check itself stays, as the second safety. A package
 the daemon provably holds already (`Disk.held`) needs no disk and is never marked (U11c, Codex r3-1):
 it stays a `local already` row of the pull list, as before U11.
+
+LM Studio (AP9-LS-E, F6 a) keeps its models in a place of its own (`Disk.lmstudio`), judged like vLLM's. A
+row of the pull list reads the place of its own entry (`runtime=`); a row that has no entry of its own, and
+the Markdown file, which has only the disk, judge a Hugging Face GGUF row of a machine with LM Studio over
+the places of the runtimes of that machine (`Disk.runtimes`): too big only where it is too big at all of them.
 """
 
 from __future__ import annotations
@@ -38,10 +43,13 @@ def known(disk: Disk | None) -> Disk | None:
 
 def place(runtime: str, disk: Disk | None) -> Disk | None:
     """The disk where `runtime` keeps its models, out of the one `Disk` a machine carries: Ollama's is
-    that disk itself, vLLM's the one nested in it (`Disk.vllm`, AP9-SV2-I); another runtime has none."""
+    that disk itself, vLLM's and LM Studio's the ones nested in it (`Disk.vllm`, AP9-SV2-I; `Disk.lmstudio`,
+    AP9-LS-E); another runtime has none."""
     if disk is None:
         return None
-    return disk if runtime == "ollama" else disk.vllm if runtime == "vllm" else None
+    if runtime == "ollama":
+        return disk
+    return disk.vllm if runtime == "vllm" else disk.lmstudio if runtime == "lmstudio" else None
 
 
 def vllm_only(disk: Disk | None) -> Disk | None:
@@ -50,7 +58,7 @@ def vllm_only(disk: Disk | None) -> Disk | None:
     Ollama row of that computer is marked, locked or passed over, exactly as before SV2-R (FR B5)."""
     if disk is None:
         return None
-    return replace(disk, free_bytes=None, drive=None, held=frozenset(), needs={})
+    return replace(disk, free_bytes=None, drive=None, held=frozenset(), needs={}, lmstudio=None, runtimes=None)
 
 
 def over_disk(weights_gib: float, disk: Disk | None, identity: Sequence[str] | None = None) -> bool:
@@ -71,26 +79,54 @@ def _download_bytes(weights_gib: float, disk: Disk, identity: Sequence[str] | No
     return weights_gib * GIB if still is None else float(still)
 
 
-def entry_download_gib(entry: RankedEntry, disk: Disk | None) -> float:
+def entry_place(entry: RankedEntry, disk: Disk | None, runtime: str | None = None) -> Disk | None:
+    """The place a row is judged at: exactly that of `runtime`, the entry of the pull list it is read for (a
+    runtime with no place of its own has none, and nothing is marked), else that of the row's own `Fit.runtime`."""
+    return place(entry.fit.runtime if runtime is None else runtime, disk)
+
+
+def entry_download_gib(entry: RankedEntry, disk: Disk | None, runtime: str | None = None) -> float:
     """What the disk rule counts as the download of a shown row, in GiB: the bytes still to fetch
-    where its runtime's place names them, else its weights."""
-    read = known(place(entry.fit.runtime, disk))
+    where its runtime's place names them, else its weights. `runtime` is the entry of the pull list the
+    row is read for (`entry_place`); without it the row's own `Fit.runtime`."""
+    read = known(entry_place(entry, disk, runtime))
     return entry.weights_gib if read is None else _download_bytes(entry.weights_gib, read, entry.package_identity) / GIB
 
 
-def entry_over_disk(entry: RankedEntry, disk: Disk | None) -> bool:
+def hf_gguf_row(entry: RankedEntry) -> bool:
+    """Whether a shown row is a Hugging Face GGUF one: the rows both Ollama and LM Studio can take
+    (`runtimes.LMSTUDIO.accepts`, held against this by a test)."""
+    return entry.package_identity[0] == "huggingface" and entry.format == "gguf"
+
+
+def entry_over_disk(entry: RankedEntry, disk: Disk | None, runtime: str | None = None) -> bool:
     """`over_disk` of a shown row, by its download and its package: the one test of the table, the
     `disk` line, the install line and the pull list. The disk read is the one where the row's own
     runtime keeps its models (`place`): Ollama's for an Ollama row, vLLM's (the Hugging Face cache)
-    for a vLLM row -- never the one for the other, and nothing marked where that one was not read."""
-    return over_disk(entry.weights_gib, place(entry.fit.runtime, disk), entry.package_identity)
+    for a vLLM row -- never the one for the other, and nothing marked where that one was not read.
+
+    With `runtime` the place of that runtime decides (an entry of the pull list). Without it a Hugging Face
+    GGUF row of a machine whose disk names its runtimes (`Disk.runtimes`) is too big only where it is too
+    big for every one of Ollama and LM Studio that the machine has -- a place that was not read counts as
+    fitting, as in the list, where an unchecked entry is an alternative; every other row, and every disk
+    without `runtimes`, is judged at the place of its own `Fit.runtime`, as before LM Studio."""
+    if runtime is None and disk is not None and disk.runtimes is not None and hf_gguf_row(entry):
+        places = [key for key in ("ollama", "lmstudio") if key in disk.runtimes]
+        if places:
+            return all(over_disk(entry.weights_gib, place(key, disk), entry.package_identity) for key in places)
+    return over_disk(entry.weights_gib, entry_place(entry, disk, runtime), entry.package_identity)
 
 
 def block_place(block: MachineRanking, disk: Disk | None) -> Disk | None:
     """The disk the words about `block` name: vLLM's for a block of vLLM rows alone (a runtime section,
-    or a machine with vLLM only), else Ollama's -- as before for every machine without vLLM."""
+    or a machine with vLLM only), LM Studio's for a machine that has LM Studio and no Ollama (its GGUF rows
+    would otherwise name Ollama's place), else Ollama's -- as before for every machine without LM Studio."""
     runtimes = {entry.fit.runtime for entry in block.ranked}
-    return place("vllm", disk) if runtimes == {"vllm"} else disk
+    if runtimes == {"vllm"}:
+        return place("vllm", disk)
+    if disk is not None and disk.runtimes is not None and "ollama" not in disk.runtimes and "lmstudio" in disk.runtimes:
+        return place("lmstudio", disk)
+    return disk
 
 
 def over_ranks(block: MachineRanking, disk: Disk | None) -> list[int]:
@@ -147,6 +183,8 @@ __all__ = [
     "disk_words",
     "entry_download_gib",
     "entry_over_disk",
+    "entry_place",
+    "hf_gguf_row",
     "known",
     "none_fits_words",
     "over_disk",

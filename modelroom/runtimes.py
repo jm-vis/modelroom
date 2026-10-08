@@ -8,6 +8,10 @@ local server is registered: `local_servers.py` reads its servers off this table 
 place to add it to (CONTRACTS.md, "Local servers and the vLLM load test";
 docs/adr/0014-runtime-entries-and-vllm-packages.md). A later runtime (vLLM's own fields first,
 then LM Studio) is a new row, never a plug-in: no dynamic loading, no registration at runtime.
+`LMSTUDIO` (AP9-LS-E, GGUF only) is the third row: its server, `accepts` (the Hugging Face GGUF
+packages), `install_name` and `command` (`lms get --gguf`, printed and never run), `model_place` and
+`on_disk` (`lmstudio_install`) are its own, its `fit` is Ollama's (both run llama.cpp), and it sits last
+so that no existing output changes.
 
 Ollama sits on this table without a behavior change: `OLLAMA.accepts`, `.fit`, `.install_name`,
 `.command`, `.model_place` and `.on_disk` are the functions that did the work before, referenced
@@ -38,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 
-from . import guided_vllm
+from . import guided_lmstudio, guided_vllm, lmstudio_install
 from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package
 from .dialog import Choice
@@ -48,6 +52,7 @@ from .guided_loadtest import NO_CANDIDATE_LINE, NO_INSTALLED_LINE, installed_not
 from .hf_cache import hf_cache_candidates, on_disk as hf_on_disk
 from .install_vllm import DOCKER_LOCAL_HOST, VLLM_IMAGE, install_name as vllm_install_name  # noqa: F401 -- the constants are re-exported
 from .intro import Fact, daemon_fact
+from .lmstudio_server import LMSTUDIO_BASE_URL, detect_lmstudio
 from .measurements import Scenario
 from .profile import HardwareProfile, RuntimeKey
 from .quantization import package_identity_key
@@ -174,6 +179,11 @@ def _ollama_accepts(package: Package) -> bool:
 def _huggingface_tensor(package: Package) -> bool:
     """A Hugging Face tensor (safetensors) package: what only vLLM serves among the table's rows."""
     return package.source == "huggingface" and package.format == "tensor"
+
+
+def _huggingface_gguf(package: Package) -> bool:
+    """A Hugging Face GGUF package: what LM Studio loads (never an Ollama-library package, never a tensor one)."""
+    return package.source == "huggingface" and package.format == "gguf"
 
 
 def _not_huggingface_tensor(package: Package) -> bool:
@@ -366,7 +376,35 @@ VLLM = Runtime(
     shown_only_with=_huggingface_tensor,
 )
 
-RUNTIMES: tuple[Runtime, ...] = (OLLAMA, VLLM)
+LMSTUDIO = Runtime(
+    key="lmstudio",
+    name="LM Studio",
+    server=LocalServer(
+        key="lmstudio",
+        name="LM Studio",
+        origin=LMSTUDIO_BASE_URL,
+        transport=lambda run: run.servers.transports.get("lmstudio"),
+        start_fact=guided_lmstudio.start_fact,
+        offer=guided_lmstudio.offer,
+        measure=guided_lmstudio.measure,
+        card_facts=guided_lmstudio.card_facts,
+    ),
+    detect=detect_lmstudio,
+    hello_field="lmstudio",
+    # GGUF only: the Hugging Face GGUF packages, the same ones `OLLAMA.accepts` claims besides the Ollama
+    # library's. A package has one fit (`fit_for` reads the first runtime that accepts it, Ollama), so a
+    # row of the table is never LM Studio's; LM Studio is a second entry of the pull list (`row_names`).
+    accepts=_huggingface_gguf,
+    fit=compute_fit_v2,  # llama.cpp under both (A-LS6); `fit_for` never reaches this one
+    install_name=lmstudio_install.install_name,
+    command=lmstudio_install.command,
+    model_place=lmstudio_install.model_place,
+    on_disk=lmstudio_install.on_disk,
+    words=RuntimeWords(package_prefix="", key_text=None, question="Which package should be installed?"),
+    shown_only_with=_huggingface_gguf,
+)
+
+RUNTIMES: tuple[Runtime, ...] = (OLLAMA, VLLM, LMSTUDIO)
 
 # The servers of the table as it was loaded, for the imports that name the list; the readers of
 # the guided run (`local_servers.start_rows`, `.load_tests`, `.card_facts`) call `local_servers()`
@@ -389,9 +427,10 @@ def accepting_runtimes(package: Package) -> tuple[Runtime, ...]:
     """Every runtime of `RUNTIMES` whose `accepts` claims `package`, in table order -- whatever the
     machine; `accepting_on_machine` below narrows this to one machine's own runtimes.
 
-    Exactly one runtime today (`OLLAMA`, for a GGUF or Ollama-library package) or none (every
-    other package: `VLLM.accepts` never claims one yet). Two or more is a package that pairs with
-    more than one runtime, each pair a row of its own.
+    Two for a Hugging Face GGUF package (`OLLAMA` and `LMSTUDIO`), one for an Ollama-library package
+    (`OLLAMA`) or a Hugging Face tensor package (`VLLM`), none for any other. Two or more is a package
+    that pairs with more than one runtime, each pair an entry of the pull list of its own (the table
+    shows the package once, with the fit of the first, `fit_for`).
     """
     return tuple(runtime for runtime in RUNTIMES if runtime.accepts(package))
 
@@ -530,6 +569,7 @@ __all__ = [
     "LOCAL_SERVERS",
     "OLLAMA",
     "Offer",
+    "LMSTUDIO",
     "Origins",
     "QUESTIONS",
     "RUNTIMES",

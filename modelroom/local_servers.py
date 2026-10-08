@@ -1,7 +1,8 @@
 """The local inference servers of this machine, as one list: a view on `runtimes.RUNTIMES`.
 
 `LOCAL_SERVERS` names every origin the guided mode reads, in the order it reads them: the Ollama
-daemon (what existed before, unchanged in behavior) and a vLLM server (AP9-SV1). Each entry says
+daemon (what existed before, unchanged in behavior), a vLLM server (AP9-SV1) and an LM Studio server
+(AP9-LS-E; it is read and named, never measured). Each entry says
 where its transport comes from, the row it adds to the start screen, what it does in step 4, and
 the rows it adds to the card of step 5. The start screen, step 4 and both card paths loop over
 this list; a server added to it reaches all three without a change anywhere else.
@@ -27,11 +28,13 @@ from . import guided_vllm
 from .config import Configuration
 from .dialog import Choice
 from .guided_loadtest import NOTHING_MEASURED, QUESTIONS as LOAD_TEST_QUESTIONS, STEP, wants_load_test
+from . import guided_lmstudio
 from .guided_remote_vllm import card_facts as remote_card_facts
 from .intro import Fact
 from .measurements import Scenario
 from . import runtimes
 from .runtimes import LOCAL_SERVERS, QUESTIONS, LocalServer, Offer, Origins, ServerRun
+from .lmstudio_server import LocalLmStudioServer
 from .screen import names_words, yes_no
 from .vllm_server import LocalVllmServer
 
@@ -41,7 +44,7 @@ if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never const
 
 def default_transports() -> dict[str, Any]:
     """The real transport of every registered server but Ollama's; constructing one connects nowhere."""
-    return {"vllm": LocalVllmServer()}
+    return {"vllm": LocalVllmServer(), "lmstudio": LocalLmStudioServer()}
 
 
 def start_rows(daemon, servers: ServerRun) -> tuple[tuple[Fact, ...], bool]:
@@ -97,7 +100,8 @@ def _asked(run: "GuidedRun", rows: list[Choice], unavailable: list[str]) -> list
 
 
 # The answer line names a server's row in words; an Ollama row is its local name already.
-ROW_WORDS = {guided_vllm.ROW: "vLLM server"}
+# LM Studio offers no row in 0.2.0 (it is not measured), but an answer file may name `lmstudio`.
+ROW_WORDS = {guided_vllm.ROW: "vLLM server", guided_lmstudio.ROW: "LM Studio server"}
 
 
 def card_facts(run: "GuidedRun") -> tuple[Fact, ...]:

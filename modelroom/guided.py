@@ -685,6 +685,8 @@ def _render_step(
     packages = run_packages(config, chosen)
     if vllm_among_chosen(run, config):  # where vLLM keeps its models (I2): read only for a run that has a machine with vLLM
         disk = replace(disk, vllm=vllm_disk(run.room, packages))
+    from .lmstudio_install import lmstudio_disk  # AP9-LS S7/S3: LM Studio's runtimes and place, this machine only
+    disk = lmstudio_disk(disk, run.room, config, here, packages)
     if daemon_reachable:  # a package the daemon holds already needs no disk and is never marked (U11c)
         disk = replace(disk, held=held_identities(run, packages))
     code = render_with_config(

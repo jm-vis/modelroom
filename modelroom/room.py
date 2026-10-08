@@ -115,6 +115,13 @@ class Disk:
     # AP9-SV2-R (R1): on a computer over SSH the server says itself whether the two places are on one
     # drive (`room.model_disk.same_as_ollama`) -- no drive of it is ever named here. `None`: compare the drives.
     same_place: bool | None = None
+    # AP9-LS-E: the free disk where LM Studio keeps its models (`~/.lmstudio/models`), next to Ollama's and
+    # vLLM's place, `None` where nobody read it -- on a machine whose profile names LM Studio only, and on this
+    # computer only (`lmstudio_install.lmstudio_disk`). `held` is what lies there already. And the runtimes of
+    # that machine (`machine_runtime_keys`): `None` is every disk before LM Studio, which judges a row by its
+    # own `Fit.runtime` alone; a set lets a Hugging Face GGUF row fit if it fits where *one* of them keeps it.
+    lmstudio: "Disk | None" = None
+    runtimes: frozenset[str] | None = None
 
     @property
     def known(self) -> bool:

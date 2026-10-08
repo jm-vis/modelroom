@@ -812,6 +812,18 @@ def test_criterion_seven_names_a_run_that_closes_without_the_card():
     assert any("card of step 5" in problem for problem in dialog.card_problems(without))
 
 
+def test_criterion_seven_does_not_take_an_older_row_for_the_card_it_lacks():
+    """The card is read from its own `folder` row on: a row printed before it (the start screen's, a table's) does
+    not make an incomplete card whole, however few lines lie between."""
+    older = [" models    a row from before the card", " speed     a row from before the card", " result    a row from before the card"]
+    incomplete = [*older, " folder    //models/results        a configuration", " machine   workstation             one graphics card",
+                  " context   32768                   as asked"]
+
+    assert any("models, speed, result" in problem for problem in dialog.card_problems(incomplete))
+    assert dialog.card_problems([]) != []  # no card at all
+    assert dialog.card_problems(GOOD_DIALOG) == []
+
+
 def test_criterion_seven_names_a_result_view_that_repeats_one_note_per_row():
     repeated = [*GOOD_DIALOG, " #2 fits into graphics memory", " #3 needs system memory", " #4 needs system memory"]
 

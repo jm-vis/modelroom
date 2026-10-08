@@ -20,6 +20,13 @@ FREE_DISK_BYTES = 44_236_955_648  # 41.2 GB
 HOME = Path("C:\\fixture-home")
 
 
+def exists(path: Path) -> bool:
+    """Every path of the fixture room exists -- except LM Studio's own folder: the fixture laptop has no LM
+    Studio installed (a guided run meets no `lms.exe` there, AP9-LS-E), so no test of an Ollama machine finds
+    a third runtime that nobody put there."""
+    return ".lmstudio" not in Path(path).parts
+
+
 def fixed_room(
     free_disk_bytes: int | None = FREE_DISK_BYTES,
     free_vram_mib: float | None = FREE_VRAM_MIB,
@@ -42,7 +49,7 @@ def fixed_room(
         environ=environ or {},
         home=HOME,
         system="win32",
-        exists=lambda path: True,
+        exists=exists,
         resolve=lambda path: path,
         disk_usage=disk_usage,
         mount_of=lambda path: "/",

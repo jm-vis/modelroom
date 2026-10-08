@@ -612,3 +612,9 @@ listings of the port checks; modelroom never runs `lms`.
 Synthetic, no recording: `lmstudio_v1_models_empty.json` (`{"models": []}`),
 `lmstudio_v1_models_embedding_only.json` (the recorded embedding entry alone) and
 `lmstudio_v1_models_no_valid_entry.json` (`{"models": [{}]}`).
+
+Also synthetic: `profiles_v4/laptop_lmstudio.json` (AP9-LS-E, 2026-10-08) -- **derived, not measured**: a laptop with
+one 8 GiB `NVIDIA GeForce RTX 4060 Laptop GPU`, 31.62 GiB of memory, `machine_class` `laptop` (`entered`), the two
+cross-checks `confirmed`, and `runtimes` `["ollama", "lmstudio"]`. `profile_id` `4c7e19a2b5d8f038`, `os_fingerprint`
+`c3d4e5f60718294a` (a fixed literal of the same shape), `recorded_at` `2026-09-28T09:14:03Z`, no newline at the end. It is
+the machine of `tests/golden/golden_lmstudio_laptop.*` and of `tests/test_lmstudio_render.py`.

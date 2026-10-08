@@ -152,7 +152,7 @@ def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path
             continue  # a path, a registry's own message and a served model's id are as long as they are
         if "cannot reach the Ollama daemon" in line:
             continue  # the daemon's own reason, since AP9-UX E also as `Ollama: <reason>` before the question
-        if "ollama pull " in line or line.strip().startswith(("repo ", "graphics  ")) or "hf.co/" in line:
+        if "ollama pull " in line or "lms get " in line or line.strip().startswith(("repo ", "graphics  ")) or "hf.co/" in line:
             continue  # a command, a repository, a pull name and a graphics adapter (AP9-GPU G8) are as long as they are
         assert len(line) <= 100, line
     # Step 4 since AP9-UX E: the reason the number will not count stands before the one question.

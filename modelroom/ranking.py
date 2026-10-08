@@ -37,6 +37,13 @@ BOTH_RUNTIMES_RULE = (
     "; on a machine with both Ollama and vLLM rows each runtime is ranked on its own: Ollama's rows as "
     "above, then every ranked vLLM package in the order of this rule"
 )
+
+
+def both_runtimes_rule(gguf_name: str = "Ollama") -> str:
+    """`BOTH_RUNTIMES_RULE` with the name of the runtime that holds the GGUF rows (AP9-LS-E, S4): `Ollama`
+    gives the constant byte for byte, `LM Studio` (a machine with LM Studio and vLLM, no Ollama) or `Ollama or
+    LM Studio` (a document whose machines differ) name the others."""
+    return BOTH_RUNTIMES_RULE.replace("Ollama", gguf_name)
 # The facts a row note names for the sentence it gains from the rule (`row_sentence`); the words of
 # the result (`ranking_words`) read the case of a block from them.
 BEST_FACT = "ranking.best_per_model"

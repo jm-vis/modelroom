@@ -25,12 +25,13 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 from .contracts import Package
 from .dialog import AnswerMissingError, Choice
 from .document import RenderDocument
+from . import lmstudio_install
 from .install_vllm import install_block_lines, vllm_install
 from .intro import label_line
 from .pull_choice import LOCAL_ALREADY, NONE_VALUE, PullRow, has_named_row, package_of, pull_rows, weights_bytes_of
 from .disk_fit import vllm_only
 from .room import Disk
-from .runtimes import OLLAMA, VLLM
+from .runtimes import LMSTUDIO, OLLAMA, VLLM
 from .views_install import INSTALL_LABEL
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -136,6 +137,11 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
         for line in vllm_handover_lines(context, chosen.machine, chosen.row, disk.vllm if disk is not None else None):
             run.screen.write(line)
         return
+    if chosen.row.runtime == LMSTUDIO.key:
+        # modelroom runs no `lms`, here or over SSH (G7): the line is handed over for that computer, like a vLLM row.
+        for line in lmstudio_handover_lines(context, chosen.machine, chosen.row):
+            run.screen.write(line)
+        return
     if chosen.machine == run.ssh_active:
         from .guided_remote import pull_remote_row  # imported here: only an SSH row needs the SSH layer
 
@@ -166,6 +172,15 @@ def vllm_handover_lines(context: "PullContext", machine: str, row: PullRow, vllm
     install = vllm_install(package_of(row, context.packages), entry.fit, block.profile, relative_cache=relative)
     there = vllm_disk is not None and row.identity in vllm_disk.held
     return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=machine)]
+
+
+def lmstudio_handover_lines(context: "PullContext", machine: str, row: PullRow) -> list:
+    """The handover of an LM Studio row (AP9-LS-E): the `lms get` line with the machine named, in the `PATH`
+    form (nobody knows where `lms` is on that computer), and what to do in LM Studio there. Printed, never run."""
+    command = lmstudio_install.command(str(row.name))
+    place = [("class:note", f"#{row.rank} on {machine}"), ("", "  "), ("class:command", command)]
+    notes = lmstudio_install.hint_rows(None, "", context.document.scenario.context_requested)
+    return [[], label_line(INSTALL_LABEL, place), *(label_line("", [("class:note", text)]) for text in notes)]
 
 
 def handover_lines(machine: str, row: PullRow, weights_bytes: float) -> list:

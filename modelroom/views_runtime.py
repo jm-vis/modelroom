@@ -5,7 +5,9 @@ module is the one place that turns `Fit.runtime` and a machine's profile into th
 row, a legend or a machine's head carries once vLLM is in the table -- the package cell's prefix
 (F4), the legend's extra line, the `runtime` row under a machine's head, and the `memory` line's
 own vLLM piece. An Ollama-only table calls none of these to anything but `""`/`None`/`[]`, so its
-output stays byte-identical to before AP9-SV2 (CONTRACTS.md, "Fit for vLLM").
+output stays byte-identical to before AP9-SV2 (CONTRACTS.md, "Fit for vLLM"). Since AP9-LS-E the `runtime`
+row also names LM Studio, and a machine with LM Studio alone keeps Ollama's table form (both run llama.cpp
+under one fit rule).
 """
 
 from __future__ import annotations
@@ -67,9 +69,11 @@ def machine_runtimes(block: MachineRanking, live_vllm: Mapping[str, object] | No
 
 def vllm_table(block: MachineRanking, live_vllm: Mapping[str, object] | None = None) -> bool:
     """Whether `block` is drawn as vLLM's (F5, Codex r5-2): a vLLM row is shown, or the machine has
-    no Ollama at all (`machine_runtimes`) -- so an empty block of a vLLM-only machine carries no
-    Ollama hint either. Never true for a machine without the `runtimes` field."""
-    return vllm_shown(block) or runtimes.OLLAMA.key not in machine_runtimes(block, live_vllm)
+    neither Ollama nor LM Studio (`machine_runtimes`) -- so an empty block of a vLLM-only machine carries no
+    Ollama hint either, and a machine with LM Studio alone keeps Ollama's form (AP9-LS-E, S6: both run
+    llama.cpp, one fit rule). Never true for a machine without the `runtimes` field."""
+    present = machine_runtimes(block, live_vllm)
+    return vllm_shown(block) or not (runtimes.OLLAMA.key in present or runtimes.LMSTUDIO.key in present)
 
 
 def key_text(block: MachineRanking) -> list[str]:
@@ -84,11 +88,11 @@ def key_text(block: MachineRanking) -> list[str]:
 
 
 def runtime_names(profile: HardwareProfile | None, live: object = None) -> str | None:
-    """`Ollama · vLLM` or `vLLM`: the runtimes of a machine in table order, where vLLM is among
-    them (`runtimes.present_runtimes`, the one source); `None` for a machine without vLLM, which
-    says nothing new (F5: step 1 and the `runtime` row alike)."""
+    """`Ollama · vLLM`, `Ollama · LM Studio` or `vLLM`: the runtimes of a machine in table order, where one
+    but Ollama is among them (`runtimes.present_runtimes`, the one source); `None` for a machine with Ollama
+    alone, which says nothing new (F5: step 1 and the `runtime` row alike; AP9-LS-E, S5: LM Studio counts)."""
     present = runtimes.present_runtimes(profile, live)
-    if runtimes.VLLM.key not in present:
+    if present <= {runtimes.OLLAMA.key}:
         return None
     return " · ".join(runtime.name for runtime in runtimes.RUNTIMES if runtime.key in present)
 
@@ -146,7 +150,7 @@ def _short_name(repo: str) -> str:
     return repo.partition("/")[2] or repo
 
 
-def unequal_cards_note(profile: HardwareProfile | None) -> str | None:
+def unequal_cards_note(profile: HardwareProfile | None, live: object = None) -> str | None:
     """The `runtime` row's own continuation line (F1, F4): named only where a card smaller than the
     equal-size group was left out of it -- `None` for a machine of one size, or none at all.
 
@@ -154,9 +158,15 @@ def unequal_cards_note(profile: HardwareProfile | None) -> str | None:
     package's row actually used: `t` is chosen per package (F1, a head count that does not divide
     the group size stops short of it), so a row's own card count is `Fit.cards`, read from the
     `memory` line's own vLLM piece (`vllm_pool_pieces`), not asserted here (Codex r1-4).
+
+    `live` is this run's own reading of vLLM on the machine (`runtimes.present_runtimes`): the note is vLLM's, so
+    it follows the runtimes in effect, profile and live reading together (AP9-LS-E).
     """
     if profile is None:
         return None
+    present = runtimes.present_runtimes(profile, live)
+    if runtimes.LMSTUDIO.key in present and runtimes.VLLM.key not in present:
+        return None  # the note belongs to vLLM's `runtime` row; a machine with LM Studio and no vLLM, live or profile, has none
     group = equal_size_group(profile)
     pool = largest_pool(profile)
     if pool is None or group.left_out == 0:

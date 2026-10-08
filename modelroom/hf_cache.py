@@ -222,15 +222,26 @@ def vllm_disk(room: RoomProbes, packages: Sequence[Package] = ()) -> Disk:
     return replace(base, held=frozenset(held), needs=needs, relative=cache_is_relative(room.environ, room.system))
 
 
-def shared_disk_words(disk: Disk) -> str:
-    """`disk 41.2 GB free on C: (Ollama and vLLM models)`: the one piece of a machine whose two places
-    are on one drive (I2)."""
-    return f"disk {gb(disk.free_bytes)} free on {disk.drive} (Ollama and vLLM models)"
+def _names_words(names: Sequence[str]) -> str:
+    """`Ollama and vLLM`, `Ollama, LM Studio and vLLM`: the names of the runtimes that keep their models on one drive."""
+    return " and ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 2 else " and ".join(names)
+
+
+def shared_disk_words(disk: Disk, names: Sequence[str] = ("Ollama", "vLLM")) -> str:
+    """`disk 41.2 GB free on C: (Ollama and vLLM models)`: the one piece of a machine whose places
+    are on one drive (I2); with LM Studio the names are `Ollama and LM Studio` or `Ollama, LM Studio and vLLM`
+    (AP9-LS-E, S3)."""
+    return f"disk {gb(disk.free_bytes)} free on {disk.drive} ({_names_words(names)} models)"
 
 
 def vllm_disk_words(disk: Disk) -> str:
     """`disk 41.2 GB free on D: (vLLM models)`: vLLM's own place, on another drive than Ollama's or alone."""
     return f"disk {gb(disk.free_bytes)} free on {disk.drive} (vLLM models)"
+
+
+def lmstudio_disk_words(disk: Disk) -> str:
+    """`disk 41.2 GB free on D: (LM Studio models)`: LM Studio's own place, on another drive than Ollama's or alone."""
+    return f"disk {gb(disk.free_bytes)} free on {disk.drive} (LM Studio models)"
 
 
 __all__ = [
@@ -240,6 +251,7 @@ __all__ = [
     "cache_is_relative",
     "check_package",
     "hf_cache_candidates",
+    "lmstudio_disk_words",
     "missing_bytes",
     "on_disk",
     "shared_disk_words",
