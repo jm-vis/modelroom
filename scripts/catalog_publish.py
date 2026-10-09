@@ -193,9 +193,9 @@ class Tool:
         if other:
             raise PublishError(f"another publication is pending ({other[0][0]}, state {other[0][1]['state']}); one at a time")
 
-    def apply(self, proposal_path: Path, given: str | None, approve, reject, admit) -> int:
+    def apply(self, proposal_path: Path, given: str | None, approve, reject, admit, approve_unread=None) -> int:
         _, proposal, sha, document, catalog_bytes, rejected_bytes = self._checked(proposal_path, given)
-        request = P.parse_request(approve, reject, admit)
+        request = P.parse_request(approve, reject, admit, approve_unread)
         P.check_request(proposal, request)
         folder = proposal_path.parent
         self._free(folder)
@@ -420,9 +420,9 @@ class Tool:
 # --- the call -----------------------------------------------------------------------------------------------------------
 
 MODES = ("show", "apply", "complete", "materialize", "record_commit", "publish_pending", "verify", "upload")
-OPTIONS = ("proposal_sha", "approve", "reject", "admit", "kind", "remote", "commit", "probe", "catalog", "rejected")
+OPTIONS = ("proposal_sha", "approve", "approve_unread", "reject", "admit", "kind", "remote", "commit", "probe", "catalog", "rejected")
 ALLOWED = {
-    "show": set(), "apply": {"proposal_sha", "approve", "reject", "admit"}, "complete": {"proposal_sha", "admit", "kind"},
+    "show": set(), "apply": {"proposal_sha", "approve", "approve_unread", "reject", "admit"}, "complete": {"proposal_sha", "admit", "kind"},
     "materialize": set(), "record_commit": set(), "publish_pending": {"remote"}, "verify": {"commit", "probe"}, "upload": {"probe"},
 }
 
@@ -439,7 +439,7 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument("--publish-pending", metavar="FOLDER")
     group.add_argument("--verify", action="store_true")
     group.add_argument("--upload", action="store_true")
-    for name in ("proposal-sha", "approve", "reject", "admit", "kind", "remote", "commit"):
+    for name in ("proposal-sha", "approve", "approve-unread", "reject", "admit", "kind", "remote", "commit"):
         parser.add_argument(f"--{name}")
     parser.add_argument("--probe", nargs="?", const="")
     parser.add_argument("--catalog", type=Path)
@@ -470,7 +470,7 @@ def main(argv: list[str] | None = None, *, root: Path | None = None, files=None,
         if mode == "show":
             return tool.show(Path(args.show))
         if mode == "apply":
-            return tool.apply(Path(args.apply), args.proposal_sha, args.approve, args.reject, args.admit)
+            return tool.apply(Path(args.apply), args.proposal_sha, args.approve, args.reject, args.admit, args.approve_unread)
         if mode == "complete":
             return tool.complete(Path(args.complete), args.proposal_sha, args.admit, args.kind)
         if mode == "materialize":

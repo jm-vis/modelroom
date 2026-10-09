@@ -30,7 +30,7 @@ no request of their own:
   is seen, and says its fault as a note (`release_notes`); a stated `legacy` stays.
 
 What the grammar promises has three levels (AP9-KA-G): the **token patterns** it reads (precision, number of experts,
-active size, size, a `k` attribute, a resolution, a size written with `p`, date forms, version, word with version, dotted
+active size, size, a `k` or `s` attribute, a resolution, a size written with `p`, date forms (including `yyyy-mm-dd`, AP9-KA-H), version, word with version, dotted
 word with version, word, and `A_B` between digits under the limit of `_split_name`); the **name composition** (a name gets
 a key only if a family word comes first, at most one version and at most one date follow -- no promise that every name with
 a new token reads); and the **promised cases** (the names of the `KEYS` table in the tests). A new token class, like a new
@@ -65,6 +65,7 @@ NOTE_WIDTH = 97
 # no earlier class took: a reading that stood stays.
 _PRECISION = re.compile(r"(?:bf|fp|int|q|iq)\d+|\d+bit")
 _K_ATTRIBUTE = re.compile(r"\d+k")  # `200k`, `32K`, `4K`: read as an attribute, never interpreted (AP9-KA-G)
+_S_ATTRIBUTE = re.compile(r"\d+s")  # `30s` (seconds of audio): an attribute like `_K_ATTRIBUTE`, never interpreted (AP9-KA-H)
 _RESOLUTION = re.compile(r"\d{3,4}p")  # `720p`, `1080p`; `1080i` has no class (AP9-KA-G)
 _P_SIZE = re.compile(r"\d+p\d+[bmt]")  # a size written with `p` for the point (`1p3b`): a boundary, no size
 _EXPERTS = re.compile(r"\d+e")
@@ -73,6 +74,7 @@ _SIZE = re.compile(r"e?\d+(?:\.\d+)?[bmt]")
 _FOUR_DIGITS = re.compile(r"\d{4}")
 _MONTH = re.compile(r"0[1-9]|1[0-2]")
 _YEAR = re.compile(r"20\d{2}")
+_DAY = re.compile(r"0[1-9]|[12]\d|3[01]")
 # A plain number counts as a version only with one or two digits: `735` or `2025` alone say nothing.
 _VERSION = re.compile(r"v(\d+(?:\.\d+)*)|(\d{1,2}(?:\.\d+)*)")
 _WORD_VERSION = re.compile(r"([a-z]{2,})(\d+(?:\.\d+)*)")
@@ -97,9 +99,9 @@ _PLAIN = "word"
 
 @dataclass(frozen=True)
 class LineDate:
-    """A date in a model name, in the form it was written: `2512` (YYMM), `0528` (MMDD), `08-2025`."""
+    """A date in a model name, in the form it was written: `2512` (YYMM), `0528` (MMDD), `08-2025`, `2025-04-14` (ISO)."""
 
-    form: Literal["yymm", "mmdd", "mm-yyyy"]
+    form: Literal["yymm", "mmdd", "mm-yyyy", "iso"]
     year: int | None
     month: int
     day: int | None
@@ -229,22 +231,49 @@ def _line_and_variant(tokens: list[_Token], boundary: int) -> tuple[str, tuple[i
 
 
 def _classified(texts: list[str]) -> list[_Token] | None:
-    """Every token with its class; a month and a year next to each other are one date token."""
+    """Every token with its class; `None` when one has no class."""
+    return _classify(texts)[0]
+
+
+def _classify(texts: list[str]) -> tuple[list[_Token] | None, str]:
+    """`(tokens, "")`, or `(None, first token without a class)`. Three tokens year, month, day (`2025-04-14`) are one ISO
+    date, tried before the single tokens (AP9-KA-H: `2001` to `2012` alone would read as YYMM); a month and a year next
+    to each other are one date token."""
     tokens: list[_Token] = []
     position = 0
     while position < len(texts):
         text = texts[position]
         following = texts[position + 1] if position + 1 < len(texts) else ""
+        behind = texts[position + 2] if position + 2 < len(texts) else ""
+        if _YEAR.fullmatch(text) and _MONTH.fullmatch(following) and _DAY.fullmatch(behind):
+            date = LineDate("iso", int(text), int(following), int(behind))
+            tokens.append(_Token(_DATE, f"{text}-{following}-{behind}", date=date))
+            position += 3
+            continue
         if _MONTH.fullmatch(text) and _YEAR.fullmatch(following) and _early_class(text) is None:
             tokens.append(_Token(_DATE, f"{text}-{following}", date=LineDate("mm-yyyy", int(following), int(text), None)))
             position += 2
             continue
         token = _early_class(text) or _late_class(text)
         if token is None:
-            return None
+            return None, text
         tokens.append(token)
         position += 1
-    return tokens
+    return tokens, ""
+
+
+def unread_reason(hf_repo: str, parameters_b: float | None = None) -> str | None:
+    """Why the grammar has no reading of a name (the first reason found), `None` when `line_key` reads it."""
+    if line_key(hf_repo, parameters_b) is not None:
+        return None
+    tokens, bad = _classify(_split_name(hf_repo.partition("/")[2].lower()))
+    if tokens is None:
+        return f"token '{bad}' has no class"
+    if not tokens or tokens[0].kind not in (_PLAIN, _WORD_NUMBER):
+        return f"starts with {tokens[0].kind if tokens else 'nothing'}"
+    boundary = next((i for i, token in enumerate(tokens) if token.kind not in (_IGNORED, _PLAIN)), len(tokens))
+    versions = sum(t.kind == _NUMBER for t in tokens[boundary:]) + (tokens[boundary].kind == _WORD_NUMBER if boundary < len(tokens) else 0)
+    return "two versions" if versions > 1 else "two dates"
 
 
 def _early_class(text: str) -> _Token | None:
@@ -260,6 +289,7 @@ def _early_class(text: str) -> _Token | None:
         or _ACTIVE.fullmatch(text)
         or _K_ATTRIBUTE.fullmatch(text)
         or _RESOLUTION.fullmatch(text)
+        or _S_ATTRIBUTE.fullmatch(text)
     ):
         return _Token(_IGNORED, text)
     if _SIZE.fullmatch(text) or _P_SIZE.fullmatch(text):
@@ -589,5 +619,6 @@ __all__ = [
     "line_key",
     "release_log",
     "release_notes",
+    "unread_reason",
     "with_release",
 ]

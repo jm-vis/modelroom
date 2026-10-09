@@ -217,11 +217,12 @@ def test_the_new_model_that_stands_over_the_latest_row_of_its_group_is_proposed_
     assert not [c for c in p["changes"] if c["hf_repo"] == "acme/Atlas-2-9B"]
 
 
-def test_a_new_model_in_a_group_without_a_latest_row_is_not_latest_and_has_no_latest_source(env):
+def test_a_single_new_model_in_a_group_without_a_latest_row_is_its_top_and_cites_the_publisher_page(env):
+    """AP9-KA-H K2 rule 1 (it was `not latest` before: a new family never had a `latest` row)."""
     hub = Hub()
     hub.page("acme", [ent("acme/Zeta-1-3B", stamp(2))])
     new = new_of(new_rows(go(env, hub)[0])["acme/Zeta-1-3B"])
-    assert (new["latest"], new["latest_source"], new["latest_checked"]) == (False, None, None)
+    assert (new["latest"], new["latest_source"], new["latest_checked"]) == (True, "https://huggingface.co/acme", TODAY)
 
 
 def test_an_embedding_model_a_huge_model_and_one_with_no_size_all_become_rows_with_null_where_the_size_is_unknown(env):
@@ -251,14 +252,16 @@ def test_a_repo_of_a_rejected_account_is_not_proposed_by_the_open_pages(env):
     assert cands(go(env, hub)[0]) == []
 
 
-def test_a_speech_model_of_a_family_with_a_latest_text_row_neither_becomes_latest_nor_makes_a_successor(env):
+def test_a_speech_model_of_a_family_with_a_latest_text_row_does_not_stand_over_it_nor_makes_a_successor(env):
+    """The kind separates the groups: the speech model is not over the text row (no `over latest`, no successor of the text
+    row); since AP9-KA-H it is the top of its own group without a `latest` row."""
     hub = Hub()
     hub.page("acme", [
         ent("acme/Atlas-Voice-3", stamp(2), pipeline_tag="text-to-speech"),
         ent("acme/Atlas-2-9B", stamp(5), cardData={"license": "apache-2.0", "new_version": "acme/Atlas-Voice-3"}),
     ])
     p, _, _ = go(env, hub)
-    assert new_of(new_rows(p)["acme/Atlas-Voice-3"])["latest"] is False
+    assert new_of(new_rows(p)["acme/Atlas-Voice-3"])["latest"] is True
     assert [c for c in p["changes"] if c["hf_repo"] == "acme/Atlas-2-9B"] == []
 
 
@@ -614,7 +617,7 @@ def test_the_files_are_sorted_json_with_two_spaces_lf_and_a_final_newline_and_th
     md = (env.out / TODAY / "proposal.md").read_bytes().decode("utf-8")
     assert md.endswith(f"proposal.json sha256: {digest(raw)}\n") and "\r" not in md
     assert json.loads(raw)["base_catalog_sha256"] == digest(CATALOG_BYTES) and json.loads(raw)["schema"] == 1
-    assert set(json.loads(raw)) == {"schema", "date", "base_catalog_sha256", "summary", "notes", "changes", "candidates"}
+    assert set(json.loads(raw)) == {"schema", "date", "base_catalog_sha256", "summary", "notes", "changes", "candidates", "drift"}
     state_raw = (env.out / "scan-state.json").read_bytes()
     assert state_raw == (json.dumps(json.loads(state_raw), indent=2, sort_keys=True) + "\n").encode("utf-8")
     assert json.loads(state_raw)["schema"] == 1 and not list(env.out.rglob("*.tmp"))
@@ -960,7 +963,9 @@ def test_two_rejected_repos_make_room_for_exactly_two_more(env):
     with_fresh(env)
     go(env, seed_hub([seed_entry(n) for n in range(1, 6)]))
     env.rejected.write_bytes(json.dumps([{"date": "2026-10-04", "hf_repo": r} for r in lumen(1, 2)]).encode("utf-8"))
-    p, _, transport = go(env, seed_hub([seed_entry(n) for n in range(1, 9)]), now=NOW + timedelta(days=1))
+    hub = seed_hub([seed_entry(n) for n in range(1, 9)])
+    hub.put(rules.collections_url("fresh"), [])  # AP9-KA-H: the first run's top is a carried `latest` row, the new top stands over it
+    p, _, transport = go(env, hub, now=NOW + timedelta(days=1))
     assert sorted(new_rows(p)) == lumen(3, 4, 5, 6, 7) and len(asked(transport, rules.seed_url("fresh"))) == 1
 
 
@@ -1208,4 +1213,360 @@ def test_a_name_the_grammar_does_not_read_becomes_a_row_with_its_first_word_as_t
     hub.page("acme", [ent("acme/Flux-7B-378", stamp(1), pipeline_tag="text-to-image")])
     p, _, _ = go(env, hub)
     assert new_of(new_rows(p)["acme/Flux-7B-378"])["family"] == "flux"
-    assert "acme/Flux-7B-378: no family word in the name, family flux taken from its first word" in p["notes"]
+    assert "acme/Flux-7B-378: no reading (token '378' has no class), family flux taken from its first word" in p["notes"]
+    assert new_rows(p)["acme/Flux-7B-378"]["reading"] is False  # AP9-KA-H K1b: the mark for the reader of the proposal
+
+
+# --- AP9-KA-H: the top of a group, successors against the end of the run, drift, the 30 days ----------------------------------
+
+
+def test_the_highest_of_two_new_versions_of_a_new_family_is_latest_and_cites_the_publisher_page(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Zeta-1-3B", stamp(3)), ent("acme/Zeta-2-3B", stamp(2))])
+    rows = new_rows(go(env, hub)[0])
+    assert [new_of(rows[r])["latest"] for r in ("acme/Zeta-1-3B", "acme/Zeta-2-3B")] == [False, True]
+    new = new_of(rows["acme/Zeta-2-3B"])
+    assert (new["latest_source"], new["latest_checked"]) == ("https://huggingface.co/acme", TODAY) and new_of(rows["acme/Zeta-1-3B"])["latest_source"] is None
+
+
+def test_two_new_versions_that_stand_level_get_no_top_and_a_note_names_both(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Zeta-2-3B", stamp(2)), ent("acme/Zeta-2-3B-Base", stamp(2))])
+    p, _, _ = go(env, hub)
+    assert [new_of(c)["latest"] for c in new_rows(p).values()] == [False, False]
+    assert "acme/zeta text: no latest, acme/Zeta-2-3B and acme/Zeta-2-3B-Base stand level" in p["notes"]
+
+
+def test_a_new_row_under_the_shipped_top_of_a_group_without_a_latest_row_changes_nothing_and_says_so(env):
+    hub = Hub()
+    hub.page("orbit", [ent("orbit/Comet-Embed-0", stamp(2), pipeline_tag="feature-extraction", safetensors=MISSING)])
+    p, _, _ = go(env, hub)
+    assert new_of(new_rows(p)["orbit/Comet-Embed-0"])["latest"] is False
+    assert "orbit/comet embedding: no latest row; the top is the shipped row orbit/Comet-Embed-1" in p["notes"]
+    assert [c for c in p["changes"] if c["hf_repo"] == "orbit/Comet-Embed-1"] == []  # no shipped row is promoted
+
+
+def test_a_group_with_a_latest_row_keeps_the_rule_over_latest_and_cites_the_source_of_that_rule(env):
+    """Regression: `Atlas-3-9B` stands over the latest `Atlas-2-9B`; its source is the collection (or the page) as before."""
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2))])
+    hub.put(rules.collections_url("acme"), (FIX / "scan_collections.json").read_bytes())
+    new = new_of(new_rows(go(env, hub)[0])["acme/Atlas-3-9B"])
+    assert (new["latest"], new["latest_source"]) == (True, "https://huggingface.co/collections/acme/atlas-6a1b2c3d4e5f")
+
+
+def successor_of(p: dict, repo: str) -> str | None:
+    change = fields_of(p, repo, "successor")
+    return new_of(change)["successor"] if change else None
+
+
+def card_of(target: str) -> dict:
+    return {"license": "mit", "new_version": target}
+
+
+def test_a_target_that_is_latest_in_the_table_is_a_successor(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-2-9B"))])
+    assert successor_of(go(env, hub)[0], "acme/Atlas-1-9B") == "acme/Atlas-2-9B"
+
+
+def test_a_target_that_becomes_latest_over_the_latest_row_in_this_run_is_a_successor(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-3-9B"))])
+    assert successor_of(go(env, hub)[0], "acme/Atlas-1-9B") == "acme/Atlas-3-9B"
+
+
+def test_a_target_that_becomes_latest_as_the_top_of_its_group_is_a_successor(env):
+    hub = Hub()
+    hub.page("orbit", [ent("orbit/Comet-Embed-2", stamp(2), pipeline_tag="feature-extraction", safetensors=MISSING),
+                       ent("orbit/Comet-Embed-1", stamp(6), pipeline_tag="feature-extraction", safetensors=MISSING, cardData=card_of("orbit/Comet-Embed-2"))])
+    p, _, _ = go(env, hub)
+    new = new_of(new_rows(p)["orbit/Comet-Embed-2"])
+    assert (new["latest"], new["latest_source"]) == (True, "https://huggingface.co/orbit")
+    assert successor_of(p, "orbit/Comet-Embed-1") == "orbit/Comet-Embed-2" and applied(p)
+
+
+def test_a_target_that_is_a_carried_new_latest_row_is_a_successor(env):
+    entry = rules.parse_entry(ent("acme/Atlas-3-9B", stamp(3)))
+    result = rules.cheap_kind(entry)
+    row = rules.build_row(entry, result, family="atlas", today=YESTERDAY, latest=True, latest_source="https://huggingface.co/acme")
+    env.prev(YESTERDAY, changes=[{**rules.new_row_change(row, result, YESTERDAY), "n": 1}])
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-3-9B"))])
+    p, _, _ = go(env, hub)
+    assert successor_of(p, "acme/Atlas-1-9B") == "acme/Atlas-3-9B" and "acme/Atlas-3-9B" in new_rows(p)
+
+
+def test_a_target_that_is_no_latest_row_at_the_end_of_the_run_is_no_successor_and_a_note_says_so(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-2-9B", stamp(5), cardData=card_of("acme/Atlas-1-9B"))])  # `Atlas-1-9B` is a shipped row, not latest
+    p, _, _ = go(env, hub)
+    assert successor_of(p, "acme/Atlas-2-9B") is None
+    assert "acme/Atlas-2-9B: successor acme/Atlas-1-9B from the card is not a latest row at the end of this run, not set" in p["notes"]
+
+
+def test_a_new_target_whose_final_row_the_table_refuses_is_no_successor(env):
+    """The row passes the first `_takes` (no latest fields) and fails the last one: its collection url is too long for
+    `latest_source`. The successor must not point at a row that is not in the proposal."""
+    slug = "acme/" + "x" * 600
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-3-9B"))])
+    hub.put(rules.collections_url("acme"), [{"slug": slug, "items": [{"type": "model", "id": "acme/Atlas-3-9B"}]}])
+    p, _, _ = go(env, hub)
+    assert "acme/Atlas-3-9B" not in new_rows(p) and successor_of(p, "acme/Atlas-1-9B") is None
+    assert [n for n in p["notes"] if n.startswith("acme/Atlas-3-9B: left out, it would not validate")]
+    assert "acme/Atlas-1-9B: successor acme/Atlas-3-9B from the card is not a latest row at the end of this run, not set" in p["notes"]
+    assert not any("which is not a model" in n for n in p["notes"])  # the target is known, it is only no `latest` row (Codex kah-1 finding 4)
+
+
+def test_a_target_the_card_names_that_no_one_knows_keeps_its_own_note(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-9-9B"))])
+    p, _, _ = go(env, hub)
+    assert any(n.startswith("acme/Atlas-1-9B: card names new_version acme/Atlas-9-9B, which is not a model") for n in p["notes"])
+
+
+def test_a_chain_of_three_gets_the_last_link_and_the_note_names_the_first(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Atlas-2-9B", stamp(5), cardData=card_of("acme/Atlas-3-9B")),
+                      ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-2-9B"))])
+    p, _, _ = go(env, hub)
+    assert (successor_of(p, "acme/Atlas-2-9B"), successor_of(p, "acme/Atlas-1-9B")) == ("acme/Atlas-3-9B", None)
+    assert "acme/Atlas-1-9B: successor acme/Atlas-2-9B not set, acme/Atlas-2-9B has a successor" in p["notes"] and applied(p)
+
+
+def test_a_cycle_of_cards_sets_nothing(env):
+    """Two shipped `latest` rows whose cards name each other (the only way a cycle gets past the single checks)."""
+    document = json.loads(CATALOG_BYTES)
+    row = next(m for m in document["models"] if m["hf_repo"] == "acme/Atlas-1-9B")
+    row.update(latest=True, latest_source="https://huggingface.co/acme", latest_checked="2026-10-01")
+    env.catalog.write_bytes(json.dumps(document).encode("utf-8"))
+    hub = Hub()
+    hub.put(rules.b2_url("acme/Atlas-1-9B"), [])  # a latest text row has its own B2 page
+    hub.page("acme", [ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-2-9B")), ent("acme/Atlas-2-9B", stamp(5), cardData=card_of("acme/Atlas-1-9B"))])
+    p, _, _ = go(env, hub)
+    assert fields_of(p, "acme/Atlas-1-9B", "successor") is None and fields_of(p, "acme/Atlas-2-9B", "successor") is None
+    assert "acme/Atlas-1-9B: successor acme/Atlas-2-9B not set, part of a cycle" in p["notes"]
+    assert "acme/Atlas-2-9B: successor acme/Atlas-1-9B not set, part of a cycle" in p["notes"]
+
+
+def shipped_pointing_at_atlas_2() -> bytes:
+    document = json.loads(CATALOG_BYTES)
+    row = next(m for m in document["models"] if m["hf_repo"] == "acme/Atlas-1-9B")
+    row.update(successor="acme/Atlas-2-9B", successor_source="https://huggingface.co/acme/Atlas-1-9B", successor_checked="2026-10-01")
+    return json.dumps(document).encode("utf-8")
+
+
+def test_a_row_that_a_shipped_successor_points_at_gets_no_successor_of_its_own(env):
+    env.catalog.write_bytes(shipped_pointing_at_atlas_2())
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Atlas-2-9B", stamp(5), cardData=card_of("acme/Atlas-3-9B"))])
+    p, _, _ = go(env, hub)
+    assert successor_of(p, "acme/Atlas-2-9B") is None
+    assert "acme/Atlas-2-9B: successor acme/Atlas-3-9B not set, acme/Atlas-1-9B points at acme/Atlas-2-9B" in p["notes"]
+
+
+def test_a_row_that_a_carried_successor_points_at_gets_no_successor_of_its_own(env):
+    card = "https://huggingface.co/acme/Atlas-1-9B"
+    carried_link = {
+        "change": "field", "field": "successor", "stage": "A3", "hf_repo": "acme/Atlas-1-9B", "kind": "text", "open_since": YESTERDAY, "evidence": [card], "n": 1,
+        "fields": {"successor": {"old": None, "new": "acme/Atlas-2-9B"}, "successor_source": {"old": None, "new": card}, "successor_checked": {"old": None, "new": YESTERDAY}},
+    }
+    env.prev(YESTERDAY, changes=[carried_link])
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Atlas-2-9B", stamp(5), cardData=card_of("acme/Atlas-3-9B"))])
+    p, _, _ = go(env, hub)
+    assert successor_of(p, "acme/Atlas-2-9B") is None and successor_of(p, "acme/Atlas-1-9B") == "acme/Atlas-2-9B"
+    assert "acme/Atlas-2-9B: successor acme/Atlas-3-9B not set, acme/Atlas-1-9B points at acme/Atlas-2-9B" in p["notes"]
+
+
+def test_a_carried_successor_of_a_row_is_not_asked_for_again_when_its_card_names_another_target(env):
+    """Codex kah-1 finding 2: `A -> B` is carried, the card of A now names C. The carried link stays, A is not resolved again."""
+    card = "https://huggingface.co/acme/Atlas-1-9B"
+    carried_link = {
+        "change": "field", "field": "successor", "stage": "A3", "hf_repo": "acme/Atlas-1-9B", "kind": "text", "open_since": YESTERDAY, "evidence": [card], "n": 1,
+        "fields": {"successor": {"old": None, "new": "acme/Atlas-2-9B"}, "successor_source": {"old": None, "new": card}, "successor_checked": {"old": None, "new": YESTERDAY}},
+    }
+    env.prev(YESTERDAY, changes=[carried_link])
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-3-9B", stamp(2)), ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-3-9B"))])
+    p, _, _ = go(env, hub)
+    assert successor_of(p, "acme/Atlas-1-9B") == "acme/Atlas-2-9B"  # the carried link, unchanged
+    assert not any("not set," in n for n in p["notes"])  # A never entered the resolution (no cycle, no chain, no pointed-at note)
+    assert "acme/Atlas-1-9B: card names new_version acme/Atlas-3-9B of another kind or the row has a successor; no successor proposed" in p["notes"]
+
+
+def test_a_carried_unreadable_new_row_without_the_mark_is_marked_and_listed(env):
+    """Codex kah-1 finding 1: a row taken over from an old proposal (no `reading` key) gets the mark and the section."""
+    entry = rules.parse_entry(ent("acme/Ovie-512", stamp(3)))
+    result = rules.cheap_kind(entry)
+    row = rules.build_row(entry, result, family="ovie", today=YESTERDAY, latest=False, latest_source=None)
+    env.prev(YESTERDAY, changes=[{**rules.new_row_change(row, result, YESTERDAY), "n": 1}])
+    p, _, _ = go(env, Hub())
+    assert new_rows(p)["acme/Ovie-512"]["reading"] is False
+    text = (env.out / TODAY / "proposal.md").read_text(encoding="utf-8")
+    assert "## Rows without a reading" in text and "| acme/Ovie-512 | reading: false | token '512' has no class" in text
+
+
+def test_a_carried_wrong_mark_is_cleaned(env):
+    entry = rules.parse_entry(ent("acme/Zeta-1-3B", stamp(3)))
+    result = rules.cheap_kind(entry)
+    row = rules.build_row(entry, result, family="zeta", today=YESTERDAY, latest=False, latest_source=None)
+    env.prev(YESTERDAY, changes=[{**rules.new_row_change(row, result, YESTERDAY), "n": 1, "reading": False}])
+    p, _, _ = go(env, Hub())
+    assert "reading" not in new_rows(p)["acme/Zeta-1-3B"] and "## Rows without a reading" not in (env.out / TODAY / "proposal.md").read_text(encoding="utf-8")
+
+
+def test_the_drift_of_a_shipped_row_that_is_also_on_the_rejection_list_is_named(env):
+    """Codex kah-1 finding 7: every shipped row is judged, a rejected one too."""
+    env.rejected.write_bytes(json.dumps([{"hf_repo": "orbit/Comet-3-8B", "date": YESTERDAY}]).encode("utf-8"))
+    p, _, _ = go(env, Hub())
+    assert "orbit/Comet-3-8B: reading drift, family comet-core in the catalog, comet today" in p["notes"]
+
+
+def test_the_scanner_names_a_family_that_the_name_no_longer_makes_and_changes_nothing(env):
+    p, _, _ = go(env, Hub())
+    assert "orbit/Comet-3-8B: reading drift, family comet-core in the catalog, comet today" in p["notes"]
+    assert p["changes"] == []  # a note only: the table is not changed by it
+
+
+COMET_DRIFT = "orbit/Comet-3-8B: reading drift, family comet-core in the catalog, comet today"
+
+
+def drift_notes_of(p: dict) -> list[str]:
+    return [n for n in p["notes"] if "reading drift" in n]
+
+
+def test_drift_the_first_run_names_every_drift_and_keeps_the_triples_in_the_proposal(env):
+    """Rev 7 (GF 2026-10-09): no earlier proposal, so every drift is named; the triples go to the next run."""
+    p, _, _ = go(env, Hub())
+    assert COMET_DRIFT in p["notes"] and len(drift_notes_of(p)) == len(p["drift"]) > 1
+    assert ["orbit/Comet-3-8B", "comet-core", ["comet", "comet-orbit"]] in p["drift"]
+
+
+def test_drift_the_second_run_with_the_same_state_names_nothing(env):
+    go(env, Hub())
+    p, _, _ = go(env, Hub(), now=NOW + timedelta(days=1))
+    assert drift_notes_of(p) == [] and len(p["drift"]) > 1  # the state is kept, only the notes are quiet
+
+
+def test_drift_a_changed_family_in_the_catalog_is_named_again_and_only_that_row(env):
+    go(env, Hub())
+    second, _, _ = go(env, Hub(), now=NOW + timedelta(days=1))
+    assert drift_notes_of(second) == []  # the second run is unchanged: quiet
+    document = json.loads(CATALOG_BYTES)
+    next(m for m in document["models"] if m["hf_repo"] == "orbit/Comet-3-8B")["family"] = "comet-other"
+    env.catalog.write_bytes(json.dumps(document).encode("utf-8"))
+    p, _, _ = go(env, Hub(), now=NOW + timedelta(days=2))  # the third run sees the changed family
+    assert drift_notes_of(p) == ["orbit/Comet-3-8B: reading drift, family comet-other in the catalog, comet today"]
+
+
+def test_drift_a_row_that_no_longer_drifts_leaves_the_state_and_is_named_again_when_it_drifts_again(env):
+    go(env, Hub())
+    healed = json.loads(CATALOG_BYTES)
+    next(m for m in healed["models"] if m["hf_repo"] == "orbit/Comet-3-8B")["family"] = "comet"
+    env.catalog.write_bytes(json.dumps(healed).encode("utf-8"))
+    second, _, _ = go(env, Hub(), now=NOW + timedelta(days=1))
+    assert not any(t[0] == "orbit/Comet-3-8B" for t in second["drift"]) and drift_notes_of(second) == []
+    env.catalog.write_bytes(CATALOG_BYTES)  # the old family comes back
+    third, _, _ = go(env, Hub(), now=NOW + timedelta(days=2))
+    assert drift_notes_of(third) == [COMET_DRIFT]
+
+
+def test_group_notes_come_only_in_a_run_with_a_new_member_of_the_group(env):
+    """Rev 7: `orbit/comet embedding` has a shipped top and no `latest` row. Nothing new in it: no note."""
+    p, _, _ = go(env, Hub())
+    assert not [n for n in p["notes"] if "no latest" in n]
+
+
+def test_group_notes_also_come_when_a_row_of_the_group_gets_a_field_change(env):
+    hub = Hub()
+    hub.page("packone", [quantized("packone/Comet-Embed-1-GGUF", "orbit/Comet-Embed-1")])
+    p, _, _ = go(env, hub)
+    assert fields_of(p, "orbit/Comet-Embed-1", "gguf_repos") is not None
+    assert "orbit/comet embedding: no latest row; the top is the shipped row orbit/Comet-Embed-1" in p["notes"]
+
+
+def test_group_notes_do_not_come_again_for_a_field_change_taken_over_unchanged_without_apply(env):
+    """Codex kah-3 finding 1: run 1 proposes the GGUF change and names the group; run 2 takes the same change over and is quiet."""
+    note = "orbit/comet embedding: no latest row; the top is the shipped row orbit/Comet-Embed-1"
+    hub = Hub()
+    hub.page("packone", [quantized("packone/Comet-Embed-1-GGUF", "orbit/Comet-Embed-1")])
+    first, _, _ = go(env, hub)
+    assert note in first["notes"] and fields_of(first, "orbit/Comet-Embed-1", "gguf_repos") is not None
+    second, _, _ = go(env, hub, now=NOW + timedelta(days=1))
+    assert fields_of(second, "orbit/Comet-Embed-1", "gguf_repos") is not None  # still open, nothing applied
+    assert note not in second["notes"] and not [n for n in second["notes"] if "no latest" in n]
+
+
+def test_group_notes_come_again_when_a_taken_over_field_change_differs_in_its_new_values(env):
+    note = "orbit/comet embedding: no latest row; the top is the shipped row orbit/Comet-Embed-1"
+    hub = Hub()
+    hub.page("packone", [quantized("packone/Comet-Embed-1-GGUF", "orbit/Comet-Embed-1")])
+    go(env, hub)
+    hub.page("packone", [quantized("packone/Comet-Embed-1-GGUF", "orbit/Comet-Embed-1"), quantized("packone/Comet-Embed-1b-GGUF", "orbit/Comet-Embed-1")])
+    second, _, _ = go(env, hub, now=NOW + timedelta(days=1))
+    assert note in second["notes"]
+
+
+def b1_carried(account: str, likes: int, open_since: str | None, **more) -> dict:
+    repo = f"{account}/Rising-1-7B"
+    data = {
+        "k": "K1", "candidate": "B1", "account": account, "hf_repo": repo, "likes": likes, "downloads": 1500, "created_at": stamp(3), "evidence": [f"https://huggingface.co/{repo}"],
+        "repos": [{"hf_repo": repo, "likes": likes, "downloads": 1500}], "open_since": open_since, **more,
+    }
+    return {key: value for key, value in data.items() if value is not None or key != "open_since"}
+
+
+def days_ago(days: int) -> str:
+    return (NOW - timedelta(days=days)).date().isoformat()
+
+
+def test_an_overdue_candidate_is_listed_before_the_limit_of_ten_and_leads_the_proposal(env):
+    carried_open = [b1_carried(f"lab{n:02d}", 200 - n, days_ago(3)) for n in range(11)] + [b1_carried("slowlab", 1, days_ago(31))]
+    env.prev(YESTERDAY, candidates=carried_open)
+    p, _, _ = go(env, Hub())
+    assert [c["account"] for c in p["candidates"]][0] == "slowlab" and len(p["candidates"]) == 11  # the overdue one, then ten of the eleven others
+    assert p["candidates"][0]["overdue_days"] == 31 and all("overdue_days" not in c for c in p["candidates"][1:])
+    assert "candidates B1 and B2 over the limit of 10: 1 not listed" in p["notes"] and p["candidates"][0]["k"] == "K1"
+    text = (env.out / TODAY / "proposal.md").read_text(encoding="utf-8")
+    head, rest = text.split("## Candidates\n")
+    assert "## Candidates past 30 days (decide now)" in head and f"| open since {days_ago(31)}, 31 days" in head and "slowlab" not in rest
+    assert text.index("## Candidates past 30 days (decide now)") < text.index("## Candidates\n")
+
+
+def test_a_candidate_of_day_30_is_not_overdue_and_one_without_the_section_has_no_such_heading(env):
+    env.prev(YESTERDAY, candidates=[b1_carried("labone", 50, days_ago(30))])
+    p, _, _ = go(env, Hub())
+    assert "overdue_days" not in p["candidates"][0]
+    assert "Candidates past 30 days" not in (env.out / TODAY / "proposal.md").read_text(encoding="utf-8")
+
+
+def test_a_rejected_overdue_candidate_is_not_listed(env):
+    env.prev(YESTERDAY, candidates=[b1_carried("oldlab", 5, days_ago(40))])
+    env.rejected.write_bytes(json.dumps([{"account": "oldlab", "date": YESTERDAY}]).encode("utf-8"))
+    p, _, _ = go(env, Hub())
+    assert p["candidates"] == [] and "Candidates past 30 days" not in (env.out / TODAY / "proposal.md").read_text(encoding="utf-8")
+
+
+def test_a_candidate_without_open_since_gets_the_day_of_the_first_run_and_keeps_it(env):
+    env.prev(YESTERDAY, candidates=[b1_carried("labone", 50, None)])
+    first, _, _ = go(env, Hub())
+    assert first["candidates"][0]["open_since"] == TODAY
+    second, _, _ = go(env, Hub(), now=NOW + timedelta(days=2))
+    assert second["candidates"][0]["open_since"] == TODAY  # the stored date, not the day of the second run
+    assert "overdue_days" not in second["candidates"][0]
+
+
+def test_a_row_without_a_reading_is_marked_and_listed_in_its_own_section_before_the_numbered_rows(env):
+    hub = Hub()
+    hub.page("acme", [ent("acme/Ovie-512", stamp(1)), ent("acme/Atlas-3-9B", stamp(2))])
+    p, _, _ = go(env, hub)
+    assert new_rows(p)["acme/Ovie-512"]["reading"] is False and "reading" not in new_rows(p)["acme/Atlas-3-9B"]
+    assert "reading" not in new_of(new_rows(p)["acme/Ovie-512"])  # not a field of the row
+    text = (env.out / TODAY / "proposal.md").read_text(encoding="utf-8")
+    section = "## Rows without a reading (approve only with an entry in SHIPPED_WITHOUT_READING)"
+    assert text.index(section) < text.index("## Changes")
+    number = new_rows(p)["acme/Ovie-512"]["n"]
+    assert f"{number} | acme/Ovie-512 | reading: false | token '512' has no class" in text and '  "acme/Ovie-512",  # token \'512\' has no class' in text
+    assert "acme/Atlas-3-9B | reading" not in text

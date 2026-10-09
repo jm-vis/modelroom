@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from modelroom.catalog import Catalog, load_catalog
 from modelroom.guided_contracts import SearchHit
 from modelroom.search_age import AgeVerdict
-from modelroom.search_release import LineDate, LineKey, Release, compute_release, line_key, with_release
+from modelroom.search_release import LineDate, LineKey, Release, compute_release, line_key, unread_reason, with_release
 
 MISTRAL_SMALL_3 = "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
 MISTRAL_SMALL_4 = "mistralai/Mistral-Small-4-119B-2603"
@@ -151,6 +151,9 @@ KEYS = [
     ("OpenGVLab/InternVL2_5-4B-MPO", "internvl", "", {"mpo"}, 4, (2, 5), None),
     ("internlm/internlm2_5-7b-chat", "internlm", "", set(), 7, (2, 5), None),
     ("stepfun-ai/GOT-OCR2_0", "got", "", {"ocr"}, None, (2, 0), None),
+    # --- AP9-KA-H K1: a `\d+s` attribute and a date in ISO form ---
+    ("m-a-p/MERT-v2-30s", "mert", "", set(), None, (2,), None),
+    ("moondream/moondream-2b-2025-04-14", "moondream", "", set(), 2, (), LineDate("iso", 2025, 4, 14)),
 ]
 
 # `KEYS` = the reference rows plus hand samples. This list: shipped names that deliberately have no reading (`line_key`
@@ -189,6 +192,13 @@ NOT_INTERPRETABLE = [
     "acme/Nova-7B-16bits",  # not a `bit` precision
     "acme/Nova-1p3-7B",  # a `p` size without a unit
     "acme/Nova-2.5_1",  # the underscore joins no part with a dot
+    # AP9-KA-H: near misses of the ISO date, and the three-digit number that stays without a class
+    "acme/Nova-2025-13-01",  # month 13: no ISO date, and `2025` alone has no class
+    "acme/Nova-2025-04-32",  # day 32
+    "acme/Nova-1999-04-14",  # not a year of `20xx`
+    "acme/Nova-2025-04-14-2025-05-01",  # two ISO dates
+    "acme/Nova-2025-04-14-2506",  # an ISO date and a YYMM date
+    "kyutai/ovie-512",  # three digits are no version, size or resolution (KA-G keeps `378` and `735` without a class)
 ]
 
 
@@ -304,6 +314,69 @@ def test_with_the_same_version_a_dated_name_stands_over_an_undated_one():
 def test_dates_of_two_forms_are_not_comparable():
     assert not _over("acme/Nova-7B-2506", "acme/Nova-7B-0731")
     assert not _over("acme/Nova-7B-0731", "acme/Nova-7B-2506")
+
+
+@pytest.mark.parametrize("year", ["2001", "2012"])
+def test_a_year_from_2001_to_2012_in_an_iso_date_is_one_iso_date_and_never_a_yymm_date(year):
+    """`2001` to `2012` alone read as YYMM (year 20, month 01 to 12); inside `yyyy-mm-dd` the three tokens are one date."""
+    key = line_key(f"acme/Nova-{year}-05-07", None)
+
+    assert key.date == LineDate("iso", int(year), 5, 7) and key.version == ()
+    assert line_key(f"acme/Nova-{year}", None).date == LineDate("yymm", 20, int(year[2:]), None)  # regression: alone it stays YYMM
+
+
+def test_the_iso_date_needs_all_three_tokens_and_leaves_a_year_with_a_month_as_before():
+    assert line_key("acme/Nova-2001-05", None).date == LineDate("yymm", 20, 1, None)  # regression: `05` is a version
+    assert line_key("acme/Nova-2001-05", None).version == (5,)
+
+
+def test_an_iso_date_stands_over_an_older_one_and_over_no_date_but_the_version_comes_first():
+    assert _over("acme/Nova-2025-05-01", "acme/Nova-2025-04-30")
+    assert _over("acme/Nova-2026-01-01", "acme/Nova-2025-12-31")
+    assert not _over("acme/Nova-2025-04-30", "acme/Nova-2025-05-01")
+    assert _over("acme/Nova-2025-04-14", "acme/Nova")
+    assert not _over("acme/Nova", "acme/Nova-2025-04-14")
+    assert _over("acme/Nova-3", "acme/Nova-2-2025-12-31")  # a higher version beats any date, whatever its form
+    assert not _over("acme/Nova-2025-12-31", "acme/Nova-2-2025-01-01")  # equal versions only (here () against (2,))
+
+
+def test_the_higher_version_wins_whatever_the_forms_of_the_dates_are():
+    """Codex kah-1 finding 10: the version comes first even when the two names carry dates of different forms."""
+    assert _over("acme/Nova-3-2506", "acme/Nova-2-2025-12-31")  # YYMM against ISO
+    assert not _over("acme/Nova-2-2025-12-31", "acme/Nova-3-2506")
+    assert _over("acme/Nova-3-2025-01-01", "acme/Nova-2-2512")  # ISO against YYMM, the other way round
+    assert not _over("acme/Nova-2-2512", "acme/Nova-3-2025-01-01")
+
+
+def test_an_iso_date_and_a_date_of_another_form_are_not_comparable():
+    assert not _over("acme/Nova-2025-05-01", "acme/Nova-2506")
+    assert not _over("acme/Nova-2506", "acme/Nova-2025-05-01")
+
+
+def test_a_seconds_attribute_is_read_and_ignored_and_it_does_not_order_names():
+    """`MERT-v2-30s`: seconds of audio, an attribute like a `k` attribute (AP9-KA-H); two of them are as good as one."""
+    assert line_key("acme/Nova-30s-45s", None) is not None
+    plain, thirty, forty_five = (line_key(f"acme/Nova-2{tail}", None) for tail in ("", "-30s", "-45s"))
+    assert (plain.version, thirty.version, forty_five.version) == ((2,), (2,), (2,))
+    assert (plain.size, plain.date, plain.variant) == (thirty.size, thirty.date, thirty.variant) == (forty_five.size, forty_five.date, forty_five.variant)
+    assert not thirty.stands_over(forty_five) and not forty_five.stands_over(thirty) and not thirty.stands_over(plain)
+
+
+@pytest.mark.parametrize("repo, reason", [
+    ("kyutai/ovie-512", "token '512' has no class"),
+    ("acme/Nova-2025-13-01", "token '2025' has no class"),
+    ("acme/Nova-2-7B-3", "two versions"),
+    ("acme/Nova-2506-0731", "two dates"),
+    ("acme/Nova-2025-04-14-2025-05-01", "two dates"),
+    ("acme/3-7B", "starts with version"),
+    ("apple/DFN5B-CLIP-ViT-H-14-378", "token '378' has no class"),
+])
+def test_the_reason_a_name_has_no_reading_is_named(repo, reason):
+    assert unread_reason(repo, None) == reason
+
+
+def test_a_name_with_a_reading_has_no_reason_to_give():
+    assert unread_reason("m-a-p/MERT-v2-30s", None) is None and unread_reason("acme/Nova-7B", 7.0) is None
 
 
 def test_the_order_is_irreflexive_and_transitive_over_the_table():

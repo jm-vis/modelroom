@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### KA-H
+
+- **Catalog hardened** (AP9-KA-H; `modelroom/search_release.py`, `scripts/catalog_scan.py`, `scripts/catalog_scan_rules.py`,
+  `scripts/catalog_scan_notes.py`, `scripts/catalog_scan_latest.py`, `scripts/catalog_publish_rules.py`, `scripts/catalog_publish.py`). The grammar reads two
+  more forms: a `\d+s` attribute (`MERT-v2-30s`) and a date `yyyy-mm-dd` as one `iso` date (`moondream-2b-2025-04-14`);
+  `kyutai/ovie-512` stays without a reading. A proposal lists new rows without a reading in their own section with the reason,
+  and `--apply` takes them only with `--approve-unread <n>` (a number of `--approve`; `approved_unread` in `decision.json`).
+  The scanner makes the one highest new member of a group without a `latest` row `latest` (source: the publisher's page) and
+  names ties and shipped tops in the notes; a successor from a card is set only when its target is a `latest` row without a
+  successor at the end of the run, and chains, cycles and rows another row points at are resolved by fixed rules. Notes name a
+  shipped row whose family the grammar no longer makes from its name (`reading drift`, named when it is new or has changed since the last proposal, which keeps the drift triples as `drift`). A candidate open for more than 30 days
+  is listed first under `## Candidates past 30 days (decide now)`, before the limit of ten; a candidate of the old form
+  without `open_since` gets the day of the first run. No schema version changes; `catalog.json` is not changed.
+
 ## [0.3.0] - 2026-10-09
 
 The README now documents LM Studio: the list entries per GGUF package, the `lms get` download
