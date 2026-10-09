@@ -111,7 +111,7 @@ def test_choosing_an_lms_row_of_another_computer_hands_over_the_lms_line_and_pul
     pull_other_step(run, _other_context(doc, [q4]))
 
     said = [line.strip() for line in lines]
-    assert f"install   #1 on {HERE}  lms get --gguf {QUANT}" in said
+    assert f"install   #1 on {HERE}  lms get --gguf https://huggingface.co/{QUANT}" in said
     assert not any("modelroom pull" in line or "ollama pull" in line for line in said)
     assert [call for call in run.daemon.calls if call[0] == "POST"] == []
 
@@ -160,9 +160,9 @@ def test_no_note_under_a_chosen_lms_row_is_wider_than_a_hundred_characters(tmp_p
 
 def test_the_command_lines_are_whole_in_every_form(tmp_path):
     for form, expected in (
-        ("path", f"lms get --gguf {QUANT}"),
-        ("home", f'& "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf {QUANT}'),
-        ("handover", f"lms get --gguf {QUANT}"),
+        ("path", f"lms get --gguf https://huggingface.co/{QUANT}"),
+        ("home", f'& "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf https://huggingface.co/{QUANT}'),
+        ("handover", f"lms get --gguf https://huggingface.co/{QUANT}"),
     ):
         lines, _context = _printed_lines(tmp_path / form, form)
         assert any(line.strip().endswith(expected) for line in lines), form

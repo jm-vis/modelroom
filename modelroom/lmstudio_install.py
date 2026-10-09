@@ -1,7 +1,8 @@
 """What the LM Studio entry installs and holds: its command, its model folder, "already there", its disk.
 
-modelroom prints `lms get --gguf <owner>/<repo>@<quant>` and never runs it (G7): the reader copies the
-line, and `lms` stays a program modelroom does not start (CONTRACTS.md, "Local servers and the vLLM load
+modelroom prints `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` and never runs it (G7):
+the URL, because `lms get <owner>/<name>` names an artifact of the LM Studio Hub (`lms get --help`). The
+reader copies the line, and `lms` stays a program modelroom does not start (CONTRACTS.md, "Local servers and the vLLM load
 test", LM Studio). Every value that reaches a line is checked here and nowhere else: the repository
 against the Hub's name rule and plain ASCII, the stage against the stages of `QUANT_ORDER` that are GGUF
 and not `UD-` (`LMS_QUANTS`), the file against `SAFE_REPO_PATH_RE`. A package with more than one weight
@@ -46,6 +47,8 @@ LMS_QUANTS: tuple[str, ...] = tuple(
 )
 
 NO_SAFE_COMMAND = "no safe command"
+# `lms get <owner>/<name>` names an artifact of the LM Studio Hub; a Hugging Face repository is named by its URL.
+HF_URL_PREFIX = "https://huggingface.co/"
 COMPUTED_ONLY_PREFIX = "computed only: lms get for"
 COMPUTED_ONLY_SPLIT = f"{COMPUTED_ONLY_PREFIX} split files is not checked"
 COMPUTED_ONLY_SUBFOLDER = f"{COMPUTED_ONLY_PREFIX} files in a subfolder is not checked"
@@ -98,16 +101,21 @@ def install_name(package: Package) -> str | None:
 
 
 def command(name: str) -> str:
-    """`LMSTUDIO.command`: the line in the `PATH` form, `lms get --gguf <owner>/<repo>@<quant>`."""
-    return f"lms get --gguf {name}"
+    """`LMSTUDIO.command`: the line in the `PATH` form,
+    `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>`.
+
+    The URL, not `<owner>/<repo>`: `lms get <owner>/<name>` resolves an artifact of the LM Studio Hub, and
+    `lms get --help` says a model from Hugging Face is downloaded by its full URL.
+    """
+    return f"lms get --gguf {HF_URL_PREFIX}{name}"
 
 
 def home_command(name: str, system: str) -> str:
     """The call where `lms` is not in the `PATH` but where LM Studio put it: a fixed shell expression, never
     a resolved path (PowerShell under Windows, a POSIX shell elsewhere). `cmd.exe` does not run it."""
     if system == "win32":
-        return f'& "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf {name}'
-    return f'"$HOME/.lmstudio/bin/lms" get --gguf {name}'
+        return f'& "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf {HF_URL_PREFIX}{name}'
+    return f'"$HOME/.lmstudio/bin/lms" get --gguf {HF_URL_PREFIX}{name}'
 
 
 def lms_form(room: RoomProbes) -> str | None:
@@ -248,6 +256,7 @@ __all__ = [
     "COMPUTED_ONLY_PREFIX",
     "COMPUTED_ONLY_SPLIT",
     "COMPUTED_ONLY_SUBFOLDER",
+    "HF_URL_PREFIX",
     "LMS_QUANTS",
     "NO_SAFE_COMMAND",
     "command",

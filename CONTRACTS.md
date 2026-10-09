@@ -5905,7 +5905,8 @@ first runtime that accepts it (Ollama's). The fields: name `LM Studio`; origin `
 `hello_field` `lmstudio` (a computer reached over SSH reads `absent`, no remote operation exists for it);
 `accepts` and `shown_only_with` the Hugging Face GGUF packages, never an Ollama or a tensor package; `fit`
 the fit rule of Ollama (both run llama.cpp); `install_name` `<owner>/<repo>@<quant>` where the command is
-safe; `command` `lms get --gguf <owner>/<repo>@<quant>`, **printed and never run**; `model_place` the
+safe; `command` `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` (the URL, because
+`lms get <owner>/<name>` names an artifact of the LM Studio Hub), **printed and never run**; `model_place` the
 standard model folder under the home folder; `on_disk` a file of the declared size in it (`stat` only);
 words without a prefix or a key hint, the question `Which package should be installed?`.
 
@@ -5952,9 +5953,10 @@ no Ollama (its GGUF rows would otherwise be titled `with Ollama`), and the ranki
 place of Ollama; every machine with Ollama keeps its words.
 
 **A choice in the list prints, it never installs (G7, S1).** Choosing an LM Studio entry prints
-`lms get --gguf <owner>/<repo>@<quant>` and two lines of what to do in LM Studio (load it with the context length
-of the run, start the server; the last line says that LM Studio is found and not measured), asks nothing and calls
-no `/api/pull`; so does the choice of any entry of a runtime but Ollama (the daemon pull is Ollama's alone). The notes
+`lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` and two lines of what to do in LM Studio (load it
+with the context length of the run, start the server; the last line says that LM Studio is found and not
+measured), asks nothing and calls no `/api/pull`; so does the choice of any entry of a runtime but
+Ollama (the daemon pull is Ollama's alone). The notes
 break between words to what a labeled row has left of the 100 characters; a command to copy is never broken. Where `lms` is only in `~/.lmstudio/bin` the line is the fixed shell expression
 (`& "$env:USERPROFILE\.lmstudio\bin\lms.exe" ...` in PowerShell, `"$HOME/.lmstudio/bin/lms" ...` elsewhere) with a
 hint line; where the program is not found, the `PATH` form with the hint that it lives in `.lmstudio/bin`. Only a
@@ -5965,6 +5967,9 @@ in `~/.lmstudio/models/<owner>/<repo>/<file>` with the size of the catalog revis
 leaves the folder makes it unknown) is `local already`; the choice and the line under the table then say
 `#<n> is on disk already (size checked)` in place of the command. A package chosen for another computer is handed
 over as the `PATH` line with the machine named, never run.
+
+For a vision model, `lms` also downloads the projector (`mmproj-*.gguf`), so the download is larger than the
+single weight file checked by modelroom.
 
 **The disk (F6 a, S3, S7).** An LM Studio entry is checked against the free disk of LM Studio's model folder, read
 now at the nearest existing folder above `~/.lmstudio/models` (`Disk.lmstudio`, after vLLM's `Disk.vllm`; this

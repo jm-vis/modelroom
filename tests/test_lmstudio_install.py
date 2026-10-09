@@ -135,7 +135,18 @@ def test_the_command_is_lms_get_gguf_owner_repo_at_quant():
     name = lms.install_name(package)
     assert name == "unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
     assert runtimes.runtime_of("lmstudio").install_name(package) == name
-    assert runtimes.runtime_of("lmstudio").command(name) == "lms get --gguf unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
+    assert runtimes.runtime_of("lmstudio").command(name) == "lms get --gguf https://huggingface.co/unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
+
+
+def test_the_command_is_the_form_lms_resolved_in_the_hand_probe():
+    """Hand probe H4 of 2026-10-09: the bare owner/repository form failed with `Failed to resolve artifact`,
+    because `<owner>/<name>` names an artifact of the LM Studio Hub. `lms get --help`: "To download a model
+    from Hugging Face directly, use its full URL." The URL form resolved and downloaded."""
+    from modelroom import lmstudio_install as lms
+
+    url = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
+    assert lms.command("unsloth/Qwen3.5-4B-GGUF@Q4_K_M") == f"lms get --gguf {url}"
+    assert lms.home_command("unsloth/Qwen3.5-4B-GGUF@Q4_K_M", "win32") == f'& "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf {url}'
 
 
 @pytest.mark.parametrize(
@@ -168,7 +179,7 @@ def test_the_command_has_only_safe_characters_for_every_lms_quant():
     for quant in lms.LMS_QUANTS:
         name = lms.install_name(_package(quant=quant))
         line = runtimes.runtime_of("lmstudio").command(name)
-        assert re.fullmatch(r"lms get --gguf [A-Za-z0-9_./@-]+", line), line
+        assert re.fullmatch(r"lms get --gguf https://huggingface\.co/[A-Za-z0-9_./@-]+", line), line
         assert "@" in name and not name.startswith("@")
 
 
@@ -211,8 +222,9 @@ def test_the_command_reads_the_same_in_posix_and_powershell():
     from modelroom import lmstudio_install as lms
 
     line = runtimes.runtime_of("lmstudio").command(lms.install_name(_package()))
-    assert shlex.split(line) == ["lms", "get", "--gguf", "unsloth/Qwen3.5-4B-GGUF@Q4_K_M"]
-    assert _powershell_tokens(line) == ["lms", "get", "--gguf", "unsloth/Qwen3.5-4B-GGUF@Q4_K_M"]
+    url = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
+    assert shlex.split(line) == ["lms", "get", "--gguf", url]
+    assert _powershell_tokens(line) == ["lms", "get", "--gguf", url]
 
 
 def _powershell_tokens(line: str) -> list[str]:
@@ -226,14 +238,14 @@ def test_the_home_call_on_windows_is_the_powershell_form():
     from modelroom import lmstudio_install as lms
 
     line = lms.home_command("unsloth/Qwen3.5-4B-GGUF@Q4_K_M", "win32")
-    assert line == '& "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf unsloth/Qwen3.5-4B-GGUF@Q4_K_M'
+    assert line == '& "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf https://huggingface.co/unsloth/Qwen3.5-4B-GGUF@Q4_K_M'
 
 
 def test_lms_only_in_home_prints_the_posix_call_elsewhere():
     from modelroom import lmstudio_install as lms
 
     line = lms.home_command("unsloth/Qwen3.5-4B-GGUF@Q4_K_M", "linux")
-    assert line == '"$HOME/.lmstudio/bin/lms" get --gguf unsloth/Qwen3.5-4B-GGUF@Q4_K_M'
+    assert line == '"$HOME/.lmstudio/bin/lms" get --gguf https://huggingface.co/unsloth/Qwen3.5-4B-GGUF@Q4_K_M'
 
 
 def test_the_home_call_carries_no_resolved_path(tmp_path):
@@ -248,7 +260,7 @@ def test_the_home_call_carries_no_resolved_path(tmp_path):
 @pytest.mark.skipif(sys.platform != "win32", reason="the PowerShell form runs under Windows")
 def test_the_powershell_home_call_resolves_its_variable_and_runs_a_batch_stand_in(tmp_path):
     """What this proves, and no more: PowerShell resolves `$env:USERPROFILE` in the form and calls a program of the
-    shape `& "<path>" get --gguf <name>` with those arguments. The stand-in is a batch file (`lms.cmd`); the
+    shape `& "<path>" get --gguf https://huggingface.co/<name>` with those arguments. The stand-in is a batch file (`lms.cmd`); the
     unchanged call of an executable (`lms.exe`) is not run, no native stand-in being at hand."""
     from modelroom import lmstudio_install as lms
 
@@ -263,7 +275,7 @@ def test_the_powershell_home_call_resolves_its_variable_and_runs_a_batch_stand_i
     result = subprocess.run(
         [shell, "-NoProfile", "-Command", line], env={**os.environ, "USERPROFILE": str(tmp_path)}, capture_output=True, text=True, timeout=60
     )
-    assert result.stdout.strip() == "get --gguf unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
+    assert result.stdout.strip() == "get --gguf https://huggingface.co/unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
 
 
 def test_unknown_call_form_prints_the_path_form_with_the_hint():
@@ -271,7 +283,9 @@ def test_unknown_call_form_prints_the_path_form_with_the_hint():
 
     lines = lms.hint_lines(None, "win32", 32768)
     assert lines[0] == "if lms is not found: it is in .lmstudio/bin in your home folder"
-    assert lms.command_for(None, "unsloth/Qwen3.5-4B-GGUF@Q4_K_M", "win32") == "lms get --gguf unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
+    assert lms.command_for(None, "unsloth/Qwen3.5-4B-GGUF@Q4_K_M", "win32") == (
+        "lms get --gguf https://huggingface.co/unsloth/Qwen3.5-4B-GGUF@Q4_K_M"
+    )
 
 
 def test_the_hint_names_the_context_of_the_run():

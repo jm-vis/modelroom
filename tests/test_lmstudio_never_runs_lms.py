@@ -70,7 +70,7 @@ def test_modelroom_never_runs_lms(tmp_path, monkeypatch):
     assert "server    LM Studio" in text and "1 loaded: qwen3.5-4b, context 8192" in text  # the start screen names it
     assert "LM Studio is not measured: it may load a model on request" in text  # step 4 says why there is no row
     assert "pull_package" in asker.asked
-    assert any(line.startswith("install   #1  lms get --gguf unsloth/Qwen3.5-9B-GGUF@") for line in lines)  # printed, not run
+    assert any(line.startswith("install   #1  lms get --gguf https://huggingface.co/unsloth/Qwen3.5-9B-GGUF@") for line in lines)  # printed, not run
     assert chat_calls(server) == []  # no chat, not even one
     assert not mark.exists()  # `lms` was never run; and the trap saw no process
 
@@ -79,5 +79,5 @@ def test_the_run_pulls_nothing_for_an_lms_row(tmp_path, monkeypatch):
     answers = {**ANSWERS, "pull_package": LIST_VALUE, "pull": True}
     code, lines, asker, _server, mark = _guided(tmp_path, monkeypatch, answers)
     assert code == 0 and "pull" not in asker.asked and not mark.exists()
-    assert any(line.startswith("install   #1  lms get --gguf ") for line in lines)  # the entry was chosen and printed
+    assert any(line.startswith("install   #1  lms get --gguf https://huggingface.co/") for line in lines)  # the entry was chosen and printed
     assert not any(line.startswith(("pulling", "✓ Pulled")) for line in lines)  # and nothing was pulled
