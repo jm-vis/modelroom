@@ -51,6 +51,8 @@ in this repository and not yet in the package an installer fetches.
   use, a card whose driver tool is missing -- computes as a machine without a card.
 - An Ollama daemon on `http://127.0.0.1:11434` for the load test only. Without one the guided
   mode says so in one line and goes on; nothing else in the tool needs it.
+- An LM Studio server on `http://127.0.0.1:1234` whose `/api/v1/models` lists its models, to be
+  detected; modelroom does not measure it yet and never loads, unloads or downloads a model.
 - Internet access for the search and the fetch.
 
 ## Tested on
@@ -125,6 +127,8 @@ Four facts before the first question: the **folder** (none chosen yet), the loca
 states it serves) and this **machine** (its name, and that no measurement is stored in this folder
 yet). The first question of step 1 is where the results should live: the folder you are in, or
 another path. The second run started in the folder the first one chose and was not asked again.
+A running LM Studio server adds a row of its own under them, here for one loaded instance
+(`server  LM Studio  1 loaded: <id>, context <n>`; see "LM Studio").
 
 ### Step 1, Configuration
 
@@ -348,7 +352,8 @@ context the vLLM server runs at); on the L40S all 26 fetched packages fit at eve
 One question for every local server: **Measure the speed on this machine now?** First each server
 says what it has -- the packages of this run's models your Ollama daemon already has, and, where a
 vLLM server answers, which model it serves and whether its number will count for this run (it
-counts when it serves a model you chose, at the context you chose). **Yes** shows one list: the
+counts when it serves a model you chose, at the context you chose). An LM Studio server is named
+at the start but not offered here: it is not measured (see "LM Studio"). **Yes** shows one list: the
 installed packages and the vLLM server, nothing marked, and you pick what to measure. An Ollama
 measurement runs a short prompt through the package and records tokens per second; it never
 downloads anything. **No** skips new measurements; a measurement stored earlier for the same package
@@ -398,10 +403,10 @@ stays where the fit puts it, but lies on red, carries ` ×` behind its download 
 then takes the best row that also fits the disk, or says in red that no package fits and space
 must be freed first. Where the local Ollama daemon answered,
 the run lists the rows shown and asks **Which package should be pulled into Ollama?**, or **Which
-package should be installed?** where the table has vLLM rows, as in the picture -- any row,
-not only #1; an Ollama row without an Ollama name is locked, as is any row whose pull name is not
-unique or whose download is too large for the free disk; the latter is shown in red with what it
-needs.
+package should be installed?** where the list has vLLM or LM Studio entries, as in the picture --
+any row, not only #1; an Ollama row without an Ollama name is locked, as is any row whose pull
+name is not unique or whose download is too large for the free disk; the latter is shown in red
+with what it needs.
 The command of the choice follows, the disk is checked again, and **Pull #1 into Ollama now?** with
 the size of the package (7.8 GB in the picture): **Yes** pulls it into the daemon and shows the
 progress, **No**, the answer in the picture, leaves the command for you to run. After the package
@@ -588,7 +593,70 @@ parallel), A2 (a model with fewer KV heads than cards, and a hybrid model), A3 (
 non-interactive SSH command in `PATH` or `~/.local/bin`), A5 (vLLM fetches exactly the start files),
 A6 and A7 (the card numbers of `CUDA_VISIBLE_DEVICES` and of Docker's `--gpus device=` are the
 `index` values of `nvidia-smi`), A8 (the fixed image tag starts and writes into the mounted cache).
-A4 concerns LM Studio, which is not part of this release.
+A4 is the assumption that the Ollama fit rule also describes a GGUF package in LM Studio, since both
+run llama.cpp; it holds approximately and has not been checked against a load in LM Studio (see
+"LM Studio").
+
+## LM Studio
+
+LM Studio is detected, not measured. On a machine that has it, each Hugging Face GGUF package gets
+an entry of its own in the list at the end of step 5, `LM Studio · <packager> · <quant>`, with the
+value `lmstudio <owner>/<repo>@<quant>`, beside the Ollama entry of the same package (a machine
+with LM Studio and no Ollama sees the LM Studio entry alone). The table itself is the same:
+LM Studio and Ollama use the same GGUF fit rule. Its suitability for LM Studio is an assumption
+(A4, see "vLLM") and has not been checked against a load in LM Studio. Ollama-library packages and
+safetensors packages have no LM Studio entry. With vLLM but without Ollama, the GGUF section of
+the card is titled `with LM Studio`. Under the table head the `runtime` line names LM Studio:
+`runtime  Ollama · LM Studio (from its profile)`, or `LM Studio (from its profile)` where Ollama
+is not among the runtimes. A machine without LM Studio gets no LM Studio entries; its output stays
+unchanged. A machine has LM Studio when a measurement of it found the server on `127.0.0.1:1234`,
+or `lms` in the `PATH` or in `~/.lmstudio/bin`; that goes into its hardware profile as the
+`runtimes` value `lmstudio`, so LM Studio counts for the table and the list from the next run
+that measures this machine.
+
+**The install line is a command, not a pull, and modelroom starts nothing.** For a
+command-capable package not already on disk, choosing an LM Studio entry prints one command and
+two lines of what to do next, and asks nothing. Command form; modelroom prints the package and
+stage in place of the placeholders:
+
+```
+lms get --gguf <owner>/<repo>@<quant>
+```
+
+Run the command modelroom printed in a terminal. In LM Studio, load the model with the context
+length of the run, then start the server; run modelroom again, and it finds the server. modelroom
+never runs `lms`, neither to detect it nor to download, and it never loads, unloads or downloads
+a model through the server either. Where `lms` is not in the `PATH` but where LM Studio put it,
+the line calls it from the home folder instead,
+`& "$env:USERPROFILE\.lmstudio\bin\lms.exe" get --gguf ...` in PowerShell (not in `cmd.exe`) on
+Windows, `"$HOME/.lmstudio/bin/lms" get --gguf ...` elsewhere, with a hint line.
+A package with more than one weight file, a file in a subfolder or a stage without a checked
+command (the `UD-` stages) gets no command: the entry is locked, `computed only: lms get for ...
+is not checked`, or `no safe command` for a name or stage that is not safe to put in a command.
+The package stays in the ranking with its fit.
+
+**The disk.** LM Studio entries are checked against the free disk of the folder where LM Studio
+keeps its models, `~/.lmstudio/models`: the download plus 1 GB of room must fit, as for Ollama and
+vLLM, and a row that does not fit is shown in red and locked in the list. The `room` line names the
+place (`disk 41.2 GB free on C: (Ollama and LM Studio models)` where both are one drive). A
+command-capable package is on disk when its one weight file lies in
+`~/.lmstudio/models/<owner>/<repo>/` with the size the catalog declares; the check reads sizes,
+never content, and the entry then reads `local already` and, once chosen,
+`#<n> is on disk already (size checked)` in place of the command. The checks hold for
+the file the catalog knows. `lms get` fetches the current state of the repository, which can be
+larger than that file, and the same size is not the same revision.
+
+**Limits.** modelroom reads LM Studio on port 1234 only, in the standard model folder only, for GGUF
+packages only, on this computer only and not over SSH (a computer reached over SSH reads without LM
+Studio). A server that asks for an API token is named at the start (`asks for an API token`) and not
+read further. No minimum version is checked; the server must answer `GET /api/v1/models` with the
+version 1 list of its models.
+
+**What is not there yet.** LM Studio is detected and gets list entries, a download command and a
+disk check; it is not measured yet, because it may load a model on request. The start screen names
+a running server and how many models it has loaded, step 4 says `LM Studio is not measured: it may
+load a model on request`, and no chat is sent to the server, no measurement is shown and no
+measurement is written.
 
 ## Files
 
@@ -687,8 +755,9 @@ labeled "fit (computed, v1)" in the output for that reason.
   `ample`. The KV cache in that formula is one fixed assumption, not a bound: a mixture
   architecture usually needs less, a dense model with many layers more, so a `fits (from size)`
   is coarser than a `fits` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
-- The Ollama fit rule covers complete GGUF packages. vLLM safetensors packages use the separate
-  fit rule described under "vLLM"; other formats remain `unknown`.
+- The Ollama fit rule covers complete GGUF packages, and judges an LM Studio entry of such a
+  package the same way (an assumption, see "LM Studio"). vLLM safetensors packages use the
+  separate fit rule described under "vLLM"; other formats remain `unknown`.
 - A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
 - Unified memory is computed as one pool -- the memory minus both reserves, since the system and
   the model share it. Apple Silicon is read as such a pool (its memory from `sysctl hw.memsize`);
@@ -717,13 +786,20 @@ own: see `CONTRACTS.md`, "`modelroom pull`".
 
 ## Network access
 
-Registry requests use HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`; local
-runtime requests use HTTP to Ollama at `127.0.0.1:11434` and vLLM at `127.0.0.1:8000`. Registry
+Registry requests use HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`. Registry
 redirects and pagination links are checked against the same registry allowlist before they are
 followed. `HTTP_PROXY`, `HTTPS_PROXY` and
 `NO_PROXY` from the environment are honored for the registries, but a proxy only changes how an
-allowed request travels, never which targets are allowed; the local daemon is reached directly. Details: `CONTRACTS.md`, "Transport security and
-proxying".
+allowed request travels, never which targets are allowed. Details: `CONTRACTS.md`, "Transport
+security and proxying".
+
+The local runtimes are reached at these addresses and no others:
+
+- Ollama, `127.0.0.1:11434`: HTTP, only on this computer, no proxy, no redirect.
+- vLLM, `127.0.0.1:8000`: HTTP, only on this computer, no proxy, no redirect.
+- LM Studio, `127.0.0.1:1234`: HTTP, only on this computer, no proxy, no redirect.
+
+modelroom never runs `lms`.
 
 The one exception is a computer you name yourself, by its SSH host alias, in "Another computer"
 above: modelroom then runs the system `ssh` to it, with your own SSH configuration and keys, never
@@ -766,6 +842,9 @@ In the order we plan to build it, none of it dated:
   stands for; how fast those requests are served is measured only for one vLLM server you started
   (see "vLLM"), and that number is not ranked. Beyond roughly eight at once it is a job for a
   serving stack such as vLLM; the ranking itself stays a rule of thumb, not measured.
+- **LM Studio, measured.** LM Studio is detected and has list entries, a download command and a
+  disk check (see "LM Studio"); its speed is not measured yet, because a request to a model that
+  was loaded a moment ago may make it load the model again.
 - **Unified memory, measured.** The rule is in; a measured profile of such a machine is what is
   missing -- an export from one is welcome.
 - **The catalog's successors.** A model shows `legacy` only when the catalog names its

@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- **README documents LM Studio** (AP9-LS-D): the list entries per GGUF package, the printed
+  `lms get` command, the disk check at LM Studio's model folder, the limits, and the three local
+  addresses under "Network access"; LM Studio is detected, not measured yet.
+
 ## [0.2.0] - 2026-10-08
 
 The second release of modelroom. The guided mode sizes for several machines and many users: step 3
