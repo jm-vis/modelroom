@@ -13,6 +13,10 @@ by the digest rule of the load test, `loadtest.installed_candidates` -- is a not
 The pull changes the daemon and nothing else: no configuration, no state, no document. What it
 does not check -- whose daemon answers, another process pulling the same name -- is CONTRACTS.md,
 "Guided mode", "The pull".
+
+An LM Studio row (AP9-LS-G) takes the same key, `pull`, and the same branch point: after the line, the
+disk check and a hint it asks `Download #n with lms now?`, and only a yes runs `lms get ... --yes`, in
+`lmstudio_get.py`, the one place that starts `lms`. This module starts no process.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Sequence, TextIO
 
-from . import lmstudio_install
+from . import lmstudio_get, lmstudio_install
 from .contracts import InstalledModel, Package
 from .daemon import PULL_PATH, Daemon, DaemonError
 from .dialog import AnswerMissingError, Asker, Choice, FileAsker
@@ -42,7 +46,7 @@ from .install_vllm import install_block_lines, vllm_install
 from .runtimes import LMSTUDIO, OLLAMA, VLLM, runtime_of
 from .screen import PULL_CANCELED as CANCELED_LINE
 from .screen import Screen
-from .screen import PULL_LABEL, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
+from .screen import PULL_LABEL, download_question, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
 from .screen import DEFAULT_PULLED_HINT, pulled_line, yes_no
 from .views import INSTALL_LABEL, install_target
 
@@ -182,11 +186,11 @@ def pull_step(run: "GuidedRun", context: PullContext | None, reachable: bool) ->
         _show_vllm(run, context, row, package, disk, (row.runtime, row.identity) in locals_)
         return
     if row.runtime == LMSTUDIO.key:
-        _show_lmstudio(run, context, row, (row.runtime, row.identity) in locals_)
+        _show_lmstudio(run, context, row, package, (row.runtime, row.identity) in locals_)
         return
     command = runtime_of(row.runtime).command(str(row.name))
     if row.runtime != OLLAMA.key:
-        # No runtime but Ollama's daemon is pulled through: its command is printed, nothing is asked or run (G7; S1).
+        # No third runtime is pulled through (LM Studio's `lms get` has its own branch above): its command is printed, nothing is asked or run (G7; S1).
         if (row.runtime, row.identity) in locals_:
             run.screen.write(label_line(INSTALL_LABEL, install_local_note(row.rank, run.screen.glyphs.dot)))
         else:
@@ -214,18 +218,41 @@ def _show_vllm(run: "GuidedRun", context: PullContext, row: PullRow, package: Pa
         run.screen.write(line)
 
 
-def _show_lmstudio(run: "GuidedRun", context: PullContext, row: PullRow, local: bool) -> None:
-    """A chosen LM Studio row: its command and what to do in LM Studio, nothing else -- no yes/no question and
-    no pull, and modelroom runs no `lms` (G7; AP9-LS-E, S1). The call form follows where the program is
-    (`lmstudio_install.lms_form`); a package that is on disk already says so in place of the command."""
+def _show_lmstudio(run: "GuidedRun", context: PullContext, row: PullRow, package: Package, local: bool) -> None:
+    """A chosen LM Studio row (G7; AP9-LS-E, S1; AP9-LS-G). The call form follows where the program is
+    (`lmstudio_install.lms_form`); a package that is on disk already says so in place of the command.
+
+    The question exists only where all four hold: the form is `path` or `home`, the package has a command,
+    it is not on disk already, and the disk allows it. Then: the line, the disk check, the hint that `lms`
+    starts the service, the question `Download #n with lms now?` (key `pull`, No by default). A yes hands
+    over to `lmstudio_get.download`, the one place that runs `lms`; a no prints the hints as before. Every
+    other case prints what it printed before, with no hint about the service and no question."""
     name, system = str(row.name), run.room.system
     form = lmstudio_install.lms_form(run.room)
+    context_size = context.document.scenario.context_requested
     if local:
         first = [("class:note", lmstudio_install.on_disk_text(row.rank))]
     else:
         first = install_pull_line(row.rank, name, command=lmstudio_install.command_for(form, name, system))
     run.screen.write(label_line(INSTALL_LABEL, first))
-    for text in lmstudio_install.hint_rows(form, system, context.document.scenario.context_requested, not local):
+    asks = not local and form in ("path", "home") and lmstudio_install.lms_reason(package) is None
+    if asks:
+        target = PullTarget(
+            daemon=run.daemon, disk=lambda: lmstudio_install.lmstudio_disk_at(run.room, context.packages), now=run.now,
+            screen=run.screen, asker=run.asker, failed=run.failed,
+        )
+        needed = FirstRow(row.rank, name, row.weights_gib, package, weights_bytes_of(package), lmstudio_install.command(name))
+        if not _disk_allows(target, needed):
+            return
+        for text in lmstudio_install.service_rows():
+            run.screen.write(label_line("", [("class:note", text)]))
+        question = download_question(row.rank, row.weights_gib)
+        wants = _wants_pull(target, question)
+        run.screen.answer(question, yes_no(wants))
+        if wants:
+            lmstudio_get.download(run, context, row, package, form)
+            return
+    for text in lmstudio_install.hint_rows(form, system, context_size, not local):
         run.screen.write(label_line("", [("class:note", text)]))
 
 

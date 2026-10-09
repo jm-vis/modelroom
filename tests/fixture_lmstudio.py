@@ -69,16 +69,38 @@ def trap_processes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(os, "system", refuse)
 
 
+def trap_processes_except(monkeypatch: pytest.MonkeyPatch, allowed: list[str]) -> list[list[str]]:
+    """Like `trap_processes`, but one call goes through to the real `subprocess.Popen`: the one whose first
+    argument is exactly the list `allowed` (AP9-LS-G, the one `lms get`), and only the first such call. Any other call, and any call by
+    `os.system`, fails the test. The returned list holds the argument lists that were let through."""
+    real_popen = subprocess.Popen
+    let_through: list[list[str]] = []
+
+    def guarded(*args, **kwargs):
+        first = args[0] if args else kwargs.get("args")
+        if not let_through and isinstance(first, list) and first == allowed:
+            let_through.append(list(first))
+            return real_popen(*args, **kwargs)
+        pytest.fail(f"a process was started: {args!r}", pytrace=False)
+
+    def refuse(*args, **kwargs):
+        pytest.fail(f"a process was started: {args!r}", pytrace=False)
+
+    monkeypatch.setattr(subprocess, "Popen", guarded)
+    monkeypatch.setattr(os, "system", refuse)
+    return let_through
+
+
 def fake_lms_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A program `lms` first in the `PATH` that writes the returned mark file when it is run."""
+    """A program `lms` first in the `PATH` that appends its arguments, one line per run, to the returned mark file."""
     folder = tmp_path / "fake-path"
     folder.mkdir()
     mark = tmp_path / "lms-was-run.txt"
     if sys.platform == "win32":
-        (folder / "lms.cmd").write_text(f'@echo off\r\necho run> "{mark}"\r\n', encoding="ascii")
+        (folder / "lms.cmd").write_text(f'@echo off\r\necho %*>> "{mark}"\r\n', encoding="ascii")
     else:
         program = folder / "lms"
-        program.write_text(f'#!/bin/sh\necho run > "{mark}"\n', encoding="ascii")
+        program.write_text(f'#!/bin/sh\necho "$@" >> "{mark}"\n', encoding="ascii")
         program.chmod(program.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ.get('PATH', '')}")
     return mark
@@ -86,10 +108,11 @@ def fake_lms_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def lms_in_the_home_folder(home: Path, mark: Path | None = None) -> None:
     """`~/.lmstudio/bin/lms` and `lms.exe`: the places Windows and the others keep the program. With `mark`
-    the files are scripts that write it when run (on a platform that can run them); without, empty files."""
+    the files are scripts that append their arguments to it when run (on a platform that can run them);
+    without, empty files."""
     folder = home / ".lmstudio" / "bin"
     folder.mkdir(parents=True, exist_ok=True)
-    text = b"" if mark is None else f'#!/bin/sh\necho run > "{mark}"\n'.encode("ascii")
+    text = b"" if mark is None else f'#!/bin/sh\necho "$@" >> "{mark}"\n'.encode("ascii")
     for name in ("lms", "lms.exe"):
         (folder / name).write_bytes(text)
         (folder / name).chmod((folder / name).stat().st_mode | stat.S_IXUSR)

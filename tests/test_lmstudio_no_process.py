@@ -1,10 +1,16 @@
-"""AP9-LS: modelroom never runs `lms`, and no module of LM Studio starts a process.
+"""AP9-LS, AP9-LS-G: no module of LM Studio starts a process, with one exception: `lmstudio_get.py`.
 
 Three guards, each with a test of its own so none can pass for the wrong reason: a static check of the
 source of the LM Studio modules (`ast`), a trap on `subprocess.Popen` and `os.system` that fails the test
 at the first call through either function, and a run of everything LM Studio does with a program called `lms`
 first in the `PATH` and in the home folder. The run proves it by the trap and by a mark file the
 program would leave.
+
+The exception (AP9-LS-G, the download after a yes): `modelroom/lmstudio_get.py` imports `subprocess` in the
+ordinary way and has exactly one call, `subprocess.run(argv, check=False)` inside `run_lms`: one positional
+argument, the name `argv`, and one keyword argument, `check=False`. `shell=`, `*args`, `**kwargs`, a second
+call and a call outside `run_lms` are findings of `get_findings`; every other process path stays forbidden
+there as in the other modules. The whole guided run, with the yes and the no, is `test_lmstudio_runs_lms_once.py`.
 """
 
 from __future__ import annotations
@@ -115,11 +121,96 @@ def _is_os_process(name: str) -> bool:
 
 def test_no_lmstudio_module_starts_a_process():
     """Every module of LM Studio that exists is read; one that is not there yet is no fault, so the check
-    runs from the first of them on (the later ones are added by later sub-packages)."""
-    present = [name for name in LMSTUDIO_MODULES if (PACKAGE / f"{name}.py").is_file()]
-    assert "lmstudio_server" in present
+    runs from the first of them on (the later ones are added by later sub-packages). `guided_install.py`,
+    where the question is asked, starts no process either: the one call lives in `lmstudio_get.py`."""
+    present = [name for name in (*LMSTUDIO_MODULES, "guided_install") if (PACKAGE / f"{name}.py").is_file()]
+    assert "lmstudio_server" in present and "guided_install" in present
     for name in present:
         assert process_findings((PACKAGE / f"{name}.py").read_text(encoding="utf-8")) == [], name
+
+
+# --- the one exception: lmstudio_get.py ---------------------------------------------------------------
+
+
+def _is_name(node: ast.AST, name: str) -> bool:
+    return isinstance(node, ast.Name) and node.id == name
+
+
+def get_findings(source: str) -> list[str]:
+    """What in the source of `lmstudio_get.py` is more than the one allowed process call.
+
+    Allowed: the ordinary `import subprocess` (no alias) and exactly one call `subprocess.run(argv, check=False)`
+    inside the function `run_lms`: one positional argument, the name `argv`, one keyword argument, `check=False`.
+    Everything `process_findings` knows stays a finding (the import of `subprocess` aside), and so is any other
+    use of the name `subprocess`: a second call, `shell=`, `*args`, `**kwargs`, a missing or true `check`, a
+    call outside `run_lms`, the module passed on or its function taken as a value."""
+    tree = ast.parse(source)
+    findings = [finding for finding in process_findings(source) if finding != "import subprocess"]
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import) and any(a.name == "subprocess" for a in node.names)]
+    if len(imports) != 1 or any(alias.asname is not None for alias in imports[0].names if alias.name == "subprocess"):
+        findings.append("the ordinary `import subprocess` is missing, repeated or aliased")
+    run_lms = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "run_lms"]
+    inside = {id(node) for function in run_lms for node in ast.walk(function)}
+    uses = [node for node in ast.walk(tree) if _is_name(node, "subprocess")]
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and _is_name(node.func.value, "subprocess")
+    ]
+    if len(calls) != 1 or len(uses) != 1:
+        findings.append(f"{len(calls)} call(s) through subprocess and {len(uses)} use(s) of its name, not exactly one")
+    for call in calls:
+        keywords = call.keywords
+        exact = (
+            call.func.attr == "run" and len(call.args) == 1 and _is_name(call.args[0], "argv") and len(keywords) == 1
+            and keywords[0].arg == "check" and isinstance(keywords[0].value, ast.Constant) and keywords[0].value.value is False
+        )
+        if not exact:
+            findings.append("the call is not `subprocess.run(argv, check=False)`")
+        if id(call) not in inside:
+            findings.append("the call is outside `run_lms`")
+    return findings
+
+
+GET_POSITIVE = '''
+import subprocess
+
+
+def run_lms(argv):
+    return subprocess.run(argv, check=False).returncode
+'''
+
+GET_NEGATIVE = {
+    "a second run call": GET_POSITIVE + "\ndef again(argv):\n    return subprocess.run(argv, check=False)\n",
+    "shell=True": GET_POSITIVE.replace("check=False", "check=False, shell=True"),
+    "**kwargs": GET_POSITIVE.replace("argv, check=False", "argv, **options"),
+    "*args": GET_POSITIVE.replace("argv, check=False", "*argv, check=False"),
+    "no check": GET_POSITIVE.replace("argv, check=False", "argv"),
+    "check=True": GET_POSITIVE.replace("check=False", "check=True"),
+    "a second positional argument": GET_POSITIVE.replace("argv, check", "argv, 3, check"),
+    "another name than argv": GET_POSITIVE.replace("subprocess.run(argv", "subprocess.run(command"),
+    "a call outside run_lms": GET_POSITIVE.replace("def run_lms", "def not_run_lms"),
+    "Popen in place of run": GET_POSITIVE.replace("subprocess.run", "subprocess.Popen"),
+    "the function taken as a value": GET_POSITIVE + "\nstart = subprocess.run\n",
+    "an aliased import": GET_POSITIVE.replace("import subprocess", "import subprocess as sp"),
+    "os.system beside it": GET_POSITIVE + "\nimport os\nos.system('x')\n",
+    "a dynamic import": GET_POSITIVE + "\n__import__('subprocess')\n",
+    "no import": GET_POSITIVE.replace("import subprocess\n", "import json\n"),
+}
+
+
+def test_the_one_exception_is_the_module_that_runs_lms_get():
+    """`lmstudio_get.py` exists, and holds nothing but the one `subprocess.run(argv, check=False)` in `run_lms`."""
+    path = PACKAGE / "lmstudio_get.py"
+    assert path.is_file(), "modelroom/lmstudio_get.py does not exist: the one place that runs lms get is missing"
+    source = path.read_text(encoding="utf-8")
+    assert get_findings(source) == []
+    assert source.count("subprocess.run(") == 1 and "def run_lms(" in source
+
+
+def test_the_exception_form_passes_and_every_other_form_is_a_finding():
+    assert get_findings(GET_POSITIVE) == []
+    for name, source in GET_NEGATIVE.items():
+        assert get_findings(source) != [], name
 
 
 @pytest.mark.parametrize(

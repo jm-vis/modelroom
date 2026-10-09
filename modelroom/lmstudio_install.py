@@ -1,9 +1,10 @@
 """What the LM Studio entry installs and holds: its command, its model folder, "already there", its disk.
 
-modelroom prints `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` and never runs it (G7):
-the URL, because `lms get <owner>/<name>` names an artifact of the LM Studio Hub (`lms get --help`). The
-reader copies the line, and `lms` stays a program modelroom does not start (CONTRACTS.md, "Local servers and the vLLM load
-test", LM Studio). Every value that reaches a line is checked here and nowhere else: the repository
+modelroom prints `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` (G7): the URL, because
+`lms get <owner>/<name>` names an artifact of the LM Studio Hub (`lms get --help`). The reader copies the
+line, or says yes to the question that follows it and modelroom runs it once, with `--yes`, in
+`lmstudio_get.py` (AP9-LS-G); that is the only place that starts `lms`, and this module starts nothing
+(CONTRACTS.md, "Local servers and the vLLM load test", LM Studio). Every value that reaches a line is checked here and nowhere else: the repository
 against the Hub's name rule and plain ASCII, the stage against the stages of `QUANT_ORDER` that are GGUF
 and not `UD-` (`LMS_QUANTS`), the file against `SAFE_REPO_PATH_RE`. A package with more than one weight
 file, a file in a subfolder or a stage outside that list has no command and says why
@@ -49,6 +50,8 @@ LMS_QUANTS: tuple[str, ...] = tuple(
 NO_SAFE_COMMAND = "no safe command"
 # `lms get <owner>/<name>` names an artifact of the LM Studio Hub; a Hugging Face repository is named by its URL.
 HF_URL_PREFIX = "https://huggingface.co/"
+# The hint under the line of a chosen entry, before the question of the download (AP9-LS-G).
+SERVICE_HINT = "lms starts LM Studio's service in the background; a vision model also fetches its projector file"
 COMPUTED_ONLY_PREFIX = "computed only: lms get for"
 COMPUTED_ONLY_SPLIT = f"{COMPUTED_ONLY_PREFIX} split files is not checked"
 COMPUTED_ONLY_SUBFOLDER = f"{COMPUTED_ONLY_PREFIX} files in a subfolder is not checked"
@@ -164,6 +167,14 @@ def hint_rows(form: str | None, system: str, context: int, with_command: bool = 
     return [row for text in hint_lines(form, system, context, with_command) for row in textwrap.wrap(text, width, break_long_words=False)]
 
 
+def service_rows() -> list[str]:
+    """`SERVICE_HINT` broken between words the way `hint_rows` breaks its lines."""
+    from .intro import LABEL_COLUMN  # call time, as in `hint_rows`
+    from .screen import JOIN_WIDTH
+
+    return textwrap.wrap(SERVICE_HINT, JOIN_WIDTH - LABEL_COLUMN, break_long_words=False)
+
+
 # --- the model folder and "already there" ---------------------------------------------------------------
 
 
@@ -259,6 +270,7 @@ __all__ = [
     "HF_URL_PREFIX",
     "LMS_QUANTS",
     "NO_SAFE_COMMAND",
+    "SERVICE_HINT",
     "command",
     "command_for",
     "hint_lines",
@@ -274,5 +286,6 @@ __all__ = [
     "on_disk",
     "on_disk_text",
     "package_on_disk",
+    "service_rows",
     "weight_files",
 ]

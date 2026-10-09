@@ -647,6 +647,23 @@ def pulled_line(
     return [("class:done", marks.check), ("", " "), ("class:value", "Pulled".ljust(LABEL_WIDTH)), ("", GAP), ("", said)]
 
 
+def download_question(rank: int, weights_gib: float | None) -> str:
+    """The question under the line of a chosen LM Studio row (AP9-LS-G): `Download #7 with lms now? (2.9 GB)`.
+
+    The size is the weight file's, as `pull_question` counts it; the projector file of a vision model is not in it."""
+    size = f" ({weights_gib:.1f} GB)" if weights_gib is not None else ""
+    return f"Download #{rank} with lms now?{size}"
+
+
+def downloaded_line(rank: int, file: str, weights_gib: float | None, marks: Glyphs, hint: str) -> Line:
+    """The line a `lms get` that left the file in LM Studio's folder ends with (AP9-LS-G):
+    `✓ Downloaded #7  <file> (2.9 GB) · <what to do in LM Studio>`, one line."""
+    size = f" ({weights_gib:.1f} GB)" if weights_gib is not None else ""
+    return [
+        ("class:done", marks.check), ("", " "), ("class:value", f"Downloaded #{rank}"), ("", GAP), ("", f"{file}{size} {marks.dot} {hint}"),
+    ]
+
+
 # --- rank ranges ------------------------------------------------------------------------------------
 
 
@@ -690,6 +707,8 @@ __all__ = [
     "clone_words",
     "context_tokens_text",
     "deviation_words",
+    "download_question",
+    "downloaded_line",
     "entered_hardware",
     "entered_note",
     "entered_number",

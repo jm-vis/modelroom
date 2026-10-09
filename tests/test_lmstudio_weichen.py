@@ -98,15 +98,51 @@ def test_an_ollama_and_an_lmstudio_row_share_the_one_list(tmp_path):
     assert values == ["hf.co/unsloth/Nova-7B-GGUF:Q4_K_M", "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M", "none"]
 
 
-def test_choosing_an_lms_row_asks_nothing_and_never_calls_the_daemon_pull(tmp_path):
+def test_choosing_an_lms_row_asks_pull_and_never_calls_the_daemon_pull(tmp_path):
     q4 = _gguf()
     doc = _on_machine(document([q4]), BOTH)
-    # `pull = yes` in the answer file: an Ollama pull would be asked and sent; an LM Studio row is printed only.
-    said, _lists, run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M", "pull": True}, _in_path)
+    # `pull = no`: the question of the download is asked (the key is `pull`, as Ollama's), nothing is sent to the daemon.
+    said, _lists, run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M", "pull": False}, _in_path)
     assert "install   #1  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M" in said
     assert not any(call[0] == "POST" for call in run.daemon.calls)
-    assert not any("Pull" in line or "pulling" in line for line in said)
-    assert "pull" not in run.asker.asked
+    assert not any(line.startswith("? Pull") or "pulling" in line for line in said)
+    assert "? Download #1 with lms now? (5.0 GB)  No" in said
+    assert run.asker.asked == ["pull_package", "pull"]
+    assert not any(line.startswith(("download", "✓ Downloaded")) for line in said)
+
+
+def test_a_yes_for_an_lms_row_goes_to_lms_get_and_not_to_the_daemon(tmp_path, monkeypatch):
+    """The whole step with a yes: the process call is the one of `run_lms`, here recorded and not started."""
+    import subprocess
+
+    calls: list = []
+
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args[0], 0)
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    q4 = _gguf()
+    doc = _on_machine(document([q4]), BOTH)
+    said, _lists, run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M", "pull": True}, _in_path)
+    assert calls == [((["C:/tools/lms", "get", "--gguf", "https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M", "--yes"],), {"check": False})]
+    assert not any(call[0] == "POST" for call in run.daemon.calls)
+    assert "download  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M --yes" in said
+    assert any(line.startswith("#1: lms get ended, but Nova-7B-Q4_K_M.gguf is not in ~/.lmstudio/models/unsloth/Nova-7B-GGUF") for line in said)
+
+
+def test_choosing_an_lms_row_without_a_found_lms_asks_nothing(tmp_path, monkeypatch):
+    """Form `None` (no `lms` in the PATH, none in the home folder): the old output, no hint, no question, no process."""
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("a process was started"))
+    q4 = _gguf()
+    doc = _on_machine(document([q4]), BOTH)
+    said, _lists, run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M", "pull": True}, lambda name: None)
+    assert run.asker.asked == ["pull_package"]
+    assert any(line.startswith("install   #1  lms get") for line in said)
+    assert "if lms is not found: it is in .lmstudio/bin in your home folder" in said
+    assert not any("service" in line or "Download" in line for line in said)
 
 
 def test_choosing_an_lms_row_prints_and_pulls_nothing(tmp_path):
@@ -115,6 +151,23 @@ def test_choosing_an_lms_row_prints_and_pulls_nothing(tmp_path):
     said, _lists, run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M"}, _in_path)
     assert any(line.startswith("install   #1  lms get") for line in said)
     assert [call for call in run.daemon.calls if call[1] == "/api/pull"] == []
+    assert "? Download #1 with lms now? (5.0 GB)  No" in said  # no answer for `pull` is a No
+
+
+def test_too_little_disk_for_an_lms_row_ends_after_the_fault_line_without_a_question(tmp_path, monkeypatch):
+    import subprocess
+
+    from modelroom import lmstudio_install
+    from modelroom.room import Disk
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("a process was started"))
+    monkeypatch.setattr(lmstudio_install, "lmstudio_disk_at", lambda room, packages=(): Disk(1 * GIB, "D:"))
+    q4 = _gguf()
+    doc = _on_machine(document([q4]), BOTH)
+    said, _lists, run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M", "pull": True}, _in_path)
+    assert any(line.startswith("install   not enough disk for #1: needs") and line.endswith("free on D:") for line in said)
+    assert run.asker.asked == ["pull_package"]
+    assert not any("service" in line or "Download" in line or "in LM Studio:" in line for line in said)
 
 
 def test_the_chosen_row_prints_the_block_of_the_brief(tmp_path):
@@ -123,11 +176,15 @@ def test_the_chosen_row_prints_the_block_of_the_brief(tmp_path):
     said, _lists, _run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M"}, _in_path)
     start = said.index("install   #1  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M")
     context = doc.scenario.context_requested
-    # the sentence of the brief, broken between words to the width of the screen (finding 2)
+    # the hint about the service, then the question, then the sentences of AP9-LS-F; each broken between words to the width of the screen
     assert " ".join(said[start + 1 : start + 3]) == (
+        "lms starts LM Studio's service in the background; a vision model also fetches its projector file"
+    )
+    assert said[start + 3] == "? Download #1 with lms now? (5.0 GB)  No"
+    assert " ".join(said[start + 4 : start + 6]) == (
         f"in LM Studio: load it with context length {context}, then start its server (the server switch in LM Studio, or lms server start)"
     )
-    assert said[start + 3] == "then run modelroom again: it finds the server; LM Studio is not measured yet"
+    assert said[start + 6] == "then run modelroom again: it finds the server; LM Studio is not measured yet"
 
 
 def test_an_answer_file_picks_an_lms_row(tmp_path):
@@ -153,7 +210,7 @@ def test_the_home_call_block_reads_as_the_golden_file(tmp_path):
     doc = _on_machine(document([q4]), BOTH)
     said, _lists, _run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M"}, lambda name: None, home_lms=True)
     start = next(index for index, line in enumerate(said) if line.startswith("install   #1"))
-    _compare("golden_install_lms_home_win.txt", "\n".join(said[start : start + 5]) + "\n")
+    _compare("golden_install_lms_home_win.txt", "\n".join(said[start : start + 8]) + "\n")
 
 
 def test_the_lock_reasons_of_an_lms_row():

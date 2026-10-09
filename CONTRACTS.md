@@ -5906,7 +5906,8 @@ first runtime that accepts it (Ollama's). The fields: name `LM Studio`; origin `
 `accepts` and `shown_only_with` the Hugging Face GGUF packages, never an Ollama or a tensor package; `fit`
 the fit rule of Ollama (both run llama.cpp); `install_name` `<owner>/<repo>@<quant>` where the command is
 safe; `command` `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` (the URL, because
-`lms get <owner>/<name>` names an artifact of the LM Studio Hub), **printed and never run**; `model_place` the
+`lms get <owner>/<name>` names an artifact of the LM Studio Hub), **printed, and run once after a yes**
+(AP9-LS-G, below); `model_place` the
 standard model folder under the home folder; `on_disk` a file of the declared size in it (`stat` only);
 words without a prefix or a key hint, the question `Which package should be installed?`.
 
@@ -5952,11 +5953,33 @@ package have no LM Studio entry. A section `with LM Studio` exists only where a 
 no Ollama (its GGUF rows would otherwise be titled `with Ollama`), and the ranking rule then names LM Studio in
 place of Ollama; every machine with Ollama keeps its words.
 
-**A choice in the list prints, it never installs (G7, S1).** Choosing an LM Studio entry prints
-`lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` and two lines of what to do in LM Studio (load it
-with the context length of the run, start the server; the last line says that LM Studio is found and not
-measured), asks nothing and calls no `/api/pull`; so does the choice of any entry of a runtime but
-Ollama (the daemon pull is Ollama's alone). The notes
+**A choice of an LM Studio entry asks, then runs `lms get` after a yes (G7, S1, AP9-LS-G).** Choosing an LM
+Studio entry prints `install  #<n>  lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` and never calls
+`/api/pull` (the daemon pull is Ollama's alone; any entry of a third runtime is printed, nothing else). The
+question exists only where all four hold: the call form is `path` or `home` (`lms_form`), the package has a
+command (`lms_reason` is `None`), it is not `local already`, and the disk allows it. The order: (1) the
+`install` line; (2) the disk check of step 5 (U8) over the `PullTarget` of the run with
+`disk=lambda: lmstudio_disk_at(room, packages)` and the weights of the package plus the margin of 1 GB, once;
+too little disk ends the branch after the existing line `not enough disk for #<n>: needs ..., ... free on ...`,
+with no hint and no question; (3) the hint `lms starts LM Studio's service in the background; a vision model
+also fetches its projector file`; (4) the question `Download #<n> with lms now? (<size> GB)` with the size of
+the weight file, key `pull`, default No, optional (an answer file without `pull` does not download); (5) the
+answer line. **No:** the lines as before (`lms is not on the PATH yet; ...` for the home form, `in LM Studio: load
+it with context length <n>, then start its server ...`, `then run modelroom again: ...`). **Yes:** (6)
+`download  <command> --yes` (the printed command, in the home form the shell expression, with ` --yes` appended;
+the command part of the `install` line is a prefix of the command part of this line); (7) the call of
+`lmstudio_get.run_lms`; (8) `package_on_disk` read again. Exit 0 and the file in place with the catalog size:
+`✓ Downloaded #<n>  <file> (<size> GB) · in LM Studio: load it with context length <n>, then start its server`
+as one line and `then run modelroom again: it finds the server; LM Studio is not measured yet` under it.
+`Model already downloaded` (exit 0, the file in place) is the same success. Exit other than 0:
+`#<n>: lms get ended with exit <code>; a canceled download resumes with the same line`. Exit 0 and the file not
+in place: `#<n>: lms get ended, but <file> is not in ~/.lmstudio/models/<owner>/<repo> with the catalog size`.
+A program that cannot be named or started (`which` gives nothing now, `OSError` at the start):
+`#<n>: could not start lms get: <cause on one line>`. Each fault is one line and the run ends with exit 1.
+`KeyboardInterrupt` writes `a canceled download resumes with the same line` once and the central handler
+ends the run with 130. Where the form is `None` (no `lms` found), the package is `local already`, the entry is
+locked or the disk is too small, the output is the one of AP9-LS-F: no hint about the service and no question.
+The notes
 break between words to what a labeled row has left of the 100 characters; a command to copy is never broken. Where `lms` is only in `~/.lmstudio/bin` the line is the fixed shell expression
 (`& "$env:USERPROFILE\.lmstudio\bin\lms.exe" ...` in PowerShell, `"$HOME/.lmstudio/bin/lms" ...` elsewhere) with a
 hint line; where the program is not found, the `PATH` form with the hint that it lives in `.lmstudio/bin`. Only a
@@ -5987,12 +6010,24 @@ second list entry of a package (the LM Studio one) exists only where Ollama is t
 the list reads the place of exactly the runtime it names (`disk_fit.entry_place`); a runtime of the table with no
 place of its own is judged at none, and falls back to the row's own `Fit.runtime` only where no runtime is named.
 
-**`modelroom` never runs `lms`.** No module starts a process for LM Studio, `lms ls` included: it starts the
-application in the background and opens the port (recording of 2026-10-08), so it is no read. A static test
-reads the modules of LM Studio for any process call -- the ordinary import, an alias, a star import and a
-dynamic import with a constant module name. In the acceptance test a trap on `subprocess.Popen` and
-`os.system` fails the test that starts a process through either of the two; `os.exec*` and `os.spawn*` are
-guarded by the static test within those import and call forms.
+**`modelroom` runs `lms` at one place only.** Every `lms` call starts the application in the background and
+opens the port, `lms ls` included (recording of 2026-10-08), so none is a read: detection, the call form, the
+measurement and the load stay without a process. The one place is `modelroom/lmstudio_get.py`, after the yes of
+the question above and never before it: the argument list `[<program>, "get", "--gguf", <url>, "--yes"]` with
+the program resolved from `room.which("lms")` (form `path`) or the file in `~/.lmstudio/bin` (form `home`),
+never `shell`, never a string, never the printed shell expression; standard input, output and error go through
+to `lms`, the working directory and the environment are the process's own. It runs for this machine only, never
+in `modelroom pull` and never for another computer (that one is handed the `PATH` line). A static test reads
+`lmstudio_get.py` by its syntax tree and allows exactly the ordinary `import subprocess` and one call
+`subprocess.run(argv, check=False)` inside `run_lms` (one positional argument, the name `argv`, one keyword
+argument, `check=False`; `shell=`, `*args`, `**kwargs` and any second call are findings); every other LM Studio
+module is read for any process call -- the ordinary import, an alias, a star import and a dynamic import with a
+constant module name. In the acceptance test (`tests/test_lmstudio_runs_lms_once.py`) the no cases (no answer for
+`pull`, `pull: false`) run under a trap on `subprocess.Popen` and `os.system` that fails the test at any call; the
+yes case runs the unchanged `run_lms`, the trap lets through only the call whose first argument is the expected
+list and fails any other, and the stand-in `lms` appends its arguments to a file, so the test demands one
+process call and one entry. `os.exec*` and `os.spawn*` are guarded by the static test within those import and
+call forms.
 
 ## Guided mode
 
@@ -6240,7 +6275,7 @@ matter, so the move is invisible to it.
 | 4 | `load_test` | Measure the speed on this machine now? | true/false, default false; one question for every local server (AP9-UX E); **one of the two optional answers** -- an answer file that does not mention it does not measure |
 | 4 | `load_test_packages` | Which of these should be measured? | a list of local Ollama names and `vllm` for a vLLM server that states a model (only after `load_test` true, where a server offers a row) |
 | 5 | `pull_package` | Which package should be pulled into Ollama? | the Ollama name of a row of the list, or `none` (AP9-UX2 U6); optional: without it `#1` is taken where it has a pull name of its own, else nothing; a name the list does not offer, or a locked row, is exit 2 |
-| 5 | `pull` | Pull #1 into Ollama now? (the screen names the row chosen and adds its weight: `Pull #3 into Ollama now? (5.0 GB)`) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull (only after a written document, with a chosen row that has an Ollama name of its own and is not local already, enough disk or disk unknown, and a daemon the start screen reached) |
+| 5 | `pull` | One key for the one choice of a run, two question texts, each naming the row chosen and adding its weight: Ollama's `Pull #3 into Ollama now? (5.0 GB)` and LM Studio's `Download #7 with lms now? (2.9 GB)` (AP9-LS-G) | true/false, default false; **the other optional answer** -- an answer file that does not mention it does not pull and does not download. Common conditions: a written document, a chosen row that is not local already, and enough disk or disk unknown. For an Ollama row also an Ollama name of its own and a daemon the start screen reached. For an LM Studio row also a safe command (`lms_reason` is `None`) and the call form `path` or `home`, with no Ollama condition at all (a machine without Ollama asks it for LM Studio); a yes runs `lms get ... --yes` once (see "`modelroom` runs `lms` at one place only") |
 | 5 | `pull_other` | Which package should go onto another computer? (AP9-FR A3, `pull_other.py`) | `<machine> <pull name>` (a value flat like every other, `answers.py:26-33`) out of the shown rows of every other **chosen** machine, or `none` -- optional: without it nothing is chosen, silently (one target machine at most, GF question 6); a value the list does not offer, or a locked row's, is exit 2; asked whenever at least one other chosen machine has a shown row with a pull name (A2), whether or not this machine has a row of its own -- an import-only run is asked too (Codex r1-1); the chosen row's command (`modelroom pull <name> --weights-bytes <n>`) is printed, never sent anywhere -- `modelroom pull` (A4, below) is what runs it, pasted on the machine it names |
 
 **Every write reads the file again first.** The dialog takes as long as the user takes, so the

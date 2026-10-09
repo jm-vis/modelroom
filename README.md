@@ -614,26 +614,38 @@ or `lms` in the `PATH` or in `~/.lmstudio/bin`; that goes into its hardware prof
 `runtimes` value `lmstudio`, so LM Studio counts for the table and the list from the next run
 that measures this machine.
 
-**The install line is a command, not a pull, and modelroom starts nothing.** For a
-command-capable package not already on disk, choosing an LM Studio entry prints one command and
-two lines of what to do next, and asks nothing. Command form; modelroom prints the package and
-stage in place of the placeholders:
+**The install line asks, then downloads after a yes.** For a command-capable package not already
+on disk, on a machine where `lms` is found, choosing an LM Studio entry prints the command, checks
+the disk, and prints a hint: `lms starts LM Studio's service in the background; a vision model also
+fetches its projector file`. Then it asks `Download #7 with lms now? (2.9 GB)` (the answer file key
+is `pull`, the default is No). On a yes, modelroom prints `download  <command> --yes`, runs the
+command once and shows the progress of `lms` itself, then looks at the folder: the file must lie in
+`~/.lmstudio/models/<owner>/<repo>` with the size of the catalog. Then the line reads
+`✓ Downloaded #7  <file> (2.9 GB) ...` with what to do in LM Studio (load the model with the context
+length of the run, start the server, run modelroom again: it finds the server). If `lms` ends with
+an error, or ends without the file in its place, the run says so in one line and ends with exit 1;
+a canceled download resumes with the same line. On a no, modelroom prints the line to copy and the
+hints, as before. Command form; modelroom prints the package and stage in place of the
+placeholders:
 
 ```
 lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>
 ```
 
 The line carries the URL, not `<owner>/<repo>`: `lms get <owner>/<name>` names an artifact of the
-LM Studio Hub, while the URL names the Hugging Face repository.
+LM Studio Hub, while the URL names the Hugging Face repository. The command that is run is the
+same with `--yes` at the end, as a list of arguments, never through a shell.
 
-Run the command modelroom printed in a terminal. In LM Studio, load the model with the context
-length of the run, then start the server; run modelroom again, and it finds the server. modelroom
-never runs `lms`, neither to detect it nor to download, and it never loads, unloads or downloads
-a model through the server either. Where `lms` is not in the `PATH` but where LM Studio put it,
-the line calls it from the home folder instead,
+There is no question, and the output is the one printed before, where `lms` is not found (the line
+and the hint `if lms is not found: it is in .lmstudio/bin in your home folder`), where the package
+is on disk already (`is on disk already (size checked)`), where the entry is locked, and where the
+disk is too small (`not enough disk for #7: ...`). modelroom runs `lms` once, for the download you
+said yes to, and never otherwise: not to detect it, not to measure, not to load, unload or
+download a model through the server. Where `lms` is not in the `PATH` but where LM Studio put it,
+the printed line calls it from the home folder instead,
 `& "$env:USERPROFILE\.lmstudio\bin\lms.exe" get --gguf https://huggingface.co/...` in PowerShell
 (not in `cmd.exe`) on Windows, `"$HOME/.lmstudio/bin/lms" get --gguf https://huggingface.co/...`
-elsewhere, with a hint line.
+elsewhere, with a hint line; the run itself starts that file directly, not the printed text.
 A package with more than one weight file, a file in a subfolder or a stage without a checked
 command (the `UD-` stages) gets no command: the entry is locked, `computed only: lms get for ...
 is not checked`, or `no safe command` for a name or stage that is not safe to put in a command.
@@ -805,9 +817,10 @@ The local runtimes are reached at these addresses and no others:
 - vLLM, `127.0.0.1:8000`: HTTP, only on this computer, no proxy, no redirect.
 - LM Studio, `127.0.0.1:1234`: HTTP, only on this computer, no proxy, no redirect.
 
-modelroom never runs `lms`.
+modelroom runs `lms` only for the download you said yes to in step 5, with `--yes`; that starts
+LM Studio's service in the background.
 
-The one exception is a computer you name yourself, by its SSH host alias, in "Another computer"
+The one exception to those addresses is a computer you name yourself, by its SSH host alias, in "Another computer"
 above: modelroom then runs the system `ssh` to it, with your own SSH configuration and keys, never
 a password for that target itself -- a jump host in between answers under its own configuration
 and needs `BatchMode yes` of its own to hold the same promise (see "Another computer"). It never
