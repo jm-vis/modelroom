@@ -124,9 +124,9 @@ def test_the_smoke_expects_document_schema_3_and_profile_schema_4(tmp_path):
     config.write_text(rs.customer_config(EXAMPLE, {"Qwen/Qwen3.5-9B"}), encoding="utf-8")
     old = {"schema_version": 3, "profile_id": "3f9a0c21d4e6b870", "gpu_state": "measured"}
     (hardware / "old.json").write_text(json.dumps(old), encoding="utf-8")
-    assert rs.step_bind_profile(config).severity == 1
+    assert rs.step_bind_profile(config, "kunde").severity == 1
     (hardware / "new.json").write_text(json.dumps({**old, "schema_version": 4, "profile_id": "0123456789abcdef"}), encoding="utf-8")
-    assert rs.step_bind_profile(config).severity == 0
+    assert rs.step_bind_profile(config, "kunde").severity == 0
 
 
 def test_binding_the_profile_writes_it_into_the_machine_table():
