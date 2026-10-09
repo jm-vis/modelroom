@@ -2200,11 +2200,13 @@ def test_the_load_test_measures_the_picked_model_and_the_ranking_shows_the_speed
     assert record["ollama_name"] == DEEPSEEK_OLLAMA_NAME
     measured = next(line.strip() for line in lines if line.strip().startswith("measured hf.co/"))
     assert measured.startswith(f"measured {DEEPSEEK_OLLAMA_NAME}: ")
-    assert "tok/s" in measured and measured.endswith("context 8k")
+    assert record["protocol"] == "v2"
+    assert "tok/s" in measured and measured.endswith("context 8k, protocol v2")
     assert "valid" not in measured and "comparable" not in measured
     assert any(line.strip().endswith("1 of 1 measured") for line in lines)
     row = _ranked_deepseek(tmp_path)
     assert row["measurement_group"] == 0
+    assert row["speed_protocol"] == "v2"
     assert row["speed_tps"] == pytest.approx(record["tps_mean"])
 
 

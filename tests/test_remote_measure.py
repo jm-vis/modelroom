@@ -144,6 +144,7 @@ def test_measure_runs_the_protocol_at_the_server_and_sinks_the_record():
     record = json.loads(lines[-1])["result"]["record"]
     assert record["profile_id"] == PROFILE_ID
     assert record["ollama_name"] == "hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M"
+    assert record["protocol"] == "v2"
 
 
 def test_a_candidate_no_longer_found_is_internal():

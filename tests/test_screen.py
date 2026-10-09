@@ -394,10 +394,18 @@ def test_the_models_row_names_the_models_and_where_their_packages_came_from():
 
 def test_the_speed_row_says_what_to_do_where_nothing_was_measured():
     nothing = speed_fact(0, None)
-    measured = speed_fact(2, ("Qwen3-0.6B", 41.06))
+    measured = speed_fact(2, ("Qwen3-0.6B", 41.06, "v2"))
 
     assert (nothing.value, nothing.note) == ("not measured", "say Yes in step 4 to measure an installed package")
-    assert (measured.value, measured.note) == ("2 measured", "fastest Qwen3-0.6B at 41.1 tok/s")
+    assert (measured.value, measured.note) == ("2 measured", "fastest Qwen3-0.6B at 41.1 tok/s, protocol v2")
+
+
+def test_the_speed_row_names_the_version_of_a_stored_v1_measurement():
+    assert speed_fact(1, ("Qwen3-0.6B", 41.06, "v1")).note == "fastest Qwen3-0.6B at 41.1 tok/s, protocol v1"
+
+
+def test_the_speed_row_names_no_version_where_the_tuple_carries_none():
+    assert speed_fact(1, ("Qwen3-0.6B", 41.06, None)).note == "fastest Qwen3-0.6B at 41.1 tok/s"
 
 
 def test_the_result_row_counts_what_was_ranked_and_what_was_set_aside():

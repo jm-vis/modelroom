@@ -151,6 +151,31 @@ def test_only_valid_comparable_same_context_measurements_count(changes):
     assert group_zero_measurement(Q5, [record], default_scenario()) is None
 
 
+@pytest.mark.parametrize("protocol", ["v1", "v2"])
+def test_a_valid_comparable_measurement_counts_whichever_protocol_version_wrote_it(protocol):
+    """E1: v1 (stored) and v2 (new) records count alike."""
+    record = _measurement(Q5, 40.0, protocol=protocol)
+    assert group_zero_measurement(Q5, [record], default_scenario()) == record
+
+
+def test_the_newest_counts_across_versions():
+    older_v1, newer_v2 = _measurement(Q5, 40.0, protocol="v1"), _measurement(Q5, 30.0, minutes=5, protocol="v2")
+    assert group_zero_measurement(Q5, [older_v1, newer_v2], default_scenario()) == newer_v2
+    newer_v1 = _measurement(Q5, 40.0, minutes=9, protocol="v1")
+    assert group_zero_measurement(Q5, [newer_v1, newer_v2], default_scenario()) == newer_v1
+
+
+def test_an_invalid_v2_measurement_is_named_by_the_other_note():
+    from modelroom.ranking import other_measurement_note
+
+    run = {**EXAMPLES["RunCounters"], "done_reason": "stop", "eval_duration": 3_200_000_000}
+    record = _measurement(
+        Q5, 40.0, runs=[run, run, run], validity="invalid", validity_reason="run 1: done_reason 'stop'",
+        protocol="v2",
+    )
+    assert other_measurement_note(Q5, [record], default_scenario()) == "measured, not valid (run 1: done_reason 'stop')"
+
+
 def test_invalid_measurement_does_not_count():
     run = {**EXAMPLES["RunCounters"], "done_reason": "stop", "eval_duration": 3_200_000_000}  # 40 tps
     record = _measurement(Q5, 40.0, runs=[run, run, run], validity="invalid", validity_reason="run 1: done_reason 'stop'")

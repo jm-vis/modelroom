@@ -3,7 +3,7 @@
 Stage 1 downloads nothing, removes nothing and says nothing about disk space. It reads the
 daemon's own inventory (`GET /api/tags`), keeps the entries a configured package provably is --
 provably meaning a digest the daemon itself shows, never a name that merely looks right -- and
-runs measurement protocol v1 against each of them. The result is a `MeasurementRecord` written
+runs measurement protocol v2 against each of them. The result is a `MeasurementRecord` written
 as its own file under `modelroom.lock`; the renderer reads it back on its own.
 
 This module writes measurements. It does not rank them and it does not render them
@@ -295,11 +295,11 @@ def run_load_test(
     stands between two observations. The record is returned, never stored: `store_measurement`
     does that, under the lock.
 
-    The protocol is not a parameter. The record this writes says `protocol: v1`, and
-    `MeasurementRecord` checks a valid one against `shipped_protocol()` -- a run after another
-    prompt, seed or warm-up count would be stored under a name it does not deserve. A new
+    The protocol is not a parameter. The record this writes says `protocol: v2`, and
+    `MeasurementRecord` checks a valid one against the file of its version -- a run after
+    another prompt, seed or warm-up count would be stored under a name it does not deserve. A new
     protocol version is a new writer, never an argument here (CONTRACTS.md, "Measurement
-    protocol v1").
+    protocol v2").
     """
     protocol = shipped_protocol()
     version = _daemon_version(daemon)
@@ -482,7 +482,7 @@ def _record(
             schema_version=MEASUREMENT_SCHEMA_VERSION,
             measurement_id=new_measurement_id(measured_at),
             profile_id=profile_id,
-            protocol="v1",
+            protocol=f"v{protocol.protocol_version}",
             measured_at=measured_at,
             package=candidate.package_ref,
             ollama_name=candidate.ollama_name,

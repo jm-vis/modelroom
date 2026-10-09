@@ -1,9 +1,9 @@
-"""Scenario, speed measurement (schema 2), export object and measurement protocol v1.
+"""Scenario, speed measurement (schema 2), export object and measurement protocol v1 and v2.
 
 A measurement is its own file, `<state>/measurements/<profile_id>/<measurement_id>.json`,
 written once under `modelroom.lock` and never changed. The load test that produces it follows
-the protocol shipped as `protocol_v1.toml`; this module holds the shapes, the validity rule and
-the file rules, not the load test itself (CONTRACTS.md, "MeasurementRecord", "Measurement
+the protocol shipped as `protocol_v2.toml` (`protocol_v1.toml` for stored records); this module holds the shapes, the validity
+rule and the file rules, not the load test itself (CONTRACTS.md, "MeasurementRecord", "Measurement
 files and import rule").
 """
 
@@ -37,7 +37,10 @@ MEASUREMENT_SCHEMA_VERSION = 2
 EXPORT_SCHEMA_VERSION = 1
 EXPORT_SCHEMA_RANGE: tuple[int, int] = (1, 2)
 DEFAULT_CONTEXT_REQUESTED = 8192
-PROTOCOL_FILE = Path(__file__).with_name("protocol_v1.toml")
+PROTOCOL_FILES = {
+    "v1": Path(__file__).with_name("protocol_v1.toml"),
+    "v2": Path(__file__).with_name("protocol_v2.toml"),
+}
 LEGACY_REASON = "measured before protocol v1 (migrated from a schema-1 profile)"
 
 _MEASUREMENT_ID_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -152,7 +155,7 @@ class LoadState(BaseModel):
 class ProtocolOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    raw: Literal[True]
+    raw: bool
     stream: Literal[False]
     num_predict: int = Field(gt=0)
     temperature: float = Field(ge=0)
@@ -169,29 +172,44 @@ class ProtocolValidity(BaseModel):
 
 
 class Protocol(BaseModel):
-    """Measurement protocol v1 as shipped in `protocol_v1.toml` (`num_ctx` is the scenario's)."""
+    """Measurement protocol v1 or v2 as shipped in `protocol_v<k>.toml` (`num_ctx` is the scenario's)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal[1]
+    protocol_version: Literal[1, 2]
     warmup_runs: int = Field(ge=0)
     measured_runs: int = Field(gt=0)
     prompt: str = Field(min_length=1)
     options: ProtocolOptions
     validity: ProtocolValidity
 
+    @model_validator(mode="after")
+    def _check_raw(self) -> "Protocol":
+        shipped = "true" if self.protocol_version == 1 else "false"
+        if self.options.raw != (self.protocol_version == 1):
+            raise ValueError(f"protocol version {self.protocol_version} ships raw = {shipped}")
+        return self
 
-def load_protocol(path: Path = PROTOCOL_FILE) -> Protocol:
-    """Read and validate a protocol file; the default is the one shipped with the package."""
+
+def load_protocol(path: Path) -> Protocol:
+    """Read and validate one protocol file; the path is required (`protocol_for` passes it)."""
     try:
         return Protocol.model_validate(tomllib.loads(path.read_text(encoding="utf-8")))
     except (OSError, tomllib.TOMLDecodeError, ValidationError) as exc:
         raise ValueError(f"{path}: invalid measurement protocol: {exc}") from exc
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=None)
+def protocol_for(version: str) -> Protocol:
+    """The shipped protocol of `version` (`v1` or `v2`), loaded once."""
+    if version not in PROTOCOL_FILES:
+        raise ValueError(f"no measurement protocol {version}")
+    return load_protocol(PROTOCOL_FILES[version])
+
+
 def shipped_protocol() -> Protocol:
-    return load_protocol()
+    """The protocol a new measurement follows: version 2."""
+    return protocol_for("v2")
 
 
 def run_invalid_reason(run: RunCounters, protocol: Protocol, num_ctx: int) -> str | None:
@@ -222,8 +240,8 @@ def measurement_invalid_reason(runs: list[RunCounters], protocol: Protocol, num_
 class MeasurementRecord(BaseModel):
     """One speed measurement of one package on one profile (schema 2), never changed once written.
 
-    `protocol` is `v1` for a load test after protocol v1, `none` for a measurement migrated from
-    a schema-1 profile (`validity` `unchecked`, never comparable, never ranked). `comparable`
+    `protocol` is `v1` or `v2` for a load test after that protocol version, `none` for a
+    measurement migrated from a schema-1 profile (`validity` `unchecked`, never comparable, never ranked). `comparable`
     is decided by the load test (daemon digest and `context_length` equal to the package and
     the scenario at every observation); a measurement that is not comparable says why.
     """
@@ -233,7 +251,7 @@ class MeasurementRecord(BaseModel):
     schema_version: int
     measurement_id: str
     profile_id: str
-    protocol: Literal["v1", "none"]
+    protocol: Literal["v1", "v2", "none"]
     measured_at: datetime
     package: PackageRef
     ollama_name: str | None = None
@@ -287,8 +305,8 @@ class MeasurementRecord(BaseModel):
             if any(value is None for value in speeds) or self.tps_min > self.tps_max:
                 raise ValueError("tps_mean, tps_min and tps_max are all set or none, tps_min <= tps_max")
             # A schema-1 range was never checked against its mean; it is carried over unchanged.
-            if self.protocol == "v1" and not (0 < self.tps_min <= self.tps_mean <= self.tps_max):
-                raise ValueError("protocol v1 requires 0 < tps_min <= tps_mean <= tps_max")
+            if self.protocol in ("v1", "v2") and not (0 < self.tps_min <= self.tps_mean <= self.tps_max):
+                raise ValueError(f"protocol {self.protocol} requires 0 < tps_min <= tps_mean <= tps_max")
         return self
 
     @model_validator(mode="after")
@@ -298,22 +316,22 @@ class MeasurementRecord(BaseModel):
                 raise ValueError("protocol 'none' requires validity 'unchecked', no runs and comparable false")
             return self
         if self.validity == "unchecked":
-            raise ValueError("protocol 'v1' is either 'valid' or 'invalid'")
+            raise ValueError(f"protocol {self.protocol!r} is either 'valid' or 'invalid'")
         if self.validity == "valid":
-            reason = measurement_invalid_reason(self.runs, shipped_protocol(), self.scenario.context_requested)
+            reason = measurement_invalid_reason(self.runs, protocol_for(self.protocol), self.scenario.context_requested)
             if reason is not None:
                 raise ValueError(f"validity 'valid' contradicts the protocol rule: {reason}")
             if self.tps_mean is None:
                 raise ValueError("a valid measurement carries tps_mean, tps_min and tps_max")
         if self.tps_mean is not None:
             if not self.runs:
-                raise ValueError("protocol v1 tps values come from runs; a record without runs carries none")
+                raise ValueError(f"protocol {self.protocol} tps values come from runs; a record without runs carries none")
             _check_speeds_match_runs(self)
         return self
 
 
 def _check_speeds_match_runs(record: "MeasurementRecord") -> None:
-    """Protocol v1: `tps_mean`/`tps_min`/`tps_max` are the mean, min and max over `runs`."""
+    """Protocol v1 and v2: `tps_mean`/`tps_min`/`tps_max` are the mean, min and max over `runs`."""
     try:
         speeds = [run.tokens_per_second() for run in record.runs if run.eval_duration > 0]
     except OverflowError as exc:

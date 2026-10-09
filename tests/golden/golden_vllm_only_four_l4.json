@@ -124,6 +124,7 @@
           "provenance": "from_metadata",
           "quantization": "AWQ",
           "rank": 1,
+          "speed_protocol": null,
           "speed_tps": null,
           "weights_gib": 5.679746963083744
         }

@@ -500,7 +500,7 @@ def test_a_valid_speed_keeps_the_card_as_it_is():
 
     fact = _speed_fact(document)
 
-    assert fact.value == "1 measured" and fact.note.startswith("fastest ") and fact.note.endswith(" tok/s")
+    assert fact.value == "1 measured" and fact.note.startswith("fastest ") and fact.note.endswith(" tok/s, protocol v1")
 
 
 def test_the_card_keeps_the_one_request_reason():
@@ -700,11 +700,16 @@ def test_a_first_reading_without_machine_id_says_nothing_to_compare(tmp_path):
 # --- N2-f: a run that ends early ---------------------------------------------------------------------
 
 
-def early_line(name: str, count: int) -> str:
-    return (
+V1_RETRY = "; protocol v2 sends the prompt through the model's template, say Yes to measure again"
+
+
+def early_line(name: str, count: int, version: int = 2) -> str:
+    """The Step 4 line of a run that ended early; only a stored v1 record carries the retry hint."""
+    line = (
         f"{name}: run 1 ended after {count} of 128 tokens (done_reason 'stop'); "
-        "protocol v1 counts a run only when it reaches 128 tokens (done_reason 'length')"
+        f"protocol v{version} counts a run only when it reaches 128 tokens (done_reason 'length')"
     )
+    return line + V1_RETRY if version == 1 else line
 
 
 def test_an_answer_that_stops_early_names_tokens_and_rule(tmp_path):
