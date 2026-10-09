@@ -29,17 +29,16 @@
     <rect x="163" y="109" width="42" height="42" rx="7" fill="none" stroke="#8CACC9" stroke-width="2" stroke-dasharray="6 5"/>
   </g>
   <text x="330" y="128" class="wm" font-size="64" fill="#FFFFFF" text-anchor="start">ModelRoom</text>
-  <text x="695" y="128" class="tl" font-size="21" fill="#8CACC9" text-anchor="start">0.3.0</text>
-  <text x="330" y="176" class="tl" font-size="26" fill="#CFE1EC" text-anchor="start">Which local model packages fit your machine, Ollama, vLLM or LM Studio.</text>
+  <text x="330" y="176" class="tl" font-size="26" fill="#CFE1EC" text-anchor="start">Which local model packages fit your machine, Ollama, LM Studio or vLLM.</text>
   <text x="330" y="210" class="sub" font-size="19" fill="#8CACC9" text-anchor="start">Memory fit computed from the package size, llmfit as a safety net.</text>
   <g class="chip" font-size="17">
-    <rect x="330" y="240" width="136" height="36" rx="8" fill="#0891B2"/>
-    <text x="398.0" y="263.76" fill="#FFFFFF" text-anchor="middle">Hugging Face</text>
-    <rect x="480" y="240" width="136" height="36" rx="8" fill="#455A64"/>
+    <rect x="330" y="240" width="136" height="36" rx="8" fill="#FFD21E" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+    <text x="398.0" y="263.76" fill="#1F2A37" text-anchor="middle">Hugging Face</text>
+    <rect x="480" y="240" width="136" height="36" rx="8" fill="#1A1A1A" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
     <text x="548.0" y="263.76" fill="#FFFFFF" text-anchor="middle">Ollama</text>
-    <rect x="630" y="240" width="136" height="36" rx="8" fill="#1B6B5C"/>
-    <text x="698.0" y="263.76" fill="#FFFFFF" text-anchor="middle">vLLM</text>
-    <rect x="780" y="240" width="136" height="36" rx="8" fill="#5B3F8C"/>
-    <text x="848.0" y="263.76" fill="#FFFFFF" text-anchor="middle">LM Studio</text>
+    <rect x="630" y="240" width="136" height="36" rx="8" fill="#4F46E5" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+    <text x="698.0" y="263.76" fill="#FFFFFF" text-anchor="middle">LM Studio</text>
+    <rect x="780" y="240" width="136" height="36" rx="8" fill="#2563EB" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+    <text x="848.0" y="263.76" fill="#FFFFFF" text-anchor="middle">vLLM</text>
   </g>
 </svg>
