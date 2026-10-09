@@ -28,7 +28,8 @@ from modelroom.parameters import parameters_from_name
 from modelroom.relation import _tag_facts
 from modelroom.search import _created_at
 from modelroom.search_pages import read_downloads
-from modelroom.search_release import line_key
+from modelroom.search_release import line_key, unread_reason
+from catalog_scan_latest import group_tops  # noqa: E402  (the K2 rules; imports `search_release` only)
 
 HUB = "https://huggingface.co"
 SCHEMA = 1
@@ -58,6 +59,7 @@ TEXT_ARCHITECTURE_SUFFIX = "ForCausalLM"
 
 B1_MIN_LIKES, B1_MIN_DOWNLOADS, B1_MAX_AGE = 100, 1000, timedelta(days=30)
 B2_MIN_ROWS = 3
+CANDIDATE_DECISION_DAYS = 30  # a candidate open for more days than this is past its time: `catalog_scan_notes.split_overdue`
 SMALLEST_PAGE = 5  # a list page too long for `API_MAX_BYTES` is asked again with half its `limit`, down to this
 SEED_PAGES = 4  # pages of one seed: twenty entries over pages of at least `SMALLEST_PAGE`
 SEED_ROWS, SEED_PAGE = 5, 20# a listed account without a row: its first five repos by downloads, read from a page of twenty
@@ -340,16 +342,44 @@ def family_for(repo: str, kind: str, rows: list[CatalogModel], size: float | Non
     return own[:CATALOG_MAX_TEXT_LEN]
 
 
-def latest_among(fresh: list[tuple[str, str, float | None]], rows: list[CatalogModel]) -> set[str]:
-    """The new repos that stand over a `latest` row of their group and under no other new repo and no row of it
-    (`rows` holds the table and the carried new rows: a carried row stands over a fresh one as a fresh one does)."""
-    out = set()
+def family_forms(repo: str, size: float | None = None) -> tuple[str, ...]:
+    """The two family names the grammar makes from a name alone (AP9-KA-H): the family word of `line_key` (else the first
+    run of letters, as `family_for`), and that word with the cleaned publisher added; both cut to `CATALOG_MAX_TEXT_LEN`."""
+    key, owner, name = _key(repo, size), *repo.split("/", 1)
+    word = key.family if key else (m.group(0) if (m := re.match(r"[a-z]{2,}", name.lower())) else None)
+    if word is None:
+        return ()
+    return tuple(dict.fromkeys(f[:CATALOG_MAX_TEXT_LEN] for f in (word, f"{word}-{re.sub(r'[^a-z0-9.-]+', '-', owner.lower()).strip('-.')}")))
+
+
+def latest_among(fresh: list[tuple[str, str, float | None]], rows: list[CatalogModel]) -> dict[str, str]:
+    """`{repo: reason}` of the new repos that become `latest`: `over latest` (stands over a `latest` row of its group
+    and under no other new repo and no row of it; `rows` holds the table and the carried new rows) or `family top`
+    (the one highest member of a group without a `latest` row, `catalog_scan_latest.group_tops`)."""
+    out = {}
     for repo, kind, size in fresh:
         over_latest = any(r.latest and stands_over(repo, kind, r, size) for r in rows)
         others = [(o, k, s) for o, k, s in fresh if o != repo] + [(r.hf_repo, r.kind, r.parameters_b) for r in rows if r.hf_repo != repo]
         if over_latest and not any(stands_over(o, k, (repo, kind, size), s) for o, k, s in others):
-            out.add(repo)
-    return out
+            out[repo] = "over latest"
+    return {**group_tops(fresh, rows)[0], **out}
+
+
+def unread_of(change: dict) -> str | None:
+    """Why a new-row change names a repo the grammar has no reading for (from its repo and `parameters_b`), else `None`."""
+    if change.get("change") != "new_row" or not isinstance(change.get("hf_repo"), str):
+        return None
+    size = (change.get("fields", {}).get("parameters_b") or {}).get("new")
+    return unread_reason(change["hf_repo"], size if isinstance(size, (int, float)) and not isinstance(size, bool) else None)
+
+
+def mark_reading(change: dict) -> dict:
+    """The new-row change with its `reading` mark from `unread_of` (for the reader only): `false` or no key."""
+    if change.get("change") == "new_row":
+        change.pop("reading", None)
+        if unread_of(change):
+            change["reading"] = False
+    return change
 
 
 def build_row(entry: Entry, result: KindResult, *, family: str, today: str, latest: bool, latest_source: str | None) -> dict:
@@ -552,7 +582,7 @@ def _thinned(cand: dict, rejected) -> dict | None:
     return cand
 
 
-def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], rejected) -> tuple[dict, dict, set[str], set[tuple], set[str]]:
+def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], rejected, today: str | None = None) -> tuple[dict, dict, set[str], set[tuple], set[str]]:
     """What of the newest earlier proposal is still open: `(changes, candidates, known repos, decided field pairs,
     decided accounts)`.
 
@@ -562,7 +592,8 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
     the table now has, a field change the table already carries, a change that touches a field the decision took, an
     account that is listed now or that the decision took through either kind of candidate. What the decision took is
     returned too, for the whole run: the repos of its new rows and B3 candidates (in `known`), every `(repo, field)`
-    pair its field changes touch and the accounts of its B1 and B2 candidates. Unreadable entries are skipped.
+    pair its field changes touch and the accounts of its B1 and B2 candidates. Unreadable entries are skipped. A candidate
+    of the old form without `open_since` gets `today` (the day of the run, UTC) once and keeps it from then on (AP9-KA-H).
     """
     taken = decision if isinstance(decision, dict) and decision.get("state") in DECISION_STATES else {}
     decided = set().union(*(_ids(taken, key) for key in ("approved", "rejected", "admitted")))
@@ -570,7 +601,6 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
     done_fields: set[tuple] = set()
     done_accounts: set[str] = set()
     changes: dict[tuple, dict] = {}
-    candidates: dict[tuple, dict] = {}
     for change in _entries(proposal, "changes"):
         try:
             repo, row = change["hf_repo"], rows.get(change["hf_repo"])
@@ -588,8 +618,21 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
         except (KeyError, TypeError, AttributeError):
             continue
     changes = {key: change for key, change in changes.items() if not touched(change) & done_fields}
+    candidates = _carried_candidates(proposal, decided, rows, listed, rejected, today, done_repos, done_accounts)
+    candidates = {key: c for key, c in candidates.items() if key[0] == "B3" or key[1] not in done_accounts}  # decided through either kind
+    known ={key[1] for key in changes if key[0] == "new_row"} | {key for kind, key in candidates if kind == "B3"} | done_repos
+    return changes, candidates, known, done_fields, done_accounts
+
+
+def _carried_candidates(proposal: dict, decided: set[str], rows: dict, listed: set[str], rejected, today: str | None,
+                        done_repos: set[str], done_accounts: set[str]) -> dict[tuple, dict]:
+    """The candidates of `carry_over`; what the decision took is added to `done_repos` and `done_accounts`. A candidate
+    Initializes open_since before _sound_candidate; _thinned preserves it."""
+    candidates: dict[tuple, dict] = {}
     for cand in _entries(proposal, "candidates"):
         try:
+            if today and "open_since" not in cand:
+                cand["open_since"] = today
             kind = cand["candidate"]
             key = cand["hf_repo"] if kind == "B3" else cand["account"]
             if kind in ("B1", "B2", "B3") and cand.get("k") in decided:
@@ -604,9 +647,7 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
                 candidates[(kind, key)] = kept
         except (KeyError, TypeError, AttributeError):
             continue
-    candidates = {key: c for key, c in candidates.items() if key[0] == "B3" or key[1] not in done_accounts}  # decided through either kind
-    known ={key[1] for key in changes if key[0] == "new_row"} | {key for kind, key in candidates if kind == "B3"} | done_repos
-    return changes, candidates, known, done_fields, done_accounts
+    return candidates
 
 
 def collection_members(data: list, owner: str) -> dict[str, str]:
@@ -654,9 +695,11 @@ def order_proposal(changes: list[dict], candidates: list[dict]) -> None:
     changes.sort(key=lambda c: (c["stage"], c["hf_repo"], c.get("field") or ""))
     for number, change in enumerate(changes, start=1):
         change["n"] = number
-    open_ones = sorted((c for c in candidates if c["candidate"] != "B3"), key=lambda c: (-c["likes"], c["account"], c["candidate"]))
-    third = sorted((c for c in candidates if c["candidate"] == "B3"), key=lambda c: (c["open_since"], c["hf_repo"]))
-    candidates[:] = open_ones + third
+    late = sorted((c for c in candidates if c.get("overdue_days")), key=lambda c: (c["open_since"], c["hf_repo"], c["candidate"]))  # past their time: first
+    rest = [c for c in candidates if not c.get("overdue_days")]
+    open_ones = sorted((c for c in rest if c["candidate"] != "B3"), key=lambda c: (-c["likes"], c["account"], c["candidate"]))
+    third = sorted((c for c in rest if c["candidate"] == "B3"), key=lambda c: (c["open_since"], c["hf_repo"]))
+    candidates[:] = late + open_ones + third
     for number, candidate in enumerate(candidates, start=1):
         candidate["k"] = f"K{number}"
 
@@ -694,9 +737,9 @@ def check_changes(document: dict, changes: list[dict]) -> tuple[list[dict], list
     return kept, notes
 
 
-def proposal_document(day: str, base_sha: str, notes: list[str], changes: list[dict], candidates: list[dict], incomplete: int, pending) -> dict:
+def proposal_document(day: str, base_sha: str, notes: list[str], changes: list[dict], candidates: list[dict], incomplete: int, pending, drift: list | None = None) -> dict:
     return {
-        "schema": SCHEMA, "date": day, "base_catalog_sha256": base_sha, "notes": notes, "changes": changes, "candidates": candidates,
+        "schema": SCHEMA, "date": day, "base_catalog_sha256": base_sha, "notes": notes, "changes": changes, "candidates": candidates, "drift": drift or [],
         "summary": {
             "new": sum(c["change"] == "new_row" for c in changes), "changed": sum(c["change"] == "field" for c in changes),
             "candidates": len(candidates), "incomplete": incomplete, "pending_publication": pending,
@@ -725,6 +768,11 @@ def render_proposal(data: dict, sha256: str | None = None) -> str:
     ]
     if summary.get("pending_publication"):
         lines.append("publication pending: " + json.dumps(summary["pending_publication"], sort_keys=True))
+    unread = [(c, unread_of(c)) for c in data["changes"] if unread_of(c)]  # from repo and size, whatever the mark says
+    if unread:
+        lines += ["", "## Rows without a reading (approve only with an entry in SHIPPED_WITHOUT_READING)", ""]
+        for c, why in unread:
+            lines += [f"{c['n']} | {c['hf_repo']} | reading: false | {why}", f'  "{c["hf_repo"]}",  # {why}']
     lines += ["", "## Changes", ""]
     for change in data["changes"]:
         lines.append(f"{change['n']} | {change['stage']} | {change['hf_repo']} | kind {change['kind']} | "
@@ -734,12 +782,16 @@ def render_proposal(data: dict, sha256: str | None = None) -> str:
         for name in sorted(change["fields"]):
             pair = change["fields"][name]
             lines.append(f"  {name}: {json.dumps(pair['old'])} -> {json.dumps(pair['new'])}")
-    lines += ["", "## Candidates", ""]
-    for cand in data["candidates"]:
-        lines.append(f"{cand['k']} | {cand['candidate']} | {cand.get('account') or cand.get('hf_repo')} | kind {cand.get('kind') or '-'} | "
-                     f"evidence {' '.join(cand.get('evidence', []))} | open since {cand['open_since']}")
-        shown = {"k", "candidate", "evidence", "open_since", "kind"}
-        lines += [f"  {name}: {json.dumps(cand[name], sort_keys=True)}" for name in sorted(cand) if name not in shown]
+    for title, group in (("Candidates past 30 days (decide now)", True), ("Candidates", False)):
+        shown_here = [c for c in data["candidates"] if bool(c.get("overdue_days")) is group]
+        if shown_here or not group:
+            lines += ["", f"## {title}", ""]
+        for cand in shown_here:
+            late = f", {cand['overdue_days']} days" if group else ""
+            lines.append(f"{cand['k']} | {cand['candidate']} | {cand.get('account') or cand.get('hf_repo')} | kind {cand.get('kind') or '-'} | "
+                         f"evidence {' '.join(cand.get('evidence', []))} | open since {cand['open_since']}{late}")
+            shown = {"k", "candidate", "evidence", "open_since", "kind", "overdue_days"}
+            lines += [f"  {name}: {json.dumps(cand[name], sort_keys=True)}" for name in sorted(cand) if name not in shown]
     lines += ["", "## Notes", ""] + [f"- {note}" for note in data["notes"]]
     lines += ["", f"proposal.json sha256: {hashlib.sha256(dump_json(data)).hexdigest() if sha256 is None else sha256}"]
     return "\n".join(lines) + "\n"

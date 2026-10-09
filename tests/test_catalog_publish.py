@@ -337,6 +337,47 @@ def test_apply_takes_exactly_the_named_numbers_and_leaves_the_others_open_for_th
     assert {(c["hf_repo"], c.get("field")) for c in nxt["changes"]} == {("acme/Atlas-1-9B", "successor"), ("orbit/Comet-Echo-1", "ollama")}
 
 
+def unread_proposal(work) -> str:
+    """Change 1 of the fixture proposal renamed to a repo without a reading, written over the proposal; its new checksum."""
+    data = json.loads(PROPOSAL_BYTES)
+    change = data["changes"][0]
+    change["hf_repo"] = change["fields"]["hf_repo"]["new"] = "acme/Ovie-512"
+    change["fields"]["source"]["new"] = "https://huggingface.co/acme/Ovie-512"
+    work.proposal.write_bytes(R.dump_json(data))
+    return P.sha256_of(work.proposal.read_bytes())
+
+
+def test_apply_reaches_the_rule_with_a_confirmation_and_the_decision_names_it(work):
+    result = work.apply("--approve", "1,2", "--approve-unread", "1")
+    assert result.code == 0 and work.decision()["approved"] == [1, 2] and work.decision()["approved_unread"] == [1]
+
+
+def test_apply_refuses_a_row_without_a_reading_before_any_write_and_takes_it_with_the_confirmation(work):
+    sha = unread_proposal(work)
+    before = work.tree()
+    refused = work.call("--apply", work.proposal, "--proposal-sha", sha, "--approve", "1")
+    assert refused.code == 2 and "row 1 has no reading; approve it with --approve-unread 1" in refused.err and work.tree() == before
+    taken = work.call("--apply", work.proposal, "--proposal-sha", sha, "--approve", "1", "--approve-unread", "1")
+    assert taken.code == 0 and "acme/Ovie-512" in work.catalog.read_text() and work.decision()["approved_unread"] == [1]
+
+
+@pytest.mark.parametrize("lists, fragment", [
+    (("--approve-unread", "1"), "nothing is named"),
+    (("--approve", "2", "--approve-unread", "1"), "--approve-unread 1 needs --approve 1"),
+    (("--approve", "1", "--approve-unread", "1,1"), "named twice in --approve-unread: 1"),
+    (("--approve", "1", "--approve-unread", "K1"), "--approve-unread"),
+])
+def test_a_confirmation_that_is_not_a_subset_of_the_approval_is_refused_with_exit_2_before_any_write(work, lists, fragment):
+    before = work.tree()
+    result = work.apply(*lists)
+    assert result.code == 2 and fragment in result.err and work.tree() == before
+
+
+def test_the_confirmation_belongs_to_apply_only(work):
+    result = work.call("--show", work.out, "--approve-unread", "1")
+    assert result.code == 2 and "options of another mode: --approve-unread" in result.err
+
+
 def test_apply_with_only_a_rejection_adds_the_repo_to_the_list_and_takes_no_row_in(work):
     result = work.apply("--reject", "4")
     assert result.code == 0 and work.catalog.read_bytes() == CATALOG_BYTES

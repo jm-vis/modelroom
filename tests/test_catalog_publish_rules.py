@@ -193,6 +193,102 @@ def test_a_change_that_cannot_be_applied_to_the_table_is_refused_with_a_sentence
     assert "cannot be applied" in refused(plan, document, broken, approve="4")
 
 
+# --- AP9-KA-H K1b: a row without a reading needs the maintainer's confirmation ----------------------------------------------------
+
+
+def unread(proposal: dict, mark: object = "absent") -> dict:
+    """The proposal with change 1 renamed to a repo the grammar has no reading for; `mark` is the `reading` mark of the
+    proposal (absent: the form of an old proposal)."""
+    data = copy.deepcopy(proposal)
+    change = data["changes"][0]
+    change["hf_repo"] = change["fields"]["hf_repo"]["new"] = "acme/Ovie-512"
+    change["fields"]["source"]["new"] = "https://huggingface.co/acme/Ovie-512"
+    if mark != "absent":
+        change["reading"] = mark
+    return data
+
+
+def plan_unread(document, proposal, approve=None, approve_unread=None, reject=None):
+    request = P.parse_request(approve, reject, None, approve_unread)
+    P.check_request(proposal, request)
+    return P.plan_apply(document, CATALOG_BYTES, REJECTED_BYTES, proposal, request, TODAY)
+
+
+@pytest.mark.parametrize("mark", ["absent", None, True, False], ids=["old proposal", "null", "reading true", "reading false"])
+def test_a_new_row_without_a_reading_is_refused_whatever_the_proposal_says_about_it(document, proposal, mark):
+    """Not-readable is worked out from the repo and the size here; the mark of the proposal is for the reader only, so
+    a missing, old, or wrong mark passes nothing."""
+    assert refused(plan_unread, document, unread(proposal, mark), approve="1") == (
+        "row 1 has no reading; approve it with --approve-unread 1 after adding it to SHIPPED_WITHOUT_READING")
+
+
+def test_a_carried_new_row_without_a_reading_is_refused_too(document, proposal):
+    carried = unread(proposal, False)
+    carried["changes"][0]["open_since"] = "2026-09-01"  # a row that has waited in earlier proposals
+    assert "has no reading" in refused(plan_unread, document, carried, approve="1,2")
+
+
+def test_a_confirmed_row_without_a_reading_enters_the_table_and_the_mark_stays_out_of_the_row(document, proposal):
+    data = unread(proposal, False)
+    result = plan_unread(document, data, approve="1", approve_unread="1")
+    rows = {m["hf_repo"]: m for m in json.loads(result.catalog_text)["models"]}
+    assert "acme/Ovie-512" in rows and "reading" not in rows["acme/Ovie-512"]
+    assert (result.approved, result.approved_unread) == ([1], [1]) and build_catalog_v2(result.catalog_text, Path("c.json"))
+
+
+def test_a_row_with_a_reading_needs_no_confirmation_and_a_confirmation_of_it_does_no_harm(document, proposal):
+    assert plan_unread(document, proposal, approve="1").approved_unread == []
+    assert plan_unread(document, proposal, approve="1", approve_unread="1").approved_unread == [1]
+
+
+def test_a_field_change_is_not_a_row_and_needs_no_confirmation(document, proposal):
+    assert plan_unread(document, unread(proposal, False), approve="2,5").approved == [2, 5]  # the other changes of the fixture
+
+
+@pytest.mark.parametrize("approve, approve_unread, reject, fragment", [
+    ("1", "2", None, "--approve-unread 2 needs --approve 2"),  # no approval
+    ("1", "9", None, "9 is not in the proposal"),  # an unknown number
+    (None, "1", "1", "--approve-unread 1 needs --approve 1"),  # approval and rejection of one number are refused before
+    ("1", "1,1", None, "named twice in --approve-unread: 1"),  # the repetition that the reading of the decision would refuse
+    ("1,1", "1", None, "named twice: 1"),
+])
+def test_a_confirmation_is_a_subset_of_the_approval_and_named_once(proposal, approve, approve_unread, reject, fragment):
+    assert fragment in refused(lambda: P.check_request(proposal, P.parse_request(approve, reject, None, approve_unread)))
+
+
+def test_the_confirmation_may_overlap_the_approval_without_naming_twice(proposal):
+    P.check_request(proposal, P.parse_request("1,2", None, None, "1"))
+    assert P.parse_request("1", None, None, "1").named == ("1",)
+
+
+@pytest.mark.parametrize("given", ["K1", "k1", "0", "one", "1,,2", ""])
+def test_the_confirmation_takes_numbers_and_no_candidate(given):
+    refused(P.parse_request, "1", None, None, given)
+
+
+def test_the_confirmation_stands_in_the_decision_beside_the_approval_and_is_read_back(document, proposal):
+    decision = P.decision_document(plan_unread(document, unread(proposal, False), approve="1,2", approve_unread="1"), SHA, TODAY,
+                                   P.sha256_of(CATALOG_BYTES), P.sha256_of(REJECTED_BYTES))
+    assert (decision["approved"], decision["approved_unread"]) == ([1, 2], [1])
+    assert P.check_decision(R.dump_json(decision)) == decision
+
+
+def test_a_decision_of_the_old_form_without_the_field_counts_as_an_empty_confirmation(document, proposal):
+    decision = decision_of(document, proposal, approve="1")
+    del decision["approved_unread"]
+    assert P.check_decision(R.dump_json(decision)) == decision
+
+
+@pytest.mark.parametrize("damage", [
+    lambda d: d.update(approved_unread=[1, 1]), lambda d: d.update(approved_unread=[3]), lambda d: d.update(approved_unread="1"),
+    lambda d: d.update(approved_unread=[True]), lambda d: d.update(approved_unread=["1"]), lambda d: d.update(approved_unread=None),
+], ids=["twice", "outside approved", "no list", "bool", "text", "null"])
+def test_a_damaged_confirmation_in_a_decision_is_an_error(document, proposal, damage):
+    decision = decision_of(document, proposal, approve="1,2")
+    damage(decision)
+    refused(P.check_decision, R.dump_json(decision))
+
+
 def test_the_lists_of_a_decision_hold_numbers_first_then_candidates_each_in_numeric_order(document, proposal):
     result = plan(document, proposal, approve="5,1,3", reject="K3,6,K1,4")
     assert (result.approved, result.rejected) == ([1, 3, 5], [4, 6, "K1", "K3"])
@@ -208,7 +304,7 @@ def decision_of(document, proposal, **lists):
 
 def test_the_decision_carries_the_lists_both_bases_both_targets_with_their_checksums_and_the_first_state(document, proposal):
     decision = decision_of(document, proposal, approve="1", reject="4")
-    assert set(decision) == {"proposal_sha", "approved", "rejected", "admitted", "date", "base_catalog_sha256", "base_rejected_sha256", "result_catalog",
+    assert set(decision) == {"proposal_sha", "approved", "approved_unread", "rejected", "admitted", "date", "base_catalog_sha256", "base_rejected_sha256", "result_catalog",
                              "result_rejected", "result_sha256", "result_rejected_sha256", "state", "commit"}
     assert (decision["state"], decision["commit"], decision["date"], decision["proposal_sha"]) == ("approved", None, TODAY, SHA)
     assert decision["result_sha256"] == P.sha256_of(decision["result_catalog"].encode()) and decision["result_rejected_sha256"] == P.sha256_of(decision["result_rejected"].encode())
@@ -246,6 +342,16 @@ def test_bytes_that_are_no_decision_are_an_error(raw):
 
 def complete(document, proposal, admit="K3", kind="vision", today=TODAY):
     return P.complete_proposal(document, proposal, P.parse_request(None, None, admit), kind, today)
+
+
+def test_complete_marks_the_new_row_and_every_carried_row_by_repo_and_size(document, proposal):
+    """Codex kah-1 finding 1: a row `--complete` makes, and one taken over, get the `reading` mark from the name."""
+    proposal["candidates"][2].update(hf_repo="acme/Ovie-512", parameters_b=None)
+    proposal["changes"][0]["reading"] = False  # a wrong mark on a readable new row (change 1 of the fixture)
+    data, number = complete(document, proposal)
+    new = next(c for c in data["changes"] if c["n"] == number)
+    assert new["reading"] is False
+    assert all(("reading" in c) == bool(R.unread_of(c)) for c in data["changes"])  # every mark follows the name, the wrong one is gone
 
 
 def test_a_candidate_of_open_kind_becomes_a_complete_row_with_the_kind_the_maintainer_named(document, proposal):

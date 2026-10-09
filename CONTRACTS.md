@@ -4808,6 +4808,20 @@ Not read in AP9-KA-G, by decision: a bare number (`apple/DFN5B-CLIP-ViT-H-14-378
 give a status computed under assumptions, not a statement of the publisher: a successor may change the task (SkyReels-V2
 to V3-A2V, Wan2.1-I2V to TI2V-5B or T2V-A14B depending on the size of the hit).
 
+**Since AP9-KA-H (decided 2026-10-09; `modelroom/search_release.py`).** Two more token forms are read, each only for
+tokens no earlier class took:
+
+- `\d+s` (`30s`, seconds of audio: `MERT-v2-30s`) is a syntactic attribute like `\d+k`: ignored, with no ordering effect, and
+  as many of them as the name holds.
+- Three tokens year `20\d\d`, month `01` to `12`, day `01` to `31` are **one** date of the form `iso` (`moondream-2b-2025-04-14`),
+  tried before the single tokens, so `2001` to `2012` inside an ISO date never read as YYMM. `LineDate.form` has the new value
+  `iso`; the order is unchanged: the version first, then with equal versions a date over no date, and two dates only when they
+  have the same form (`iso` against `iso`; `iso` against `yymm` is not comparable).
+
+A three-digit number (`kyutai/ovie-512`) stays without a class, so `378` and `735` stay without a reading. A scanner proposal
+marks a new row whose name has no reading with `reading: false` (a mark for the reader, never a field of the row).
+`unread_reason(name, size)` gives the reason a name has no reading.
+
 **Until AP9-UX2**, as decided 2026-09-25 (kept for the record):
 
 - **A name as a key** (`line_key`). The name half of the repository id is lowercased and split at

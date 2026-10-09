@@ -582,7 +582,7 @@ def test_a_first_word_family_next_to_a_readable_one_of_the_same_name_never_stand
         rows.append(row)
     models = [rules.CatalogModel.model_validate(r) for r in rows]
     assert not rules.stands_over(fallback, "image-generation", models[0]) and not rules.stands_over(readable, "image-generation", models[1])
-    assert rules.latest_among([(fallback, "image-generation", None)], models[:1]) == set()
+    assert rules.latest_among([(fallback, "image-generation", None)], models[:1]) == {}  # AP9-KA-H: a mapping `repo -> reason` now
     document = json.loads((FIX / "scan_catalog.json").read_bytes())
     document["publishers"] = sorted(document["publishers"] + [{"account": "black-forest-labs", "name": "BFL", "region": "EU"}], key=lambda p: p["account"])
     document["models"] += rows
@@ -884,3 +884,90 @@ def test_pages_that_show_entries_but_no_usable_time_are_a_page_error_however_the
         assert env.state()["accounts"]["acme"] == {"covered_until": "2026-08-30T00:00:00.000Z", "pending": None}
     else:
         assert note not in p["notes"] and result.exit_code == 0 and env.state()["accounts"]["acme"]["pending"] is None
+
+
+# --- AP9-KA-H -----------------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("repo, forms", [
+    ("acme/Nova-1", ("nova", "nova-acme")),
+    ("Black-Forest-Labs/FLUX.1-dev", ("flux", "flux-black-forest-labs")),
+    ("apple/DFN5B-CLIP-ViT-H-14-378", ("dfn", "dfn-apple")),  # no reading: the first run of letters
+    ("acme/7B-foo", ()),  # no run of letters at the start
+    ("Some Org/Nova-1", ("nova", "nova-some-org")),  # the same cleaning of the owner as `family_for`
+])
+def test_the_family_forms_of_a_name_are_the_word_and_the_word_with_the_cleaned_publisher(repo, forms):
+    assert rules.family_forms(repo) == forms
+
+
+def test_the_family_forms_are_cut_to_the_length_limit_and_do_not_repeat_when_the_cut_makes_them_equal():
+    long_name = "a" * (rules.CATALOG_MAX_TEXT_LEN + 5)
+    assert rules.family_forms(f"acme/{long_name}-1") == ("a" * rules.CATALOG_MAX_TEXT_LEN,)
+
+
+def test_the_family_forms_depend_on_the_name_only_and_family_for_is_as_before():
+    """Regression: `family_for` still takes the family of the group's rows and adds the publisher on a clash."""
+    assert rules.family_for("acme/Nova-1", "text", []) == "nova"
+    clash = rules.CatalogModel.model_validate(rules.build_row(
+        rules.parse_entry(ent("other/Nova-1", stamp(1))), rules.cheap_kind(rules.parse_entry(ent("other/Nova-1", stamp(1)))),
+        family="nova", today=TODAY, latest=False, latest_source=None))
+    assert rules.family_for("acme/Nova-2", "text", [clash]) == "nova-acme"
+
+
+def model(repo: str, kind: str = "text", latest: bool = False, family: str = "nova"):
+    entry = rules.parse_entry(ent(repo, stamp(3), pipeline_tag={"text": "text-generation", "vision": "image-text-to-text"}[kind]))
+    row = rules.build_row(entry, rules.cheap_kind(entry), family=family, today=TODAY, latest=latest, latest_source="https://huggingface.co/acme" if latest else None)
+    return rules.CatalogModel.model_validate(row)
+
+
+def test_latest_among_gives_the_reason_over_latest_for_a_new_repo_over_a_latest_row():
+    rows = [model("acme/Nova-1", latest=True)]
+    assert rules.latest_among([("acme/Nova-2", "text", None)], rows) == {"acme/Nova-2": "over latest"}
+    assert rules.latest_among([("acme/Nova-0", "text", None)], rows) == {}
+
+
+def test_latest_among_gives_the_reason_family_top_for_the_one_highest_member_of_a_group_without_a_latest_row():
+    rows = [model("acme/Nova-1")]
+    assert rules.latest_among([("acme/Nova-2", "text", None)], rows) == {"acme/Nova-2": "family top"}
+    assert rules.latest_among([("acme/Nova-1", "text", None)], rows) == {"acme/Nova-1": "family top"}  # a single member is the top
+    assert rules.latest_among([("acme/Nova-0", "text", None)], rows) == {}  # the shipped row is the top: nothing is promoted
+
+
+def test_latest_among_knows_no_top_for_a_tie_and_for_publishers_and_kinds_that_share_a_family_word_only():
+    rows = [model("acme/Nova-1")]
+    assert rules.latest_among([("acme/Nova-1-Base", "text", None)], rows) == {}  # the same version: level
+    assert rules.latest_among([("other/Nova-5", "text", None)], rows) == {"other/Nova-5": "family top"}  # its own group
+    assert rules.latest_among([("acme/Nova-5", "vision", None)], rows) == {"acme/Nova-5": "family top"}
+
+
+def test_the_candidates_are_numbered_with_the_overdue_ones_first():
+    late = {"candidate": "B1", "account": "zlab", "hf_repo": "zlab/X-1", "likes": 1, "open_since": "2026-08-01", "overdue_days": 64}
+    early = {"candidate": "B1", "account": "alab", "hf_repo": "alab/X-1", "likes": 900, "open_since": "2026-10-01"}
+    third = {"candidate": "B3", "account": "clab", "hf_repo": "clab/X-1", "open_since": "2026-09-01", "overdue_days": 33}
+    candidates = [early, third, late]
+    rules.order_proposal([], candidates)
+    assert [(c["k"], c["account"]) for c in candidates] == [("K1", "zlab"), ("K2", "clab"), ("K3", "alab")]  # by `open_since`, then the rest as before
+
+
+def test_the_rendering_puts_the_overdue_candidates_in_a_section_of_their_own_before_the_others():
+    data = {
+        "schema": 1, "date": "2026-10-04", "base_catalog_sha256": "b" * 64, "notes": [], "changes": [],
+        "summary": {"new": 0, "changed": 0, "candidates": 2, "incomplete": 0, "pending_publication": None},
+        "candidates": [
+            {"k": "K1", "candidate": "B1", "account": "zlab", "likes": 1, "open_since": "2026-08-01", "overdue_days": 64, "evidence": []},
+            {"k": "K2", "candidate": "B1", "account": "alab", "likes": 9, "open_since": "2026-10-01", "evidence": []},
+        ],
+    }
+    lines = rules.render_proposal(data, "0" * 64).splitlines()
+    assert lines.index("## Candidates past 30 days (decide now)") < lines.index("K1 | B1 | zlab | kind - | evidence  | open since 2026-08-01, 64 days")
+    assert lines.index("K1 | B1 | zlab | kind - | evidence  | open since 2026-08-01, 64 days") < lines.index("## Candidates") < lines.index("K2 | B1 | alab | kind - | evidence  | open since 2026-10-01")
+    assert not any(line.startswith("  overdue_days") for line in lines)
+
+
+def test_a_candidate_of_the_old_form_gets_the_day_given_to_carry_over_and_one_with_a_date_keeps_it():
+    old = {"candidate": "B1", "account": "alab", "hf_repo": "alab/X-1", "likes": 5, "evidence": [], "repos": [{"hf_repo": "alab/X-1", "likes": 5, "downloads": 1}]}
+    dated = {**old, "account": "blab", "hf_repo": "blab/X-1", "open_since": "2026-09-01"}
+    proposal = {"changes": [], "candidates": [old, dated]}
+    kept = rules.carry_over(json.loads(json.dumps(proposal)), None, {}, set(), lambda repo: False, "2026-10-04")[1]
+    assert {key[1]: c["open_since"] for key, c in kept.items()} == {"alab": "2026-10-04", "blab": "2026-09-01"}
+    assert rules.carry_over(json.loads(json.dumps(proposal)), None, {}, set(), lambda repo: False)[1].keys() == {("B1", "blab")}  # no day given: as before, the old form is dropped

@@ -37,6 +37,8 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the rules module sits beside this script
+import catalog_scan_latest as L  # noqa: E402
+import catalog_scan_notes as N  # noqa: E402
 import catalog_scan_rules as R  # noqa: E402
 
 from modelroom.catalog import CatalogError, CatalogModel  # noqa: E402
@@ -219,7 +221,7 @@ class _Run:
     def _carry(self) -> None:
         """Every change and candidate of the newest earlier proposal that is still open comes back with its first date."""
         if self.carry_from is not None:
-            self.changes, self.cands, self.known, self.done_fields, self.done_accounts = R.carry_over(self.carry_from, self.decision, self.rows, set(self.accounts), self._is_rejected)
+            self.changes, self.cands, self.known, self.done_fields, self.done_accounts = R.carry_over(self.carry_from, self.decision, self.rows, set(self.accounts), self._is_rejected, self.today)
 
     # --- asking -----------------------------------------------------------------------------------------------
 
@@ -621,35 +623,56 @@ class _Run:
         return True
 
     def _build(self) -> None:
-        table = [m for m in self.rows.values() if not self._is_rejected(m.hf_repo)]
+        carried_fields = N.field_values(self.changes)  # all there is before this run adds its own
+        self.notes += N.drift_notes(self.rows.values(), N.last_drift(self.carry_from))  # every shipped row, a rejected one too; only what changed
         carried = self._carried_rows()
-        self.carried = {m.hf_repo for m in carried}  # the carried rows that count: for family, latest and as a successor target
+        self.carried = {m.hf_repo for m in carried}  # the carried rows that count: family, latest, successor target
         rows = list(self.rows.values()) + carried
-        taken = []  # the fresh rows the table would take, each with its family and GGUF list: only these count for latest
+        taken = self._taken_rows(rows)
+        plain = [m for m in self.rows.values() if not self._is_rejected(m.hf_repo) and m.latest and not (m.latest_source or "").startswith(f"{R.HUB}/collections/{m.publisher}/")]
+        collections = self._new_rows(taken, rows, plain)
+        self._gguf_changes()
+        self._successors()
+        self.notes += L.group_tops([(e.repo, r.kind, e.parameters_b) for e, r, *_ in taken], rows, N.new_field_repos(carried_fields, self.changes))[1]
+        for row in plain:
+            link = collections.get(row.publisher, {}).get(row.hf_repo)
+            if link and ("field", row.hf_repo, "successor") not in self.changes:
+                self._put(("field", row.hf_repo, "latest_source"), R.field_change(
+                    row, "A3", {"latest_source": (row.latest_source, link)}, [link], self.today, "latest_source"))
+
+    def _taken_rows(self, rows: list[CatalogModel]) -> list:
+        """The fresh rows the table would take, each with its family and GGUF list: only these count for latest."""
+        taken = []
         for entry, result, open_since in sorted(self.fresh.values(), key=lambda item: item[0].repo):
             family = R.family_for(entry.repo, result.kind, rows, entry.parameters_b)
             if family is None:
                 self.notes.append(f"{entry.repo}: no family word in the name, not proposed")
                 self.fresh.pop(entry.repo)
                 continue
-            if not R.has_reading(entry.repo, entry.parameters_b):
-                self.notes.append(f"{entry.repo}: no family word in the name, family {family} taken from its first word")
+            self.notes += N.unread_notes(entry.repo, entry.parameters_b, family)
             trial = R.build_row(entry, result, family=family, today=self.today, latest=False, latest_source=None)
             trial["gguf_repos"] = sorted(self.gguf.get(entry.repo, ()))[:R.MAX_GGUF_REPOS]
             if self._takes(entry.repo, R.new_row_change(trial, result, open_since)):
                 rows.append(CatalogModel.model_validate(trial))  # the next new row sees this one: one family, one publisher
                 taken.append((entry, result, open_since, family, trial["gguf_repos"]))
-        latest = R.latest_among([(e.repo, r.kind, e.parameters_b) for e, r, _, _, _ in taken], rows)
-        plain = [m for m in table if m.latest and not (m.latest_source or "").startswith(f"{R.HUB}/collections/{m.publisher}/")]
-        owners = [a for a in self.publishers if any(e.owner == a and e.repo in latest for e, _, _, _, _ in taken) or any(m.publisher == a for m in plain)]
+        return taken
+
+    def _new_rows(self, taken: list, rows: list[CatalogModel], plain: list[CatalogModel]) -> dict:  # a `family top` row cites the publisher's page
+        fresh = [(e.repo, r.kind, e.parameters_b) for e, r, _, _, _ in taken]
+        latest = R.latest_among(fresh, rows)  # repo -> "over latest" | "family top"
+        owners = [a for a in self.publishers if any(e.owner == a and latest.get(e.repo) == "over latest" for e, _, _, _, _ in taken) or any(m.publisher == a for m in plain)]
         collections = self._collections(owners)
         for entry, result, open_since, family, gguf in taken:
-            source = collections.get(entry.owner, {}).get(entry.repo) or f"{R.HUB}/{entry.owner}"
+            source = f"{R.HUB}/{entry.owner}" if latest.get(entry.repo) == "family top" else collections.get(entry.owner, {}).get(entry.repo) or f"{R.HUB}/{entry.owner}"
             row = R.build_row(entry, result, family=family, today=self.today, latest=entry.repo in latest, latest_source=source)
             row["gguf_repos"] = gguf
             change = R.new_row_change(row, result, open_since)
             if self._takes(entry.repo, change):  # once more as it stands: a latest row carries more fields
                 self._put(("new_row", entry.repo), change)
+            else: self.left_out[entry.repo] = result.kind  # refused at the last check: a card naming it names a known row that is no `latest` row
+        return collections
+
+    def _gguf_changes(self) -> None:
         for base, found in sorted(self.gguf.items()):
             row = None if self._is_rejected(base) else self.rows.get(base)
             added = sorted(r for r in found if r not in row.gguf_repos) if row is not None else []
@@ -657,43 +680,41 @@ class _Run:
             if row is not None and target != list(row.gguf_repos):  # a full list takes nothing more: no change
                 self._put(("field", base, "gguf_repos"), R.field_change(
                     row, "A2", {"gguf_repos": (list(row.gguf_repos), target)}, [f"{R.HUB}/{r}" for r in added if r in target], self.today, "gguf_repos"))
-        for row, target in sorted(self.successors, key=lambda pair: pair[0].hf_repo):
-            self._successor(row, target)
-        for row in plain:
-            link = collections.get(row.publisher, {}).get(row.hf_repo)
-            if link and ("field", row.hf_repo, "successor") not in self.changes:
-                self._put(("field", row.hf_repo, "latest_source"), R.field_change(
-                    row, "A3", {"latest_source": (row.latest_source, link)}, [link], self.today, "latest_source"))
 
-    def _successor(self, row: CatalogModel, target: str) -> None:
-        """`new_version` on the card of a row names a model of the same account and kind that the table or this proposal
-        has (a new row of this run or a carried one, as it stands; a carried row is never changed)."""
+    def _successors(self) -> None:
+        """The successors the cards name, against the table at the end of the run, resolved among themselves (AP9-KA-H)."""
+        state = L.end_state(self.rows, self.changes)
+        pointed = {target: repo for repo, (_, target) in sorted(state.items()) if target}
+        candidates = {row.hf_repo: target for row, target in sorted(self.successors, key=lambda pair: pair[0].hf_repo)
+                      if self._successor_ok(row, target, state)}
+        chosen, notes = L.resolve_successors(candidates, pointed)
+        self.notes += notes
+        for repo, target in sorted(chosen.items()):
+            row, card = self.rows[repo], f"{R.HUB}/{repo}"
+            self._put(("field", repo, "successor"), R.field_change(row, "A3", L.successor_pairs(row, target, card, self.today), [card], self.today, "successor"))
+
+    def _successor_ok(self, row: CatalogModel, target: str, state: dict) -> bool:
+        """`new_version` on the card names a same-account, same-kind `latest` row without a successor at the end of this run."""
+        if state.get(row.hf_repo, (False, None))[1] == target: return False  # the row's carried change names it already
         found, proposed = self.rows.get(target), self.changes.get(("new_row", target)) if target in self.carried or target in self.fresh else None
-        kind = found.kind if found is not None else proposed["kind"] if proposed is not None else None
+        kind = found.kind if found is not None else proposed["kind"] if proposed is not None else self.left_out.get(target)
         if self._is_rejected(target):
             kind = None
         try:
             validate_hf_repo(target)
         except ValueError:
             kind = None
-        if kind is None or target.split("/", 1)[0] != row.publisher or target == row.hf_repo:
-            self.notes.append(f"{row.hf_repo}: card names new_version {target}, which is not a model of the table or of this proposal; no successor proposed")
-            return
-        if kind != row.kind or row.successor is not None:
-            self.notes.append(f"{row.hf_repo}: card names new_version {target} of another kind or the row has a successor; no successor proposed")
-            return
-        card = f"{R.HUB}/{row.hf_repo}"
-        pairs = {"successor": (None, target), "successor_source": (None, card), "successor_checked": (None, self.today)}
-        if row.latest:
-            pairs.update(latest=(True, False), latest_source=(row.latest_source, None),
-                         latest_checked=(row.latest_checked.isoformat() if row.latest_checked else None, None))
-        self._put(("field", row.hf_repo, "successor"), R.field_change(row, "A3", pairs, [card], self.today, "successor"))
+        refusal = L.successor_refusal(row, target, kind, state)
+        if refusal:
+            self.notes.append(refusal)
+        return refusal is None
 
     def _capped(self) -> list[dict]:
-        kept, dropped = R.split_candidates(list(self.cands.values()))
+        overdue, rest = N.split_overdue(list(self.cands.values()), self.today)  # before the limit of ten
+        kept, dropped = R.split_candidates(rest)
         if dropped:
             self.notes.append(f"candidates B1 and B2 over the limit of {R.MAX_CANDIDATES}: {dropped} not listed")
-        return kept
+        return overdue + kept
 
     def _unread_notes(self) -> None:
         if self.unread["accounts"]:
@@ -704,6 +725,7 @@ class _Run:
         self.incomplete.update(self.unread["accounts"])
 
     def execute(self) -> ScanResult:
+        self.left_out: dict[str, str] = {}  # repo -> kind of a new row the last `_takes` refused
         self._history()
         self._carry()
         self._recheck()
@@ -723,10 +745,11 @@ class _Run:
         except ValueError as exc:
             raise UsageError(str(exc)) from exc
         self.notes += left_out
+        changes = [R.mark_reading(c) for c in changes]  # the `reading` mark of every new row, carried ones too
         candidates = self._capped()
         R.order_proposal(changes, candidates)
         proposal = R.proposal_document(self.today, self.catalog_sha, list(dict.fromkeys(self.notes)), changes, candidates,
-                                       len(self.incomplete), self.pending_publication)
+                                       len(self.incomplete), self.pending_publication, N.drift_triples(self.rows.values()))
         marks = {a: self.new_marks.get(a, self.marks[a]) for a in self.accounts}
         state = {"schema": STATE_SCHEMA, "accounts": {a: {"covered_until": R.stamp(c), "pending": p} for a, (c, p) in marks.items()}}
         try:  # all three files exist in memory before the first is written

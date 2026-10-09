@@ -14,7 +14,7 @@ import hashlib
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the scanner's rules sit beside this module
@@ -88,6 +88,7 @@ class Request:
     approve: tuple[str, ...] = ()
     reject: tuple[str, ...] = ()
     admit: tuple[str, ...] = ()
+    approve_unread: tuple[str, ...] = ()  # numbers of `approve` for which the maintainer confirms a row without a reading
 
     @property
     def named(self) -> tuple[str, ...]:
@@ -104,11 +105,11 @@ def _tokens(text: str | None, option: str, pattern: re.Pattern[str], also: re.Pa
     return found
 
 
-def parse_request(approve: str | None, reject: str | None, admit: str | None) -> Request:
+def parse_request(approve: str | None, reject: str | None, admit: str | None, approve_unread: str | None = None) -> Request:
     """`--approve` takes numbers (a candidate is refused later, with its own sentence), `--reject` numbers and candidates,
-    `--admit` candidates only."""
+    `--admit` candidates only, `--approve-unread` numbers only."""
     return Request(_tokens(approve, "--approve", _NUMBER, _CANDIDATE), _tokens(reject, "--reject", _NUMBER, _CANDIDATE),
-                   _tokens(admit, "--admit", _CANDIDATE))
+                   _tokens(admit, "--admit", _CANDIDATE), _tokens(approve_unread, "--approve-unread", _NUMBER))
 
 
 def _proposal_parts(proposal: dict) -> tuple[dict, dict]:
@@ -138,6 +139,21 @@ def check_request(proposal: dict, request: Request) -> None:
     for name in request.admit:
         if candidates[name]["candidate"] == "B3":
             raise PublishError(f"{name} is a repo of open kind: only --complete can make it a row")
+    _check_unread(changes, request)
+
+
+def _check_unread(changes: dict, request: Request) -> None:
+    """`--approve-unread` confirms rows of `--approve`; it is no second decision: each number is in the proposal, named
+    once, and also in `--approve`."""
+    for name in request.approve_unread:
+        if name not in changes:
+            raise PublishError(f"{name} is not in the proposal")
+    twice = sorted({name for name in request.approve_unread if request.approve_unread.count(name) > 1})
+    if twice:
+        raise PublishError(f"named twice in --approve-unread: {', '.join(twice)}")
+    for name in request.approve_unread:
+        if name not in request.approve:
+            raise PublishError(f"--approve-unread {name} needs --approve {name}")
 
 
 def _order(names) -> list:
@@ -157,6 +173,7 @@ class Plan:
     approved: list
     rejected: list
     admitted: list
+    approved_unread: list = field(default_factory=list)  # the approved rows without a reading the maintainer confirmed
 
 
 def _admission(document: dict, candidate: dict) -> None:
@@ -177,12 +194,22 @@ def _rejection(proposal_parts: tuple[dict, dict], name: str) -> tuple[str, str]:
     return ("hf_repo", candidate["hf_repo"]) if candidate["candidate"] == "B3" else ("account", candidate["account"])
 
 
+def _check_reading(change: dict, name: str, request: Request) -> None:
+    """A new row whose name the grammar cannot read is taken only with `--approve-unread` for its number. The reading is
+    worked out here from the repo and the size of the row; the `reading` mark of the proposal is for the reader only, so a
+    missing, old or wrong mark passes nothing."""
+    if name not in request.approve_unread and R.unread_of(change):
+        raise PublishError(f"row {name} has no reading; approve it with --approve-unread {name} after adding it to SHIPPED_WITHOUT_READING")
+
+
 def plan_apply(document: dict, catalog_bytes: bytes, rejected_bytes: bytes, proposal: dict, request: Request, today: str) -> Plan:
     """The target of an `--apply`, in memory and validated: the table with exactly the approved changes and the admitted
     accounts (`published` is the day of the call when the table changes at all), the rejection list with the named repos and
     accounts added once. A file nobody changes keeps its bytes."""
     parts = _proposal_parts(proposal)
     taken = [parts[0][name] for name in sorted(request.approve, key=int)]
+    for name, change in zip(sorted(request.approve, key=int), taken):
+        _check_reading(change, name, request)
     try:
         target = R.apply_changes(document, taken) if taken else copy.deepcopy(document)
         for name in sorted(request.admit, key=lambda k: int(k[1:])):
@@ -209,13 +236,14 @@ def plan_apply(document: dict, catalog_bytes: bytes, rejected_bytes: bytes, prop
         R.parse_rejected(rejected_text.encode("utf-8"))
     except ValueError as exc:
         raise PublishError(f"the rejection list is not valid: {' '.join(str(exc).split())[:200]}") from exc
-    return Plan(catalog_text, rejected_text, _order(request.approve), _order(request.reject), _order(request.admit))
+    return Plan(catalog_text, rejected_text, _order(request.approve), _order(request.reject), _order(request.admit), _order(request.approve_unread))
 
 
 def decision_document(plan: Plan, proposal_sha: str, today: str, base_catalog_sha: str, base_rejected_sha: str) -> dict:
     """`decision.json` as step 1 writes it: the lists, both bases, both targets as text with their checksums, `approved`."""
     return {
-        "proposal_sha": proposal_sha, "approved": plan.approved, "rejected": plan.rejected, "admitted": plan.admitted, "date": today,
+        "proposal_sha": proposal_sha, "approved": plan.approved, "approved_unread": plan.approved_unread, "rejected": plan.rejected,
+        "admitted": plan.admitted, "date": today,
         "base_catalog_sha256": base_catalog_sha, "base_rejected_sha256": base_rejected_sha,
         "result_catalog": plan.catalog_text, "result_rejected": plan.rejected_text,
         "result_sha256": sha256_of(plan.catalog_text.encode("utf-8")), "result_rejected_sha256": sha256_of(plan.rejected_text.encode("utf-8")),
@@ -231,6 +259,15 @@ def _candidate(value: object) -> bool:
     return isinstance(value, str) and _CANDIDATE.fullmatch(value) is not None
 
 
+def _unread_sound(decision: dict) -> bool:
+    """`approved_unread` (AP9-KA-H): absent in a decision of the old form, which counts as an empty list; else a list of
+    different numbers that are all in `approved`."""
+    if "approved_unread" not in decision:
+        return True
+    found = decision["approved_unread"]
+    return isinstance(found, list) and all(_number(v) for v in found) and len(set(found)) == len(found) and set(found) <= set(decision["approved"])
+
+
 def check_decision(raw: bytes) -> dict:
     """A `decision.json` as this tool and the scanner read it: numbers as `int` (a `bool` is none), candidates as `Kk`;
     a damaged one is an error, never guessed at."""
@@ -244,6 +281,7 @@ def check_decision(raw: bytes) -> dict:
             and all(isinstance(decision.get(key), str) and _SHA256.fullmatch(decision[key]) for key in ("base_catalog_sha256", "base_rejected_sha256", "proposal_sha", *texts.values()))
             and all(isinstance(decision.get(text), str) and sha256_of(decision[text].encode("utf-8")) == decision[digest] for text, digest in texts.items())
             and (decision.get("commit") is None or isinstance(decision["commit"], str))
+            and _unread_sound(decision)
         )
     except (ValueError, AttributeError):
         sound = False
@@ -280,24 +318,29 @@ def complete_proposal(document: dict, proposal: dict, request: Request, kind: st
     if family is None:
         raise PublishError(f"{entry.repo}: no family word in the name, no row can be made")
     result = R.KindResult(kind, "decision", False, {"stage": "decision", "value": kind})
-    latest = entry.repo in R.latest_among([(entry.repo, kind, entry.parameters_b)], rows)
+    latest = R.latest_among([(entry.repo, kind, entry.parameters_b)], rows).get(entry.repo) == "over latest"  # as before AP9-KA-H: no `family top` here
     row = R.build_row(entry, result, family=family, today=today, latest=latest, latest_source=f"{R.HUB}/{entry.owner}")
     row["note"] = f"Kind {kind} set by the maintainer on {today}."
-    change = R.new_row_change(row, result, candidate["open_since"])
-    changes = copy.deepcopy(proposal["changes"]) + [change]
+    change = R.mark_reading(R.new_row_change(row, result, candidate["open_since"]))
+    changes = [R.mark_reading(c) for c in copy.deepcopy(proposal["changes"])] + [change]
     try:
         kept, notes = R.check_changes(document, changes)
     except ValueError as exc:
         raise PublishError(str(exc)) from exc
     if len(kept) != len(changes):
         raise PublishError(f"the row would not pass the schema together with the proposal: {'; '.join(notes) or 'a change is left out'}")
+    return _completed(proposal, changes, request.admit[0]), next(c["n"] for c in changes if c["hf_repo"] == entry.repo and c["change"] == "new_row")
+
+
+def _completed(proposal: dict, changes: list[dict], admitted: str) -> dict:
+    """The proposal with `changes` (the new row among them) and without the candidate `admitted`; numbers made again."""
     data = copy.deepcopy(proposal)
-    candidates_left = [c for c in data["candidates"] if c["k"] != request.admit[0]]
+    candidates_left = [c for c in data["candidates"] if c["k"] != admitted]
     R.order_proposal(changes, candidates_left)
     data["changes"], data["candidates"] = changes, candidates_left
     data["summary"].update(new=sum(c["change"] == "new_row" for c in changes), changed=sum(c["change"] == "field" for c in changes),
                            candidates=len(candidates_left))
-    return data, next(c["n"] for c in changes if c["hf_repo"] == entry.repo and c["change"] == "new_row")
+    return data
 
 
 # --- --show ------------------------------------------------------------------------------------------------------------
