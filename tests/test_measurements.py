@@ -1,4 +1,4 @@
-"""Tests for modelroom.measurements: scenario, protocol v1, measurement records, files, export."""
+"""Tests for modelroom.measurements: scenario, protocols v1 and v2, measurement records, files, export."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from modelroom.contracts import HardwareSnapshot, SchemaVersionError
 from modelroom.examples import EXAMPLES
 from modelroom.measurements import (
+    PROTOCOL_FILES,
     ExportObject,
     MeasurementExistsError,
     MeasurementRecord,
@@ -26,6 +27,7 @@ from modelroom.measurements import (
     measurement_path,
     new_measurement_id,
     plan_measurement_import,
+    protocol_for,
     read_measurements,
     run_invalid_reason,
     shipped_protocol,
@@ -70,9 +72,13 @@ def test_scenario_entered_context_may_be_any_value():
     Scenario.model_validate({**EXAMPLES["Scenario"], "context_origin": "entered", "context_requested": 4096})
 
 
-def test_v1_speeds_must_be_above_zero():
-    base = _record(validity="invalid", validity_reason="x")  # the example's runs stay: only the rule below fails
-    with pytest.raises(ValidationError, match="0 < tps_min"):
+VERSIONS = ("v1", "v2")
+
+
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_speeds_must_be_above_zero(protocol):
+    base = _record(protocol=protocol, validity="invalid", validity_reason="x")  # the example's runs stay
+    with pytest.raises(ValidationError, match=f"protocol {protocol} requires 0 < tps_min"):
         MeasurementRecord.model_validate({**base, "tps_min": 0.0})
 
 
@@ -85,27 +91,82 @@ def test_scenario_rejects_out_of_range_values(field, value):
 # --- protocol v1 ------------------------------------------------------------------------------
 
 
-def test_shipped_protocol_is_version_1_with_raw_and_fixed_sampling():
+PACKAGE_DIR = Path(__file__).parent.parent / "modelroom"
+
+
+def test_shipped_protocol_is_version_2_without_raw_and_with_fixed_sampling():
     protocol = shipped_protocol()
-    assert protocol.protocol_version == 1
+    assert protocol is protocol_for("v2")
+    assert protocol.protocol_version == 2
     assert (protocol.warmup_runs, protocol.measured_runs) == (1, 3)
-    assert protocol.options.raw is True and protocol.options.stream is False
+    assert protocol.options.raw is False and protocol.options.stream is False
     assert (protocol.options.num_predict, protocol.options.temperature, protocol.options.seed) == (128, 0.0, 42)
     assert protocol.validity.done_reason == "length"
 
 
-def test_shipped_protocol_file_is_inside_the_package():
+def test_protocol_for_v1_is_version_1_with_raw_and_the_same_prompt():
+    v1, v2 = protocol_for("v1"), protocol_for("v2")
+    assert v1.protocol_version == 1 and v1.options.raw is True
+    assert v2.protocol_version == 2 and v2.options.raw is False
+    assert v1.prompt == v2.prompt
+
+
+def test_protocol_v2_differs_from_v1_only_in_version_and_raw():
+    v1, v2 = protocol_for("v1").model_dump(), protocol_for("v2").model_dump()
+    for protocol, version, raw in ((v1, 1, True), (v2, 2, False)):
+        assert (protocol.pop("protocol_version"), protocol["options"].pop("raw")) == (version, raw)
+    assert v1 == v2
+
+
+def test_protocol_for_an_unknown_version_is_a_value_error_with_its_name():
+    with pytest.raises(ValueError, match="no measurement protocol v3"):
+        protocol_for("v3")
+
+
+def test_shipped_protocol_files_are_inside_the_package():
     import modelroom
 
-    assert (Path(modelroom.__file__).parent / "protocol_v1.toml").is_file()
+    for name in ("protocol_v1.toml", "protocol_v2.toml"):
+        assert (Path(modelroom.__file__).parent / name).is_file()
+    assert set(PROTOCOL_FILES) == {"v1", "v2"}
 
 
-def test_load_protocol_rejects_a_protocol_without_raw(tmp_path):
-    text = (Path(__file__).parent.parent / "modelroom" / "protocol_v1.toml").read_text(encoding="utf-8")
+def test_protocol_v1_file_is_unchanged_from_the_base():
+    import hashlib
+
+    data = (PACKAGE_DIR / "protocol_v1.toml").read_bytes()
+    assert hashlib.sha256(data).hexdigest() == "97f2f13bbea7d1c3c1b5df3ccc89c5310c4c853065226b7a93fa71f63a55221f"
+
+
+def test_load_protocol_rejects_version_1_with_raw_false_as_a_regression(tmp_path):
+    """Regression, green on the base too: version 1 ships raw = true."""
+    text = (PACKAGE_DIR / "protocol_v1.toml").read_text(encoding="utf-8")
     broken = tmp_path / "protocol.toml"
     broken.write_text(text.replace("raw = true", "raw = false"), encoding="utf-8")
     with pytest.raises(ValueError, match="invalid measurement protocol"):
         load_protocol(broken)
+
+
+def test_load_protocol_rejects_version_2_with_raw_true_by_the_validator(tmp_path):
+    text = (PACKAGE_DIR / "protocol_v2.toml").read_text(encoding="utf-8")
+    broken = tmp_path / "protocol.toml"
+    broken.write_text(text.replace("raw = false", "raw = true"), encoding="utf-8")
+    with pytest.raises(ValueError, match="protocol version 2 ships raw = false"):
+        load_protocol(broken)
+
+
+def test_load_protocol_rejects_version_1_with_raw_false_by_the_validator(tmp_path):
+    text = (PACKAGE_DIR / "protocol_v1.toml").read_text(encoding="utf-8")
+    broken = tmp_path / "protocol.toml"
+    broken.write_text(text.replace("raw = true", "raw = false"), encoding="utf-8")
+    with pytest.raises(ValueError, match="protocol version 1 ships raw = true"):
+        load_protocol(broken)
+
+
+def test_load_protocol_accepts_version_2_with_raw_false(tmp_path):
+    copy_of_v2 = tmp_path / "protocol.toml"
+    copy_of_v2.write_bytes((PACKAGE_DIR / "protocol_v2.toml").read_bytes())
+    assert load_protocol(copy_of_v2).options.raw is False
 
 
 @pytest.mark.parametrize(
@@ -151,16 +212,60 @@ def test_a_measurement_runs_exactly_one_request():
         MeasurementRecord.model_validate(_record(scenario={**EXAMPLES["Scenario"], "requests": 2}))
 
 
-def test_valid_v1_measurement_must_satisfy_the_protocol_rule():
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_valid_measurement_must_satisfy_the_protocol_rule(protocol):
     runs = copy.deepcopy(EXAMPLES["MeasurementRecord"]["runs"])
     runs[0]["done_reason"] = "stop"
     with pytest.raises(ValidationError, match="contradicts the protocol rule"):
-        MeasurementRecord.model_validate(_record(runs=runs))
+        MeasurementRecord.model_validate(_record(protocol=protocol, runs=runs))
 
 
-def test_valid_v1_speeds_must_be_the_mean_min_max_of_the_runs():
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_valid_measurement_without_runs_is_refused(protocol):
+    with pytest.raises(ValidationError, match="contradicts the protocol rule"):
+        MeasurementRecord.model_validate(
+            _record(protocol=protocol, runs=[], tps_mean=None, tps_min=None, tps_max=None)
+        )
+
+
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_valid_speeds_must_be_the_mean_min_max_of_the_runs(protocol):
     with pytest.raises(ValidationError, match="do not match the runs"):
-        MeasurementRecord.model_validate(_record(tps_mean=51.0))  # inside min..max, not the mean
+        MeasurementRecord.model_validate(_record(protocol=protocol, tps_mean=51.0))  # inside min..max, not the mean
+
+
+@pytest.mark.parametrize("field, value", [("tps_min", 49.0), ("tps_max", 52.0)])
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_minimum_and_maximum_are_each_checked_against_the_runs(protocol, field, value):
+    """Only one bound differs and 0 < min <= mean <= max still holds, so the comparison with `runs` is what fails."""
+    with pytest.raises(ValidationError, match="do not match the runs"):
+        MeasurementRecord.model_validate(_record(protocol=protocol, **{field: value}))
+
+
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_invalid_without_a_validity_reason_is_refused(protocol):
+    with pytest.raises(ValidationError, match="validity_reason is set exactly when"):
+        MeasurementRecord.model_validate(_record(protocol=protocol, validity="invalid", validity_reason=None))
+
+
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_comparable_with_a_comparable_reason_is_refused(protocol):
+    with pytest.raises(ValidationError, match="comparable_reason is set exactly when"):
+        MeasurementRecord.model_validate(_record(protocol=protocol, comparable=True, comparable_reason="x"))
+
+
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_a_valid_record_is_checked_against_the_file_of_its_version(protocol, monkeypatch):
+    asked: list[str] = []
+    real = protocol_for
+
+    def spy(version):
+        asked.append(version)
+        return real(version)
+
+    monkeypatch.setattr("modelroom.measurements.protocol_for", spy)
+    MeasurementRecord.model_validate(_record(protocol=protocol))
+    assert asked == [protocol]
 
 
 def test_an_overflowing_run_counter_is_a_validation_error():
@@ -183,22 +288,52 @@ def test_one_broken_measurement_file_does_not_stop_reading_the_others(tmp_path):
     assert [path.stem for path, _ in result.unreadable] == [broken["measurement_id"]]
 
 
-def test_v1_speeds_need_runs_to_come_from():
-    with pytest.raises(ValidationError, match="runs"):
-        MeasurementRecord.model_validate(_record(runs=[], validity="invalid", validity_reason="no runs"))
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_speeds_need_runs_to_come_from(protocol):
+    with pytest.raises(ValidationError, match=f"protocol {protocol} tps values come from runs"):
+        MeasurementRecord.model_validate(
+            _record(protocol=protocol, runs=[], validity="invalid", validity_reason="no runs")
+        )
     MeasurementRecord.model_validate(
-        _record(runs=[], validity="invalid", validity_reason="no runs", tps_mean=None, tps_min=None, tps_max=None)
+        _record(
+            protocol=protocol, runs=[], validity="invalid", validity_reason="no runs",
+            tps_mean=None, tps_min=None, tps_max=None,
+        )
     )
 
 
-def test_v1_is_never_unchecked_and_reasons_follow_the_flags():
+@pytest.mark.parametrize("protocol", VERSIONS)
+def test_a_version_is_never_unchecked_and_reasons_follow_the_flags(protocol):
+    with pytest.raises(ValidationError, match=f"protocol '{protocol}' is either 'valid' or 'invalid'"):
+        MeasurementRecord.model_validate(_record(protocol=protocol, validity="unchecked", validity_reason="x"))
     with pytest.raises(ValidationError):
-        MeasurementRecord.model_validate(_record(validity="unchecked", validity_reason="x"))
+        MeasurementRecord.model_validate(_record(protocol=protocol, validity_reason="should not be here"))
     with pytest.raises(ValidationError):
-        MeasurementRecord.model_validate(_record(validity_reason="should not be here"))
+        MeasurementRecord.model_validate(_record(protocol=protocol, comparable=False))
+    MeasurementRecord.model_validate(
+        _record(protocol=protocol, comparable=False, comparable_reason="daemon digest changed")
+    )
+
+
+def test_the_sink_lets_a_v2_reason_through_unchanged():
+    """The reason of a v2 record has the same shape as v1's: no new pattern is needed in `neutral.py`."""
+    from modelroom.neutral import neutral_record
+
+    reason = "run 1: done_reason 'stop', expected 'length'"
+    runs = copy.deepcopy(EXAMPLES["MeasurementRecord"]["runs"])
+    runs[0].update(done_reason="stop", eval_count=2)
+    record = MeasurementRecord.model_validate(
+        _record(
+            protocol="v2", runs=runs, validity="invalid", validity_reason=reason,
+            tps_mean=None, tps_min=None, tps_max=None,
+        )
+    )
+    assert neutral_record(record).validity_reason == reason
+
+
+def test_a_protocol_word_outside_v1_v2_none_is_refused():
     with pytest.raises(ValidationError):
-        MeasurementRecord.model_validate(_record(comparable=False))
-    MeasurementRecord.model_validate(_record(comparable=False, comparable_reason="daemon digest changed"))
+        MeasurementRecord.model_validate(_record(protocol="v3"))
 
 
 def test_invalid_measurement_fixture_validates_and_keeps_its_reason():

@@ -52,6 +52,36 @@ def test_group_one_carries_no_measurement():
         RankedEntry.model_validate(_ranked(measurement_group=1))
 
 
+@pytest.mark.parametrize("protocol", ["v1", "v2"])
+def test_group_zero_may_carry_the_protocol_of_its_measurement(protocol):
+    assert RankedEntry.model_validate(_ranked(speed_protocol=protocol)).speed_protocol == protocol
+
+
+def test_group_zero_without_speed_protocol_is_the_form_written_before_and_stays_valid():
+    data = _ranked()
+    data.pop("speed_protocol", None)
+    entry = RankedEntry.model_validate(data)
+    assert entry.measurement_group == 0 and entry.speed_protocol is None  # never filled in as v1
+
+
+def test_group_one_without_speed_protocol_is_valid():
+    entry = RankedEntry.model_validate(_ranked(measurement_group=1, measurement_id=None, speed_tps=None))
+    assert entry.speed_protocol is None
+
+
+def test_group_one_with_speed_protocol_is_refused():
+    with pytest.raises(ValidationError, match="speed_protocol"):
+        RankedEntry.model_validate(
+            _ranked(measurement_group=1, measurement_id=None, speed_tps=None, speed_protocol="v2")
+        )
+
+
+@pytest.mark.parametrize("value", ["none", "v3", "", 2])
+def test_speed_protocol_is_v1_or_v2_only(value):
+    with pytest.raises(ValidationError):
+        RankedEntry.model_validate(_ranked(speed_protocol=value))
+
+
 def test_a_ranked_entry_is_never_unknown_or_no_fit():
     fit = {**EXAMPLES["RankedEntry"]["fit"], "fit_class": "unknown", "reason": "not covered"}
     with pytest.raises(ValidationError):

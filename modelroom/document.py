@@ -64,8 +64,11 @@ class PackageLine(BaseModel):
 class RankedEntry(PackageLine):
     """One row of one machine's ranking: its place, its computed fit, its measured speed.
 
-    `measurement_group` 0 means a measurement counted for this ranking (protocol v1, valid,
+    `measurement_group` 0 means a measurement counted for this ranking (protocol v1 or v2, valid,
     comparable, same context) -- then and only then `measurement_id` and `speed_tps` are set.
+    `speed_protocol` names the protocol of that counted measurement; a document written before
+    1.0.0 carries none for a group 0 row, and the card then names no version (one-sided: a row of
+    group 1 never carries it).
     """
 
     rank: int = Field(ge=1)
@@ -73,6 +76,7 @@ class RankedEntry(PackageLine):
     measurement_group: Literal[0, 1]
     measurement_id: str | None = None
     speed_tps: float | None = Field(default=None, gt=0)
+    speed_protocol: Literal["v1", "v2"] | None = None
 
     @model_validator(mode="after")
     def _check_entry(self) -> "RankedEntry":
@@ -80,7 +84,12 @@ class RankedEntry(PackageLine):
             raise ValueError(f"a ranked entry has a fit class of {_RANKABLE_CLASSES}, got {self.fit.fit_class!r}")
         measured = self.measurement_id is not None
         if measured != (self.measurement_group == 0) or measured != (self.speed_tps is not None):
-            raise ValueError("measurement_group 0 carries measurement_id and speed_tps, group 1 carries neither")
+            raise ValueError(
+                "measurement_group 0 carries measurement_id and speed_tps, group 1 carries neither "
+                "(nor speed_protocol)"
+            )
+        if self.speed_protocol is not None and not measured:
+            raise ValueError("speed_protocol belongs to a measured row (measurement_group 0)")
         return self
 
 

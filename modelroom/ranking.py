@@ -147,7 +147,7 @@ def group_zero_measurement(
 ) -> MeasurementRecord | None:
     """The newest measurement of `package` that counts for this ranking, or `None` (group 1).
 
-    Counts: protocol v1, valid, comparable, the same `context_requested` and the same
+    Counts: protocol v1 or v2, valid, comparable, the same `context_requested` and the same
     `requests` as the ranking (a measurement always runs one request, so a ranking of more
     requests has no group 0). Ties on `measured_at` break on `measurement_id`.
     """
@@ -166,7 +166,7 @@ def _counting_but_requests(
     return [
         record
         for record in measurements
-        if record.protocol == "v1"
+        if record.protocol in ("v1", "v2")
         and record.validity == "valid"
         and record.comparable
         and record.scenario.context_requested == scenario.context_requested
@@ -203,7 +203,7 @@ def other_measurement_note(package: Package, measurements: list[MeasurementRecor
     if not mine:
         return None
     newest = max(mine, key=lambda r: (r.measured_at, r.measurement_id))
-    if newest.protocol != "v1" or newest.validity != "valid":
+    if newest.protocol not in ("v1", "v2") or newest.validity != "valid":
         return f"measured, not valid ({newest.validity_reason or newest.validity})"
     if not newest.comparable:
         return f"measured, not comparable ({newest.comparable_reason})"
