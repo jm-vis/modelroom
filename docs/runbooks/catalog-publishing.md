@@ -78,6 +78,12 @@ datasets) into the entry that records the set-up.
    decision that exists already, another publication pending. A rejected number puts its repo on the rejection list, a
    rejected candidate its account (a candidate of open kind: its repo). An admitted publisher is entered with its account
    as name and no region: fill in both by hand in a later change.
+   **Rows without a reading (AP9-KA-H).** A new row the grammar cannot read (section `Rows without a reading` of the
+   proposal, computed from repo and size, not from a mark) is taken by `--apply` only with `--approve-unread <n>`, where
+   `<n>` is also in `--approve` and named once; the number is then stored as `approved_unread` in `decision.json` (a
+   decision without the field counts as an empty list). The exception entry in `SHIPPED_WITHOUT_READING`
+   (`tests/test_search_release.py`) and the `--apply` belong in the same commit. Candidates open for more than 30 days
+   are listed first under `## Candidates past 30 days (decide now)`.
    **Deciding on candidates (rule of 2026-10-08).** The catalog is the public list of sources the maintainer trusts;
    admitting an account says "we watch this maker, its models appear by themselves". A name that is not in the catalog
    costs the user nothing: a typed name is never hidden and modelroom measures every model. So the risk sits on the
