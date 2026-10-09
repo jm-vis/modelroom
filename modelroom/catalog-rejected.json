@@ -118,5 +118,21 @@
   {
     "date": "2026-10-08",
     "hf_repo": "yandex/yalm-100b"
+  },
+  {
+    "account": "jkim96",
+    "date": "2026-10-09"
+  },
+  {
+    "account": "saidutta69",
+    "date": "2026-10-09"
+  },
+  {
+    "date": "2026-10-09",
+    "hf_repo": "inclusionAI/AI-Transparency"
+  },
+  {
+    "date": "2026-10-09",
+    "hf_repo": "upstage/solar-pro4-tokenizer"
   }
 ]
