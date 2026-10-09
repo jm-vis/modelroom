@@ -5945,11 +5945,17 @@ words without a prefix or a key hint, the question `Which package should be inst
 origin, `http://127.0.0.1:1234`, judged by the very function the vLLM transport uses
 (`vllm_server.check_origin`): another scheme, host or port, a path, a query, a fragment or user info is
 refused in the constructor. The opener is `daemon.py`'s: no proxy handler, no redirect following. The whole
-surface in 0.2.0 is **one call**, `GET /api/v1/models`, checked before a connection; a chat
-(`POST /v1/chat/completions`), `/api/v1/models/load`, `/unload`, `/download`, `/api/v1/chat`, `/v1/models`,
-`/api/v0/*` and `/metrics` are refused like any other call (see "Measurement" below: the transport cannot
-send a chat). The time limit is 10 s; an answer above 4 MiB is a fault. A `401` or a `403` is the reason `the LM Studio server asks for an API token;
-modelroom reads an open local server only`: no `Authorization` header is ever sent. `read_lmstudio_models`
+surface is **two calls**, checked before a connection: `GET /api/v1/models` with a time limit of 10 s and
+`POST /v1/chat/completions` with 600 s, the one request of the measurement (see "Measurement" below);
+`/api/v1/models/load`, `/unload`, `/download`, `/api/v1/chat`, `/v1/models`, `/api/v0/*` and `/metrics` are
+refused like any other call. The limit of time holds for the whole call, at the connection, at the body and at
+the body of an error status, and is told apart as `LmStudioTimeoutError` wherever it is reached; an answer above
+4 MiB is a fault. At the list a `401` or a `403` is the reason `the LM Studio server asks for an API token;
+modelroom reads an open local server only`, decided from the status alone (its body is not read): no
+`Authorization` header is ever sent. At the chat the same statuses are an answer like any other (row 6 of the
+table below). A chat answer whose body cannot be read, or is above 4 MiB, is handed on with its status, an empty
+body and the header `x-modelroom-body: unread` or `oversized`, so that the measurement can name its row; only a
+limit of time is raised. `read_lmstudio_models`
 reads the list in three steps: (1) `keys`, the `key` of every entry that is an object, before any filter;
 (2) the structure, which is the version gate (no version number is read): an entry is valid when it is an
 object with a `key` string, a `type` string, a `size_bytes` whole number and a `loaded_instances` list; `models`
@@ -5964,15 +5970,62 @@ when `lms` is in the `PATH` or at `~/.lmstudio/bin/lms` (`lms.exe` on Windows), 
 `PATH` search and a file test, **never an `lms` call**. `lms_call` says `path`, `home` or `None` for the form
 of a later command and starts nothing.
 
-**Measurement: LM Studio is not measured (the measuring switch stands on its negative branch, decided
-2026-10-08).** A chat to the id of a model that was loaded a moment ago may make LM Studio load it again
-(just-in-time loading is on by default), and the recording of a chat to an unloaded id ended in a failed load,
-`Failed to load model ... Operation canceled.`, which proves neither a refusal nor a load. Because that is
-open, step 4 offers no LM Studio row, sends no chat, shows no number and says `LM Studio is not measured: it
-may load a model on request`. The start screen still names the server: `server  LM Studio  <k> loaded: <id>,
-context <n>`, `<k> models loaded`, or `127.0.0.1:1234  asks for an API token`. Nothing is written. **Limits:**
-port 1234 only; the standard model folder only; a server with the version 1 list of `GET /api/v1/models`, no
-minimum version; LM Studio on another computer is not read.
+**Measurement: one loaded model, one request after the other, on the wall (AP9-LS-M, protocol v2 contract
+section 4; GF decisions of 2026-10-09: E2 the prompt of the protocol, E3 thinking tokens counted, E4 measure
+although the server may load on its own).** The start screen names the server as before: `server  LM Studio
+<k> loaded: <id>, context <n>`, `<k> models loaded`, or `127.0.0.1:1234  asks for an API token`. Step 4 offers a
+row `LM Studio server  <instance id>, context <n>` for **exactly one loaded GGUF instance**; with none or several
+it says `LM Studio: no model loaded, nothing to measure` or `LM Studio: <k> models loaded, measure with one
+loaded model` and offers no row, and a server that asks for a token has neither row nor note. With a context
+other than the run's it offers the row, says `the number will not count: LM Studio runs context <m>, this run
+asks for <n>` before the question, and a yes sends no chat.
+
+The request is `POST /v1/chat/completions` with `model` the **instance id** of `loaded_instances[]` (not the
+`key`), `max_tokens 128`, `temperature 0.0`, `seed 42`, `stream false` and one user message, the prompt of the
+shipped protocol (`shipped_protocol().prompt`, the Ollama prompt). One warm-up and three runs, one request at a
+time, and the list is read five times: before the warm-up, after the warm-up, and after each of the three runs.
+Every read has to show the same instance with the same `context_length`, else the measurement ends. A request is
+valid with status `200`, `choices[0].finish_reason` `length`, `usage.completion_tokens` 128 (thinking tokens are
+part of them; `reasoning_tokens`, `content` and the draft counters of a speculative decoder are not read, an
+empty `content` is fine), `usage.prompt_tokens` a whole number `>= 0` (`bool`, a float or a string are not one)
+with `prompt_tokens + 128 <= context_length`, and a wall time above 0. The wall time is the injected clock read
+right before the call and right after the whole body is in; the reads and the warm-up lie outside it. The
+number is the mean of the three `128 / seconds`, held inside its minimum and maximum
+(`loadtest._mean_within`). An error ends the measurement with no number, no part of one and no repeat, and step 4
+goes on with the other servers. The first row of this table that applies is the one (the order is the check
+order), every line has the prefix `LM Studio: `:
+
+| Nr. | Condition | Line |
+|---|---|---|
+| 1 | a read fails (transport, limit of 10 s, no model list) | `stopped answering during the measurement` |
+| 2 | a read does not show the instance, shows another id or another `context_length` | `the loaded model changed during the measurement` |
+| 3 | a chat without an answer (connection gone) | `stopped answering during the measurement` |
+| 4 | a chat reaches 600 s: limit of time, or a wall time above 600 s | `a request did not answer within 600 s` |
+| 5 | status 400 and the body names `Failed to load model` | `failed to load the model for the request; nothing measured` |
+| 6 | any other status than 200 (also 400 without the pattern, 401, 403, 429, 5xx) | `a request did not answer with status 200` |
+| 7 | the body is not readable, or `finish_reason`, `prompt_tokens`, `completion_tokens` are missing or not a string / whole number, or a counter is negative | `a request carried no readable finish_reason and usage` |
+| 8 | `finish_reason` is not `length` | `a request did not end with finish_reason length` |
+| 9 | `completion_tokens` is not 128 | `a request did not carry 128 tokens` |
+| 10 | `prompt_tokens + 128 > context_length` | `a request did not fit the context <n>` |
+| 11 | wall time `<= 0` | `a request took no measurable time` |
+
+Row 5 is a failed attempt to load, which is no observed change of state (row 2). The result is an
+`LmStudioMeasurement` in memory: **nothing is written, nothing is ranked**, no record, no profile, no snapshot,
+and nothing from `measurements.py` is imported but the prompt. Step 4 says `measured LM Studio <id>: <x> tok/s
+(<min>-<max>), one request, wall time, context <n>` and `LM Studio states no load, so a busy server reads slower;
+not ranked, nothing written` and counts `1 of 1 measured`; the card of step 5 carries four rows under `server`
+(`LM Studio server  <x> tok/s, one request, wall time`, `package unknown; not ranked, nothing written`, `LM Studio
+states no load, so a busy server reads slower`, `never asks to load; an unseen server load can affect the
+time`, each note at most 65 characters), and only where no row of the table ended the measurement. The number is
+a throughput of this runtime configuration (the speculative decoder may stay on), one request on the wall, and
+is never mixed with an Ollama number. **The assurance, public in this text, in the README and on the card in its
+short form:** modelroom never asks LM Studio to load, unload or download a model. It reads the model list before
+and after every request and drops the measurement when the loaded model changed; a load the server does on its
+own inside a request can stay unseen and then sits in the measured time. A chat to the id of a model that was
+unloaded a moment ago may make LM Studio load it again (just-in-time loading is on by default), which is why the
+reads stand before and after every request; unloading and loading the same id with the same context inside one
+request cannot be seen. **Limits:** port 1234 only; the standard model folder only; a server with the version 1
+list of `GET /api/v1/models`, no minimum version; LM Studio on another computer is not read.
 
 **One table row, two list entries (AP9-LS-E, F7 a).** A Hugging Face GGUF package has one fit and so one row
 of the table, shown once with Ollama's fit in one table without a section, a prefix or a legend of its own. On a
@@ -6000,7 +6053,7 @@ it with context length <n>, then start its server ...`, `then run modelroom agai
 the command part of the `install` line is a prefix of the command part of this line); (7) the call of
 `lmstudio_get.run_lms`; (8) `package_on_disk` read again. Exit 0 and the file in place with the catalog size:
 `✓ Downloaded #<n>  <file> (<size> GB) · in LM Studio: load it with context length <n>, then start its server`
-as one line and `then run modelroom again: it finds the server; LM Studio is not measured yet` under it.
+as one line and `then run modelroom again: it finds the server and measures the loaded model` under it.
 `Model already downloaded` (exit 0, the file in place) is the same success. Exit other than 0:
 `#<n>: lms get ended with exit <code>; a canceled download resumes with the same line`. Exit 0 and the file not
 in place: `#<n>: lms get ended, but <file> is not in ~/.lmstudio/models/<owner>/<repo> with the catalog size`.

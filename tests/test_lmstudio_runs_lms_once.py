@@ -105,13 +105,13 @@ def test_a_no_runs_no_lms_and_prints_the_line_to_copy(tmp_path, monkeypatch, ans
 
     assert code == 0, text
     assert "server    LM Studio" in text and "1 loaded: qwen3.5-4b, context 8192" in text  # the start screen names it
-    assert "LM Studio is not measured: it may load a model on request" in text  # step 4 says why there is no row
+    assert "LM Studio is not measured" not in text and "load_test" in asker.asked  # its row is offered, so step 4 asks; no chat is sent
     assert "pull_package" in asker.asked and "pull" in asker.asked  # the question was reached and answered No
     assert any(line.startswith("install   #1  lms get --gguf https://huggingface.co/unsloth/Qwen3.5-9B-GGUF@") for line in lines)
     assert any(line.startswith("? Download #1 with lms now?") and line.endswith("No") for line in lines)
     assert not any(line.startswith(("download", "✓ Downloaded")) for line in lines)
     assert any("then run modelroom again" in line for line in lines)  # the hints stay for a no
-    assert chat_calls(server) == []  # no chat, not even one
+    assert chat_calls(server) == []  # not picked, so no chat
     assert not mark.exists()  # `lms` was never run; and the trap saw no process
 
 
