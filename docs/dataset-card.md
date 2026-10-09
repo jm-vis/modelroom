@@ -34,7 +34,7 @@ A small table of the models their publishers call current: text, vision, embeddi
 recognition, image and video generation. Not every build on the Hub. One row per model, with the
 publisher page that says it is current and the date that was checked.
 
-**231 models · 56 publisher accounts watched · one JSON file (171 KB) · schema 2 · CC BY 4.0**
+**247 models · 56 publisher accounts watched · one JSON file (183 KB) · schema 2 · CC BY 4.0**
 
 ## What a row carries
 

@@ -31,7 +31,7 @@
   <text x="520" y="372" class="tl" font-size="22" fill="#8CACC9">Text, vision, embedding, speech, image and video generation.</text>
   <g class="chip" font-size="19">
     <rect x="520" y="410" width="142" height="46" rx="8" fill="#C32F27"/>
-    <text x="591" y="440.36" fill="#FFFFFF" text-anchor="middle">231 models</text>
+    <text x="591" y="440.36" fill="#FFFFFF" text-anchor="middle">247 models</text>
     <rect x="676" y="410" width="259" height="46" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
     <text x="805.5" y="440.36" fill="#FFFFFF" text-anchor="middle">56 publishers watched</text>
     <rect x="949" y="410" width="131" height="46" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
