@@ -153,3 +153,160 @@ def test_the_measured_note_names_the_version_of_the_record(protocol, word):
     record = MeasurementRecord.model_validate(data)
 
     assert _measurement_note(record, "-").endswith(f", context 8k, {word}")
+
+
+# --- F6: stored records named before the question of step 4 --------------------------------------------
+
+QUESTION = "Measure the speed on this machine now?"
+
+
+def _stored_files(tmp_path):
+    return sorted((tmp_path / "results" / "state" / "measurements").glob("*/*.json"))
+
+
+def _guided(tmp_path, answers: dict, generates, now) -> list[str]:
+    """One guided run of the measured example over the folder of `tmp_path`; its printed lines."""
+    from fixture_support import build_transport, guided_transport_mapping, loadtest_daemon, offline_servers, windows_probes
+    from modelroom.dialog import FileAsker
+    from modelroom.guided import run_guided
+    from test_guided_install import MEASURED
+
+    lines: list[str] = []
+    run_guided(
+        FileAsker({**MEASURED, "pull": False, **answers}),
+        here=tmp_path / "results",
+        pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        daemon=loadtest_daemon(generates=generates),
+        servers=offline_servers(),
+        now=now,
+        out=lines.append,
+        colored=False,
+    )
+    return [line.strip() for line in lines]
+
+
+def _rewrite(path, protocol: str, context: int | None = None) -> None:
+    import json
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["protocol"] = protocol
+    if context is not None:
+        data["scenario"]["context_requested"] = context
+    path.write_bytes(json.dumps(data, indent=2).encode("utf-8"))
+
+
+def _seed(tmp_path, generates, protocol: str, context: int | None = None, answer: str = "8192") -> None:
+    """A first run writes a record; it is then rewritten as a stored record of `protocol` (and `context`)."""
+    from test_guided import RUN1
+
+    _guided(tmp_path, {"context": answer}, generates, RUN1)
+    files = _stored_files(tmp_path)
+    assert len(files) == 1
+    _rewrite(files[0], protocol, context)
+
+
+def _before_the_question(tmp_path, answer: str = "8192") -> list[str]:
+    """The lines a second run prints before the question of step 4 (the user says No)."""
+    from test_guided import RUN2
+
+    lines = _guided(tmp_path, {"context": answer, "load_test": False}, None, RUN2)
+    return lines[: next(i for i, line in enumerate(lines) if QUESTION in line)]
+
+
+def _stop(count: int = 2):
+    from test_fr_nachlese import _stop_answer
+
+    return [_stop_answer(count)] * 4
+
+
+def test_a_stored_v1_record_with_an_early_end_is_named_before_the_question(tmp_path):
+    from fixture_support import DEEPSEEK_OLLAMA_NAME
+
+    _seed(tmp_path, _stop(), "v1")
+
+    before = _before_the_question(tmp_path)
+
+    problem = f"{DEEPSEEK_OLLAMA_NAME}: no speed, invalid (run 1: done_reason 'stop', expected 'length')"
+    assert problem in before
+    assert before[before.index(problem) + 1] == early_line(DEEPSEEK_OLLAMA_NAME, 2, version=1)
+    assert before[before.index(problem) + 1].endswith("say Yes to measure again")
+
+
+def test_a_stored_valid_record_says_nothing_before_the_question(tmp_path):
+    from fixture_support import DEEPSEEK_OLLAMA_NAME
+
+    _seed(tmp_path, None, "v1")
+
+    before = _before_the_question(tmp_path)
+
+    assert not any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}:") for line in before)
+
+
+def test_a_stored_record_of_another_context_says_nothing_before_the_question(tmp_path):
+    from fixture_support import DEEPSEEK_OLLAMA_NAME
+
+    _seed(tmp_path, _stop(), "v1", context=4096)
+
+    before = _before_the_question(tmp_path)
+
+    assert not any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}:") for line in before)
+
+
+def test_a_newer_migrated_record_hides_an_older_invalid_one(tmp_path):
+    """Only the newest record of the package and context decides: a newer `none` says nothing, and no older one is shown."""
+    import json
+
+    from fixture_support import DEEPSEEK_OLLAMA_NAME
+
+    _seed(tmp_path, _stop(), "v1")
+    [older] = _stored_files(tmp_path)
+    data = json.loads(older.read_text(encoding="utf-8"))
+    data.update(
+        protocol="none", runs=[], validity="unchecked", validity_reason="old", comparable=False,
+        comparable_reason="old", tps_mean=None, tps_min=None, tps_max=None,
+        measured_at="2026-09-23T08:30:00Z", measurement_id="20260923T083000Z-aaaa0001",
+    )
+    (older.parent / "20260923T083000Z-aaaa0001.json").write_bytes(json.dumps(data, indent=2).encode("utf-8"))
+
+    before = _before_the_question(tmp_path)
+
+    assert not any(line.startswith(f"{DEEPSEEK_OLLAMA_NAME}:") for line in before)
+
+
+@pytest.mark.parametrize("answer", ["131072", "XXL"], ids=["entered 131072", "level XXL"])
+def test_a_stored_early_end_at_128k_is_named_and_the_yes_writes_a_v2_record_of_the_same_context(tmp_path, answer):
+    import json
+
+    from fixture_support import DEEPSEEK_OLLAMA_NAME
+    from test_guided import RUN2
+
+    _seed(tmp_path, _stop(), "v1", answer=answer)
+    [stored] = _stored_files(tmp_path)
+    assert json.loads(stored.read_text(encoding="utf-8"))["scenario"]["context_requested"] == 131072
+
+    lines = _guided(tmp_path, {"context": answer, "load_test": True}, None, RUN2)
+
+    before = lines[: next(i for i, line in enumerate(lines) if QUESTION in line)]
+    problem = f"{DEEPSEEK_OLLAMA_NAME}: no speed, invalid (run 1: done_reason 'stop', expected 'length')"
+    assert problem in before
+    assert before[before.index(problem) + 1] == early_line(DEEPSEEK_OLLAMA_NAME, 2, version=1)
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in _stored_files(tmp_path)]
+    newest = max(records, key=lambda record: (record["measured_at"], record["measurement_id"]))
+    assert len(records) == 2
+    assert (newest["protocol"], newest["validity"]) == ("v2", "valid")
+    assert (newest["scenario"]["context_requested"], newest["scenario"]["requests"]) == (131072, 1)
+
+
+def test_a_stored_v2_record_with_an_early_end_is_named_without_the_hint(tmp_path):
+    from fixture_support import DEEPSEEK_OLLAMA_NAME
+
+    _seed(tmp_path, _stop(), "v2")
+
+    before = _before_the_question(tmp_path)
+
+    problem = f"{DEEPSEEK_OLLAMA_NAME}: no speed, invalid (run 1: done_reason 'stop', expected 'length')"
+    assert problem in before
+    assert before[before.index(problem) + 1] == early_line(DEEPSEEK_OLLAMA_NAME, 2, version=2)
+    assert "say Yes" not in before[before.index(problem) + 1]

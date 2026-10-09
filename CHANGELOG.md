@@ -22,6 +22,9 @@ Speed measurement protocol v2 for Ollama (AP9-FR-M). No schema version changes.
   (a document written before has none, and the card then names no version). A run that ends early names
   the version of its record; only a stored `v1` record gets `; protocol v2 sends the prompt through the
   model's template, say Yes to measure again`.
+- **Stored records in step 4**: before the question, step 4 now names the newest stored record of each
+  offered package (same context, one request) that is no measurement, so a stored `v1` record that ended
+  early is seen and the hint to measure again is reached.
 
 ## [0.3.0] - 2026-10-09
 

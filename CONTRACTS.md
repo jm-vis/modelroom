@@ -6964,6 +6964,15 @@ that version, and a protocol that fits it is a new protocol version, not an edit
 protocol v1"). The same note stands for the measurement of the active SSH target
 (`guided_remote_measure`, through `report_problem`).
 
+**Stored records, named before the question (AP9-FR-M, F6).** Before the question `Measure the speed on
+this machine now?` the daemon's part names, for each candidate it offers, the newest stored record of
+the bound profile that belongs to that package (the ranking's own rule, `ranking._matches`), has the run's
+`context_requested` and one request, and is no measurement (`_record_problem`): the fault line and, for
+a run that ended early, the second line of `early_end_line` (for a stored `v1` record with the hint).
+A valid, comparable record, a record of another context and a file that cannot be read say nothing
+here. The newest record decides: where it is a migrated record (`protocol` `none`) the candidate says
+nothing, and no older record of the package is shown in its place.
+
 The vLLM part (AP9-SV1, "Local servers and the vLLM load test"). The server runs on this machine, so
 it passes the daemon's own check, one function for both (`guided_loadtest.local_measure_target`,
 Codex r3 and r4): first the identity -- the profile this machine is bound to is in the folder and its

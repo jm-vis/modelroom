@@ -29,9 +29,17 @@ from .loadtest import (
     weight_digest,
 )
 from .measure import read_os_identity
-from .measurements import MeasurementExistsError, MeasurementRecord, Scenario, protocol_for, run_invalid_reason
+from .measurements import (
+    MeasurementExistsError,
+    MeasurementRecord,
+    Scenario,
+    protocol_for,
+    read_measurements,
+    run_invalid_reason,
+)
 from .neutral import NeutralError, neutral_record
 from .profile import os_fingerprint
+from .ranking import _matches as record_is_of_package  # the ranking's own record-to-package rule
 from .screen import context_tokens_text
 from .selection import narrow_snapshot
 from .state import LockHeldError, UnreadableStateFileError, read_snapshot
@@ -251,6 +259,31 @@ def report_problem(run: "GuidedRun", record: MeasurementRecord) -> bool:
     return True
 
 
+def report_stored_problems(run: "GuidedRun", config: Configuration, candidates: list[Candidate], profile_id: str) -> None:
+    """Before the question: name the newest stored record of each candidate that is no measurement (FR-M, F6).
+
+    Only a record of this package (the ranking's rule, `ranking._matches`), of the run's context
+    and of one request counts; of those the newest one is looked at, and a valid, comparable one
+    says nothing. When that newest one is a migrated record (`none`, not a protocol run) it says
+    nothing either, and no older record is shown instead. A file that cannot be read is left to the
+    ranking's own note, as before.
+    """
+    context = config.guided.context
+    if context is None or not candidates:
+        return
+    stored = read_measurements(config.paths.state, profile_id).records
+    for candidate in candidates:
+        mine = [
+            r for r in stored
+            if record_is_of_package(r, candidate.package)
+            and r.scenario.context_requested == context
+            and r.scenario.requests == 1
+        ]
+        newest = max(mine, key=lambda r: (r.measured_at, r.measurement_id), default=None)
+        if newest is not None and newest.protocol != "none":
+            report_problem(run, newest)
+
+
 def _measure_candidate(
     run: "GuidedRun", config: Configuration, candidate: Candidate, scenario: Scenario, profile_id: str
 ) -> bool:
@@ -338,6 +371,7 @@ def ollama_offer(
         return OllamaOffer(unavailable=reason)
     inventory = installed_candidates(packages, installed, lambda name: weight_digest(run.daemon, name))
     _report_set_aside(run, inventory, cloud=not inventory.candidates)
+    report_stored_problems(run, config, inventory.candidates, profile_id)
     return OllamaOffer(tuple(inventory.candidates), profile_id)
 
 
