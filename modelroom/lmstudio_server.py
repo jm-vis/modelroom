@@ -8,8 +8,9 @@ servers and the vLLM load test", LM Studio).
 
 **In 0.2.0 the transport cannot send a chat**: a request that names a model unloaded a moment ago may make
 LM Studio load it again, and the recording of that case proves neither a refusal nor a load, so LM Studio
-is not measured. The call returns with a later sub-package that proves a measurement safe. **modelroom never runs `lms`**: detection looks for the program in the `PATH` and in the home
-folder and starts nothing; `tests/test_lmstudio_no_process.py` guards it.
+is not measured. The call returns with a later sub-package that proves a measurement safe. **modelroom runs `lms` at one place only**, the download after a yes in
+`lmstudio_get.py` (AP9-LS-G): this module and detection look for the program in the `PATH` and in the home
+folder and start nothing; `tests/test_lmstudio_no_process.py` guards it.
 
 The reader gives no package identity: the REST list names a publisher and a key, never a repository or a
 file. `LocalLmStudioServer` is the only implementation that opens a connection; a test constructs a

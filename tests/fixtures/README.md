@@ -607,7 +607,8 @@ the proof a later sub-package needs to bring the chat call back. The regression 
 uses the lists recorded after it and asserts that no POST of any kind reaches the server.
 
 Not taken over: the raw output of `lms ls --json` (a command-line recording, no answer body) and the
-listings of the port checks; modelroom never runs `lms`.
+listings of the port checks; modelroom runs `lms` at one place only (`lmstudio_get.py`, `lms get --gguf
+<URL> --yes` as an argument list after a yes in step 5; every no stays fully blocked).
 
 Synthetic, no recording: `lmstudio_v1_models_empty.json` (`{"models": []}`),
 `lmstudio_v1_models_embedding_only.json` (the recorded embedding entry alone) and

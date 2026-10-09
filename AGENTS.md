@@ -165,7 +165,7 @@ daemon on `127.0.0.1:11434` -- five read and generate calls, and one `POST
 /api/pull` that only the pull question of guided step 5 sends, for the first row of this machine
 and only on a yes (decided 2026-09-25: the README promised the install from step 5); its limit is
 60 s per read on the socket and none for the whole pull; never `/api/delete` -- subprocess calls to
-`llmfit` and `nvidia-smi` with fixed argument lists (none to `lms`: modelroom never runs `lms`), and file writes under the configured state
+`llmfit` and `nvidia-smi` with fixed argument lists (`lms` at one place only: `lmstudio_get.py`, `lms get --gguf <URL> --yes` as an argument list after a yes in step 5), and file writes under the configured state
 directory. No user-facing web surface, no uploads, no HTML
 rendering of whatever a registry returns. The tests therefore have to prove, with a deliberately
 broken input each:
@@ -189,9 +189,11 @@ broken input each:
   user info included) and every call outside its one (`GET /api/v1/models`), carries no proxy handler,
   follows no redirect, sends no key, refuses an answer above 4 MiB, and sends no chat at all: it has no chat
   call, because LM Studio is not measured;
-- modelroom never runs `lms`: a static test reads the modules of LM Studio for process calls in the
-  import and call forms it lists (`os.exec*` and `os.spawn*` included), and in the acceptance test a trap on
-  `subprocess.Popen` and `os.system` fails the test that starts a process through either;
+- modelroom runs `lms` at one place only, `lmstudio_get.py`: `lms get --gguf <URL> --yes` as an argument
+  list, after a yes in step 5; every no stays fully blocked. A static test reads the other modules of LM
+  Studio for process calls in the import and call forms it lists (`os.exec*` and `os.spawn*` included), and
+  in the acceptance test a trap on `subprocess.Popen` and `os.system` fails the test that starts a process
+  through either, bar the one exact call after a yes;
 - vLLM on another computer is reached only through `modelroom remote vllm`/`vllm-measure`
   (AP9-SV2-R), which binds the very same origin `http://127.0.0.1:8000` and the very same three
   calls *there*, at the server -- nothing about it is started or loaded from here, and no

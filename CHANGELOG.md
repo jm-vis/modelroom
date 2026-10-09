@@ -7,11 +7,24 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [0.3.0] - 2026-10-09
 
-The README now documents LM Studio: the list entries per GGUF package, the printed `lms get`
-command, the disk check at LM Studio's model folder, the limits, and the three local addresses
-under "Network access". LM Studio is detected, not measured yet. The guided screen names one
-machine with one name on every line: the profile's `display_name`, as on the card, the table
-heads and step 1. No schema version changes.
+The README now documents LM Studio: the list entries per GGUF package, the `lms get` download
+after a yes (the printed line stays for a no), the disk check at LM Studio's model folder, the
+limits, and the three local addresses under "Network access". LM Studio is detected, not measured
+yet. The guided screen names one machine with one name on every line: the profile's `display_name`,
+as on the card, the table heads and step 1. No schema version changes.
+
+### Added
+
+- **LM Studio downloads after a yes** (AP9-LS-G; `modelroom/lmstudio_get.py`, `modelroom/guided_install.py`):
+  choosing an LM Studio entry on a machine where `lms` is found prints the line as before, checks the
+  disk, says `lms starts LM Studio's service in the background; a vision model also fetches its
+  projector file` and asks `Download #7 with lms now? (2.9 GB)` (answer file key `pull`, default No).
+  On a yes modelroom runs `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant> --yes` once, as
+  a list of arguments and never through a shell, shows the progress of `lms` itself, and checks the file
+  in `~/.lmstudio/models` against the catalog size (`✓ Downloaded #7 ...`); an error exit or a missing
+  file is one line and exit 1. On a no, the line to copy and the hints are printed as before. No
+  question, and the old output, where `lms` is not found, the package is on disk already, the entry is
+  locked or the disk is too small. This is the only place modelroom starts `lms`.
 
 ### Changed
 

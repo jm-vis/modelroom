@@ -9,7 +9,7 @@ place to add it to (CONTRACTS.md, "Local servers and the vLLM load test";
 docs/adr/0014-runtime-entries-and-vllm-packages.md). A later runtime (vLLM's own fields first,
 then LM Studio) is a new row, never a plug-in: no dynamic loading, no registration at runtime.
 `LMSTUDIO` (AP9-LS-E, GGUF only) is the third row: its server, `accepts` (the Hugging Face GGUF
-packages), `install_name` and `command` (`lms get --gguf https://huggingface.co/...`, printed and never run), `model_place` and
+packages), `install_name` and `command` (`lms get --gguf https://huggingface.co/...`, printed; run once after a yes, `lmstudio_get.py`), `model_place` and
 `on_disk` (`lmstudio_install`) are its own, its `fit` is Ollama's (both run llama.cpp), and it sits last
 so that no existing output changes.
 
