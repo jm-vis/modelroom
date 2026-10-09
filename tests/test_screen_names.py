@@ -315,6 +315,6 @@ def test_the_lm_studio_handover_names_the_machine_by_its_name_and_keeps_the_comm
     pull_other_step(run, PullContext(document, HERE_KEY, [q4], ambiguous_names([q4])))
 
     text = [line.strip() for line in lines]
-    assert f"install   #1 on {OTHER_NAME}  lms get --gguf {QUANT}" in text  # the command is the one of the basis
+    assert f"install   #1 on {OTHER_NAME}  lms get --gguf https://huggingface.co/{QUANT}" in text  # the command is the one of the basis
     assert not any(key in line for key in (OTHER_KEY, HERE_KEY, DECOY_KEY, DECOY_NAME) for line in text)
     assert not any("modelroom pull" in line or "ollama pull" in line for line in text)

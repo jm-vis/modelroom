@@ -103,7 +103,7 @@ def test_choosing_an_lms_row_asks_nothing_and_never_calls_the_daemon_pull(tmp_pa
     doc = _on_machine(document([q4]), BOTH)
     # `pull = yes` in the answer file: an Ollama pull would be asked and sent; an LM Studio row is printed only.
     said, _lists, run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M", "pull": True}, _in_path)
-    assert "install   #1  lms get --gguf unsloth/Nova-7B-GGUF@Q4_K_M" in said
+    assert "install   #1  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M" in said
     assert not any(call[0] == "POST" for call in run.daemon.calls)
     assert not any("Pull" in line or "pulling" in line for line in said)
     assert "pull" not in run.asker.asked
@@ -121,7 +121,7 @@ def test_the_chosen_row_prints_the_block_of_the_brief(tmp_path):
     q4 = _gguf()
     doc = _on_machine(document([q4]), BOTH)
     said, _lists, _run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M"}, _in_path)
-    start = said.index("install   #1  lms get --gguf unsloth/Nova-7B-GGUF@Q4_K_M")
+    start = said.index("install   #1  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M")
     context = doc.scenario.context_requested
     # the sentence of the brief, broken between words to the width of the screen (finding 2)
     assert " ".join(said[start + 1 : start + 3]) == (
@@ -134,7 +134,7 @@ def test_an_answer_file_picks_an_lms_row(tmp_path):
     q4, q8 = _gguf(), _gguf("Nova-7B-Q8_0.gguf", "Q8_0", 8.0)
     doc = _on_machine(document([q8, q4]), BOTH)
     said, _lists, _run = _pull(tmp_path, doc, [q8, q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M"}, _in_path)
-    assert "install   #2  lms get --gguf unsloth/Nova-7B-GGUF@Q4_K_M" in said
+    assert "install   #2  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M" in said
 
 
 def test_an_lms_only_in_the_home_folder_prints_the_home_call_and_its_hint(tmp_path):
@@ -142,7 +142,7 @@ def test_an_lms_only_in_the_home_folder_prints_the_home_call_and_its_hint(tmp_pa
     doc = _on_machine(document([q4]), BOTH)
     said, _lists, _run = _pull(tmp_path, doc, [q4], {"pull_package": "lmstudio unsloth/Nova-7B-GGUF@Q4_K_M"}, lambda name: None, home_lms=True)
     # the fixed room has a Windows home with every file present, so `lms.exe` is found there
-    assert 'install   #1  & "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf unsloth/Nova-7B-GGUF@Q4_K_M' in said
+    assert 'install   #1  & "$env:USERPROFILE\\.lmstudio\\bin\\lms.exe" get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M' in said
     assert "lms is not on the PATH yet; this line calls it where LM Studio put it (PowerShell)" in said
 
 
@@ -186,7 +186,7 @@ def test_the_line_under_the_table_is_the_path_form():
     q4 = _gguf()
     doc = _on_machine(document([q4]), ["lmstudio"])  # a machine with LM Studio alone: its entry is the one offered
     text = "\n".join(plain(line) for line in terminal_blocks(doc, HERE, view=RunView(install_for=HERE, packages=[q4])))
-    assert "install   #1  lms get --gguf unsloth/Nova-7B-GGUF@Q4_K_M" in text
+    assert "install   #1  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M" in text
     assert "ollama pull" not in text and "in LM Studio:" not in text  # no hint lines under the table
 
 
@@ -221,7 +221,7 @@ def test_a_profile_from_another_computer_with_lmstudio_prints_the_command():
     doc = _on_machine(document([q4]), ["lmstudio"])
     view = RunView(install_for="gpu1", packages=[q4])  # this run is on another machine: the block is that machine's
     text = "\n".join(plain(line) for line in terminal_blocks(doc, "gpu1", view=view))
-    assert "#1 on workstation  lms get --gguf unsloth/Nova-7B-GGUF@Q4_K_M" in text
+    assert "#1 on workstation  lms get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M" in text
 
 
 # --- S4: the title of a section and the rule ------------------------------------------------------------------

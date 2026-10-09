@@ -620,16 +620,20 @@ two lines of what to do next, and asks nothing. Command form; modelroom prints t
 stage in place of the placeholders:
 
 ```
-lms get --gguf <owner>/<repo>@<quant>
+lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>
 ```
+
+The line carries the URL, not `<owner>/<repo>`: `lms get <owner>/<name>` names an artifact of the
+LM Studio Hub, while the URL names the Hugging Face repository.
 
 Run the command modelroom printed in a terminal. In LM Studio, load the model with the context
 length of the run, then start the server; run modelroom again, and it finds the server. modelroom
 never runs `lms`, neither to detect it nor to download, and it never loads, unloads or downloads
 a model through the server either. Where `lms` is not in the `PATH` but where LM Studio put it,
 the line calls it from the home folder instead,
-`& "$env:USERPROFILE\.lmstudio\bin\lms.exe" get --gguf ...` in PowerShell (not in `cmd.exe`) on
-Windows, `"$HOME/.lmstudio/bin/lms" get --gguf ...` elsewhere, with a hint line.
+`& "$env:USERPROFILE\.lmstudio\bin\lms.exe" get --gguf https://huggingface.co/...` in PowerShell
+(not in `cmd.exe`) on Windows, `"$HOME/.lmstudio/bin/lms" get --gguf https://huggingface.co/...`
+elsewhere, with a hint line.
 A package with more than one weight file, a file in a subfolder or a stage without a checked
 command (the `UD-` stages) gets no command: the entry is locked, `computed only: lms get for ...
 is not checked`, or `no safe command` for a name or stage that is not safe to put in a command.
@@ -645,6 +649,8 @@ never content, and the entry then reads `local already` and, once chosen,
 `#<n> is on disk already (size checked)` in place of the command. The checks hold for
 the file the catalog knows. `lms get` fetches the current state of the repository, which can be
 larger than that file, and the same size is not the same revision.
+For a vision model, `lms` also downloads the projector (`mmproj-*.gguf`), so the download is
+larger than the single weight file checked by modelroom.
 
 **Limits.** modelroom reads LM Studio on port 1234 only, in the standard model folder only, for GGUF
 packages only, on this computer only and not over SSH (a computer reached over SSH reads without LM

@@ -21,6 +21,12 @@ heads and step 1. No schema version changes.
 
 ### Fixed
 
+- **The printed `lms get` line uses the Hugging Face URL** (AP9-LS-F; `modelroom/lmstudio_install.py`):
+  `lms get <owner>/<name>` resolves an artifact of the LM Studio Hub, not a Hugging Face repository, and
+  failed with `Failed to resolve artifact`. The line now reads
+  `lms get --gguf https://huggingface.co/<owner>/<repo>@<quant>` in the `PATH` form and in the home form.
+  The quantization suffix remains `@<quant>`. For vision models, LM Studio also downloads the projector
+  file.
 - **One name for one machine on every line of the guided screen** (AP9-FR-N3, after AP9-FR-N2; `modelroom/screen_names.py`,
   CONTRACTS.md, "The screen"). The instruction line of the context scale said `last column: how many fetched packages fit
   computer-<8 hex>` where the card and step 1 said `server-<8 hex>`: it printed the key of the machine in the

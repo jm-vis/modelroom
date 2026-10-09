@@ -1,4 +1,4 @@
-install   #1  & "$env:USERPROFILE\.lmstudio\bin\lms.exe" get --gguf unsloth/Nova-7B-GGUF@Q4_K_M
+install   #1  & "$env:USERPROFILE\.lmstudio\bin\lms.exe" get --gguf https://huggingface.co/unsloth/Nova-7B-GGUF@Q4_K_M
 lms is not on the PATH yet; this line calls it where LM Studio put it (PowerShell)
 in LM Studio: load it with context length 8192, then start its server (the server switch
 in LM Studio, or lms server start)
