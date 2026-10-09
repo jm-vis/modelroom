@@ -16,8 +16,8 @@ from typing import Mapping, Sequence
 from . import runtimes
 from .contracts import Area, Fit, Package, Rating
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
-from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_row, runtime_set_line, unequal_cards_note  # noqa: F401
-from .views_runtime import vllm_pool_pieces, vllm_shown, vllm_table
+from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_row, runtime_set_line, unequal_cards_note, vllm_pool_pieces, vllm_shown, vllm_table  # noqa: F401, E501
+from .screen_names import shown_names
 from .views_sections import ALTERNATIVES, runtime_sections, section_head, section_title
 from .views_sections import _named, set_aside_pieces as _set_aside_pieces  # noqa: F401 -- moved (size guard, F5)
 from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
@@ -532,10 +532,9 @@ def _labeled(label: str, pieces: list[str], dot: str) -> list[Line]:
 
 @dataclass(frozen=True)
 class RunView:
-    """What the guided run adds to the terminal view (AP9-UX2): the pull names no row may claim (U4),
-    what was read live per machine name (AP9-RM U10; `None` outside a guided run, which reads no
-    machine live), where each machine came from (U2), and the other machines `pull_other_step` will
-    list a row for (A3, AP9-FR) -- so a table's note never promises a list that will not follow."""
+    """What the guided run adds to the terminal view (AP9-UX2): the pull names no row may claim (U4), what was read
+    live per machine key (AP9-RM U10; `None` outside a guided run), where each machine came from (U2), the other
+    machines `pull_other_step` will list a row for (A3, AP9-FR), and `shown` (AP9-FR-N3): key -> the name the guided screen says."""
 
     install_for: str | None = None
     ambiguous: frozenset[str] = frozenset()
@@ -546,6 +545,7 @@ class RunView:
     packages: Sequence[Package] = ()  # the run's packages: the install line's runtime (`views_install`)
     held: Mapping[str, frozenset] = field(default_factory=dict)  # what each runtime but Ollama holds itself
     live_vllm: Mapping[str, object] = field(default_factory=dict)  # the render's own vLLM reading (Codex r7)
+    shown: Mapping[str, str] = field(default_factory=dict)  # FR-N3: key -> display name; empty = keys, as `render` and the logs print them
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -565,7 +565,7 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     if from_size:
         lines += _labeled(BASIS_LABEL, [f"{ranks_text(from_size, dash)} {_FROM_SIZE_NOTE}"], dot)
     lines += [] if vllm else _labeled(SPEED_LABEL, _speed_pieces(block, dash), dot)
-    lines += _labeled_rows(LOCAL_LABEL, local_pieces(block, _disk(block, view), "this computer" if block.machine == view.install_for else block.machine, dash))
+    lines += _labeled_rows(LOCAL_LABEL, local_pieces(block, _disk(block, view), "this computer" if block.machine == view.install_for else view.shown.get(block.machine, block.machine), dash))
     if block.ranked or vllm_shown(block):  # a vLLM row set aside owes its key too (Codex r3-1)
         speed = [SPEED_HINT] if block.ranked else []
         lines += _labeled_rows(KEY_LABEL, joined(key_text(block), dot=dot, width=_NOTE_WIDTH, indent=0) + speed)
@@ -616,7 +616,7 @@ def _room_lines(block: MachineRanking, view: RunView, dot: str) -> list[Line]:
         else "ssh_inactive" if view.origins.get(block.machine) == "ssh"
         else "other"
     )
-    lines = _labeled(ROOM_LABEL, head_pieces(block, live, where, machine_runtimes(block, view.live_vllm)), dot)
+    lines = _labeled(ROOM_LABEL, head_pieces(block, live, where, machine_runtimes(block, view.live_vllm), view.shown.get(block.machine, block.machine)), dot)
     loaded = loaded_pieces(live)
     return lines + (_labeled(LOADED_LABEL, loaded, dot) if loaded else [])
 
@@ -689,7 +689,7 @@ def show_result(
     through the screen, so the labels, the notes and the install command carry the colors of the card
     (decided 2026-09-25).
     """
-    view = RunView(install_for=install_for) if view is None else replace(view, install_for=install_for)
+    view = replace(view or RunView(), install_for=install_for, shown=shown_names(document))
     screen.blank()
     screen.card(
         result_card(

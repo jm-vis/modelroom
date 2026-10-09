@@ -5,11 +5,30 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
+The README now documents LM Studio: the list entries per GGUF package, the printed `lms get`
+command, the disk check at LM Studio's model folder, the limits, and the three local addresses
+under "Network access". LM Studio is detected, not measured yet. The guided screen names one
+machine with one name on every line: the profile's `display_name`, as on the card, the table
+heads and step 1. No schema version changes.
+
 ### Changed
 
 - **README documents LM Studio** (AP9-LS-D): the list entries per GGUF package, the printed
   `lms get` command, the disk check at LM Studio's model folder, the limits, and the three local
   addresses under "Network access"; LM Studio is detected, not measured yet.
+
+### Fixed
+
+- **One name for one machine on every line of the guided screen** (AP9-FR-N3, after AP9-FR-N2; `modelroom/screen_names.py`,
+  CONTRACTS.md, "The screen"). The instruction line of the context scale said `last column: how many fetched packages fit
+  computer-<8 hex>` where the card and step 1 said `server-<8 hex>`: it printed the key of the machine in the
+  configuration, not the name of its profile. It now says the `display_name` of the profile, like the card, the table
+  heads and step 1; so do the `local` line under another machine's table, the `disk` line (`room`) of a stored SSH
+  computer that is not connected in this run, and the list for another computer, its answer line and its handover. A
+  machine whose profile cannot be resolved keeps its key, `this computer` stays, and the
+  Markdown document (`## Ranking: <key>`), `modelroom render`, the logs and every file are unchanged. No schema step.
 
 ## [0.2.0] - 2026-10-08
 

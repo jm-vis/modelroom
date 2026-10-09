@@ -32,6 +32,7 @@ from .pull_choice import LOCAL_ALREADY, NONE_VALUE, PullRow, has_named_row, pack
 from .disk_fit import vllm_only
 from .room import Disk
 from .runtimes import LMSTUDIO, OLLAMA, VLLM
+from .screen_names import shown_as, shown_names
 from .views_install import INSTALL_LABEL
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
@@ -91,14 +92,15 @@ def eligible_other_machines(document: RenderDocument, machine: str, ambiguous: f
     return frozenset(block.machine for block in document.machines if block.machine != machine and has_named_row(block))
 
 
-def pull_other_choices(rows: Sequence[OtherRow]) -> list[Choice]:
+def pull_other_choices(rows: Sequence[OtherRow], shown: Mapping[str, str] | None = None) -> list[Choice]:
     """One heading per machine that has a row, its rows under it (locked exactly as they are in its
-    own table), then `none`, the pointer starting there -- never on a row (A3)."""
+    own table), then `none`, the pointer starting there -- never on a row (A3). The heading says the
+    machine's name (`shown`, AP9-FR-N3); the value of a row stays `<key> <pull name>`."""
     choices: list[Choice] = []
     seen: set[str] = set()
     for entry in rows:
         if entry.machine not in seen:
-            choices.append(Choice(f"__heading_{entry.machine}__", entry.machine, heading=True))
+            choices.append(Choice(f"__heading_{entry.machine}__", shown_as(shown or {}, entry.machine), heading=True))
             seen.add(entry.machine)
         choices.append(Choice(entry.value, _row_words(entry), disabled=entry.row.locked, warn=entry.row.over_disk))
     return choices + [Choice(NONE_VALUE, NONE_WORDS, checked=True)]
@@ -121,13 +123,14 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
     if not eligible_other_machines(context.document, context.machine, context.ambiguous):
         return
     rows = other_rows(context.document, context.machine, context.ambiguous, run.screen.glyphs.dot, context.packages, _ssh_disks(run))
-    choices = pull_other_choices(rows)
+    names = shown_names(context.document)  # AP9-FR-N3: the screen says the name of the profile; the key stays the identity
+    choices = pull_other_choices(rows, names)
     try:
         value = run.asker.select(KEY, QUESTION, choices)
     except AnswerMissingError:
         return
     chosen = next((entry for entry in rows if entry.row.locked is None and entry.value == value), None)
-    run.screen.answer(QUESTION, NONE_WORDS if chosen is None else f"{chosen.machine}  #{chosen.row.rank}  {chosen.row.name}")
+    run.screen.answer(QUESTION, NONE_WORDS if chosen is None else f"{shown_as(names, chosen.machine)}  #{chosen.row.rank}  {chosen.row.name}")
     if chosen is None:
         return
     if chosen.row.runtime == VLLM.key:
@@ -150,7 +153,7 @@ def pull_other_step(run: "GuidedRun", context: "PullContext | None") -> None:
     package = package_of(chosen.row, context.packages)
     if package is None:
         return
-    for line in handover_lines(chosen.machine, chosen.row, weights_bytes_of(package)):
+    for line in handover_lines(shown_as(names, chosen.machine), chosen.row, weights_bytes_of(package)):
         run.screen.write(line)
 
 
@@ -171,14 +174,14 @@ def vllm_handover_lines(context: "PullContext", machine: str, row: PullRow, vllm
     relative = vllm_disk is not None and vllm_disk.relative
     install = vllm_install(package_of(row, context.packages), entry.fit, block.profile, relative_cache=relative)
     there = vllm_disk is not None and row.identity in vllm_disk.held
-    return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=machine)]
+    return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=shown_as(shown_names(context.document), machine))]
 
 
 def lmstudio_handover_lines(context: "PullContext", machine: str, row: PullRow) -> list:
     """The handover of an LM Studio row (AP9-LS-E): the `lms get` line with the machine named, in the `PATH`
     form (nobody knows where `lms` is on that computer), and what to do in LM Studio there. Printed, never run."""
     command = lmstudio_install.command(str(row.name))
-    place = [("class:note", f"#{row.rank} on {machine}"), ("", "  "), ("class:command", command)]
+    place = [("class:note", f"#{row.rank} on {shown_as(shown_names(context.document), machine)}"), ("", "  "), ("class:command", command)]
     notes = lmstudio_install.hint_rows(None, "", context.document.scenario.context_requested)
     return [[], label_line(INSTALL_LABEL, place), *(label_line("", [("class:note", text)]) for text in notes)]
 
@@ -186,7 +189,7 @@ def lmstudio_handover_lines(context: "PullContext", machine: str, row: PullRow) 
 def handover_lines(machine: str, row: PullRow, weights_bytes: float) -> list:
     """The three lines of the handover (A3): the command to paste on `machine`, what it does there,
     and the bare `ollama pull` for a computer without modelroom -- no path, no machine name beyond
-    the neutral one the document already carries."""
+    the neutral one the document already carries. `machine` is the name the screen says (AP9-FR-N3)."""
     command = f"modelroom pull {row.name} --weights-bytes {round(weights_bytes)}"
     return [
         [],

@@ -1,6 +1,6 @@
 [project]
 name = "modelroom"
-version = "0.2.0"
+version = "0.3.0"
 description = "Which local model packages exist for your model families, and which of them fit your machine."
 readme = "README.md"
 requires-python = ">=3.11"

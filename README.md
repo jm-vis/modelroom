@@ -26,7 +26,7 @@ on the machine you want to size, and keep the files wherever you keep your notes
 
 ## Status
 
-Alpha, version 0.2.0 (see `CHANGELOG.md`). The guided mode and the subcommands work end to end;
+Alpha, version 0.3.0 (see `CHANGELOG.md`). The guided mode and the subcommands work end to end;
 the data shapes are versioned contracts (see `CONTRACTS.md`). Expect changes to the rendered
 layout and to the fit rules before a stable release. `CHANGELOG.md` lists what has landed. The
 branch `main` runs ahead of the release on PyPI: what `CHANGELOG.md` lists under "Unreleased" is
@@ -864,6 +864,6 @@ to size on-premise deployments before anyone buys hardware.
 
 ## License
 
-MIT, see [LICENSE](https://github.com/jm-vis/modelroom/blob/v0.2.0/LICENSE). The machine
+MIT, see [LICENSE](https://github.com/jm-vis/modelroom/blob/v0.3.0/LICENSE). The machine
 measurement is cross-checked with [llmfit](https://github.com/AlexsJones/llmfit) (MIT), which
 runs as a separate program and is not part of this package.

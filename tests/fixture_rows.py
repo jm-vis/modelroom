@@ -80,6 +80,7 @@ def document_multi(per_machine: dict[str, list[Package]], *, total: int | None =
         block = copy.deepcopy(template)
         block["machine"] = machine
         block["label"] = machine
+        block["profile"]["display_name"] = machine  # AP9-FR-N3: the profile names the machine as the label does
         block["ranked"] = [entry(pkg, rank) for rank, pkg in enumerate(packages, start=1)]
         block["ranked_total"] = total if total is not None else len(packages)
         block["not_covered"], block["no_fit"] = [], []

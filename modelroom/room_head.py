@@ -41,7 +41,8 @@ _OLLAMA_ONLY = frozenset({"ollama"})
 
 
 def head_pieces(
-    block: MachineRanking, live: LiveRoom | None, where: Where, runtime_keys: frozenset[str] = _OLLAMA_ONLY
+    block: MachineRanking, live: LiveRoom | None, where: Where, runtime_keys: frozenset[str] = _OLLAMA_ONLY,
+    shown: str | None = None,
 ) -> list[str]:
     """The pieces of the `room` line of one machine: budgets from the profile, then the disk.
 
@@ -51,6 +52,7 @@ def head_pieces(
     system-memory fallback, so it adds no memory piece; its disk is `_disk_pieces`'s. LM Studio runs the
     same llama.cpp under the same fit, so its machine has the same budgets (AP9-LS-E): beside vLLM they are
     named for the runtimes of the GGUF rows, `for LM Studio` or `for Ollama and LM Studio`.
+    `shown` is the name the guided screen says for the machine (AP9-FR-N3); without it the key stands.
     """
     profile = block.profile
     ollama, vllm = "ollama" in runtime_keys, "vllm" in runtime_keys and profile is not None
@@ -63,9 +65,10 @@ def head_pieces(
     else:
         pieces = [_graphics_piece(block, whom), _memory_piece(block, whom)]
     pieces = (pieces if ollama or lmstudio else []) + ([_vllm_piece(block)] if vllm else [])
+    name = shown or block.machine  # AP9-FR-N3: only the guided screen passes a name
     if lmstudio:
-        return [*pieces, *_disk_pieces_with_lmstudio(live, where, block.machine, ollama, vllm)]
-    return [*pieces, *_disk_pieces(live, where, block.machine, ollama, vllm)]
+        return [*pieces, *_disk_pieces_with_lmstudio(live, where, name, ollama, vllm)]
+    return [*pieces, *_disk_pieces(live, where, name, ollama, vllm)]
 
 
 def _gguf_names(ollama: bool, lmstudio: bool) -> str:

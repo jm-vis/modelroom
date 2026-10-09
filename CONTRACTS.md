@@ -3260,10 +3260,15 @@ Only a backup that cannot be cleaned is a note instead. This computer's key of 0
 host name exactly as 0.1.0 formed it (every character that is not alphanumeric one `-`, `node  01`
 is `node--01`); a host name that gave 0.1.0 no key gives none here.
 
-**The screen.** This computer's host name stands only in the start line (`machine <host name>`,
-read live). Every other line names keys and names as the files do; the answer line of the name typed
-for a machine entered by hand says `not kept: the machine gets a neutral name`, and the answer line of
-the machine list names this machine by its class alone (`this machine (laptop)`).
+**The screen.** This computer's host name stands only in the start line (`machine <host name>`, read
+live). In guided-run screen output, a line that names a machine uses the `display_name` of its profile,
+or `neutral_name(profile_id, machine_class)` where the profile has none (AP9-FR-N2, extended to every
+line by AP9-FR-N3, the instruction line of the context scale included); a machine whose profile cannot
+be resolved keeps its key. Contextual references (`this computer`) and the class-only answer of the
+machine list (`this machine (laptop)`) are unchanged, and the answer line of the name typed for a
+machine entered by hand says `not kept: the machine gets a neutral name`. Outside guided-run screen
+output, keys and names follow the files: this changes no file output, and the Markdown ranking headings
+(`## Ranking: <key>`) retain their machine keys.
 
 ### The remote protocol v1 (AP9-FR, FR-B1)
 

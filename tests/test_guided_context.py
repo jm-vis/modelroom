@@ -352,6 +352,197 @@ def test_a_profile_the_fit_may_not_compute_for_gets_no_column_either(tmp_path):
     assert checked.reason.startswith("no fit on this machine: gpu_state multi_gpu_not_covered")
 
 
+# --- AP9-FR-N3: the instruction line names the machine the way its profile does ---------------------
+#
+# `_machine_entry` (the rule these tests rely on, unchanged): the entry of the configuration that
+# serves a bound profile is the **first** `[machines.<key>]`, in sorted key order, whose `profile`
+# is that profile's id. The key stays the internal identity (`Checked.name`); the screen says the
+# profile's `display_name` (`Checked.shown`).
+
+KEY = "computer-aaaaaaaa"
+SHOWN = "server-bbbbbbbb"
+ID_ONE = "b" * 16
+ID_TWO = "c" * 16
+INSTRUCTION = "last column: how many fetched packages fit "
+
+
+def _named_profile(profile_id: str, display_name: str, vram_gib: float = 11.94) -> HardwareProfile:
+    return _profile(vram_gib).model_copy(update={"profile_id": profile_id, "display_name": display_name})
+
+
+def _folder_of(tmp_path, bound: HardwareProfile, profiles: list[HardwareProfile], machines: dict) -> tuple[Path, Configuration]:
+    """A results folder holding `profiles`, the pointer binding this machine to `bound`, and `machines` as configured."""
+    from modelroom.binding import GuidedPointer, write_pointer
+    from modelroom.state import atomic_write_json
+
+    results = tmp_path / "results"
+    config = Configuration.from_dict(
+        {
+            "schema_version": 2,
+            "families": [],
+            "machines": machines,
+            "paths": {"state": str(results / "state"), "markdown": str(results / "docs" / "models.md")},
+        }
+    )
+    for profile in profiles:
+        atomic_write_json(config.paths.hardware_dir / f"{profile.profile_id}.json", profile.model_dump(mode="json"))
+    pointer = tmp_path / "home" / "guided.json"
+    write_pointer(pointer, GuidedPointer(schema_version=1, current=str(results), bindings={str(results): bound.profile_id}))
+    return pointer, config
+
+
+def _entry(profile_id: str | None, reserve_vram_gib: float = 1.0) -> dict:
+    entry = {"reserve_ram_gib": 8.0, "reserve_vram_gib": reserve_vram_gib, "writer": True}
+    return {**entry, "profile": profile_id} if profile_id is not None else entry
+
+
+def _asked(config: Configuration, checked: Checked, snapshot=None) -> tuple[str | None, list]:
+    """What `_answered_context` hands the asker: the instruction line and the choices of the scale. `snapshot` is
+    the `(packages, base models)` the step reads where the folder holds none (a folder of a test has no snapshot)."""
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from modelroom import guided_context
+    from modelroom.selection import RunSelection
+
+    seen: dict = {}
+
+    class _Asker:
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
+            seen["instruction"], seen["choices"] = instruction, list(choices)
+            return "L"
+
+    run = SimpleNamespace(asker=_Asker(), selection=RunSelection(machines=(), models=()), servers=SimpleNamespace(found={}))
+    if snapshot is None:
+        guided_context._answered_context(run, config, checked)
+    else:
+        with mock.patch.object(guided_context, "snapshot_packages", lambda *args, **kwargs: snapshot):
+            guided_context._answered_context(run, config, checked)
+    return seen["instruction"], seen["choices"]
+
+
+def _instruction(config: Configuration, checked: Checked) -> str | None:
+    """The instruction line the scale is asked with."""
+    return _asked(config, checked)[0]
+
+
+def test_the_instruction_line_names_the_machine_by_its_display_name_not_its_key(tmp_path):
+    """Foto 6: the line said `computer-<8 hex>` where the card and step 1 said `server-<8 hex>`."""
+    profile = _named_profile(ID_ONE, SHOWN)
+    pointer, config = _folder_of(tmp_path, profile, [profile], {KEY: _entry(ID_ONE)})
+
+    checked = machine_checked(pointer, config, tmp_path / "results")
+    line = _instruction(config, checked)
+
+    assert line == INSTRUCTION + SHOWN
+    assert KEY not in line
+    assert checked.name == KEY  # the internal identity stays the key
+    assert checked.shown == SHOWN and checked.shown  # 1f: never None, never empty
+
+
+def test_a_profile_without_a_display_name_is_called_by_its_neutral_name(tmp_path, monkeypatch):
+    """1b. The schema keeps `display_name` non-empty, so a file cannot lack it; the fallback is shown with a
+    profile whose name is empty (`model_copy` does not validate) handed to the scale."""
+    from types import SimpleNamespace
+
+    from modelroom import guided_context
+    from modelroom.neutral import neutral_name
+
+    bare = _named_profile(ID_ONE, "").model_copy(update={"machine_class": "laptop"})
+    pointer, config = _folder_of(tmp_path, _named_profile(ID_ONE, SHOWN), [_named_profile(ID_ONE, SHOWN)], {KEY: _entry(ID_ONE)})
+    monkeypatch.setattr(guided_context, "scan_profiles", lambda _directory: SimpleNamespace(profiles={ID_ONE: bare}))
+
+    checked = machine_checked(pointer, config, tmp_path / "results")
+    line = _instruction(config, checked)
+
+    assert line == INSTRUCTION + neutral_name(ID_ONE, "laptop") == INSTRUCTION + "laptop-bbbbbbbb"
+    assert KEY not in line
+    assert checked.shown == "laptop-bbbbbbbb" and checked.name == KEY
+
+
+def test_without_a_bound_profile_there_is_no_instruction_line(tmp_path):
+    """1c (kept): no machine, a reason, no line."""
+    from modelroom.binding import GuidedPointer, write_pointer
+
+    profile = _named_profile(ID_ONE, SHOWN)
+    pointer, config = _folder_of(tmp_path, profile, [profile], {KEY: _entry(ID_ONE)})
+    write_pointer(pointer, GuidedPointer(schema_version=1, current=None, bindings={}))
+
+    checked = machine_checked(pointer, config, tmp_path / "results")
+
+    assert checked.reason == NO_MACHINE_LINE and checked.name is None
+    assert _instruction(config, checked) is None
+
+
+def _two_profiles(tmp_path):
+    """The binding says P1; the configuration holds an entry for P1 (the first key in sorted order that names P1) and
+    a second entry for P2, whose card is so much larger that the fixture packages fit differently on it."""
+    one = _named_profile(ID_ONE, SHOWN, vram_gib=11.94)
+    two = _named_profile(ID_TWO, "laptop-cccccccc", vram_gib=80.0)
+    machines = {KEY: _entry(ID_ONE, reserve_vram_gib=1.0), "computer-dddddddd": _entry(ID_TWO, reserve_vram_gib=2.0)}
+    pointer, config = _folder_of(tmp_path, one, [one, two], machines)
+    return one, two, config, machine_checked(pointer, config, tmp_path / "results")
+
+
+def test_the_scale_follows_the_pointer_binding_and_names_that_profile(tmp_path):
+    """1d, the name: the line says P1's `display_name`; neither P2's name nor either key stands in it."""
+    _one, _two, config, checked = _two_profiles(tmp_path)
+
+    line = _instruction(config, checked)
+
+    assert line == INSTRUCTION + SHOWN
+    assert "laptop-cccccccc" not in line and "computer-dddddddd" not in line and KEY not in line
+    assert checked.shown == SHOWN and checked.shown  # 1f: never None, never empty
+
+
+def test_the_scale_follows_the_pointer_binding_in_its_values_reserves_and_fit(tmp_path):
+    """1d, what must stay (kept, green on the basis): the scale handed to the asker -- its values -- is P1's, built from
+    P1's fit and the reserves of its entry; P2's scale is another one and appears nowhere."""
+    one, two, config, checked = _two_profiles(tmp_path)
+
+    _line, choices = _asked(config, checked, snapshot=(PACKAGES, [_base_model()]))  # the scale as the asker sees it
+    contexts = [level.tokens for level in LEVELS] + [DEFAULT_CONTEXT]
+    by_one = fit_texts(PACKAGES, BY_REPO, _checked(one), contexts)
+    by_two = fit_texts(PACKAGES, BY_REPO, _checked(two), contexts)
+    cap = context_cap([_base_model()])
+    expected_one = scale_choices(LEVELS, DEFAULT_CONTEXT, by_one, cap)
+    expected_two = scale_choices(LEVELS, DEFAULT_CONTEXT, by_two, cap)
+
+    assert checked.name == KEY and checked.profile.profile_id == ID_ONE
+    assert checked.machine_config.reserve_vram_gib == 1.0
+    assert by_one != by_two and expected_one != expected_two  # the fixture tells the two profiles apart in what the asker gets
+    assert choices == expected_one  # the scale handed to the asker is P1's, value by value ...
+    assert choices != expected_two  # ... and not P2's
+    assert fit_texts(PACKAGES, BY_REPO, checked, contexts) == by_one
+
+
+def test_a_bound_profile_the_fit_may_not_compute_for_keeps_its_reason_and_has_no_line(tmp_path):
+    """1e (kept): the reason as before, no instruction line."""
+    blocked = _named_profile(ID_ONE, SHOWN).model_copy(update={"gpu_state": "multi_gpu_not_covered", "gpus": []})
+    pointer, config = _folder_of(tmp_path, blocked, [blocked], {KEY: _entry(ID_ONE)})
+
+    checked = machine_checked(pointer, config, tmp_path / "results")
+
+    assert checked.reason.startswith("no fit on this machine: gpu_state multi_gpu_not_covered")
+    assert checked.profile is None and checked.name is None
+    assert _instruction(config, checked) is None
+
+
+def test_a_bound_profile_no_entry_names_keeps_the_error_text_with_its_profile_id(tmp_path):
+    """1g (kept): the entry of the configuration names P2 only; the reason is the unchanged one, with P1's id."""
+    from modelroom.guided_context import NO_ENTRY_LINE
+
+    one = _named_profile(ID_ONE, SHOWN)
+    two = _named_profile(ID_TWO, "laptop-cccccccc")
+    pointer, config = _folder_of(tmp_path, one, [one, two], {"computer-dddddddd": _entry(ID_TWO)})
+
+    checked = machine_checked(pointer, config, tmp_path / "results")
+
+    assert checked.reason == NO_ENTRY_LINE.format(profile_id=ID_ONE)
+    assert ID_ONE in checked.reason
+    assert _instruction(config, checked) is None
+
+
 # --- the cap ---------------------------------------------------------------------------------------
 
 
