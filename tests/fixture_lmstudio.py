@@ -1,7 +1,8 @@
 """Fixture helpers for the LM Studio tests (AP9-LS): the recorded answers as servers, and the process trap.
 
 `lmstudio_servers` builds a `FixtureLmStudioServer` from the recordings of `tests/fixtures/lmstudio_*.json`
-and counts the chats it gets, so a test can say that none was sent. `trap_processes` fails the test on calls
+(the model lists, and the chats where a test gives some) and counts the chats it gets, so a test can say
+how many were sent. `trap_processes` fails the test on calls
 through the patched `subprocess.Popen` and `os.system` functions, and `fake_lms_on_path` puts a program
 called `lms` in the `PATH` that leaves a mark when it runs. Not a test module (no `test_` prefix).
 """
@@ -20,37 +21,144 @@ import pytest
 
 from fixture_http import json_response
 from modelroom.http import Response
-from modelroom.lmstudio_server import MODELS_PATH, FixtureLmStudioServer
+from modelroom.intro import UNICODE_GLYPHS
+from modelroom.lmstudio_server import CHAT_PATH, MODELS_PATH, FixtureLmStudioServer
 
 
-def lmstudio_servers(lists: list) -> FixtureLmStudioServer:
-    """A server whose model list answers `lists` one after the other (the last one stays): a recording by
-    its file name, or a list built by the test as a dict. It answers no chat -- the transport refuses the
-    call -- but keeps every attempt in `calls`; `chat_calls` and `list_calls` count what it was sent."""
-    answers = [
-        json_response(item) if isinstance(item, str) else Response(status=200, body=json.dumps(item).encode("utf-8"))
-        for item in lists
-    ]
+def _answer(item):
+    """A recording by its file name, a body built by the test as a dict, or an answer as it is (a `Response`,
+    an `LmStudioServerError` to raise, a function of the request body)."""
+    if isinstance(item, str):
+        return json_response(item)
+    if isinstance(item, dict):
+        return Response(status=200, body=json.dumps(item).encode("utf-8"))
+    return item
+
+
+def lmstudio_servers(lists: list, chats: list | None = None) -> FixtureLmStudioServer:
+    """A server whose model list answers `lists` one after the other (the last one stays), and whose chat
+    answers `chats`, one entry per chat (a chat beyond the entries fails the test with an `IndexError`).
+
+    An entry is a recording by its file name, a dict, or an answer as it is (see `_answer`). Without `chats`
+    the server has no answer to a chat and a chat fails the test with a `KeyError`. Every call is kept in
+    `calls`; `chat_calls` and `list_calls` count what it was sent."""
+    answers = [_answer(item) for item in lists]
 
     def next_list(_body):
         return answers.pop(0) if len(answers) > 1 else answers[0]
 
-    return FixtureLmStudioServer({("GET", MODELS_PATH): next_list})
+    pinned: dict = {("GET", MODELS_PATH): next_list}
+    if chats is not None:
+        pinned[("POST", CHAT_PATH)] = [_answer(item) for item in chats]
+    return FixtureLmStudioServer(pinned)
+
+
+def chat_to(instance_id: str, reply: str | Response = "lmstudio_chat_one.json"):
+    """An answer to a chat that checks the request: only the model `instance_id` is loaded, so a body that
+    names another model (the `key` of the model, say) gets the 404 a server gives for a model it does not know."""
+
+    response = json_response(reply) if isinstance(reply, str) else reply  # read now, not at the request
+
+    def answer(body):
+        named = (body or {}).get("model")
+        if named != instance_id:
+            text = json.dumps({"error": {"message": f"model {named!r} is not loaded"}})
+            return Response(status=404, body=text.encode("utf-8"))
+        return response
+
+    return answer
 
 
 def run_of(server: FixtureLmStudioServer | None):
     """A stand-in for the guided run, as far as LM Studio reads it: `servers` (its transport, what the start
-    screen found, what step 4 measured) and `screen.note`, which keeps every note in `notes`."""
+    screen found, what step 4 measured), `screen.note`, which keeps every note in `notes`, `screen.glyphs`
+    (the drawn set) and `failed`, which keeps every message in `failures`."""
     from modelroom.runtimes import ServerRun
 
     notes: list[str] = []
+    failures: list[str] = []
     transports = {} if server is None else {"lmstudio": server}
-    screen = types.SimpleNamespace(note=notes.append)
-    return types.SimpleNamespace(servers=ServerRun(transports=transports), screen=screen, notes=notes)
+    screen = types.SimpleNamespace(note=notes.append, glyphs=UNICODE_GLYPHS)
+    return types.SimpleNamespace(
+        servers=ServerRun(transports=transports), screen=screen, notes=notes, failed=failures.append, failures=failures
+    )
+
+
+class FakeAnswer:
+    """What an opener's `open` hands back: a context manager with a status, headers and a body to read, or
+    an error that the read raises (a limit of time, say)."""
+
+    def __init__(self, status: int = 200, body: bytes = b"", headers: dict | None = None, read_error=None) -> None:
+        self.status, self.headers, self._body, self._error = status, headers or {}, body, read_error
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        self.closed = True
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if self._error is not None:
+            raise self._error
+        return self._body if size < 0 else self._body[:size]
+
+
+class _ErrorBody:
+    """The body of an HTTP error: its bytes, or an error on the read; `reads` counts the reads."""
+
+    def __init__(self, body: bytes, read_error) -> None:
+        self._body, self._error, self.reads, self.closed = body, read_error, 0, False
+
+    def read(self, size: int = -1) -> bytes:
+        self.reads += 1
+        if self._error is not None:
+            raise self._error
+        return self._body if size < 0 else self._body[:size]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def http_error(status: int, body: bytes = b"", read_error=None):
+    """An `HTTPError` of `status`, the way `opener.open` raises one, with its body reader (`.fp.reads`)."""
+    import urllib.error
+
+    return urllib.error.HTTPError("http://127.0.0.1:1234/x", status, "error", {}, _ErrorBody(body, read_error))
+
+
+class ScriptedOpener:
+    """An opener for `LocalLmStudioServer._opener`: per path an answer (a `FakeAnswer`), an exception to raise,
+    or a function of the request. `opened` keeps `(method, path, timeout)` of every call."""
+
+    def __init__(self, replies: dict) -> None:
+        self.replies, self.opened = replies, []
+
+    def open(self, request, timeout=None):
+        from urllib.parse import urlsplit
+
+        path = urlsplit(request.full_url).path
+        self.opened.append((request.get_method(), path, timeout))
+        reply = self.replies[path]
+        if callable(reply):
+            reply = reply(request)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+
+def scripted_server(replies: dict):
+    """A `LocalLmStudioServer` whose connection is a `ScriptedOpener`: nothing is opened."""
+    from modelroom.lmstudio_server import LocalLmStudioServer
+
+    server = LocalLmStudioServer()
+    server._opener = ScriptedOpener(replies)
+    return server
 
 
 def chat_calls(server: FixtureLmStudioServer) -> list:
-    """The chats a fixture server was sent: none, in every test of LM Studio in 0.2.0."""
+    """The chats a fixture server was sent."""
     return [call for call in server.calls if call[0] == "POST"]
 
 

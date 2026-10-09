@@ -2,8 +2,8 @@
 
 The transport is exercised against a real HTTP server on a loopback port, the reader against the answers
 recorded from LM Studio on 2026-10-08 (`tests/fixtures/lmstudio_*.json`, `tests/fixtures/README.md`).
-No network is touched and nothing is replaced. LM Studio is never measured in 0.2.0: no test here sends a
-chat to anything but a loopback double.
+No network is touched and nothing is replaced. The chat is the second call the transport allows (AP9-LS-M): a
+chat goes to a loopback double or an injected opener, never to a real server.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -20,6 +21,10 @@ import pytest
 from modelroom.http import Response
 from modelroom.lmstudio_server import (
     ALLOWED_CALLS,
+    BODY_HEADER,
+    BODY_OVERSIZED,
+    BODY_UNREAD,
+    CHAT_PATH,
     KEY_REASON,
     LMSTUDIO_BASE_URL,
     MAX_ANSWER_BYTES,
@@ -28,6 +33,7 @@ from modelroom.lmstudio_server import (
     LmStudioKeyError,
     LmStudioModels,
     LmStudioServerError,
+    LmStudioTimeoutError,
     LoadedModel,
     LocalLmStudioServer,
     detect_lmstudio,
@@ -36,9 +42,8 @@ from modelroom.lmstudio_server import (
 )
 
 from fixture_http import FIXTURES, json_response
-from fixture_lmstudio import local_server_at
+from fixture_lmstudio import FakeAnswer, http_error, local_server_at, scripted_server
 
-CHAT_PATH = "/v1/chat/completions"  # refused: the transport has no chat call
 LLM_KEY = "qwen3.5-4b"
 EMBEDDING_KEY = "text-embedding-nomic-embed-text-v1.5"
 
@@ -49,13 +54,13 @@ class _Recording(BaseHTTPRequestHandler):
     answers: dict[str, tuple[int, bytes, dict]] = {}
     seen: list[tuple[str, str]] = []
     headers_seen: list[dict[str, str]] = []
+    bodies_seen: list[bytes] = []
 
     def _reply(self):
         type(self).seen.append((self.command, self.path))
         type(self).headers_seen.append({name.lower(): value for name, value in self.headers.items()})
         length = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
+        type(self).bodies_seen.append(self.rfile.read(length) if length else b"")
         status, body, extra = type(self).answers.get(self.path, (404, b"{}", {}))
         self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
@@ -77,6 +82,7 @@ def loopback(monkeypatch):
     _Recording.answers = {}
     _Recording.seen = []
     _Recording.headers_seen = []
+    _Recording.bodies_seen = []
     server = HTTPServer(("127.0.0.1", 0), _Recording)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -132,8 +138,8 @@ def test_the_transport_refuses_every_other_origin(other):
         LocalLmStudioServer(base_url=other)
 
 
-def test_the_whole_surface_is_one_call():
-    assert ALLOWED_CALLS == {("GET", "/api/v1/models")}
+def test_the_whole_surface_is_two_calls():
+    assert ALLOWED_CALLS == {("GET", "/api/v1/models"), ("POST", "/v1/chat/completions")}
 
 
 @pytest.mark.parametrize(
@@ -143,15 +149,16 @@ def test_the_whole_surface_is_one_call():
         ("POST", "/api/v1/models/unload"),
         ("POST", "/api/v1/models/download"),
         ("POST", "/api/v1/chat"),
-        ("POST", CHAT_PATH),
         ("GET", "/metrics"),
         ("GET", "/api/v0/models"),
+        ("POST", "/api/v0/chat/completions"),
         ("GET", "/v1/models"),
         ("POST", MODELS_PATH),
         ("GET", CHAT_PATH),
+        ("PUT", CHAT_PATH),
     ],
 )
-def test_only_the_one_call_is_allowed(loopback, method, path):
+def test_only_the_two_calls_are_allowed(loopback, method, path):
     lmstudio, recorder = loopback
 
     with pytest.raises(LmStudioServerError, match="refusing to call"):
@@ -160,25 +167,137 @@ def test_only_the_one_call_is_allowed(loopback, method, path):
     assert recorder.seen == []
 
 
-def test_the_one_call_reaches_the_server_as_it_was_named(loopback):
+def test_the_two_calls_reach_the_server_as_they_were_named(loopback):
     lmstudio, recorder = loopback
-    recorder.answers = {MODELS_PATH: (200, b"{}", {})}
+    recorder.answers = {MODELS_PATH: (200, b"{}", {}), CHAT_PATH: (200, b'{"choices": []}', {})}
 
     lmstudio("GET", MODELS_PATH)
+    chat = lmstudio("POST", CHAT_PATH, {"model": "m"})
 
-    assert recorder.seen == [("GET", MODELS_PATH)]
+    assert recorder.seen == [("GET", MODELS_PATH), ("POST", CHAT_PATH)]
+    assert recorder.bodies_seen == [b"", b'{"model": "m"}'] and chat.status == 200
 
 
-def test_a_chat_is_refused_before_a_connection_and_the_fixture_server_counts_none_through(loopback):
-    lmstudio, recorder = loopback
-    fixture = FixtureLmStudioServer({("GET", MODELS_PATH): Response(status=200, body=b"{}")})
+def test_a_chat_reaches_the_fixture_server_and_is_kept_in_its_calls():
+    fixture = FixtureLmStudioServer({("POST", CHAT_PATH): Response(status=200, body=b"{}")})
 
-    for server in (lmstudio, fixture):
-        with pytest.raises(LmStudioServerError, match="refusing to call POST"):
-            server("POST", CHAT_PATH, {"model": "m"})
+    fixture("POST", CHAT_PATH, {"model": "m"})
 
-    assert recorder.seen == []  # no connection was opened
-    assert not hasattr(lmstudio, "timeout_for")  # and no chat time limit exists
+    assert fixture.calls == [("POST", CHAT_PATH, {"model": "m"})]
+    with pytest.raises(LmStudioServerError, match="refusing to call GET"):
+        fixture("GET", CHAT_PATH)
+
+
+def test_the_list_gets_10_s_and_the_chat_600_s():
+    answer = FakeAnswer(body=b"{}")
+    lmstudio = scripted_server({MODELS_PATH: answer, CHAT_PATH: answer})
+
+    lmstudio("GET", MODELS_PATH)
+    lmstudio("POST", CHAT_PATH, {"model": "m"})
+
+    assert lmstudio._opener.opened == [("GET", MODELS_PATH, 10.0), ("POST", CHAT_PATH, 600.0)]
+    assert (lmstudio.timeout_for(MODELS_PATH), lmstudio.timeout_for(CHAT_PATH)) == (10.0, 600.0)
+
+
+# --- the limit of time: at the connection, at the body, at the body of an error --------------------------------
+
+_STAGES = {
+    "connect, as a TimeoutError": lambda: TimeoutError("timed out"),
+    "connect, as a URLError": lambda: urllib.error.URLError(TimeoutError("timed out")),
+    "read of the body": lambda: FakeAnswer(read_error=TimeoutError("timed out")),
+    "read of the body of an error": lambda: http_error(500, read_error=TimeoutError("timed out")),
+    "read of the body, as a URLError": lambda: FakeAnswer(read_error=urllib.error.URLError(TimeoutError("timed out"))),
+    "read of the body of an error, as a URLError": lambda: http_error(
+        500, read_error=urllib.error.URLError(TimeoutError("timed out"))
+    ),
+}
+
+
+@pytest.mark.parametrize("path", [MODELS_PATH, CHAT_PATH], ids=["list", "chat"])
+@pytest.mark.parametrize("stage", list(_STAGES))
+def test_a_limit_of_time_is_told_apart_at_all_three_places_for_the_list_and_the_chat(stage, path):
+    lmstudio = scripted_server({path: _STAGES[stage]()})
+
+    with pytest.raises(LmStudioTimeoutError) as caught:
+        lmstudio("GET" if path == MODELS_PATH else "POST", path, None if path == MODELS_PATH else {"model": "m"})
+
+    assert isinstance(caught.value, LmStudioServerError) and path in str(caught.value)
+
+
+def test_another_failure_to_connect_is_no_limit_of_time():
+    lmstudio = scripted_server({CHAT_PATH: urllib.error.URLError(ConnectionRefusedError("refused"))})
+
+    with pytest.raises(LmStudioServerError) as caught:
+        lmstudio("POST", CHAT_PATH, {"model": "m"})
+
+    assert not isinstance(caught.value, LmStudioTimeoutError)
+
+
+# --- a body that is not there: the list raises, the chat keeps the status --------------------------------------------
+
+
+def test_the_list_raises_for_a_body_it_cannot_read_and_for_a_body_above_the_limit():
+    unreadable = scripted_server({MODELS_PATH: FakeAnswer(read_error=OSError("reset"))})
+    oversized = scripted_server({MODELS_PATH: FakeAnswer(body=b"x" * (MAX_ANSWER_BYTES + 1))})
+    error_unreadable = scripted_server({MODELS_PATH: http_error(500, read_error=OSError("reset"))})
+
+    for lmstudio in (unreadable, oversized, error_unreadable):
+        with pytest.raises(LmStudioServerError) as caught:
+            lmstudio("GET", MODELS_PATH)
+        assert not isinstance(caught.value, LmStudioTimeoutError)
+
+
+@pytest.mark.parametrize("status", [200, 400, 401, 403, 429, 500])
+@pytest.mark.parametrize("why", [BODY_UNREAD, BODY_OVERSIZED])
+def test_the_chat_keeps_the_known_status_when_its_body_cannot_be_read_or_is_too_large(status, why):
+    if why == BODY_UNREAD:
+        reply = FakeAnswer(status, read_error=OSError("reset")) if status == 200 else http_error(status, read_error=OSError("reset"))
+    else:
+        big = b"x" * (MAX_ANSWER_BYTES + 1)
+        reply = FakeAnswer(status, big) if status == 200 else http_error(status, big)
+    lmstudio = scripted_server({CHAT_PATH: reply})
+
+    answer = lmstudio("POST", CHAT_PATH, {"model": "m"})
+
+    assert (answer.status, answer.body, answer.header(BODY_HEADER)) == (status, b"", why)
+
+
+@pytest.mark.parametrize("status", [200, 500])
+def test_a_value_error_at_the_read_leaves_the_status_at_the_chat_and_raises_at_the_list(status):
+    """A closed stream raises `ValueError` at the read: the chat keeps the status with `unread`, the list raises."""
+    def reply():
+        return FakeAnswer(status, read_error=ValueError("closed")) if status == 200 else http_error(status, read_error=ValueError("closed"))
+
+    answer = scripted_server({CHAT_PATH: reply()})("POST", CHAT_PATH, {"model": "m"})
+    assert (answer.status, answer.body, answer.header(BODY_HEADER)) == (status, b"", BODY_UNREAD)
+    with pytest.raises(LmStudioServerError) as caught:
+        scripted_server({MODELS_PATH: reply()})("GET", MODELS_PATH)
+    assert not isinstance(caught.value, LmStudioTimeoutError)
+
+
+@pytest.mark.parametrize("status", [200, 400, 401, 403, 429, 500])
+def test_a_chat_with_a_body_that_can_be_read_has_no_marker(status):
+    reply = FakeAnswer(status, b'{"a": 1}') if status == 200 else http_error(status, b'{"a": 1}')
+
+    answer = scripted_server({CHAT_PATH: reply})("POST", CHAT_PATH, {"model": "m"})
+
+    assert (answer.status, answer.body, answer.header(BODY_HEADER)) == (status, b'{"a": 1}', None)
+
+
+def test_the_fixture_server_keeps_the_status_of_a_chat_above_the_limit_and_raises_for_the_list():
+    big = b"x" * (MAX_ANSWER_BYTES + 1)
+    fixture = FixtureLmStudioServer(
+        {("POST", CHAT_PATH): [Response(status=200, body=big), Response(status=500, body=big)],
+         ("GET", MODELS_PATH): Response(status=200, body=big)}
+    )
+
+    first, second = fixture("POST", CHAT_PATH, {}), fixture("POST", CHAT_PATH, {})
+
+    assert [(r.status, r.body, r.header(BODY_HEADER)) for r in (first, second)] == [
+        (200, b"", BODY_OVERSIZED), (500, b"", BODY_OVERSIZED)
+    ]
+    with pytest.raises(LmStudioServerError, match="more than"):
+        fixture("GET", MODELS_PATH)
 
 
 def test_no_proxy_handler_no_redirect():
@@ -241,7 +360,7 @@ def test_no_constructor_way_admits_another_origin():
         LocalLmStudioServer("http://127.0.0.1:4321")
     with pytest.raises(TypeError):
         LocalLmStudioServer("http://127.0.0.1:4321", allowed_origins=frozenset({("127.0.0.1", 4321)}))
-    assert list(inspect.signature(LocalLmStudioServer).parameters) == ["base_url", "timeout"]
+    assert list(inspect.signature(LocalLmStudioServer).parameters) == ["base_url", "timeout", "chat_timeout"]
 
 
 def test_an_origin_assigned_after_the_construction_is_refused_before_a_connection():
@@ -301,6 +420,52 @@ def test_another_status_with_an_unreadable_body_is_still_a_fault_with_the_status
 
     with pytest.raises(LmStudioServerError, match="status 500, no body"):
         lmstudio("GET", MODELS_PATH)
+
+
+# --- 401 and 403 by call: the list asks for a token, the chat has a status like any other -----------------------
+
+
+@pytest.mark.parametrize("status", [401, 403])
+@pytest.mark.parametrize("form", ["error status", "returned status"])
+def test_a_401_or_403_of_the_list_is_the_key_reason_on_the_real_transport_in_both_forms(status, form):
+    if form == "error status":
+        reply = http_error(status, read_error=ValueError("the body was read"))
+    else:
+        reply = FakeAnswer(status, read_error=ValueError("the body was read"))
+    lmstudio = scripted_server({MODELS_PATH: reply})
+
+    with pytest.raises(LmStudioKeyError):
+        lmstudio("GET", MODELS_PATH)
+
+    assert (reply.fp.reads, reply.fp.closed) == (0, True) if form == "error status" else reply.closed  # closed, not read
+
+
+@pytest.mark.parametrize("status", [401, 403])
+@pytest.mark.parametrize("form", ["error status", "returned status"])
+def test_a_401_or_403_of_the_chat_is_handed_on_with_its_status_on_the_real_transport(status, form):
+    reply = http_error(status, b'{"error": "no"}') if form == "error status" else FakeAnswer(status, b'{"error": "no"}')
+
+    answer = scripted_server({CHAT_PATH: reply})("POST", CHAT_PATH, {"model": "m"})
+
+    assert (answer.status, answer.body) == (status, b'{"error": "no"}')
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_401_or_403_by_call_on_the_fixture_server(status):
+    fixture = FixtureLmStudioServer(
+        {("GET", MODELS_PATH): Response(status=status, body=b"{}"), ("POST", CHAT_PATH): Response(status=status, body=b"{}")}
+    )
+
+    with pytest.raises(LmStudioKeyError):
+        fixture("GET", MODELS_PATH)
+    assert fixture("POST", CHAT_PATH, {"model": "m"}).status == status
+
+
+def test_a_401_of_the_chat_whose_body_hits_the_limit_of_time_is_the_limit_not_the_status():
+    lmstudio = scripted_server({CHAT_PATH: http_error(401, read_error=TimeoutError("timed out"))})
+
+    with pytest.raises(LmStudioTimeoutError):
+        lmstudio("POST", CHAT_PATH, {"model": "m"})
 
 
 # --- the fixture server ---------------------------------------------------------------------------

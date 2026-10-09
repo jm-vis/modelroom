@@ -2,7 +2,7 @@
 
 `LOCAL_SERVERS` names every origin the guided mode reads, in the order it reads them: the Ollama
 daemon (what existed before, unchanged in behavior), a vLLM server (AP9-SV1) and an LM Studio server
-(AP9-LS-E; it is read and named, never measured). Each entry says
+(AP9-LS-E; it is read, named and, with one loaded model, measured). Each entry says
 where its transport comes from, the row it adds to the start screen, what it does in step 4, and
 the rows it adds to the card of step 5. The start screen, step 4 and both card paths loop over
 this list; a server added to it reaches all three without a change anywhere else.
@@ -100,7 +100,7 @@ def _asked(run: "GuidedRun", rows: list[Choice], unavailable: list[str]) -> list
 
 
 # The answer line names a server's row in words; an Ollama row is its local name already.
-# LM Studio offers no row in 0.2.0 (it is not measured), but an answer file may name `lmstudio`.
+# An answer file may name `lmstudio`; its row is offered for one loaded model only (`guided_lmstudio.offer`).
 ROW_WORDS = {guided_vllm.ROW: "vLLM server", guided_lmstudio.ROW: "LM Studio server"}
 
 

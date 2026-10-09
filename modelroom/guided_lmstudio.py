@@ -1,25 +1,31 @@
-"""The LM Studio server in the guided mode: its start row, its note in step 4, and nothing to measure.
+"""The LM Studio server in the guided mode: its start row, its row in step 4, its four rows on the card.
 
 A server that answers on `127.0.0.1:1234` with the model list of LM Studio gets a row on the start screen
-that says how many models it has loaded. Step 4 does not offer it: LM Studio is not measured
-(`loadtest_lmstudio`), so there is no row in the one list, no request that names a model, no number and no
-row on the card. The four functions are the ones the entry of the table takes (`LocalServer.start_fact`,
-`offer`, `measure`, `card_facts`); they are not registered here -- AP9-LS-E does that -- so the table and
-the guided run are unchanged by this module.
+that says how many models it has loaded. With **exactly one loaded GGUF instance** step 4 offers it as a row
+of the one list; the measurement (`loadtest_lmstudio`) is one request at a time, timed on the wall, and the
+number is shown in step 4 and on the card with what it is: not ranked, nothing written, a busy server reads
+slower, and the server's own load can stay unseen. With no or several loaded models there is a note and no
+row; with a context other than the one this run asks for the number would not count, so there is a note and
+no chat. The four functions are the ones the entry of the table takes (`LocalServer.start_fact`, `offer`,
+`measure`, `card_facts`).
 
-**Nothing is persisted**, and nothing is looked at beyond the model list: no model folder, no process, no
-`lms`. What the start screen read lives in the run's `ServerRun` and nowhere else. This module never imports
-`guided.py`, and it imports `runtimes.py` only when a step 4 asks for an `Offer` (`runtimes.py` will import
-this module at load time).
+**Nothing is persisted**, and nothing is looked at beyond the model list and the one request: no model
+folder, no process, no `lms`. What the start screen read and what step 4 measured live in the run's
+`ServerRun` and nowhere else. This module never imports `guided.py`, and it imports `runtimes.py` only when a
+step 4 asks for an `Offer` (`runtimes.py` imports this module at load time). The one thing it takes from
+`measurements.py` at run time is the prompt of the protocol (`shipped_protocol().prompt`).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .dialog import Choice
 from .intro import Fact
-from .lmstudio_server import LmStudioKeyError, LmStudioServerError, read_lmstudio_models
-from .loadtest_lmstudio import step_note
+from .lmstudio_server import LmStudioKeyError, LmStudioModels, LmStudioServerError, read_lmstudio_models
+from .loadtest import LoadTestError
+from .loadtest_lmstudio import LmStudioMeasurement, run_lmstudio_load_test
+from .measurements import shipped_protocol
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from pathlib import Path
@@ -34,6 +40,15 @@ ROW = "lmstudio"
 LABEL = "server"
 NAME = "LM Studio"
 _ORIGIN = "127.0.0.1:1234"
+MEASURED = "1 of 1 measured"
+NO_MODEL_NOTE = "LM Studio: no model loaded, nothing to measure"
+SEVERAL_NOTE = "LM Studio: {count} models loaded, measure with one loaded model"
+OTHER_CONTEXT_NOTE = "the number will not count: LM Studio runs context {server}, this run asks for {run}"
+NOT_RANKED_NOTE = "LM Studio states no load, so a busy server reads slower; not ranked, nothing written"
+# The three further rows of the card under the number (each at most 65 characters, the note column).
+CARD_NOT_RANKED = "package unknown; not ranked, nothing written"
+CARD_BUSY = "LM Studio states no load, so a busy server reads slower"
+CARD_UNSEEN = "never asks to load; an unseen server load can affect the time"
 
 
 def start_fact(origins) -> Fact | None:
@@ -58,25 +73,32 @@ def start_fact(origins) -> Fact | None:
 
 
 def _loaded_words(loaded) -> str:
-    """`1 loaded: <id>, context <n>`, `<k> models loaded`, or `0 loaded`: the id is shown, never sent anywhere."""
+    """`1 loaded: <id>, context <n>`, `<k> models loaded`, or `0 loaded`: the id is shown, and sent to the chat."""
     if len(loaded) == 1:
         return f"1 loaded: {loaded[0].instance_id}, context {loaded[0].context_length}"
     return f"{len(loaded)} models loaded" if loaded else "0 loaded"
 
 
 def offer(run: "GuidedRun", config: Configuration | None, scenario: Scenario, results_dir: Path | None) -> "Offer":
-    """Step 4 up to the question: the note, and no row -- there is nothing to measure.
+    """Step 4 up to the question: one row for exactly one loaded instance, else the note and no row.
 
-    The note is the sentence of `loadtest_lmstudio` for a server that answered, the reason for one that asks
-    for a token, and nothing where the start screen read no server. No row means no question for this
-    server and no request: the server is not asked for anything here.
+    A server that asks for a token has neither row nor note (the start row says it), and one the start
+    screen did not read has nothing. With a context other than the run's the row is still offered; the note
+    that the number will not count comes before the question, and a yes then measures nothing.
     """
-    from .runtimes import Offer  # deferred: runtimes.py will import this module at load time (a cycle)
+    from .runtimes import Offer  # deferred: runtimes.py imports this module at load time (a cycle)
 
-    note = step_note(run.servers.found.get(ROW))
-    if note is not None:
-        run.screen.note(note)
-    return Offer()
+    found = run.servers.found.get(ROW)
+    if not isinstance(found, LmStudioModels):
+        return Offer()
+    if len(found.loaded) != 1:
+        run.screen.note(SEVERAL_NOTE.format(count=len(found.loaded)) if found.loaded else NO_MODEL_NOTE)
+        return Offer(state=found)
+    instance = found.loaded[0]
+    if instance.context_length != scenario.context_requested:
+        run.screen.note(OTHER_CONTEXT_NOTE.format(server=instance.context_length, run=scenario.context_requested))
+    row = Choice(ROW, f"LM Studio server  {instance.instance_id}, context {instance.context_length}")
+    return Offer((row,), state=found)
 
 
 def measure(
@@ -87,16 +109,55 @@ def measure(
     offered: "Offer",
     picked: list[str],
 ) -> str | None:
-    """Nothing was offered, so nothing is measured, whatever `picked` holds (an answers file may name `lmstudio`).
+    """Measure the one loaded instance where its row was picked; `1 of 1 measured`, or `None`.
 
-    The server is not called, nothing is kept for the card and the balance of step 4 hears nothing of it.
+    Nothing runs where the row was not picked (an answers file may name `lmstudio` all the same), where
+    the offer holds no single instance, or where its context is not the run's. A row of the table of the
+    contract is one line and `None`; a fault outside the table is `nothing measured for LM Studio`. In all
+    three step 4 goes on with the other servers. Only a measurement without a problem is kept for the card.
     """
-    return None
+    found = offered.state
+    if ROW not in picked or not isinstance(found, LmStudioModels) or len(found.loaded) != 1:
+        return None
+    instance = found.loaded[0]
+    if instance.context_length != scenario.context_requested:
+        return None
+    try:
+        measurement = run_lmstudio_load_test(
+            run.servers.transports[ROW], instance, scenario, shipped_protocol().prompt
+        )
+    except (LoadTestError, LmStudioServerError) as exc:
+        run.failed(f"nothing measured for LM Studio: {exc}")
+        return None
+    if measurement.problem is not None:
+        run.screen.note(f"{NAME}: {measurement.problem}")
+        return None
+    for line in measurement_lines(measurement, run.screen.glyphs.skip):
+        run.screen.note(line)
+    run.servers.measured[ROW] = measurement
+    return MEASURED
+
+
+def measurement_lines(measurement: LmStudioMeasurement, dash: str) -> list[str]:
+    """The two notes of a number: the speed with its range, and what it is."""
+    speed = f"{measurement.request_tps:.1f} tok/s ({measurement.request_min:.1f}{dash}{measurement.request_max:.1f})"
+    return [
+        f"measured {NAME} {measurement.instance_id}: {speed}, one request, wall time, context {measurement.context}",
+        NOT_RANKED_NOTE,
+    ]
 
 
 def card_facts(run: "GuidedRun") -> tuple[Fact, ...]:
-    """No row on the card: there is no number to show and no outcome the run keeps."""
-    return ()
+    """Four rows on the card where step 4 kept a number, else none: the number, then what it is."""
+    measurement = run.servers.measured.get(ROW)
+    if not isinstance(measurement, LmStudioMeasurement) or measurement.problem is not None:
+        return ()
+    return (
+        Fact(LABEL, f"{NAME} server", f"{measurement.request_tps:.1f} tok/s, one request, wall time"),
+        Fact("", "", CARD_NOT_RANKED),
+        Fact("", "", CARD_BUSY),
+        Fact("", "", CARD_UNSEEN),
+    )
 
 
-__all__ = ["LABEL", "NAME", "ROW", "card_facts", "measure", "offer", "start_fact"]
+__all__ = ["LABEL", "NAME", "ROW", "card_facts", "measure", "measurement_lines", "offer", "start_fact"]

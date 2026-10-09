@@ -5,4 +5,4 @@ projector file
 lms is not on the PATH yet; this line calls it where LM Studio put it (PowerShell)
 in LM Studio: load it with context length 8192, then start its server (the server switch
 in LM Studio, or lms server start)
-then run modelroom again: it finds the server; LM Studio is not measured yet
+then run modelroom again: it finds the server and measures the loaded model

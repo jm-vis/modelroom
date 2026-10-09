@@ -599,7 +599,7 @@ run llama.cpp; it holds approximately and has not been checked against a load in
 
 ## LM Studio
 
-LM Studio is detected, not measured. On a machine that has it, each Hugging Face GGUF package gets
+LM Studio is detected and, with one model loaded, measured. On a machine that has it, each Hugging Face GGUF package gets
 an entry of its own in the list at the end of step 5, `LM Studio · <packager> · <quant>`, with the
 value `lmstudio <owner>/<repo>@<quant>`, beside the Ollama entry of the same package (a machine
 with LM Studio and no Ollama sees the LM Studio entry alone). The table itself is the same:
@@ -640,8 +640,7 @@ There is no question, and the output is the one printed before, where `lms` is n
 and the hint `if lms is not found: it is in .lmstudio/bin in your home folder`), where the package
 is on disk already (`is on disk already (size checked)`), where the entry is locked, and where the
 disk is too small (`not enough disk for #7: ...`). modelroom runs `lms` once, for the download you
-said yes to, and never otherwise: not to detect it, not to measure, not to load, unload or
-download a model through the server. Where `lms` is not in the `PATH` but where LM Studio put it,
+said yes to, and never otherwise: not to detect it and not to measure. Where `lms` is not in the `PATH` but where LM Studio put it,
 the printed line calls it from the home folder instead,
 `& "$env:USERPROFILE\.lmstudio\bin\lms.exe" get --gguf https://huggingface.co/...` in PowerShell
 (not in `cmd.exe`) on Windows, `"$HOME/.lmstudio/bin/lms" get --gguf https://huggingface.co/...`
@@ -670,11 +669,24 @@ Studio). A server that asks for an API token is named at the start (`asks for an
 read further. No minimum version is checked; the server must answer `GET /api/v1/models` with the
 version 1 list of its models.
 
-**What is not there yet.** LM Studio is detected and gets list entries, a download command and a
-disk check; it is not measured yet, because it may load a model on request. The start screen names
-a running server and how many models it has loaded, step 4 says `LM Studio is not measured: it may
-load a model on request`, and no chat is sent to the server, no measurement is shown and no
-measurement is written.
+**Measurement.** The start screen names a running server and how many models it has loaded. With
+exactly one GGUF model loaded, step 4 offers the server as a row of its own, `LM Studio server
+<id>, context <n>`. A yes sends the model one chat of 128 tokens after the other, a warm-up and three
+runs, with the prompt of the protocol, and times each on the wall. modelroom reads the model list
+before the warm-up and after every request, and the measurement ends without a number when the loaded
+model or its context changed, a request fails, does not answer with status 200, does not end with
+`length` after 128 tokens, or takes more than 600 s; the line says which. The number is tokens per
+second for one request on the wall: thinking tokens count, a busy server reads slower (LM Studio
+states no load), and it is never mixed with an Ollama number. Step 4 shows it, the card carries it
+with `package unknown; not ranked, nothing written`, and nothing is saved or ranked. With no model
+loaded, with several, or with a context other than the one this run asks for, step 4 says so and sends
+no chat. modelroom never asks LM Studio to load, unload or download a model. It reads the model list
+before and after every request and drops the measurement when the loaded model changed; a load the
+server does on its own inside a request can stay unseen and then sits in the measured time.
+
+**What is not there yet.** The LM Studio number is for one loaded model and one request at a time:
+it is not ranked, not saved and not set beside an Ollama number, and there is no measurement of
+several requests at once, because LM Studio has no metrics page to count them.
 
 ## Files
 

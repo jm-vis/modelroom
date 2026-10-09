@@ -140,7 +140,7 @@ def on_disk_text(rank: int) -> str:
 def hint_lines(form: str | None, system: str, context: int, with_command: bool = True) -> list[str]:
     """The lines under the command of a chosen LM Studio row: about the call form, then what to do in LM Studio.
 
-    The last one is the negative branch of the measuring switch: LM Studio is found, not measured. Without
+    The last one says what the next run does: it finds the server and measures the loaded model. Without
     a command (the package is on disk already) the lines about the call form go.
     """
     lines: list[str] = []
@@ -153,7 +153,7 @@ def hint_lines(form: str | None, system: str, context: int, with_command: bool =
         f"in LM Studio: load it with context length {context}, then start its server "
         "(the server switch in LM Studio, or lms server start)"
     )
-    lines.append("then run modelroom again: it finds the server; LM Studio is not measured yet")
+    lines.append("then run modelroom again: it finds the server and measures the loaded model")
     return lines
 
 

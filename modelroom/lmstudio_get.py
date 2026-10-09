@@ -41,7 +41,7 @@ if TYPE_CHECKING:  # pragma: no cover - the run and its context are passed in, n
 DOWNLOAD_LABEL = "download"
 CANCELED_HINT = "a canceled download resumes with the same line"
 LOAD_HINT = "in LM Studio: load it with context length {context}, then start its server"
-AGAIN_HINT = "then run modelroom again: it finds the server; LM Studio is not measured yet"
+AGAIN_HINT = "then run modelroom again: it finds the server and measures the loaded model"
 
 
 class LmsStartError(Exception):
