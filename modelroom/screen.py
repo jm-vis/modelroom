@@ -507,8 +507,13 @@ def models_fact(names: Sequence[str], packages: int, accounts: Sequence[str]) ->
     return Fact("models", names_words(names, "none"), f"{counted} from {named_accounts(accounts)}")
 
 
-def speed_fact(measured: int, fastest: tuple[str, float] | None, reason: str | None = None, from_measurement: bool = False) -> Fact:
+def speed_fact(
+    measured: int, fastest: tuple[str, float, str | None] | None, reason: str | None = None, from_measurement: bool = False
+) -> Fact:
     """The speed row of the card: how many packages were measured here, and which was fastest.
+
+    `fastest` is (name, speed, protocol of the counted measurement); the protocol is named only
+    where the tuple carries one, never guessed.
 
     Where no row carries a speed, `reason` is why a measurement a row has did not count
     (`#3 measured with 1 request, ranking assumes 3`); only without one does the row say to measure.
@@ -516,8 +521,9 @@ def speed_fact(measured: int, fastest: tuple[str, float] | None, reason: str | N
     """
     if not measured or fastest is None:
         return Fact("speed", SPEED_NONE_COUNTED if from_measurement else SPEED_NOT_MEASURED, reason or MEASURE_HINT)
-    name, speed = fastest
-    return Fact("speed", f"{measured} measured", f"fastest {name} at {speed:.1f} tok/s")
+    name, speed, protocol = fastest
+    version = "" if protocol is None else f", protocol {protocol}"
+    return Fact("speed", f"{measured} measured", f"fastest {name} at {speed:.1f} tok/s{version}")
 
 
 def result_fact(path: str, ranked: int, set_aside: Sequence[tuple[str, int]], dot: str = "·") -> Fact:

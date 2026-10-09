@@ -42,7 +42,7 @@
    hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 1 of 3
    hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 2 of 3
    hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: run 3 of 3
-   measured hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: <speed>, context 8k
+   measured hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M: <speed>, context 8k, protocol v2
  ✓ Measurement     1 of 1 measured
 
  ── Step 5 of 5  Results ────────────────────────────────────────────────
@@ -51,7 +51,7 @@
  machine   laptop-00000000         laptop, 12 GB graphics, 128 GB memory, measured today
  models    Qwen3.5-9B, DeepSeek-R1-0528-Qwen3-8B  24 packages from unsloth and Ollama
  context   8k (entered), KV cache f16 (assumed), 1 request (from 1 user)
- speed     1 measured              fastest DeepSeek-R1-0528-Qwen3-8B at <speed>
+ speed     1 measured              fastest DeepSeek-R1-0528-Qwen3-8B at <speed>, protocol v2
  result    docs\models.md          24 packages ranked, 0 no fit
 
  laptop-00000000 · context S 8k

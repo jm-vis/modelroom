@@ -2840,7 +2840,7 @@ and is never claimed.
 
 ### Measurement protocol v1
 
-Shipped as `modelroom/protocol_v1.toml` and read by `load_protocol()`/`shipped_protocol()`:
+Shipped as `modelroom/protocol_v1.toml` and read by `protocol_for("v1")`:
 one warm-up run, then three measured runs, each `POST /api/generate` with `raw = true` (no
 template, no system prompt stored in the model), `stream = false`, `num_predict = 128`,
 `temperature = 0.0`, `seed = 42`, a neutral English prompt of a few sentences, and `num_ctx`
@@ -2856,19 +2856,42 @@ new protocol version, never an edit of version 1.
 that is reached ends that measurement as a fault with its reason; it is never a `done_reason`
 and never a stored measurement.
 
+### Measurement protocol v2
+
+Shipped as `modelroom/protocol_v2.toml` (`protocol_version = 2`) and read by `protocol_for("v2")`.
+It differs from version 1 in one request field: `raw = false`. The daemon applies the template of
+the model's Modelfile, and the prompt is the user turn. A system text stored in the Modelfile
+goes into the prompt as well -- the package is measured the way a user runs it, so the share of the
+prompt differs per package (template and system tokens) while the 128 decoded tokens are the same.
+Everything else is version 1: `stream = false`, `num_predict = 128`, `temperature = 0.0`,
+`seed = 42`, the same prompt text, `num_ctx` equal to the scenario's `context_requested`, one
+warm-up run and three measured runs, and the same validity rule (`done_reason` `length`,
+`eval_count` equal to `num_predict`, `eval_duration` above zero, the context reserve). There is no
+`think` field: a model that cannot think refuses it, thinking tokens are decoded tokens and sit in
+`eval_count`, and `thinking` in the answer is not read.
+
+`Protocol.protocol_version` is `1` or `2`, and `options.raw` is `true` exactly for version 1 (a
+file that says otherwise is refused with `protocol version <k> ships raw = <v>`).
+`protocol_for(version)` returns the shipped protocol of `"v1"` or `"v2"` (each loaded once; any
+other word is a `ValueError`, `no measurement protocol <version>`); `load_protocol(path)` has no
+default path. `shipped_protocol()` is `protocol_for("v2")` and stays the name the writer calls: a
+new protocol version is a new writer, there is no second function name and no choice for the
+caller. Version 1 stays in the package for the records it wrote.
+
 ### MeasurementRecord
 
 One speed measurement of one package on one profile, schema 2, never changed once written.
 
 - `measurement_id` is `<measured_at as YYYYMMDDTHHMMSSZ>-<8 hex>` and must agree with
   `measured_at`; `new_measurement_id` draws the 8 hex characters at random.
-- `protocol` is `v1` for a load test after the protocol above, `none` for a measurement migrated
-  from a schema-1 profile. `none` requires `validity` `unchecked`, no runs and
-  `comparable = false`. `v1` is `valid` or `invalid`; `valid` is checked against the protocol
-  rule and requires the speeds.
+- `protocol` is `v1` or `v2` for a load test after that protocol version, `none` for a measurement
+  migrated from a schema-1 profile. `none` requires `validity` `unchecked`, no runs and
+  `comparable = false`. `v1` and `v2` are `valid` or `invalid`; `valid` is checked against the
+  protocol rule of the file of its own version (`protocol_for(record.protocol)`) and requires the
+  speeds. The rules for `v1` and `v2` are the same; a stored `v1` record is never rewritten.
 - `tps_mean`, `tps_min`, `tps_max` are all set or all `None`, `tps_mean > 0`,
-  `tps_min <= tps_max`. With protocol `v1`, `0 < tps_min <= tps_mean <= tps_max` and they are the
-  mean, minimum and maximum over `runs`, so a `v1` record without runs carries none. A migrated schema-1 range is carried over unchanged
+  `tps_min <= tps_max`. With protocol `v1` or `v2`, `0 < tps_min <= tps_mean <= tps_max` and they are the
+  mean, minimum and maximum over `runs`, so a `v1` or `v2` record without runs carries none. A migrated schema-1 range is carried over unchanged
   (schema 1 only required `low <= high`, so `0.0` or a range that misses the mean stays as it
   was).
 - `comparable` is decided by the load test (daemon digest and `context_length` equal to the
@@ -4144,7 +4167,7 @@ an unknown parameter count and is not `legacy`. Seven steps:
 
 `ample`, `fits` and `tight` rank alike and keep their word in the row; `unknown` and `no_fit` are set
 apart as before. "Best" means the same model, less compressed: modelroom rates no model family
-against another. A measurement counts (`group_zero_measurement`) when it is protocol `v1`, `valid`,
+against another. A measurement counts (`group_zero_measurement`) when it is protocol `v1` or `v2`, `valid`,
 comparable, for the same `context_requested` and the same `requests` as the ranking and for
 exactly this package content (manifest digest, or repo, revision and a weight file's digest); the
 newest one wins. A measurement always runs one request, so a ranking of more requests has no
@@ -5128,7 +5151,14 @@ unsupported or it does not read.
 
 One row of one machine's ranking. `package_identity` is the package identity triple;
 `quantization` is `unknown` when the package declares none, `package_context` is `null` then.
-`measurement_group` 0 carries `measurement_id` and `speed_tps`, group 1 carries neither. The
+`measurement_group` 0 carries `measurement_id` and `speed_tps`, group 1 carries neither. A
+group 0 row also carries `speed_protocol` (`v1` or `v2`), the protocol of the counted measurement,
+and a group 1 row never does (`null` in the JSON, like `measurement_id`). The rule runs one way
+only: a group 0 row without `speed_protocol` stays valid -- a document written before 1.0.0 has
+none, and the card then names no version, it never fills in `v1`. The example below shows that
+older form; a row of a measured entry written now ends `"measurement_group": 0, "measurement_id":
+"20260923T083000Z-5c1e9a07", "speed_protocol": "v1", "speed_tps": 50.4` (`v2` for a measurement
+of protocol v2). The schema version of the document does not change. The
 `fit` is always `ample`, `fits` or `tight` -- the other two classes are set aside.
 
 ```json
@@ -5672,14 +5702,14 @@ single-file packages of the same repository, revision and weight digest are the 
 two names and share a measurement on purpose.
 
 **The protocol is not a parameter.** `run_load_test` always runs `shipped_protocol()`, because the
-record it writes says `protocol: v1` and `MeasurementRecord` checks a valid one against that same
-shipped definition. A run after another prompt, seed or warm-up count would be stored under a name
+record it writes says `protocol: v2` and `MeasurementRecord` checks a valid one against the
+shipped definition of its own version. A run after another prompt, seed or warm-up count would be stored under a name
 it does not deserve, and no validator could tell afterwards. A new protocol version is a new
 writer.
 
 **The run** (`run_load_test`). In this order: `GET /api/version` (stored as `daemon_version`,
 never a validity criterion), the machine's load once (`LoadState`), the warm-up run, then the
-measured runs of protocol v1. **`/api/ps` is read after every run, the warm-up included**, so
+measured runs of protocol v2 (four readings, none before the warm-up). **`/api/ps` is read after every run, the warm-up included**, so
 every measured run stands between two observations. Each `POST /api/generate` carries the local
 name, the protocol's prompt, `raw`, `stream` and its options plus `num_ctx` = the ranking's
 `context_requested`. The warm-up is not one of `runs`.
@@ -6734,7 +6764,7 @@ report a reader looks at once the run is over:
 | `models` | the base models of the snapshot, by name | `<p> packages from <up to three packager accounts, else "and n more">` |
 | `context` | the scenario sentence of the Markdown head after its first word, which is the row's own label: `32k (entered), KV cache f16 (assumed), 3 requests (from 25 users)` (decided 2026-09-26) | -- |
 | `load` | only beyond `OLLAMA_REQUEST_HINT` (8) requests: the hint of the Markdown head's `Load:` line, wrapped on rows of its own so no line is wider than 100 columns | -- |
-| `speed` | `not measured`, `none counted` or `<n> measured` | `fastest <name> at 41.1 tok/s`; where no row carries a speed, the rows whose measurement counts nowhere here, each with its reason as the `speed` note under the table says it (`#3 measured with 1 request, ranking assumes 3`, `#8 measured, not valid`, `#2 measured, not comparable`, `#4 measured at context 32k, this ranking's is 8k`; the kinds of both notes in one list, in the order the ranking first meets them, joined by ` · ` where that fits 65 columns, else the first; by count, `6 rows measured with ...` or `6 rows measured, not counted here`, only where the ranks of one kind alone would make the row wider than 100 columns), the value then `none counted`; only without such a row the value is `not measured` and the note `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table, which the card takes over and no other (AP9-FR-N2, c2) |
+| `speed` | `not measured`, `none counted` or `<n> measured` | `fastest <name> at 41.1 tok/s, protocol v2` (the protocol of the counted measurement, `v1` for a stored record of version 1; a document without `speed_protocol` gives `fastest <name> at 41.1 tok/s`, no version is guessed); where no row carries a speed, the rows whose measurement counts nowhere here, each with its reason as the `speed` note under the table says it (`#3 measured with 1 request, ranking assumes 3`, `#8 measured, not valid`, `#2 measured, not comparable`, `#4 measured at context 32k, this ranking's is 8k`; the kinds of both notes in one list, in the order the ranking first meets them, joined by ` · ` where that fits 65 columns, else the first; by count, `6 rows measured with ...` or `6 rows measured, not counted here`, only where the ranks of one kind alone would make the row wider than 100 columns), the value then `none counted`; only without such a row the value is `not measured` and the note `say Yes in step 4 to measure an installed package` (for a machine entered by hand `a machine entered by hand is never measured`) -- the rule of the `speed` note under the table, which the card takes over and no other (AP9-FR-N2, c2) |
 | `server` | only for a registered server step 4 read a served model of (AP9-SV1): `vLLM` | whether its number counts for this run (AP9-UX E): `48.2 tok/s total, 20 requests at once, counts for this run`, `..., not counted` (another model or another context), `..., counts, no fit` (no package of this folder); `not measured in this run`; a measurement fault its reason (`invalid (<reason>)`, `not comparable (<reason>)`), cut at 65 columns. On a row of its own without a label `identity stated · fit: 32 at once, fits` (`no fit computed` without a fit, `no package of this folder` without a package). The same rows on the card of a run with nothing to rank (`views.show_nothing`) |
 | `result` | the Markdown path **relative to the results folder** | `<ranked_total> packages ranked, <k> no fit` (`0 no fit` where there is none), and every other set-aside reason with its count behind a `·` |
 
@@ -6886,7 +6916,7 @@ pointer row, one candidate, never all (it measured all three in the hand test of
 config, scenario, results_dir) -> Offer` (its notes, its rows, why it could not be read) and
 `measure(...) -> str | None` (`local_servers.LocalServer`, replacing `step`).
 
-The daemon's part. A measurement runs one request (protocol v1): the measurement gets a copy of the
+The daemon's part. A measurement runs one request (protocol v2): the measurement gets a copy of the
 run's scenario with `requests = 1` and the same context, the render of step 5 the whole scenario. When
 the ranking assumes more than one request, the step's first line says so: `measurements run one
 request; this ranking assumes 3` (with another server on the start screen `Ollama measurements ...`)
@@ -6915,20 +6945,24 @@ download)` where no other server offers a row, else `Ollama: no package of this 
 installed here`. Before the runs the step notes that the load is read once and that the model behind
 the name must not change, and the progress of each run is a note of its own. Each measurement is
 written as its own file and reported in one note: `measured <name>: 41.1 tok/s (39.8–42.3), context
-32k`; a record that is not valid or not comparable carries **what it is missing** instead (`<name>:
+32k, protocol v2` (the protocol of the record shown); a record that is not valid or not comparable carries **what it is missing** instead (`<name>:
 not comparable (<reason>)`) and the run still ends `0`.
 
 **A run that ends early (AP9-FR-N2, f; GF decision 2026-10-01, option A).** Where a stored record is
-`invalid` and its first invalid run did not end with `done_reason 'length'`, a second note follows the
-fault line, with the neutral name the fault line has (`record.ollama_name`) and only what was
-observed and the condition it breaks: `<name>: run 1 ended after 2 of 128 tokens (done_reason
-'stop'); protocol v1 counts a run only when it reaches 128 tokens (done_reason 'length')`. The
+`invalid` (protocol `v1` or `v2`) and its first invalid run did not end with `done_reason 'length'`,
+a second note follows the fault line, with the neutral name the fault line has (`record.ollama_name`)
+and only what was observed and the condition it breaks: `<name>: run 1 ended after 2 of 128 tokens
+(done_reason 'stop'); protocol v<k> counts a run only when it reaches 128 tokens (done_reason
+'length')`, `k` the version of the record, read from `protocol_for(record.protocol)`. Only for a
+stored `v1` record the sentence ends with `; protocol v2 sends the prompt through the model's
+template, say Yes to measure again`; a `v2` record gets the sentence without it. The
 numbers are `record.runs[i].eval_count`, its `done_reason` and `protocol.options.num_predict`, read
 from the record **after** the sink (so `done_reason` is a known word or `unknown`, `eval_count` an
 integer); no cause is named on the screen. It is display only: the stored reason and the record stay
-as protocol v1 forms them, a speed run of such a model counts nowhere, and a protocol that fits it is
-a new protocol version, not an edit of v1 ("Measurement protocol v1"). The same note stands for the
-measurement of the active SSH target (`guided_remote_measure`).
+as the protocol of their own version forms them, a speed run of such a model counts nowhere under
+that version, and a protocol that fits it is a new protocol version, not an edit of v1 ("Measurement
+protocol v1"). The same note stands for the measurement of the active SSH target
+(`guided_remote_measure`, through `report_problem`).
 
 The vLLM part (AP9-SV1, "Local servers and the vLLM load test"). The server runs on this machine, so
 it passes the daemon's own check, one function for both (`guided_loadtest.local_measure_target`,

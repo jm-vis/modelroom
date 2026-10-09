@@ -87,10 +87,13 @@ def _card_block(document: RenderDocument, machine: str | None) -> MachineRanking
     return next((block for block in blocks if block.status == "ranked"), own or (blocks[0] if blocks else None))
 
 
-def _measured_speeds(block: MachineRanking | None) -> tuple[int, tuple[str, float] | None]:
-    """How many rows of this machine's ranking carry a measured speed, and which is the fastest."""
+def _measured_speeds(block: MachineRanking | None) -> tuple[int, tuple[str, float, str | None] | None]:
+    """How many rows of this machine's ranking carry a measured speed, and which is the fastest
+    (name, speed, protocol of the counted measurement -- `None` for a document that carries none)."""
     rows = [] if block is None else block.ranked
-    measured = [(_model_name(entry), entry.speed_tps) for entry in rows if entry.speed_tps is not None]
+    measured = [
+        (_model_name(entry), entry.speed_tps, entry.speed_protocol) for entry in rows if entry.speed_tps is not None
+    ]
     return len(measured), max(measured, key=lambda entry: entry[1]) if measured else None
 
 

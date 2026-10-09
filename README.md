@@ -356,7 +356,8 @@ counts when it serves a model you chose, at the context you chose). An LM Studio
 at the start but not offered here: it is not measured (see "LM Studio"). **Yes** shows one list: the
 installed packages and the vLLM server, nothing marked, and you pick what to measure. An Ollama
 measurement runs a short prompt through the package and records tokens per second; it never
-downloads anything. **No** skips new measurements; a measurement stored earlier for the same package
+downloads anything. The prompt goes through the template of the model (protocol v2); measurements
+stored under protocol v1 keep counting and are shown as such (`protocol v1`). **No** skips new measurements; a measurement stored earlier for the same package
 content at the same context stays in the ranking, and a row without one shows `–` for speed. An
 Ollama measurement always runs one request; when the ranking assumes more, the step says so first, and a
 measured row then names why its speed does not count there. The balance says `vLLM measured` only

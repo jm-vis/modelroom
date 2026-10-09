@@ -29,7 +29,7 @@ from .loadtest import (
     weight_digest,
 )
 from .measure import read_os_identity
-from .measurements import MeasurementExistsError, MeasurementRecord, Scenario, run_invalid_reason, shipped_protocol
+from .measurements import MeasurementExistsError, MeasurementRecord, Scenario, protocol_for, run_invalid_reason
 from .neutral import NeutralError, neutral_record
 from .profile import os_fingerprint
 from .screen import context_tokens_text
@@ -196,7 +196,7 @@ def _measurement_note(record: MeasurementRecord, dash: str) -> str:
     """
     context = f"context {context_tokens_text(record.scenario.context_requested)}"
     speed = f"{record.tps_mean:.1f} tok/s ({record.tps_min:.1f}{dash}{record.tps_max:.1f})"
-    return f"measured {record.ollama_name}: {speed}, {context}"
+    return f"measured {record.ollama_name}: {speed}, {context}, protocol {record.protocol}"
 
 
 def _record_problem(record: MeasurementRecord) -> str | None:
@@ -212,8 +212,9 @@ def _record_problem(record: MeasurementRecord) -> str | None:
 
 _EARLY_END = (
     "{name}: run {number} ended after {count} of {wanted} tokens (done_reason {got!r}); "
-    "protocol v1 counts a run only when it reaches {wanted} tokens (done_reason {expected!r})"
+    "protocol v{version} counts a run only when it reaches {wanted} tokens (done_reason {expected!r})"
 )
+_V1_RETRY = "; protocol v2 sends the prompt through the model's template, say Yes to measure again"
 
 
 def early_end_line(record: MeasurementRecord) -> str | None:
@@ -221,18 +222,19 @@ def early_end_line(record: MeasurementRecord) -> str | None:
     (AP9-FR-N2, f): the tokens it reached, the count and `done_reason` the protocol asks. Only what was
     observed and the condition it breaks, never a cause; read from the record after the sink, so
     `done_reason` is a known word and `eval_count` an integer. `None` for any other invalid record."""
-    if record.protocol != "v1" or record.validity != "invalid" or record.ollama_name is None:
+    if record.protocol not in ("v1", "v2") or record.validity != "invalid" or record.ollama_name is None:
         return None
-    protocol = shipped_protocol()
+    protocol = protocol_for(record.protocol)
     for number, run in enumerate(record.runs, start=1):
         if run_invalid_reason(run, protocol, record.scenario.context_requested) is None:
             continue
         if run.done_reason == protocol.validity.done_reason:
             return None
-        return _EARLY_END.format(
+        line = _EARLY_END.format(
             name=record.ollama_name, number=number, count=run.eval_count, wanted=protocol.options.num_predict,
-            got=run.done_reason, expected=protocol.validity.done_reason,
+            got=run.done_reason, expected=protocol.validity.done_reason, version=protocol.protocol_version,
         )
+        return line + _V1_RETRY if record.protocol == "v1" else line
     return None
 
 

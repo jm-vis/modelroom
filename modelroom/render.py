@@ -444,6 +444,7 @@ def _ranked_entries(
                 measurement_group=ranked.measurement_group,
                 measurement_id=ranked.measurement.measurement_id if ranked.measurement is not None else None,
                 speed_tps=ranked.measurement.tps_mean if ranked.measurement is not None else None,
+                speed_protocol=ranked.measurement.protocol if ranked.measurement is not None else None,
                 **_package_line(ranked.package, note),
             )
         )
