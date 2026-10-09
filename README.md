@@ -352,9 +352,10 @@ context the vLLM server runs at); on the L40S all 26 fetched packages fit at eve
 One question for every local server: **Measure the speed on this machine now?** First each server
 says what it has -- the packages of this run's models your Ollama daemon already has, and, where a
 vLLM server answers, which model it serves and whether its number will count for this run (it
-counts when it serves a model you chose, at the context you chose). An LM Studio server is named
-at the start but not offered here: it is not measured (see "LM Studio"). **Yes** shows one list: the
-installed packages and the vLLM server, nothing marked, and you pick what to measure. An Ollama
+counts when it serves a model you chose, at the context you chose). An LM Studio server with
+exactly one model loaded is offered as a row too: one request after the other, timed on the wall,
+not ranked and not saved (see "LM Studio"). **Yes** shows one list: the installed packages, the vLLM
+server and the LM Studio server, nothing marked, and you pick what to measure. An Ollama
 measurement runs a short prompt through the package and records tokens per second; it never
 downloads anything. The prompt goes through the template of the model (protocol v2); measurements
 stored under protocol v1 keep counting and are shown as such (`protocol v1`). **No** skips new measurements; a measurement stored earlier for the same package
@@ -874,9 +875,6 @@ In the order we plan to build it, none of it dated:
   stands for; how fast those requests are served is measured only for one vLLM server you started
   (see "vLLM"), and that number is not ranked. Beyond roughly eight at once it is a job for a
   serving stack such as vLLM; the ranking itself stays a rule of thumb, not measured.
-- **LM Studio, measured.** LM Studio is detected and has list entries, a download command and a
-  disk check (see "LM Studio"); its speed is not measured yet, because a request to a model that
-  was loaded a moment ago may make it load the model again.
 - **Unified memory, measured.** The rule is in; a measured profile of such a machine is what is
   missing -- an export from one is welcome.
 - **The catalog's successors.** A model shows `legacy` only when the catalog names its
