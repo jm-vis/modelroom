@@ -69,7 +69,7 @@ def _default_which(name: str) -> str | None:
     return None
 
 # `llmfit --help` (checked 2026-09-22) prints no install line of its own; this names the
-# project's own documented source instead (README.md, "Planned usage").
+# project's own documented source instead (README.md, "Requirements").
 INSTALL_HINT = "install llmfit (see https://github.com/AlexsJones/llmfit)"
 
 _VERSION_OUTPUT_RE = re.compile(r"llmfit (\d+)\.(\d+)\.(\d+)")

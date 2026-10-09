@@ -59,6 +59,10 @@ Speed measurement protocol v2 for Ollama (AP9-FR-M). No schema version changes.
   is listed first under `## Candidates past 30 days (decide now)`, before the limit of ten; a candidate of the old form
   without `open_since` gets the day of the first run. No schema version changes; `catalog.json` is not changed.
 
+### RD
+
+- README regrouped: quick start first, the guided run, the runtimes, a reference part; no sentence of the program changed.
+
 ## [0.3.0] - 2026-10-09
 
 The README now documents LM Studio: the list entries per GGUF package, the `lms get` download

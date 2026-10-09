@@ -24,6 +24,9 @@ with a ranking per configured machine. Nothing in the tool is tied to a specific
 operator: you bring a configuration file with your families, packagers and machines, run it
 on the machine you want to size, and keep the files wherever you keep your notes.
 
+Start: [Quick start](#quick-start). Depth: [The guided run](#the-guided-run), [Runtimes](#runtimes),
+[Reference](#reference).
+
 ## Status
 
 Alpha, version 0.3.0 (see `CHANGELOG.md`). The guided mode and the subcommands work end to end;
@@ -32,46 +35,7 @@ layout and to the fit rules before a stable release. `CHANGELOG.md` lists what h
 branch `main` runs ahead of the release on PyPI: what `CHANGELOG.md` lists under "Unreleased" is
 in this repository and not yet in the package an installer fetches.
 
-## Requirements
-
-- Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
-- `llmfit` 1.1.16 or newer on `PATH` is optional: `hardware` measures the machine itself and
-  uses `llmfit` to cross-check the physical RAM and the graphics memory, and as the fallback
-  where it counts no card of its own -- a card llmfit counts says so with the source `llmfit`.
-  Without it the command still succeeds: the RAM check is `absent`, and so is the graphics check,
-  except where no comparison could be made anyway (cards of different sizes, or cards named but
-  none counted: `not_comparable`, `CONTRACTS.md`, "Cross-check with llmfit"). The minimum version
-  is set in the configuration (`[llmfit] min_version`).
-- The graphics cards are read from each vendor's own source: NVIDIA from `nvidia-smi` (one card or
-  several), AMD on Linux from the kernel (sysfs, with the ROCm compute driver), Apple Silicon from
-  `sysctl` as one pool of unified memory, and every other unit from the system's list of display
-  adapters (`lspci` on Linux, `Win32_VideoController` and the registry on Windows). `hardware`
-  prints one line per unit: vendor and model, memory, source, and whether it is usable for
-  Ollama and counted. A card that is not counted -- integrated graphics, a card only Vulkan can
-  use, a card whose driver tool is missing -- computes as a machine without a card.
-- An Ollama daemon on `http://127.0.0.1:11434` for the load test only. Without one the guided
-  mode says so in one line and goes on; nothing else in the tool needs it.
-- An LM Studio server on `http://127.0.0.1:1234` whose `/api/v1/models` lists its models, to be
-  detected; modelroom does not measure it yet and never loads, unloads or downloads a model.
-- Internet access for the search and the fetch.
-
-## Tested on
-
-Every machine a version really ran its self-test on (`scripts/selftest.py`), one line each. The
-two-card fixtures were recorded on the Verda and Scaleway instances listed below; the fixtures of three graphics
-cards and more, and of cards of mixed sizes, are synthetic (`tests/fixtures/README.md`). The load
-test is the speed the self-test measured for `hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M`
-at context 8192, one request. The Class column is what the profile says: `server (entered)` means
-the run supplied the machine class.
-
-| Machine | Class | Graphics cards | Memory | Date | Self-test | Load test |
-|---|---|---|---|---|---|---|
-| a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` | 56.9 tok/s |
-| a rented instance at Verda (Helsinki) | server (entered) | 2 x NVIDIA A100-SXM4-80GB, 80.00 GiB each | 235.92 GiB | 2026-09-27 | `SELFTEST: OK` | 143.5 tok/s |
-| a rented instance at Scaleway (Paris) | server (entered) | 2 x NVIDIA L4, 22.49 GiB each | 94.29 GiB | 2026-09-27 | `SELFTEST: OK` | 48.2 tok/s |
-| a rented instance at Seeweb (Frosinone) | server (entered) | 1 x NVIDIA L40S, 44.99 GiB | 31.27 GiB | 2026-10-08 | `SELFTEST: OK` | 122.8 tok/s |
-
-## Installation
+## Quick start
 
 As a command-line tool from the Python Package Index, with either installer:
 
@@ -93,8 +57,6 @@ command is not found afterwards, the installer's folder is not on `PATH` yet: ru
 no configuration file: it writes one into the folder you choose. `modelroom.example.toml` in this
 repository is the starting point for the subcommands further down.
 
-## Quick start
-
 Open a terminal in the folder where the results should live and type the command:
 
 ```bash
@@ -107,7 +69,46 @@ in the words you gave it, and each step writes its files as it goes. `Esc` leave
 leaves at any point. The next run is the same command: it remembers the folder, the machine it
 measured and the context you chose.
 
-## A guided run, step by step
+## Requirements
+
+- Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
+- `llmfit` 1.1.16 or newer on `PATH` is optional: `hardware` measures the machine itself and
+  uses `llmfit` to cross-check the physical RAM and the graphics memory, and as the fallback
+  where it counts no card of its own -- a card llmfit counts says so with the source `llmfit`.
+  Without it the command still succeeds: the RAM check is `absent`, and so is the graphics check,
+  except where no comparison could be made anyway (cards of different sizes, or cards named but
+  none counted: `not_comparable`, `CONTRACTS.md`, "Cross-check with llmfit"). The minimum version
+  is set in the configuration (`[llmfit] min_version`).
+- The graphics cards are read from each vendor's own source: NVIDIA from `nvidia-smi` (one card or
+  several), AMD on Linux from the kernel (sysfs, with the ROCm compute driver), Apple Silicon from
+  `sysctl` as one pool of unified memory, and every other unit from the system's list of display
+  adapters (`lspci` on Linux, `Win32_VideoController` and the registry on Windows). `hardware`
+  prints one line per unit: vendor and model, memory, source, and whether it is usable for
+  Ollama and counted. A card that is not counted -- integrated graphics, a card only Vulkan can
+  use, a card whose driver tool is missing -- computes as a machine without a card.
+- An Ollama daemon on `http://127.0.0.1:11434` for the load test only. Without one the guided
+  mode says so in one line and goes on; nothing else in the tool needs it.
+- An LM Studio server on `http://127.0.0.1:1234` whose `/api/v1/models` lists its models, to be
+  detected and, with exactly one loaded model, measured; modelroom never loads, unloads or downloads a model.
+- Internet access for the search and the fetch.
+
+### Tested on
+
+Every machine a version really ran its self-test on (`scripts/selftest.py`), one line each. The
+two-card fixtures were recorded on the Verda and Scaleway instances listed below; the fixtures of three graphics
+cards and more, and of cards of mixed sizes, are synthetic (`tests/fixtures/README.md`). The load
+test is the speed the self-test measured for `hf.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF:Q4_K_M`
+at context 8192, one request. The Class column is what the profile says: `server (entered)` means
+the run supplied the machine class.
+
+| Machine | Class | Graphics cards | Memory | Date | Self-test | Load test |
+|---|---|---|---|---|---|---|
+| a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` | 56.9 tok/s |
+| a rented instance at Verda (Helsinki) | server (entered) | 2 x NVIDIA A100-SXM4-80GB, 80.00 GiB each | 235.92 GiB | 2026-09-27 | `SELFTEST: OK` | 143.5 tok/s |
+| a rented instance at Scaleway (Paris) | server (entered) | 2 x NVIDIA L4, 22.49 GiB each | 94.29 GiB | 2026-09-27 | `SELFTEST: OK` | 48.2 tok/s |
+| a rented instance at Seeweb (Frosinone) | server (entered) | 1 x NVIDIA L40S, 44.99 GiB | 31.27 GiB | 2026-10-08 | `SELFTEST: OK` | 122.8 tok/s |
+
+## The guided run
 
 The pictures come from three runs on a rented server at Seeweb with one NVIDIA L40S graphics card
 (44.99 GiB) and 31 GiB of memory, in a folder named `/srv/models`, chosen for the pictures; any
@@ -432,6 +433,8 @@ at the end with its place. The result shows only the machines and models this ru
 `docs/models.md` and `docs/models.json`; what the search asked, page by page, is in
 `state/search.json` next to them.
 
+## Other ways to run
+
 ### Nothing in mind
 
 ![Step 2 with an empty search word: the catalog's current models, one page each, ranked by fit](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/9-anything.png)
@@ -515,91 +518,37 @@ name already, checks the free disk against `--weights-bytes` where one was given
 `<name>` into Ollama now?** (default No) before it pulls -- `--yes` skips the question for a
 terminal-less run. See `CONTRACTS.md`, "`modelroom pull`", for its exit codes.
 
-## vLLM
+## Runtimes
 
-On a machine that has vLLM, the table lists vLLM rows beside the Ollama rows: safetensors packages
-(AWQ, GPTQ, FP8, W4A16, BF16), judged by vLLM's own memory rule, and under the table head a line
-`runtime  Ollama · vLLM serving Qwen3-8B-AWQ` (or `vLLM installed, not serving`, or `vLLM (from its
-profile)` for a machine without a connection). A machine without vLLM shows neither the rows nor the
-line, and its result is the same as before. **modelroom finds vLLM only where it is installed on the
-machine (Linux); the docker line is another way to start the same server, not a way to detect it.** A
-machine whose vLLM exists only as a Docker image counts as a machine without vLLM; native Windows
-and macOS count as without vLLM as well.
+### Ollama
 
-**The fit.** vLLM takes 0.92 of each card, loads the weights, keeps 1.50 GiB per card for itself and
-gives the rest to the KV cache. The ranking assumes the requests of step 3 and asks how many of them
-the cards hold at once. Several cards of the same size (within 1 %) can share a model by tensor
-parallel; the other cards of the machine are left out, and the table head says so. **The number of
-cards `t` is the smallest of 1, 2, 4, 8 at which the package fits**, that is at most the number of
-equal cards, divides the model's attention head count and gives the class `fits` or `ample` on the
-first `t` cards; where it fits at none, the largest allowed `t` shows what the cards can do at best,
-and with no head count `t` is 1, with the reason named. A smaller `t` answers faster and leaves the
-other cards free. Computed, never measured; the numbers behind it are in `CONTRACTS.md`, "Fit for
-vLLM".
+**What is read.**
 
-**The install line is a command, not a pull, and modelroom starts nothing.** Choosing a vLLM row prints
-two commands for the same server; run one of the two in a terminal that stays open. vLLM downloads the
-model at its first start; then run modelroom again, and step 4 finds the server and measures it
-(10 requests at once, if that is what the ranking assumes; the number is not ranked and nothing is
-written).
+Packages of the Ollama library, from `ollama.com` and `registry.ollama.ai` (see
+"Network access"), and what the daemon at `127.0.0.1:11434` already has: on this computer, or on the
+computer over SSH (steps 4 and 5).
 
-```
-CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 vllm serve Qwen/Qwen3-8B-AWQ --revision 4da05a8edb55c6046cce958586c33b61da07bb79 --max-model-len 32768 --tensor-parallel-size 4 --gpu-memory-utilization 0.92 --host 127.0.0.1 --port 8000
-mkdir -p "${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}" && docker --host unix:///var/run/docker.sock run --rm --ipc=host --gpus '"device=0,1,2,3"' -e CUDA_DEVICE_ORDER=PCI_BUS_ID -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 -p 127.0.0.1:8000:8000 --mount "type=bind,src=${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub},dst=/root/.cache/huggingface/hub" vllm/vllm-openai:v0.30.0 Qwen/Qwen3-8B-AWQ --revision 4da05a8edb55c6046cce958586c33b61da07bb79 --max-model-len 32768 --tensor-parallel-size 4 --gpu-memory-utilization 0.92 --host 0.0.0.0 --port 8000
-```
+**What is measured.**
 
-Every value in them is checked first (`no safe command` otherwise), and the cards are bound by
-number, always, so a mask your shell already holds cannot shrink the line. If the model allows a
-larger `--tensor-parallel-size` than the one named on the machine's equal cards, a line under the commands says `larger
---tensor-parallel-size spreads the load over more cards, if the server is yours alone`. Cards whose
-memory `nvidia-smi` did not read give no line, only `computed only`.
+A short prompt through the package, in tokens per second, always as one
+request; the prompt goes through the template of the model (protocol v2; step 4).
 
-**The docker line.** It talks to the local Docker daemon at `unix:///var/run/docker.sock` and creates
-the cache folder first; with rootless Docker, change the part after `--host` to your socket. Four
-limits:
+**What is never done.**
 
-- It mounts the Hugging Face cache of the machine, so the download lands where the free disk was
-  checked. Started with another volume, vLLM has another place, and the disk check does not apply.
-- The container writes into the cache as `root`. A later `vllm serve` of the same user reads those
-  files but cannot write there.
-- If `HF_HUB_CACHE`, `HF_HOME` or `XDG_CACHE_HOME` (the one that counts) is a relative path, `docker
-  --mount` refuses it; the line is left out and a note says `docker: left out, the Hugging Face cache is
-  set as a relative path; set it absolute to get this line`. The `vllm serve` line stays.
-- modelroom never calls Docker, neither to detect nor to start, and it ignores `DOCKER_HOST` and
-  `DOCKER_CONTEXT`.
+A measurement never downloads anything. In step 5, a Yes to **Pull #1 into Ollama now?** pulls the
+package into the daemon, and a No leaves the command for you to run; `modelroom pull` asks once
+before it pulls unless `--yes` is given.
 
-**Where the models are, and "on disk already".** vLLM keeps them in the Hugging Face cache: `HF_HUB_CACHE`,
-else `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`. The disk
-rule of step 5 reads the free space there for vLLM rows and at Ollama's place for Ollama rows
-(`disk 41.2 GB free on C: (Ollama and vLLM models)` where both are one drive). A package is on disk when
-every start file is in the cache with the size the package declares; the check reads sizes, never
-content. `huggingface_hub` 1.x keeps large files in the cache's own `blobs/` folder, and modelroom
-counts them as there. A part that is missing counts only its missing bytes.
+**The install line.**
 
-**A server over SSH.** With a computer reached over SSH (see "Another computer"), the other end reads
-and measures vLLM at the server against its own `127.0.0.1:8000`, with no forwarded port. The table
-shows `runtime  Ollama · vLLM serving Qwen3-8B-AWQ · on gpu1`, step 4 offers `vLLM server on gpu1`
-beside the Ollama candidates, and step 5 prints both commands with `on gpu1` in the label (nothing is
-started over SSH) and `is on disk already (size checked)` where the server has the files. Neither
-the model's own name or path as the server states it, nor an address, nor a path of the server
-reaches this computer: the server answers with the number of the package of the run, or "another
-model". **Current behavior:** the SSH way needs an answering Ollama at the server; `Ollama does not
-answer on gpu1` ends the run even when only vLLM runs there.
+Where the local Ollama daemon answered, step 5 asks **Which package should be pulled into Ollama?**,
+or **Which package should be installed?** where the list has vLLM or LM Studio entries. The command
+of the choice follows and the disk is checked again; too little disk says so and asks nothing, and a
+row the daemon already has gets a note instead of the question (step 5).
 
-**What is assumed and what is checked.** The numbers rest on eight assumptions, named in `CONTRACTS.md`.
-Confirmed at a rented server (hand probes of 2026-10-02 and 2026-10-03): vLLM is found at
-`127.0.0.1:8000` also when it runs from the docker line; the measurement with 10 requests at once
-runs; the cache place follows the four rules above; and `huggingface_hub` 1.x keeps large files in
-`<cache>/blobs/`, which the check now counts. Still open: A1 (1.50 GiB per card also under tensor
-parallel), A2 (a model with fewer KV heads than cards, and a hybrid model), A3 (vLLM found over a
-non-interactive SSH command in `PATH` or `~/.local/bin`), A5 (vLLM fetches exactly the start files),
-A6 and A7 (the card numbers of `CUDA_VISIBLE_DEVICES` and of Docker's `--gpus device=` are the
-`index` values of `nvidia-smi`), A8 (the fixed image tag starts and writes into the mounted cache).
-A4 is the assumption that the Ollama fit rule also describes a GGUF package in LM Studio, since both
-run llama.cpp; it holds approximately and has not been checked against a load in LM Studio (see
-"LM Studio").
+### LM Studio
 
-## LM Studio
+**What is read.**
 
 LM Studio is detected and, with one model loaded, measured. On a machine that has it, each Hugging Face GGUF package gets
 an entry of its own in the list at the end of step 5, `LM Studio · <packager> · <quant>`, with the
@@ -615,6 +564,39 @@ unchanged. A machine has LM Studio when a measurement of it found the server on 
 or `lms` in the `PATH` or in `~/.lmstudio/bin`; that goes into its hardware profile as the
 `runtimes` value `lmstudio`, so LM Studio counts for the table and the list from the next run
 that measures this machine.
+
+**Limits.** modelroom reads LM Studio on port 1234 only, in the standard model folder only, for GGUF
+packages only, on this computer only and not over SSH (a computer reached over SSH reads without LM
+Studio). A server that asks for an API token is named at the start (`asks for an API token`) and not
+read further. No minimum version is checked; the server must answer `GET /api/v1/models` with the
+version 1 list of its models.
+
+**What is measured.**
+
+**Measurement.** The start screen names a running server and how many models it has loaded. With
+exactly one GGUF model loaded, step 4 offers the server as a row of its own, `LM Studio server
+<id>, context <n>`. A yes sends the model one chat of 128 tokens after the other, a warm-up and three
+runs, with the prompt of the protocol, and times each on the wall. modelroom reads the model list
+before the warm-up and after every request, and the measurement ends without a number when the loaded
+model or its context changed, a request fails, does not answer with status 200, does not end with
+`length` after 128 tokens, or takes more than 600 s; the line says which. The number is tokens per
+second for one request on the wall: thinking tokens count, a busy server reads slower (LM Studio
+states no load), and it is never mixed with an Ollama number. Step 4 shows it, the card carries it
+with `package unknown; not ranked, nothing written`, and nothing is saved or ranked. With no model
+loaded, with several, or with a context other than the one this run asks for, step 4 says so and sends
+no chat. It reads the model list
+before and after every request and drops the measurement when the loaded model changed; a load the
+server does on its own inside a request can stay unseen and then sits in the measured time.
+
+**What is not there yet.** The LM Studio number is for one loaded model and one request at a time:
+it is not ranked, not saved and not set beside an Ollama number, and there is no measurement of
+several requests at once, because LM Studio has no metrics page to count them.
+
+**What is never done.**
+
+modelroom never asks LM Studio to load, unload or download a model.
+
+**The install line.**
 
 **The install line asks, then downloads after a yes.** For a command-capable package not already
 on disk, on a machine where `lms` is found, choosing an LM Studio entry prints the command, checks
@@ -665,32 +647,105 @@ larger than that file, and the same size is not the same revision.
 For a vision model, `lms` also downloads the projector (`mmproj-*.gguf`), so the download is
 larger than the single weight file checked by modelroom.
 
-**Limits.** modelroom reads LM Studio on port 1234 only, in the standard model folder only, for GGUF
-packages only, on this computer only and not over SSH (a computer reached over SSH reads without LM
-Studio). A server that asks for an API token is named at the start (`asks for an API token`) and not
-read further. No minimum version is checked; the server must answer `GET /api/v1/models` with the
-version 1 list of its models.
+### vLLM
 
-**Measurement.** The start screen names a running server and how many models it has loaded. With
-exactly one GGUF model loaded, step 4 offers the server as a row of its own, `LM Studio server
-<id>, context <n>`. A yes sends the model one chat of 128 tokens after the other, a warm-up and three
-runs, with the prompt of the protocol, and times each on the wall. modelroom reads the model list
-before the warm-up and after every request, and the measurement ends without a number when the loaded
-model or its context changed, a request fails, does not answer with status 200, does not end with
-`length` after 128 tokens, or takes more than 600 s; the line says which. The number is tokens per
-second for one request on the wall: thinking tokens count, a busy server reads slower (LM Studio
-states no load), and it is never mixed with an Ollama number. Step 4 shows it, the card carries it
-with `package unknown; not ranked, nothing written`, and nothing is saved or ranked. With no model
-loaded, with several, or with a context other than the one this run asks for, step 4 says so and sends
-no chat. modelroom never asks LM Studio to load, unload or download a model. It reads the model list
-before and after every request and drops the measurement when the loaded model changed; a load the
-server does on its own inside a request can stay unseen and then sits in the measured time.
+**What is read.**
 
-**What is not there yet.** The LM Studio number is for one loaded model and one request at a time:
-it is not ranked, not saved and not set beside an Ollama number, and there is no measurement of
-several requests at once, because LM Studio has no metrics page to count them.
+On a machine that has vLLM, the table lists vLLM rows beside the Ollama rows: safetensors packages
+(AWQ, GPTQ, FP8, W4A16, BF16), judged by vLLM's own memory rule, and under the table head a line
+`runtime  Ollama · vLLM serving Qwen3-8B-AWQ` (or `vLLM installed, not serving`, or `vLLM (from its
+profile)` for a machine without a connection). A machine without vLLM shows neither the rows nor the
+line, and its result is the same as before. **modelroom finds vLLM only where it is installed on the
+machine (Linux); the docker line is another way to start the same server, not a way to detect it.** A
+machine whose vLLM exists only as a Docker image counts as a machine without vLLM; native Windows
+and macOS count as without vLLM as well.
 
-## Files
+**The fit.** vLLM takes 0.92 of each card, loads the weights, keeps 1.50 GiB per card for itself and
+gives the rest to the KV cache. The ranking assumes the requests of step 3 and asks how many of them
+the cards hold at once. Several cards of the same size (within 1 %) can share a model by tensor
+parallel; the other cards of the machine are left out, and the table head says so. **The number of
+cards `t` is the smallest of 1, 2, 4, 8 at which the package fits**, that is at most the number of
+equal cards, divides the model's attention head count and gives the class `fits` or `ample` on the
+first `t` cards; where it fits at none, the largest allowed `t` shows what the cards can do at best,
+and with no head count `t` is 1, with the reason named. A smaller `t` answers faster and leaves the
+other cards free. Computed, never measured; the numbers behind it are in `CONTRACTS.md`, "Fit for
+vLLM".
+
+**Where the models are, and "on disk already".** vLLM keeps them in the Hugging Face cache: `HF_HUB_CACHE`,
+else `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`. The disk
+rule of step 5 reads the free space there for vLLM rows and at Ollama's place for Ollama rows
+(`disk 41.2 GB free on C: (Ollama and vLLM models)` where both are one drive). A package is on disk when
+every start file is in the cache with the size the package declares; the check reads sizes, never
+content. `huggingface_hub` 1.x keeps large files in the cache's own `blobs/` folder, and modelroom
+counts them as there. A part that is missing counts only its missing bytes.
+
+**A server over SSH.** With a computer reached over SSH (see "Another computer"), the other end reads
+and measures vLLM at the server against its own `127.0.0.1:8000`, with no forwarded port. The table
+shows `runtime  Ollama · vLLM serving Qwen3-8B-AWQ · on gpu1`, step 4 offers `vLLM server on gpu1`
+beside the Ollama candidates, and step 5 prints both commands with `on gpu1` in the label (nothing is
+started over SSH) and `is on disk already (size checked)` where the server has the files. Neither
+the model's own name or path as the server states it, nor an address, nor a path of the server
+reaches this computer: the server answers with the number of the package of the run, or "another
+model". **Current behavior:** the SSH way needs an answering Ollama at the server; `Ollama does not
+answer on gpu1` ends the run even when only vLLM runs there.
+
+**What is measured.**
+
+vLLM downloads the
+model at its first start; then run modelroom again, and step 4 finds the server and measures it
+(10 requests at once, if that is what the ranking assumes; the number is not ranked and nothing is
+written).
+
+**What is assumed and what is checked.** The numbers rest on eight assumptions, named in `CONTRACTS.md`.
+Confirmed at a rented server (hand probes of 2026-10-02 and 2026-10-03): vLLM is found at
+`127.0.0.1:8000` also when it runs from the docker line; the measurement with 10 requests at once
+runs; the cache place follows the four rules above; and `huggingface_hub` 1.x keeps large files in
+`<cache>/blobs/`, which the check now counts. Still open: A1 (1.50 GiB per card also under tensor
+parallel), A2 (a model with fewer KV heads than cards, and a hybrid model), A3 (vLLM found over a
+non-interactive SSH command in `PATH` or `~/.local/bin`), A5 (vLLM fetches exactly the start files),
+A6 and A7 (the card numbers of `CUDA_VISIBLE_DEVICES` and of Docker's `--gpus device=` are the
+`index` values of `nvidia-smi`), A8 (the fixed image tag starts and writes into the mounted cache).
+A4 is the assumption that the Ollama fit rule also describes a GGUF package in LM Studio, since both
+run llama.cpp; it holds approximately and has not been checked against a load in LM Studio (see
+"LM Studio").
+
+**What is never done.**
+
+**The install line is a command, not a pull, and modelroom starts nothing.**
+
+**The install line.**
+
+Choosing a vLLM row prints
+two commands for the same server; run one of the two in a terminal that stays open.
+
+```
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 vllm serve Qwen/Qwen3-8B-AWQ --revision 4da05a8edb55c6046cce958586c33b61da07bb79 --max-model-len 32768 --tensor-parallel-size 4 --gpu-memory-utilization 0.92 --host 127.0.0.1 --port 8000
+mkdir -p "${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}" && docker --host unix:///var/run/docker.sock run --rm --ipc=host --gpus '"device=0,1,2,3"' -e CUDA_DEVICE_ORDER=PCI_BUS_ID -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 -p 127.0.0.1:8000:8000 --mount "type=bind,src=${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub},dst=/root/.cache/huggingface/hub" vllm/vllm-openai:v0.30.0 Qwen/Qwen3-8B-AWQ --revision 4da05a8edb55c6046cce958586c33b61da07bb79 --max-model-len 32768 --tensor-parallel-size 4 --gpu-memory-utilization 0.92 --host 0.0.0.0 --port 8000
+```
+
+Every value in them is checked first (`no safe command` otherwise), and the cards are bound by
+number, always, so a mask your shell already holds cannot shrink the line. If the model allows a
+larger `--tensor-parallel-size` than the one named on the machine's equal cards, a line under the commands says `larger
+--tensor-parallel-size spreads the load over more cards, if the server is yours alone`. Cards whose
+memory `nvidia-smi` did not read give no line, only `computed only`.
+
+**The docker line.** It talks to the local Docker daemon at `unix:///var/run/docker.sock` and creates
+the cache folder first; with rootless Docker, change the part after `--host` to your socket. Four
+limits:
+
+- It mounts the Hugging Face cache of the machine, so the download lands where the free disk was
+  checked. Started with another volume, vLLM has another place, and the disk check does not apply.
+- The container writes into the cache as `root`. A later `vllm serve` of the same user reads those
+  files but cannot write there.
+- If `HF_HUB_CACHE`, `HF_HOME` or `XDG_CACHE_HOME` (the one that counts) is a relative path, `docker
+  --mount` refuses it; the line is left out and a note says `docker: left out, the Hugging Face cache is
+  set as a relative path; set it absolute to get this line`. The `vllm serve` line stays.
+- modelroom never calls Docker, neither to detect nor to start, and it ignores `DOCKER_HOST` and
+  `DOCKER_CONTEXT`.
+
+## Reference
+
+### Files
 
 Under `paths.state`:
 
@@ -714,7 +769,100 @@ folder and which profile is this computer in each, and `~/.modelroom/remote.json
 computer's neutral key, your SSH aliases and the shared folder you set up (if any). Neither is
 exported or copied into a results folder.
 
-## Publishers the search resolves
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | success: every fetch area complete; `hardware` measured and wrote the profile (also when `llmfit` was not there to cross-check it); `render` wrote the document (also when its rating source failed) |
+| `1` | at least one fetch area incomplete (complete areas are still written); or another process holds the lock; or this `fetch` is not newer than the stored snapshot; or `render` has no snapshot; or the existing document was rendered from a newer snapshot; or `hardware` wrote the profile but could not record the binding in the pointer file. Every case but the first and the last leaves the snapshot, hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated |
+| `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); `hardware`'s bound profile is missing or belongs to another machine (run it with `--same-machine` or `--new-identity`, never both); or a tool a command requires is missing, older than the minimum, fails, or returns invalid output |
+| `3` | an unsupported `schema_version` in the configuration, the snapshot, a hardware profile, the answer file or the pointer file; or one of them is not valid JSON or does not match its model |
+| `130` | the guided mode was stopped with Ctrl-C; nothing is left half written |
+
+The guided mode ends with `1` when it wrote its document but a step did not finish -- a
+measurement that failed, a `fetch` that did not complete, an import that did not go through, a
+pull that did not finish.
+Those lines are printed as they happen; the run goes on with the machines that are there.
+
+Source: `CONTRACTS.md`, "Exit codes", and `AGENTS.md`.
+
+`modelroom pull` (AP9-FR A4) has no results folder and no configuration, so its exit codes are its
+own: see `CONTRACTS.md`, "`modelroom pull`".
+
+### Network access
+
+Registry requests use HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`. Registry
+redirects and pagination links are checked against the same registry allowlist before they are
+followed. `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` from the environment are honored for the registries, but a proxy only changes how an
+allowed request travels, never which targets are allowed. Details: `CONTRACTS.md`, "Transport
+security and proxying".
+
+The local runtimes are reached at these addresses and no others:
+
+- Ollama, `127.0.0.1:11434`: HTTP, only on this computer, no proxy, no redirect.
+- vLLM, `127.0.0.1:8000`: HTTP, only on this computer, no proxy, no redirect.
+- LM Studio, `127.0.0.1:1234`: HTTP, only on this computer, no proxy, no redirect.
+
+modelroom runs `lms` only for the download you said yes to in step 5, with `--yes`; that starts
+LM Studio's service in the background.
+
+The one exception to those addresses is a computer you name yourself, by its SSH host alias, in "Another computer"
+above: modelroom then runs the system `ssh` to it, with your own SSH configuration and keys, never
+a password for that target itself -- a jump host in between answers under its own configuration
+and needs `BatchMode yes` of its own to hold the same promise (see "Another computer"). It never
+connects anywhere else on its own.
+
+The result names a website for model quality; modelroom never opens it.
+
+### What the fit class means
+
+For a judged fit, the cell reads `<class> (<mode>, need <n> / pool <n> GiB)`. The class is
+computed from a memory formula: weights plus 10 %, plus a 16-bit KV cache for the context of the
+run (the level the guided mode chose for the folder; 8192 for a configuration no guided run has
+chosen one in), plus 0.5 GiB. The result is compared with the VRAM of one graphics card minus
+its reserve -- the largest card, the way Ollama loads a model -- then, on a machine with several
+cards, with all of them together, each minus its own reserve (`gpu_split`), and with the RAM minus
+its reserve when it fits no graphics memory. `ample` needs at most 60 % of that pool, `fits`
+85 %, `tight` 98 %; anything above is `no_fit`. Off the GPU the class is capped at `fits`. Each
+word says only what was computed, and a table carries a line under it that says so. The full rule is in `CONTRACTS.md`,
+"Fit contract v1".
+
+**The reserve of the system memory** follows the machine's size: a quarter of its memory, at least
+2 and at most 16 GB (on unified memory a quarter with no upper bound, plus the card reserve). To
+set it yourself, write a number into the machine's table of `modelroom.toml` -- `reserve_ram_gib =
+12.0` under `[machines.<name>]` -- and that number always wins; `0.0` gives the whole memory. A
+folder written by 0.1.0 carries `8.0` there and keeps it; the table of such a machine says what the
+computed reserve would be. A folder written by this version carries no number where none was set;
+the released 0.1.0 refuses it with exit `3` (ADR 0012).
+
+**Under each table's head** the line `room` names what the fit computes with -- the budget, not the
+memory free at this moment: `graphics 11.0 GB for models (12.0 GB card minus reserve) · memory 111.7
+GB for models (127.7 GB minus reserve) · disk 41.2 GB free on C: (Ollama models)`. What Ollama holds
+right now stands on a line `loaded` under it, only while it holds a model.
+
+What it does not say: the class is arithmetic, not a measurement. It makes no statement about
+tokens per second, output quality or whether a runtime actually loads the package. It is
+labeled "fit (computed, v1)" in the output for that reason.
+
+### Limits of fit v1
+
+- Only a dense transformer architecture is judged from its own layers and heads. A hybrid or
+  mixture-of-experts architecture is judged **from the size of the package** instead: the same
+  formula with the KV cache taken from a constant, shown as `fits (from size)` and never as
+  `ample`. The KV cache in that formula is one fixed assumption, not a bound: a mixture
+  architecture usually needs less, a dense model with many layers more, so a `fits (from size)`
+  is coarser than a `fits` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
+- The Ollama fit rule covers complete GGUF packages, and judges an LM Studio entry of such a
+  package the same way (an assumption, see "LM Studio"). vLLM safetensors packages use the
+  separate fit rule described under "vLLM"; other formats remain `unknown`.
+- A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
+- Unified memory is computed as one pool -- the memory minus both reserves, since the system and
+  the model share it. Apple Silicon is read as such a pool (its memory from `sysctl hw.memsize`);
+  macOS keeps part of that memory for the system, which the reserves are there for. An Intel Mac
+  computes as a machine without a card (`CONTRACTS.md`, "Hardware profile").
+
+### Publishers the search resolves
 
 The shipped catalog `modelroom/catalog.toml` names the publisher accounts whose models a search
 resolves: with the owner filter on, a hit is selectable when the Hugging Face account of its base
@@ -749,106 +897,15 @@ approves them by number in conversation, and `scripts/catalog_publish.py` commit
 that commit. Nothing is published without the maintainer's word, and the published file is compared with the
 repository every day.
 
-## What the fit class means
-
-For a judged fit, the cell reads `<class> (<mode>, need <n> / pool <n> GiB)`. The class is
-computed from a memory formula: weights plus 10 %, plus a 16-bit KV cache for the context of the
-run (the level the guided mode chose for the folder; 8192 for a configuration no guided run has
-chosen one in), plus 0.5 GiB. The result is compared with the VRAM of one graphics card minus
-its reserve -- the largest card, the way Ollama loads a model -- then, on a machine with several
-cards, with all of them together, each minus its own reserve (`gpu_split`), and with the RAM minus
-its reserve when it fits no graphics memory. `ample` needs at most 60 % of that pool, `fits`
-85 %, `tight` 98 %; anything above is `no_fit`. Off the GPU the class is capped at `fits`. Each
-word says only what was computed, and a table carries a line under it that says so. The full rule is in `CONTRACTS.md`,
-"Fit contract v1".
-
-**The reserve of the system memory** follows the machine's size: a quarter of its memory, at least
-2 and at most 16 GB (on unified memory a quarter with no upper bound, plus the card reserve). To
-set it yourself, write a number into the machine's table of `modelroom.toml` -- `reserve_ram_gib =
-12.0` under `[machines.<name>]` -- and that number always wins; `0.0` gives the whole memory. A
-folder written by 0.1.0 carries `8.0` there and keeps it; the table of such a machine says what the
-computed reserve would be. A folder written by this version carries no number where none was set;
-the released 0.1.0 refuses it with exit `3` (ADR 0012).
-
-**Under each table's head** the line `room` names what the fit computes with -- the budget, not the
-memory free at this moment: `graphics 11.0 GB for models (12.0 GB card minus reserve) · memory 111.7
-GB for models (127.7 GB minus reserve) · disk 41.2 GB free on C: (Ollama models)`. What Ollama holds
-right now stands on a line `loaded` under it, only while it holds a model.
-
-What it does not say: the class is arithmetic, not a measurement. It makes no statement about
-tokens per second, output quality or whether a runtime actually loads the package. It is
-labeled "fit (computed, v1)" in the output for that reason.
-
-## Limits of fit v1
-
-- Only a dense transformer architecture is judged from its own layers and heads. A hybrid or
-  mixture-of-experts architecture is judged **from the size of the package** instead: the same
-  formula with the KV cache taken from a constant, shown as `fits (from size)` and never as
-  `ample`. The KV cache in that formula is one fixed assumption, not a bound: a mixture
-  architecture usually needs less, a dense model with many layers more, so a `fits (from size)`
-  is coarser than a `fits` with the architecture behind it (`CONTRACTS.md`, "Fit from size").
-- The Ollama fit rule covers complete GGUF packages, and judges an LM Studio entry of such a
-  package the same way (an assumption, see "LM Studio"). vLLM safetensors packages use the
-  separate fit rule described under "vLLM"; other formats remain `unknown`.
-- A machine without a hardware profile shows `no profile` (or `no recommendation: no profile`).
-- Unified memory is computed as one pool -- the memory minus both reserves, since the system and
-  the model share it. Apple Silicon is read as such a pool (its memory from `sysctl hw.memsize`);
-  macOS keeps part of that memory for the system, which the reserves are there for. An Intel Mac
-  computes as a machine without a card (`CONTRACTS.md`, "Hardware profile").
-
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| `0` | success: every fetch area complete; `hardware` measured and wrote the profile (also when `llmfit` was not there to cross-check it); `render` wrote the document (also when its rating source failed) |
-| `1` | at least one fetch area incomplete (complete areas are still written); or another process holds the lock; or this `fetch` is not newer than the stored snapshot; or `render` has no snapshot; or the existing document was rendered from a newer snapshot; or `hardware` wrote the profile but could not record the binding in the pointer file. Every case but the first and the last leaves the snapshot, hardware profiles, `run-status.json` and the rendered document unchanged; the lock file may be created or updated |
-| `2` | the configuration is missing or invalid; the machine is not a writer (`fetch`) or not configured (`hardware`); `hardware`'s bound profile is missing or belongs to another machine (run it with `--same-machine` or `--new-identity`, never both); or a tool a command requires is missing, older than the minimum, fails, or returns invalid output |
-| `3` | an unsupported `schema_version` in the configuration, the snapshot, a hardware profile, the answer file or the pointer file; or one of them is not valid JSON or does not match its model |
-| `130` | the guided mode was stopped with Ctrl-C; nothing is left half written |
-
-The guided mode ends with `1` when it wrote its document but a step did not finish -- a
-measurement that failed, a `fetch` that did not complete, an import that did not go through, a
-pull that did not finish.
-Those lines are printed as they happen; the run goes on with the machines that are there.
-
-Source: `CONTRACTS.md`, "Exit codes", and `AGENTS.md`.
-
-`modelroom pull` (AP9-FR A4) has no results folder and no configuration, so its exit codes are its
-own: see `CONTRACTS.md`, "`modelroom pull`".
-
-## Network access
-
-Registry requests use HTTPS to `huggingface.co`, `ollama.com` and `registry.ollama.ai`. Registry
-redirects and pagination links are checked against the same registry allowlist before they are
-followed. `HTTP_PROXY`, `HTTPS_PROXY` and
-`NO_PROXY` from the environment are honored for the registries, but a proxy only changes how an
-allowed request travels, never which targets are allowed. Details: `CONTRACTS.md`, "Transport
-security and proxying".
-
-The local runtimes are reached at these addresses and no others:
-
-- Ollama, `127.0.0.1:11434`: HTTP, only on this computer, no proxy, no redirect.
-- vLLM, `127.0.0.1:8000`: HTTP, only on this computer, no proxy, no redirect.
-- LM Studio, `127.0.0.1:1234`: HTTP, only on this computer, no proxy, no redirect.
-
-modelroom runs `lms` only for the download you said yes to in step 5, with `--yes`; that starts
-LM Studio's service in the background.
-
-The one exception to those addresses is a computer you name yourself, by its SSH host alias, in "Another computer"
-above: modelroom then runs the system `ssh` to it, with your own SSH configuration and keys, never
-a password for that target itself -- a jump host in between answers under its own configuration
-and needs `BatchMode yes` of its own to hold the same promise (see "Another computer"). It never
-connects anywhere else on its own.
-
-The result names a website for model quality; modelroom never opens it.
-
-## Language choice
+### Language choice
 
 Python, because the catalog logic and Pydantic contracts it integrates with are Python, and the
 run has to be platform neutral (Windows, Linux, macOS). Everything in this repository, from
 identifiers to documentation, is English.
 
-## Release
+## Project
+
+### Release
 
 For maintainers, from a clean clone at the commit to be released:
 
@@ -867,7 +924,7 @@ The second installs the built wheel into a fresh environment and runs
 `hardware`, an offline `fetch` and `render` against it. Both must end with exit `0`; the full
 procedure is in `AGENTS.md`, "Versioning and releases".
 
-## What comes next
+### What comes next
 
 In the order we plan to build it, none of it dated:
 
@@ -881,18 +938,18 @@ In the order we plan to build it, none of it dated:
   successor with the page that says so; many families still carry no such line, and those
   rows show `–`. The catalog is a data file in this repository and takes pull requests.
 
-## Contributing and conventions
+### Contributing and conventions
 
 `AGENTS.md` is the tool-neutral rule set for anyone (human or agent) working on this
 repository. `CONTRACTS.md` describes the data shapes and their versioning. Issues and pull
 requests are welcome.
 
-## About
+### About
 
 We use ModelRoom to decide which models run on our own laptops and servers, and with clients
 to size on-premise deployments before anyone buys hardware.
 
-## License
+### License
 
 MIT, see [LICENSE](https://github.com/jm-vis/modelroom/blob/v0.3.0/LICENSE). The machine
 measurement is cross-checked with [llmfit](https://github.com/AlexsJones/llmfit) (MIT), which
