@@ -184,7 +184,7 @@ def test_the_chosen_row_prints_the_block_of_the_brief(tmp_path):
     assert " ".join(said[start + 4 : start + 6]) == (
         f"in LM Studio: load it with context length {context}, then start its server (the server switch in LM Studio, or lms server start)"
     )
-    assert said[start + 6] == "then run modelroom again: it finds the server; LM Studio is not measured yet"
+    assert said[start + 6] == "then run modelroom again: it finds the server and measures the loaded model"
 
 
 def test_an_answer_file_picks_an_lms_row(tmp_path):

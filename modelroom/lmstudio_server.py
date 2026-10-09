@@ -2,15 +2,19 @@
 
 `modelroom/vllm_server.py` reaches a vLLM server; this module reaches LM Studio on `http://127.0.0.1:1234`
 in the same way -- one origin (judged by that module's own `check_origin`), no proxy handler, no redirect
-following (the opener is `daemon.py`'s). One call is allowed: `GET /api/v1/models`. Nothing else is ever
-sent: no key, no chat, no load, unload or download, no `/v1/models`, no `/metrics` (CONTRACTS.md, "Local
+following (the opener is `daemon.py`'s). Two calls are allowed: `GET /api/v1/models` (10 s) and
+`POST /v1/chat/completions` (600 s), the one request of the measurement (`loadtest_lmstudio`). Nothing else
+is ever sent: no key, no load, unload or download, no `/v1/models`, no `/metrics` (CONTRACTS.md, "Local
 servers and the vLLM load test", LM Studio).
 
-**In 0.2.0 the transport cannot send a chat**: a request that names a model unloaded a moment ago may make
-LM Studio load it again, and the recording of that case proves neither a refusal nor a load, so LM Studio
-is not measured. The call returns with a later sub-package that proves a measurement safe. **modelroom runs `lms` at one place only**, the download after a yes in
-`lmstudio_get.py` (AP9-LS-G): this module and detection look for the program in the `PATH` and in the home
-folder and start nothing; `tests/test_lmstudio_no_process.py` guards it.
+A chat that names a model unloaded a moment ago may make LM Studio load it again; modelroom therefore
+reads the list before and after every request and never asks for a load itself. At the chat a `401`, a
+`403`, and a body that cannot be read or is too large are not raised but handed on as a `Response` that
+carries the status (`x-modelroom-body: unread` or `oversized` for the body), so the measurement can name
+the row of its table; only a limit of time is raised as `LmStudioTimeoutError`. **modelroom runs `lms` at
+one place only**, the download after a yes in `lmstudio_get.py` (AP9-LS-G): this module and detection look
+for the program in the `PATH` and in the home folder and start nothing;
+`tests/test_lmstudio_no_process.py` guards it.
 
 The reader gives no package identity: the REST list names a publisher and a key, never a repository or a
 file. `LocalLmStudioServer` is the only implementation that opens a connection; a test constructs a
@@ -33,6 +37,8 @@ from typing import Any, Callable, Protocol
 from .daemon import _build_opener
 from .http import Response
 from .vllm_server import (
+    CHAT_PATH,
+    CHAT_TIMEOUT_SECONDS,
     MAX_ANSWER_BYTES,
     SHORT_TIMEOUT_SECONDS,
     USER_AGENT,
@@ -42,7 +48,11 @@ from .vllm_server import (
 
 LMSTUDIO_BASE_URL = "http://127.0.0.1:1234"
 MODELS_PATH = "/api/v1/models"
-ALLOWED_CALLS: frozenset[tuple[str, str]] = frozenset({("GET", MODELS_PATH)})
+ALLOWED_CALLS: frozenset[tuple[str, str]] = frozenset({("GET", MODELS_PATH), ("POST", CHAT_PATH)})
+# The header of a chat answer whose body is not there: `unread` (it failed to read) or `oversized`.
+BODY_HEADER = "x-modelroom-body"
+BODY_UNREAD = "unread"
+BODY_OVERSIZED = "oversized"
 KEY_REASON = "the LM Studio server asks for an API token; modelroom reads an open local server only"
 
 _ALLOWED_ORIGINS: frozenset[tuple[str | None, int | None]] = frozenset({("127.0.0.1", 1234)})
@@ -55,7 +65,11 @@ class LmStudioServerError(Exception):
 
 
 class LmStudioKeyError(LmStudioServerError):
-    """The server answered `401` or `403`: it asks for an API token, which modelroom never sends."""
+    """The list answered `401` or `403`: the server asks for an API token, which modelroom never sends."""
+
+
+class LmStudioTimeoutError(LmStudioServerError):
+    """A call reached its limit of time (10 s for the list, 600 s for the chat) at any point of the call."""
 
 
 @dataclass(frozen=True)
@@ -107,13 +121,27 @@ def _check_origin(base_url: str, allowed: frozenset[tuple[str | None, int | None
         raise LmStudioServerError(f"refusing to talk to {base_url!r}: not a local LM Studio server origin") from exc
 
 
-def checked_answer(answer: Response) -> Response:
-    """A `401` or `403` is the key reason and an answer above the limit a fault; anything else as it came."""
-    if answer.status in (401, 403):
+def _marked(answer: Response, marker: str) -> Response:
+    """The status and the headers of `answer`, an empty body and the marker for why the body is gone."""
+    return Response(status=answer.status, headers={**answer.headers, BODY_HEADER: marker}, body=b"")
+
+
+def checked_answer(answer: Response, path: str) -> Response:
+    """The list: a `401` or `403` is the key reason and an answer above the limit a fault. The chat: its status
+    always stays (no key reason there), and an answer above the limit loses its body, marked `oversized`."""
+    if path == MODELS_PATH and answer.status in (401, 403):
         raise LmStudioKeyError(KEY_REASON)
     if len(answer.body) > MAX_ANSWER_BYTES:
+        if path == CHAT_PATH:
+            return _marked(answer, BODY_OVERSIZED)
         raise LmStudioServerError(f"the LM Studio server answered more than {MAX_ANSWER_BYTES} bytes")
     return answer
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """urllib raises the limit of time as a `TimeoutError` at the read, and as a `URLError` whose reason is one
+    at the connection: both are the limit."""
+    return isinstance(exc, TimeoutError) or (isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, TimeoutError))
 
 
 class LocalLmStudioServer:
@@ -123,33 +151,65 @@ class LocalLmStudioServer:
         self,
         base_url: str = LMSTUDIO_BASE_URL,
         timeout: float = SHORT_TIMEOUT_SECONDS,
+        chat_timeout: float = CHAT_TIMEOUT_SECONDS,
     ) -> None:
         _check_origin(base_url, _ALLOWED_ORIGINS)  # the module's list, read at the call; never an argument
         self.base_url = base_url
         self._timeout = timeout
+        self._chat_timeout = chat_timeout
         self._opener = _build_opener()
+
+    def timeout_for(self, path: str) -> float:
+        """A chat of 128 tokens can take minutes; the list answers at once."""
+        return self._chat_timeout if path == CHAT_PATH else self._timeout
 
     def __call__(self, method: str, path: str, body: dict | None = None) -> Response:
         check_call(method, path)
         _check_origin(self.base_url, _ALLOWED_ORIGINS)  # `base_url` is public: judged again at every call
         request = self._request(method, path, body)
         try:
-            with self._opener.open(request, timeout=self._timeout) as answer:
-                data = answer.read(MAX_ANSWER_BYTES + 1)
-                return checked_answer(Response(status=answer.status, headers=dict(answer.headers), body=data))
+            with self._opener.open(request, timeout=self.timeout_for(path)) as answer:
+                return self._read_answer(answer, path)
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):  # the status says it all: the body is not read (it may not be readable)
-                exc.close()
+            return self._read_error(exc, path)
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            raise self._failure(exc, path, "the LM Studio server did not answer") from exc
+
+    def _failure(self, exc: BaseException, path: str, what: str) -> LmStudioServerError:
+        """A limit of time is `LmStudioTimeoutError` wherever it was reached, anything else a server error."""
+        kind = LmStudioTimeoutError if _is_timeout(exc) else LmStudioServerError
+        return kind(f"{self.base_url}{path}: {what} ({exc})")
+
+    def _read_answer(self, answer: Any, path: str) -> Response:
+        """The body of an answer. A `401` or `403` of the list is decided before the body is read. At the chat a
+        body that fails to read leaves the status and a marker."""
+        headers = dict(answer.headers)
+        if path == MODELS_PATH and answer.status in (401, 403):
+            raise LmStudioKeyError(KEY_REASON)
+        try:
+            data = answer.read(MAX_ANSWER_BYTES + 1)
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            if path != CHAT_PATH or _is_timeout(exc):
+                raise self._failure(exc, path, "the answer could not be read") from exc
+            return _marked(Response(status=answer.status, headers=headers), BODY_UNREAD)
+        return checked_answer(Response(status=answer.status, headers=headers, body=data), path)
+
+    def _read_error(self, exc: urllib.error.HTTPError, path: str) -> Response:
+        """An error status. A `401` or `403` of the list says it all: its body is not read (it may not be
+        readable). Elsewhere the body is read; at the chat one that fails to read leaves the status."""
+        headers = dict(exc.headers or {})
+        try:
+            if exc.code in (401, 403) and path == MODELS_PATH:
                 raise LmStudioKeyError(KEY_REASON) from exc
             try:
                 data = exc.read(MAX_ANSWER_BYTES + 1)
-            except (OSError, http.client.HTTPException) as read_exc:
-                raise LmStudioServerError(f"{self.base_url}{path}: status {exc.code}, no body ({read_exc})") from read_exc
-            finally:
-                exc.close()
-            return checked_answer(Response(status=exc.code, headers=dict(exc.headers or {}), body=data))
-        except (OSError, ValueError, http.client.HTTPException) as exc:
-            raise LmStudioServerError(f"{self.base_url}{path}: the LM Studio server did not answer ({exc})") from exc
+            except (OSError, ValueError, http.client.HTTPException) as read_exc:
+                if path != CHAT_PATH or _is_timeout(read_exc):
+                    raise self._failure(read_exc, path, f"status {exc.code}, no body") from read_exc
+                return _marked(Response(status=exc.code, headers=headers), BODY_UNREAD)
+            return checked_answer(Response(status=exc.code, headers=headers, body=data), path)
+        finally:
+            exc.close()
 
     def _request(self, method: str, path: str, body: dict | None) -> urllib.request.Request:
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -190,7 +250,7 @@ class FixtureLmStudioServer:
             answer = answer(body)
         if isinstance(answer, LmStudioServerError):
             raise answer
-        return checked_answer(answer)
+        return checked_answer(answer, path)
 
 
 # --- the model list -----------------------------------------------------------------------------------
@@ -314,6 +374,10 @@ def detect_lmstudio(
 
 __all__ = [
     "ALLOWED_CALLS",
+    "BODY_HEADER",
+    "BODY_OVERSIZED",
+    "BODY_UNREAD",
+    "CHAT_PATH",
     "KEY_REASON",
     "LMSTUDIO_BASE_URL",
     "MODELS_PATH",
@@ -322,6 +386,7 @@ __all__ = [
     "LmStudioModels",
     "LmStudioServer",
     "LmStudioServerError",
+    "LmStudioTimeoutError",
     "LoadedModel",
     "LocalLmStudioServer",
     "check_call",

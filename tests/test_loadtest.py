@@ -278,7 +278,7 @@ def test_a_clean_run_is_valid_comparable_and_carries_the_three_speeds():
     protocol = shipped_protocol()
     assert len(record.runs) == protocol.measured_runs
     assert (record.validity, record.comparable) == ("valid", True)
-    assert record.protocol == "v1"
+    assert record.protocol == "v2"
     assert record.daemon_version == "0.34.2"
     assert record.ollama_name == DEEPSEEK_OLLAMA_NAME
     assert record.measured_at == NOW
@@ -307,13 +307,23 @@ def test_every_generate_carries_the_protocol_and_the_ranking_context():
     for _method, path, body in [call for call in daemon.calls if call[1] == GENERATE_PATH]:
         assert body["model"] == DEEPSEEK_OLLAMA_NAME
         assert body["prompt"] == protocol.prompt
-        assert (body["raw"], body["stream"]) == (True, False)
+        assert (body["raw"], body["stream"]) == (False, False)
         assert body["options"] == {
             "num_ctx": 4096,
             "num_predict": protocol.options.num_predict,
             "temperature": protocol.options.temperature,
             "seed": protocol.options.seed,
         }
+
+
+def test_the_four_ps_readings_follow_the_warm_up_and_each_measured_run():
+    daemon = loadtest_daemon()
+
+    record = _measure(daemon)
+
+    steps = [call[1] for call in daemon.calls if call[1] in (GENERATE_PATH, PS_PATH)]
+    assert steps == [GENERATE_PATH, PS_PATH] * 4
+    assert record.protocol == "v2" and record.comparable is True
 
 
 def test_the_machine_load_is_read_once_before_the_runs():

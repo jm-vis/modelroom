@@ -125,7 +125,7 @@ def test_exit_0_and_the_file_there_is_the_downloaded_line(tmp_path):
     assert said[1] == (
         f"✓ Downloaded #7  {FILE} (2.9 GB) · in LM Studio: load it with context length 8192, then start its server"
     )
-    assert said[2] == "then run modelroom again: it finds the server; LM Studio is not measured yet"
+    assert said[2] == "then run modelroom again: it finds the server and measures the loaded model"
     assert len(said) == 3
 
 

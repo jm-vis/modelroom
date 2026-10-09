@@ -101,6 +101,7 @@
           "provenance": "from_metadata",
           "quantization": "Q4_K_M",
           "rank": 1,
+          "speed_protocol": null,
           "speed_tps": null,
           "weights_gib": 4.68248987197876
         },
@@ -143,6 +144,7 @@
           "provenance": "from_metadata",
           "quantization": "Q8_0",
           "rank": 2,
+          "speed_protocol": null,
           "speed_tps": null,
           "weights_gib": 8.111371040344238
         }

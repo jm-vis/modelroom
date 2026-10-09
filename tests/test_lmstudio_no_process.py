@@ -27,7 +27,7 @@ from modelroom.lmstudio_server import MODELS_PATH, detect_lmstudio, lms_call, re
 from modelroom.measurements import Scenario
 from modelroom.runtimes import Origins
 
-from fixture_lmstudio import chat_calls, fake_lms_on_path, lms_in_the_home_folder, lmstudio_servers, run_of, trap_processes
+from fixture_lmstudio import chat_calls, chat_to, fake_lms_on_path, lms_in_the_home_folder, lmstudio_servers, run_of, trap_processes
 
 PACKAGE = Path(__file__).resolve().parent.parent / "modelroom"
 LMSTUDIO_MODULES = ("lmstudio_server", "lmstudio_install", "loadtest_lmstudio", "guided_lmstudio")
@@ -291,7 +291,7 @@ def test_modelroom_never_runs_lms_from_the_home_folder_either(tmp_path, monkeypa
     lms_in_the_home_folder(home, mark)
     assert shutil.which("lms") is None
     trap_processes(monkeypatch)
-    run = run_of(lmstudio_servers(["lmstudio_v1_models_loaded.json"]))
+    run = run_of(lmstudio_servers(["lmstudio_v1_models_loaded.json"], chats=[chat_to("qwen3.5-4b")] * 4))
     scenario = Scenario(context_requested=8192, context_origin="default", kv_type="f16", kv_type_assumed=True, requests=1)
 
     assert detect_lmstudio(None, system=sys.platform, which=shutil.which, home=home) == "installed"
@@ -300,8 +300,8 @@ def test_modelroom_never_runs_lms_from_the_home_folder_either(tmp_path, monkeypa
     given = offer(run, None, scenario, tmp_path)
     said = measure(run, None, scenario, tmp_path, given, [ROW])
 
-    assert fact is not None and given.rows == () and said is None
-    assert chat_calls(run.servers.transports["lmstudio"]) == []
+    assert fact is not None and len(given.rows) == 1 and said == "1 of 1 measured"  # the measurement ran: four chats
+    assert len(chat_calls(run.servers.transports["lmstudio"])) == 4
     assert not mark.exists()
 
 
@@ -326,12 +326,12 @@ def test_modelroom_never_runs_lms(tmp_path, monkeypatch):
     assert [loaded.instance_id for loaded in models.loaded] == ["qwen3.5-4b"]
     assert [call[:2] for call in server.calls] == [("GET", MODELS_PATH)] * 2
 
-    run = run_of(lmstudio_servers(["lmstudio_v1_models_loaded.json"]))
+    run = run_of(lmstudio_servers(["lmstudio_v1_models_loaded.json"], chats=[chat_to("qwen3.5-4b")] * 4))
     scenario = Scenario(context_requested=8192, context_origin="default", kv_type="f16", kv_type_assumed=True, requests=1)
     fact = start_fact(Origins(daemon=None, servers=run.servers))
     given = offer(run, None, scenario, tmp_path)
     said = measure(run, None, scenario, tmp_path, given, [ROW])
 
-    assert fact is not None and given.rows == () and said is None and card_facts(run) == ()
-    assert chat_calls(run.servers.transports["lmstudio"]) == []
+    assert fact is not None and len(given.rows) == 1 and said == "1 of 1 measured" and len(card_facts(run)) == 4
+    assert len(chat_calls(run.servers.transports["lmstudio"])) == 4
     assert not mark.exists()

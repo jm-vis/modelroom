@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### FR-M
+
+Speed measurement protocol v2 for Ollama (AP9-FR-M). No schema version changes.
+
+- **Protocol v2** (`modelroom/protocol_v2.toml`): the load test sends the prompt with `raw = false`, so the
+  daemon applies the template (and the system text) of the model's Modelfile. A thinking model such as
+  Qwen3.8-27B reaches the 128 tokens instead of ending after 2 and now gets a speed. Prompt, sampling,
+  warm-up, three measured runs, the four `/api/ps` readings and the validity rule are those of v1.
+  `protocol_v1.toml` stays for the records it wrote; `protocol_for("v1" or "v2")` reads either,
+  `shipped_protocol()` is v2 and `load_protocol(path)` has no default path any more.
+- **Records**: a new measurement is stored as `protocol: v2`; a stored `v1` record is read unchanged, is
+  checked against the file of its own version and still counts in the ranking (v1 and v2 count alike).
+- **Version on screen**: step 4 says `measured <name>: ..., context 8k, protocol v2` and the card says
+  `fastest <name> at <x> tok/s, protocol v2`; the render document carries `speed_protocol` per measured row
+  (a document written before has none, and the card then names no version). A run that ends early names
+  the version of its record; only a stored `v1` record gets `; protocol v2 sends the prompt through the
+  model's template, say Yes to measure again`.
+- **Stored records in step 4**: before the question, step 4 now names the newest stored record of each
+  offered package (same context, one request) that is no measurement, so a stored `v1` record that ended
+  early is seen and the hint to measure again is reached.
+
+### LS-M
+
+- **LM Studio is measured with one loaded model** (AP9-LS-M; `modelroom/loadtest_lmstudio.py`,
+  `modelroom/guided_lmstudio.py`): step 4 offers `LM Studio server  <id>, context <n>` for exactly one loaded
+  GGUF instance. A yes sends one chat of 128 tokens after the other (a warm-up and three runs, the prompt of the
+  protocol, the instance id as the model) and times each on the wall; the model list is read before the warm-up
+  and after every request, and the measurement ends without a number when the loaded model or its context
+  changed or a request is not valid (eleven lines, from `stopped answering during the measurement` to `a request
+  took no measurable time`). The number is shown in step 4 and on the card in four rows (`package unknown; not
+  ranked, nothing written`, a busy server reads slower, never asks to load); nothing is saved or ranked. With no
+  or several loaded models, or another context than the run's, there is a note and no chat. modelroom never
+  asks LM Studio to load, unload or download a model.
+- **The LM Studio transport has a second call** (`modelroom/lmstudio_server.py`): `POST /v1/chat/completions`
+  with a limit of 600 s beside `GET /api/v1/models` with 10 s. A limit of time is told apart at the
+  connection, at the body and at the body of an error; at the chat a `401`, a `403` and a body that cannot be
+  read or is too large keep their status instead of raising. `401` and `403` still mean a token at the list.
+- The hint after an LM Studio entry reads `then run modelroom again: it finds the server and measures the loaded
+  model` (the printed block and the line after `lms get`).
+
 ### KA-H
 
 - **Catalog hardened** (AP9-KA-H; `modelroom/search_release.py`, `scripts/catalog_scan.py`, `scripts/catalog_scan_rules.py`,

@@ -1,0 +1,13 @@
+{
+  "id": "chatcmpl-test-prompt-negative",
+  "object": "chat.completion",
+  "model": "qwen3.5-4b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": ""},
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {"prompt_tokens": -1, "completion_tokens": 128, "total_tokens": 127}
+}

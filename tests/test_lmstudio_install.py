@@ -294,7 +294,7 @@ def test_the_hint_names_the_context_of_the_run():
     lines = lms.hint_lines("path", "win32", 32768)
     assert lines == [
         "in LM Studio: load it with context length 32768, then start its server (the server switch in LM Studio, or lms server start)",
-        "then run modelroom again: it finds the server; LM Studio is not measured yet",
+        "then run modelroom again: it finds the server and measures the loaded model",
     ]
     assert "context length 8192" in lms.hint_lines("path", "linux", 8192)[0]
 
