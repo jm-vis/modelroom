@@ -1034,8 +1034,8 @@ count a user named:
 `requests` and `requests_origin` are written together or not at all; a table that breaks one of
 the rules is invalid (`ConfigError`, exit `2`). A `[guided]` table without the keys reads as one
 request of origin `default`. `render_cmd.scenario_from_config` reads `requests` whether a context
-is kept or not. Step 3 of the guided mode asks for the head count and writes the three keys
-together (see "Guided mode", step 3; decided 2026-09-26).
+is kept or not. Step 3 of the guided mode asks how many people work at the same time and writes the three keys
+together (see "Guided mode", step 3; decided 2026-09-26, question changed 2026-10-10).
 
 | Field | Type | Constraint | Meaning |
 |---|---|---|---|
@@ -6325,7 +6325,7 @@ and what the step came to (`✓ Packages        2 models, 26 packages from 4 rep
 where it did nothing (`– Measurement     none in this run`). Step 5 closes with the card of the
 whole run over the result table and `✓ Results         docs\models.md`, the document's path relative
 to the results folder. The five are **1 Configuration** (the results folder, the configuration in
-it, the machines), **2 Packages** (search, choice, fetch), **3 Context** (the head count, then the
+it, the machines), **2 Packages** (search, choice, fetch), **3 Context** (how many people work at the same time, then the
 size scale),
 **4 Measurement** (the load test), **5 Results** (the render).
 
@@ -6367,7 +6367,8 @@ matter, so the move is invisible to it.
 | 2 | `filter_owners` | Show only repositories of a publisher or a listed packager? | true/false |
 | 2 | `did_you_mean` | Nothing was found. Did you mean one of these? | one of the candidates, or `keep` (only when the search found no model and the catalog knows a word close to the one that was typed) |
 | 2 | `select` | Which of these models should the result cover? | a list of base model ids (`Qwen/Qwen3.5-9B`); an answer file may name repository ids instead, as before |
-| 3 | `users` | How many people use it on a typical day? | a whole number of people (`1..10240`), or the requests named outright as text, `"12 requests"` (`1..1024`); asked before `context`; the pointer starts on `[guided].users` when this folder kept one, else on `1` |
+| 3 | `at_once` | How many people work with it at the same time? | a whole number of people at the same time (`1..1024`, origin `entered`), `"N people"` for a daily head count (`1..10240`, origin `from_users`), `"12 requests"` as before, or `"kept"` for the line a folder kept; asked before `context` |
+| 3 | `users` | (the same question) | the key of 1.0.0 and earlier, read only from an answer file and only when `at_once` is absent: a whole number of people of a day, or `"12 requests"`; a file holding both keys ends with exit `2` |
 | 3 | `context` | How much text should a model handle at once? | a level of the scale (`"XS"` … `"XXL"`), or a whole number of tokens; the pointer starts on `[guided].context` when this folder kept one, else on `L` |
 | 4 | `load_test` | Measure the speed on this machine now? | true/false, default false; one question for every local server (AP9-UX E); **one of the two optional answers** -- an answer file that does not mention it does not measure |
 | 4 | `load_test_packages` | Which of these should be measured? | a list of local Ollama names, `vllm` for a vLLM server that states a model and `lmstudio` for an LM Studio server with exactly one loaded model (only after `load_test` true, where a server offers a row) |
@@ -6722,35 +6723,39 @@ whose base model the shipped catalog has no family for gets the family name
 Then `fetch_with_config` runs with the same budget object (nothing configured yet means nothing to
 fetch, said out loud).
 
-**Step 3, the head count** (`modelroom/guided_context.py`, decided 2026-09-26), asked **before**
-the scale: the last column of the scale and the fit of the ranking compute with the same requests,
-or the scale would show a number the run contradicts a moment later. `How many people use it on a
-typical day?` is a list of `1`, `5`, `10`, `25`, `100`, each with the requests it stands for, and
-`enter a number`; the derivation stands in the instruction line under the list: `assumes 1 in 10 of
-them at once (rule of thumb, not measured)` (`config.ACTIVE_SHARE`, `requests_from_users`). The
-pointer starts on the head count this folder kept (`[guided].users`), on a line of its own `<n>
-<k> requests kept in this folder` when that is no line of the list, and on `1` when the folder kept
-none -- also when it kept requests named outright without a head count, since a number of slots
-says nothing about how many people there are.
+**Step 3, at the same time** (`modelroom/guided_context.py`, decided 2026-09-26, question changed
+2026-10-10), asked **before** the scale: the last column of the scale and the fit of the ranking
+compute with the same requests. `How many people work with it at the same time?` is a list of `1`,
+`5`, `10`, `50`, `100`, each with what it is (`one person`, `a small team`, `a department; consider
+a serving stack such as vLLM`, then `a serving stack such as vLLM`), and `enter a number`. For this
+question, modelroom assumes one request at a time per person working with the model. The
+instruction line under the list: `one request at a time per person; a daily head count is about
+10 times as many (rule of thumb, not measured)` (`config.ACTIVE_SHARE`). The pointer starts on
+`[guided].requests` when its origin is not `default`, else on `1`; a kept number that is no line of
+the list, and every kept `from_users` answer, gets a line of its own, `kept in this folder` (with
+`(<users> people)` for `from_users`), and the pointer starts there.
 
-- **A whole number** is a head count: `requests = requests_from_users(users)`, origin `from_users`
-  -- `1` included, which is a head count the user named, not the `default`.
-- **`N requests`** (also `1 request`) names the parallel requests outright: origin `entered`, and
-  `users` stays what the file holds **when the answer is written** (read in the change, on every
-  attempt), or none; only the display uses it.
-- **Anything else** -- `0`, `-1`, `abc`, `3 people`, a head count above 10240, requests above 1024
-  -- ends the run with exit `2`, naming what was answered and both forms with their bounds
-  (`GuidedConfig` checks them).
-- **The answer line**: `? How many people use it on a typical day?  25 (3 requests)`, `1 (1
-  request)`, or `12 requests`.
+- **A whole number** is the requests: origin `entered`, `users` stays what the file holds when the
+  answer is written, or none; only the display uses it. `N requests` (also `1 request`) is the same.
+- **`N people`** (also `1 person`) is a daily head count: `requests = requests_from_users(users)`,
+  origin `from_users`.
+- **`kept`** keeps the stored `users`, `requests` and `requests_origin` unchanged.
+- **Anything else**, `0`, `-1`, `abc`, more than 1024 at once, a head count above 10240, ends the
+  run with exit `2`: `'<answer>' is not a valid answer for step 3: answer a whole number of people
+  at the same time (1 to 1024) or `N people` for a daily head count (1 to 10240)`.
+- **The answer line**: `? How many people work with it at the same time?  5 at once`, or
+  `25 people (3 at once)` for a head count.
+- **An answer file** may answer `at_once` or, as in 1.0.0 and earlier, `users` (a whole number is then a
+  head count of a day); both in one file end with exit `2`, `the answer file holds both users and
+  at_once; answer only one of them`; the answer line is the same in both cases.
 - **The write**: `[guided].users`, `requests` and `requests_origin` together
   (`guided_write.with_requests`), right after the answer, compared with the file as it is then and
   not with this run's copy -- the rule of the context below. The configuration that comes back is
   the one the run goes on with: the scale is computed for the machine and the reserves **it** holds,
-  not the ones read before the question. After the scale the head count is applied once more,
-  together with the context (`guided_write.combined`), so a head count another run wrote while the
+  not the ones read before the question. After the scale the answer is applied once more,
+  together with the context (`guided_write.combined`), so an answer another run wrote while the
   scale was asked cannot leave this run's scenario, its document and the file apart (second-model
-  round, 2026-09-26). A second run in the same folder offers the kept head count.
+  round, 2026-09-26). A second run in the same folder offers the kept answer.
 
 **Step 3, the context as a size scale** (`modelroom/guided_context.py`). Six levels, in this
 order, each a line of the list: `XS` 4096, `S` 8192, `M` 16384, `L` 32768, `XL` 65536, `XXL`
@@ -6769,7 +6774,7 @@ in <toml>` all went (test round, 2026-09-24). A machine a fit cannot be computed
   question for a number of tokens; it starts empty, because what this folder kept is already the
   line under the pointer.
 - **The last column, "how many fit"**: for every level, fit contract v1's own formula
-  (`fit.count_fitting` over `compute_fit_v2`, the requests of the head count, 16-bit KV cache per
+  (`fit.count_fitting` over `compute_fit_v2`, the chosen number of requests, 16-bit KV cache per
   request) over the packages of
   this folder's snapshot that a fit may be computed for (`render._eligible_packages`), against the
   profile **the pointer file binds this machine to for this folder** (the same source step 4
@@ -7092,7 +7097,7 @@ state.
 **The answer file** (`modelroom/answers.py`) is TOML with `schema_version = 1` and one key per
 question; an answer may be text, a whole number, `true`/`false` or a list of texts. A question
 with no answer ends the run with exit `2` and names the question -- an answer file written for 0.1.0
-has no `users` and stops at step 3 until the key is added (`users = 1` keeps its old ranking); an answer that is not one of
+has neither `at_once` nor `users` and stops at step 3 until one is added (`users = 1` keeps its old ranking); an answer that is not one of
 the offered choices, or of the wrong shape, does the same. An unsupported `schema_version` is
 exit `3`. **The three exceptions are `load_test`, `pull` and `pull_other`:** a file that does not
 mention `load_test` measures nothing -- on no server -- one that does not mention `pull` does not

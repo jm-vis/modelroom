@@ -29,7 +29,7 @@
  ✓ Packages        2 models, 24 packages from 3 repositories
 
  ── Step 3 of 5  Context ────────────────────────────────────────────────
- ? How many people use it on a typical day?  1 (1 request)
+ ? How many people work with it at the same time?  1 person (1 at once)
  ? How much text should a model handle at once?  S  8k  6,000 words  a long conversation
  ✓ Context         S 8k
 

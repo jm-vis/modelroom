@@ -14,13 +14,20 @@ from pathlib import Path
 
 import pytest
 
-from modelroom.config import Configuration, MachineConfig
+from modelroom.config import Configuration, GuidedConfig, MachineConfig
 from modelroom.contracts import BaseModelSpec, Package
 from modelroom.examples import EXAMPLES
 from modelroom.fit import compute_fit_v2, count_fitting
 from modelroom.guided import GuidedError
 from modelroom.guided_context import (
+    AT_ONCE_EXPLANATION,
+    AT_ONCE_FORMS,
+    AT_ONCE_KEY,
+    AT_ONCE_LEVELS,
+    AT_ONCE_NUMBER_QUESTION,
+    AT_ONCE_QUESTION,
     DEFAULT_CONTEXT,
+    KEPT_VALUE,
     LEVELS,
     NO_MACHINE_LINE,
     NO_PACKAGES,
@@ -30,6 +37,8 @@ from modelroom.guided_context import (
     Checked,
     RequestsAnswer,
     answer_words,
+    at_once_answer,
+    at_once_choices,
     context_cap,
     context_scenario,
     fit_texts,
@@ -661,14 +670,133 @@ def test_anything_else_ends_the_run_and_names_both_forms_with_their_bounds(answe
 @pytest.mark.parametrize(
     "answer, words",
     [
-        (RequestsAnswer(25, 3, "from_users"), "25 (3 requests)"),
-        (RequestsAnswer(1, 1, "from_users"), "1 (1 request)"),
-        (RequestsAnswer(None, 12, "entered"), "12 requests"),
-        (RequestsAnswer(25, 1, "entered"), "1 request"),
+        (RequestsAnswer(25, 3, "from_users"), "25 people (3 at once)"),
+        (RequestsAnswer(1, 1, "from_users"), "1 person (1 at once)"),
+        (RequestsAnswer(None, 12, "entered"), "12 at once"),
+        (RequestsAnswer(25, 1, "entered"), "1 at once"),
     ],
 )
 def test_the_answer_line_names_the_requests_behind_the_head_count(answer, words):
     assert answer_words(answer) == words
+
+
+# --- the question about people at the same time (AP9-PQ) ---------------------------------------------
+
+
+def _guided(users=None, requests=1, origin="default") -> GuidedConfig:
+    return GuidedConfig(users=users, requests=requests, requests_origin=origin)
+
+
+def test_the_texts_of_the_question_about_people_at_the_same_time():
+    assert AT_ONCE_KEY == "at_once"
+    assert AT_ONCE_QUESTION == "How many people work with it at the same time?"
+    assert AT_ONCE_EXPLANATION == (
+        "one request at a time per person; a daily head count is about 10 times as many (rule of thumb, not measured)"
+    )
+    assert AT_ONCE_NUMBER_QUESTION == "How many at the same time? (or: N people)"
+    assert AT_ONCE_LEVELS == (1, 5, 10, 50, 100)
+    assert AT_ONCE_FORMS == (
+        "a whole number of people at the same time (1 to 1024) or `N people` for a daily head count (1 to 10240)"
+    )
+
+
+def test_the_list_offers_five_levels_with_what_each_is_and_a_number_of_your_own():
+    choices = at_once_choices(_guided())
+
+    assert [choice.value for choice in choices] == ["1", "5", "10", "50", "100", NUMBER_VALUE]
+    assert [choice.label for choice in choices[:5]] == [
+        "1      one person",
+        "5      a small team",
+        "10     a department; consider a serving stack such as vLLM",
+        "50     a serving stack such as vLLM",
+        "100    a serving stack such as vLLM",
+    ]
+    assert [choice.value for choice in choices if choice.checked] == ["1"]
+
+
+def test_the_list_of_a_kept_level_starts_on_that_level_without_a_kept_line():
+    choices = at_once_choices(_guided(None, 5, "entered"))
+
+    assert [choice.value for choice in choices if choice.checked] == ["5"]
+    assert KEPT_VALUE not in [choice.value for choice in choices]
+
+
+def test_the_list_of_a_kept_head_count_gets_a_kept_line_and_the_pointer_on_it():
+    choices = at_once_choices(_guided(50, 5, "from_users"))
+
+    kept = next(choice for choice in choices if choice.value == KEPT_VALUE)
+    assert kept.label == "5      kept in this folder (50 people)"
+    assert [choice.value for choice in choices if choice.checked] == [KEPT_VALUE]
+
+
+def test_a_kept_number_that_is_no_level_gets_a_kept_line_without_people():
+    choices = at_once_choices(_guided(None, 12, "entered"))
+
+    kept = next(choice for choice in choices if choice.value == KEPT_VALUE)
+    assert kept.label == "12     kept in this folder"
+    assert [choice.value for choice in choices if choice.checked] == [KEPT_VALUE]
+
+
+@pytest.mark.parametrize(
+    "answered, expected",
+    [
+        ("5", RequestsAnswer(None, 5, "entered")),
+        ("1024", RequestsAnswer(None, 1024, "entered")),
+        ("12 requests", RequestsAnswer(None, 12, "entered")),
+        ("1 request", RequestsAnswer(None, 1, "entered")),
+        ("25 people", RequestsAnswer(25, 3, "from_users")),
+        ("1 person", RequestsAnswer(1, 1, "from_users")),
+        ("10240 people", RequestsAnswer(10240, 1024, "from_users")),
+    ],
+)
+def test_the_answer_to_people_at_the_same_time_is_a_number_or_a_head_count(answered, expected):
+    assert at_once_answer(answered, _guided()) == expected
+
+
+@pytest.mark.parametrize(
+    "answered",
+    [
+        "0", "-1", "abc", "1025", "10241 people", "3 persons", "kept", "", "+5", "1_000", "5 requests please",
+        "2 request", "2 person", "25  people", "25\tpeople", " 25 people",
+    ],
+)
+def test_anything_else_ends_the_run_with_the_new_error_text(answered):
+    with pytest.raises(GuidedError) as raised:
+        at_once_answer(answered, _guided())
+
+    assert str(raised.value) == f"{answered!r} is not a valid answer for step 3: answer {AT_ONCE_FORMS}"
+
+
+def test_the_singular_is_for_one_only_and_the_plural_takes_every_other_number():
+    assert at_once_answer("1 request", _guided()) == RequestsAnswer(None, 1, "entered")
+    assert at_once_answer("1 person", _guided()) == RequestsAnswer(1, 1, "from_users")
+    assert at_once_answer("1 requests", _guided()) == RequestsAnswer(None, 1, "entered")
+    assert at_once_answer("1 people", _guided()) == RequestsAnswer(1, 1, "from_users")
+    assert at_once_answer("2 requests", _guided()) == RequestsAnswer(None, 2, "entered")
+
+
+def test_kept_is_refused_for_a_level_and_keeps_the_triple_for_a_nonstandard_number():
+    with pytest.raises(GuidedError):
+        at_once_answer("kept", _guided(None, 5, "entered"))
+
+    assert at_once_answer("kept", _guided(None, 12, "entered")) == RequestsAnswer(None, 12, "entered")
+
+
+def test_a_terminal_holds_no_key_and_a_file_holds_what_it_answers_without_asking():
+    from modelroom.dialog import FileAsker, TerminalAsker
+
+    assert TerminalAsker().holds("at_once") is False
+    assert TerminalAsker().holds("users") is False
+    asker = FileAsker({"at_once": 5})
+    assert (asker.holds("at_once"), asker.holds("users")) == (True, False)
+    assert asker.asked == []
+
+
+def test_a_number_keeps_the_head_count_the_folder_holds_and_kept_keeps_the_stored_triple():
+    kept = _guided(25, 3, "from_users")
+
+    assert at_once_answer("10", kept) == RequestsAnswer(25, 10, "entered")
+    assert at_once_answer("kept", kept) == RequestsAnswer(25, 3, "from_users")
 
 
 def test_the_list_offers_five_head_counts_and_a_number_of_your_own_starting_on_one():

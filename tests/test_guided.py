@@ -1854,7 +1854,7 @@ def test_a_context_the_scenario_cannot_take_ends_the_run_without_a_traceback(tmp
 
 # --- step 3, the head count: the requests the ranking assumes -----------------------------------------
 
-USERS_QUESTION_LINE = "? How many people use it on a typical day?"
+USERS_QUESTION_LINE = "? How many people work with it at the same time?"  # the answer line is the same for `users` and `at_once`
 ONE_REQUEST_LINE = "measurements run one request; this ranking assumes {requests}"
 
 
@@ -1927,7 +1927,7 @@ def test_a_head_count_is_kept_with_its_requests_and_reaches_the_document(tmp_pat
     assert (payload["users"], payload["requests_origin"], payload["scenario"]["requests"]) == (25, "from_users", 3)
     fits = [row["fit"] for row in payload["machines"][0]["ranked"] + payload["machines"][0]["no_fit"]]
     assert fits and {fit["requests"] for fit in fits} == {3}
-    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  25 (3 requests)"
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  25 people (3 at once)"
     sentence = "context 8k (entered), KV cache f16 (assumed), 3 requests (from 25 users)"
     assert f"Scenario: {sentence}" in _markdown(tmp_path)
     assert _card(lines)["context"] == "context   " + sentence.removeprefix("context ")
@@ -1939,7 +1939,7 @@ def test_one_person_is_a_head_count_too_and_says_so_in_the_singular(tmp_path: Pa
     assert code == 0
     assert _kept_requests(tmp_path) == (1, 1, "from_users")
     assert (_document(tmp_path)["users"], _document(tmp_path)["requests_origin"]) == (1, "from_users")
-    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  1 (1 request)"
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  1 person (1 at once)"
     assert "Scenario: context 8k (entered), KV cache f16 (assumed), 1 request (from 1 user)" in _markdown(tmp_path)
     # One request: no hint, no sentence in step 4.
     printed = "\n".join(lines)
@@ -1955,7 +1955,7 @@ def test_requests_named_outright_are_entered_and_carry_the_hint_beyond_eight(tmp
     assert "users" not in tomllib.loads(_config_file(tmp_path).read_text(encoding="utf-8"))["guided"]
     payload = _document(tmp_path)
     assert (payload["users"], payload["requests_origin"], payload["scenario"]["requests"]) == (None, "entered", 12)
-    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  12 requests"
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  12 at once"
     markdown = _markdown(tmp_path)
     assert "Scenario: context 8k (entered), KV cache f16 (assumed), 12 requests (entered)" in markdown
     assert f"Load: {OLLAMA_REQUEST_HINT_TEXT}" in markdown
@@ -2032,7 +2032,7 @@ def test_a_head_count_the_ranking_cannot_take_ends_the_run_naming_both_forms(tmp
 
 
 def test_an_answer_file_without_the_head_count_is_exit_2_and_names_it(tmp_path: Path, capsys):
-    """An answer file of 0.1.0 has no `users`; like every other missing answer it stops the run."""
+    """An answer file of 0.1.0 has neither `at_once` nor `users`; like every other missing answer it stops the run."""
     answers = tmp_path / "answers.toml"
     body = [f"{key} = {json.dumps(value)}" for key, value in FULL_ANSWERS.items() if key != "users"]
     answers.write_text("schema_version = 1\n" + "\n".join(body) + "\n", encoding="utf-8")
@@ -2050,7 +2050,190 @@ def test_an_answer_file_without_the_head_count_is_exit_2_and_names_it(tmp_path: 
     )
 
     assert code == 2
-    assert "no answer for 'users'" in capsys.readouterr().err
+    assert (
+        "the answer file has no answer for 'at_once' (How many people work with it at the same time?)"
+        in capsys.readouterr().err
+    )
+
+
+# --- step 3, the question about people at the same time: `at_once` in the answer file (AP9-PQ) ---------
+
+
+def _at_once(value) -> dict:
+    """The full answers with `at_once` in place of `users`."""
+    return {**{key: item for key, item in FULL_ANSWERS.items() if key != "users"}, "at_once": value}
+
+
+def test_at_once_is_asked_before_the_scale_and_users_is_not_asked(tmp_path: Path):
+    asker = FileAsker(_at_once(5))
+    assert _run_with(tmp_path, asker, now=RUN1) == 0
+
+    assert asker.asked.index("at_once") + 1 == asker.asked.index("context")
+    assert "users" not in asker.asked
+
+
+def test_at_once_over_a_kept_head_count_keeps_the_head_count(tmp_path: Path):
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25})[0] == 0
+
+    code, lines = _run(tmp_path, _at_once(50), now=RUN2)
+
+    assert code == 0
+    assert _kept_requests(tmp_path) == (25, 50, "entered")
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  50 at once"
+
+
+def test_at_once_people_is_a_daily_head_count(tmp_path: Path):
+    code, lines = _run(tmp_path, _at_once("25 people"))
+
+    assert code == 0
+    assert _kept_requests(tmp_path) == (25, 3, "from_users")
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  25 people (3 at once)"
+
+
+def test_at_once_requests_is_the_compatibility_form(tmp_path: Path):
+    assert _run(tmp_path, _at_once("12 requests"))[0] == 0
+
+    assert _kept_requests(tmp_path) == (None, 12, "entered")
+
+
+@pytest.mark.parametrize("level", [1, 5, 10, 50, 100])
+def test_every_level_of_the_list_sets_its_own_number_of_requests(tmp_path: Path, level):
+    code, lines = _run(tmp_path, _at_once(level))
+
+    assert code == 0
+    assert _kept_requests(tmp_path) == (None, level, "entered")
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  {level} at once"
+
+
+@pytest.mark.parametrize("answer, expected", [(1, (None, 1, "entered")), (1024, (None, 1024, "entered"))])
+def test_at_once_is_valid_from_one_to_1024(tmp_path: Path, answer, expected):
+    assert _run(tmp_path, _at_once(answer))[0] == 0
+
+    assert _kept_requests(tmp_path) == expected
+
+
+def test_at_once_above_1024_ends_the_run_with_the_error_text(tmp_path: Path):
+    with pytest.raises(GuidedError, match="'1025' is not a valid answer for step 3: answer a whole number of people at the same time"):
+        _run(tmp_path, _at_once(1025))
+
+
+def test_a_head_count_of_10240_is_valid_and_10241_ends_the_run(tmp_path: Path):
+    assert _run(tmp_path, _at_once("10240 people"))[0] == 0
+    assert _kept_requests(tmp_path) == (10240, 1024, "from_users")
+
+    (tmp_path / "second").mkdir()
+    with pytest.raises(GuidedError, match="not a valid answer for step 3"):
+        _run(tmp_path / "second", _at_once("10241 people"))
+
+
+def test_a_file_holding_users_and_at_once_ends_the_run(tmp_path: Path):
+    with pytest.raises(GuidedError) as raised:
+        _run(tmp_path, {**FULL_ANSWERS, "at_once": 5})
+
+    assert str(raised.value) == "the answer file holds both users and at_once; answer only one of them"
+
+
+def test_a_file_with_neither_key_is_missing_the_answer_for_at_once(tmp_path: Path):
+    answers = {key: item for key, item in FULL_ANSWERS.items() if key != "users"}
+
+    with pytest.raises(AnswerMissingError) as raised:
+        _run(tmp_path, answers)
+
+    assert str(raised.value) == "the answer file has no answer for 'at_once' (How many people work with it at the same time?)"
+
+
+def test_kept_keeps_the_stored_triple_unchanged(tmp_path: Path):
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25})[0] == 0
+
+    code, lines = _run(tmp_path, _at_once("kept"), now=RUN2)
+
+    assert code == 0
+    assert _kept_requests(tmp_path) == (25, 3, "from_users")
+    assert _answer_line(lines, USERS_QUESTION_LINE) == f"{USERS_QUESTION_LINE}  25 people (3 at once)"
+
+
+def test_kept_in_a_folder_that_kept_nothing_ends_the_run(tmp_path: Path):
+    with pytest.raises(GuidedError, match="'kept' is not a valid answer for step 3"):
+        _run(tmp_path, _at_once("kept"))
+
+
+def test_a_level_over_a_kept_head_count_is_entered(tmp_path: Path):
+    assert _run(tmp_path, {**FULL_ANSWERS, "users": 25})[0] == 0
+
+    assert _run(tmp_path, _at_once(10), now=RUN2)[0] == 0
+
+    assert _kept_requests(tmp_path) == (25, 10, "entered")
+
+
+def test_at_once_true_is_refused_with_the_old_wording(tmp_path: Path):
+    from modelroom.dialog import AnswerInvalidError
+
+    with pytest.raises(AnswerInvalidError) as raised:
+        _run(tmp_path, _at_once(True))
+
+    assert str(raised.value) == "the answer for 'at_once' is not text or a whole number: True"
+
+
+def test_one_person_and_one_request_are_the_smallest_answers(tmp_path: Path):
+    assert _run(tmp_path, _at_once("1 person"))[0] == 0
+    assert _kept_requests(tmp_path) == (1, 1, "from_users")
+
+    (tmp_path / "second").mkdir()
+    assert _run(tmp_path / "second", _at_once("1 request"))[0] == 0
+    assert _kept_requests(tmp_path / "second") == (None, 1, "entered")
+
+
+@pytest.mark.parametrize("answer", [0, -1, "abc", "3 persons", "2 request", "2 person"])
+def test_anything_else_ends_the_run_with_the_error_text(tmp_path: Path, answer):
+    from modelroom.guided_context import AT_ONCE_FORMS
+
+    with pytest.raises(GuidedError) as raised:
+        _run(tmp_path, _at_once(answer))
+
+    assert str(raised.value) == f"{str(answer)!r} is not a valid answer for step 3: answer {AT_ONCE_FORMS}"
+
+
+def test_spaces_around_a_head_count_are_stripped_before_it_is_read(tmp_path: Path):
+    assert _run(tmp_path, _at_once(" 25 people "))[0] == 0
+
+    assert _kept_requests(tmp_path) == (25, 3, "from_users")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"at_once": 1025},
+        {"at_once": "10241 people"},
+        {"at_once": "2 request"},
+        {"at_once": "2 person"},
+        {"at_once": "25  people"},
+        {"at_once": "25\tpeople"},
+        {"at_once": "abc"},
+        {"at_once": "kept"},
+        {"at_once": 5, "users": 5},
+    ],
+)
+def test_the_new_error_paths_end_the_run_with_exit_2_through_the_command_line(tmp_path: Path, capsys, extra):
+    """The same answers through `main --answers`: a GuidedError is exit 2, not a traceback."""
+    answers = tmp_path / "answers.toml"
+    base = {key: item for key, item in FULL_ANSWERS.items() if key != "users"}
+    body = [f"{key} = {json.dumps(value)}" for key, value in {**base, **extra}.items()]
+    answers.write_text("schema_version = 1\n" + "\n".join(body) + "\n", encoding="utf-8")
+
+    code = main(
+        ["--answers", str(answers)],
+        transport=build_transport(guided_transport_mapping()),
+        probes=windows_probes(),
+        pointer_path=_pointer(tmp_path),
+        daemon=offline_daemon(),
+        servers=offline_servers(),
+        now=RUN1,
+        here=_results(tmp_path),
+        out=[].append,
+    )
+
+    assert code == 2
+    assert capsys.readouterr().err.strip()
 
 
 class _EditsWhileAsked(FileAsker):

@@ -391,17 +391,19 @@ the first listed packager that has it. It records them.
 
 ![Step 3: the context scale from XS to XXL, with how many of the fetched packages fit at each level](https://raw.githubusercontent.com/jm-vis/modelroom/v0.2.0/docs/screenshots/6-context.png)
 
-Step 3 decides how many people use the model and how much text it handles at once.
+Step 3 decides how many people work with the model at the same time and how much text it handles
+at once.
 
-**What you choose.** First, how many people use it on a typical day. The answers are:
+**What you choose.** First, how many people work with it at the same time. The answers are:
 
-- 1, 5, 10, 25 or 100;
+- 1, 5, 10, 50 or 100;
 - a number of your own;
-- for whoever knows the number of parallel requests, that number typed as `12 requests`.
+- for whoever only knows how many people use it on a day, that head count typed as `250 people`.
 
-The ranking assumes that 1 in 10 of the people send a request at the same moment, so 25 people are
-3 parallel requests. This is a rule of thumb, not measured, and the gray line under the list says
-so. Every request holds its own KV cache in memory.
+modelroom assumes one request at a time per person working with the model. A daily head count
+becomes requests by a rule of thumb, 1 in 10 at the same moment, so 250 people are 25 requests.
+The rule is not measured, and the gray line under the list says so. Every request holds its own
+KV cache in memory. From about 10 at once a serving stack such as vLLM is the runtime to look at.
 
 Then how much text a model should handle at once, as a scale from XS to XXL. **L** (32k, a report
 or a long contract) is the default for a new folder. A number of tokens can be typed instead.
@@ -412,11 +414,13 @@ The last column is the point of the question. It shows how many of the packages 
 fit this computer at that context and for those requests. The memory a model needs grows with the
 text it holds.
 
-In the picture the folder offers what the first run chose: 25 people (3 requests) and **XS** (4k,
-the context the vLLM server runs at). On the L40S all 26 fetched packages fit at every level.
+The picture shows the question of an earlier version, which asked for a daily head count: the
+folder offers what the first run chose, 25 people (3 requests), and **XS** (4k, the context the
+vLLM server runs at). On the L40S all 26 fetched packages fit at every level.
 
-**What is written.** A folder keeps the head count it was given and offers it next time. It keeps
-the level it chose last time too.
+**What is written.** A folder keeps the answer it was given and offers it next time. It gets a line
+of its own when the number is none of the five or was derived from a daily head count. It keeps the
+level it chose last time too.
 
 ### Step 4, Measurement
 
@@ -555,11 +559,13 @@ typed.
 
 Without an interactive terminal the command prints the help and stops. `modelroom --answers <file>`
 takes the answers from a TOML file instead, for a self-test or a CI run (continuous integration).
-`users` there is a number of people or `"12 requests"`, `context` a level (`"L"`) or a number
-of tokens.
+`at_once` there is a number of people at the same time, `"250 people"` for a daily head count
+or `"12 requests"`; `context` a level (`"L"`) or a number of tokens. The older key `users` still
+works with its earlier meaning (a number is a daily head count); a file may hold one of the two.
 
-An answer file written for 0.1.0 needs `users` added (`users = 1` sizes for one person, as 0.1.0
-did). `modelroom --config <file>` works on that configuration rather than the remembered folder.
+An answer file written for 0.1.0 needs `at_once` or `users` added (`users = 1` sizes for one
+person, as 0.1.0 did). `modelroom --config <file>` works on that configuration rather than the
+remembered folder.
 
 An answer file for the guided mode is like a script: run only your own, since its answers choose
 folders and paths. See `CONTRACTS.md`, "Guided mode", for every question and its key.

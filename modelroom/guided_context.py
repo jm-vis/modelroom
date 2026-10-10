@@ -1,8 +1,9 @@
-"""Step 3 of the guided mode: how many people use the model, then how much text it should handle.
+"""Step 3 of the guided mode: how many people work with the model at the same time, then how much text it should handle.
 
-First the head count: how many people use it on a typical day, turned into the parallel requests
-the ranking assumes by a rule of thumb that is said under the list (`config.requests_from_users`),
-or the requests named outright as `N requests`. Then the size scale: six levels from XS to XXL,
+First the people at the same time: the question assumes one request at a time per person, so the
+number named is the parallel requests the ranking computes with. Whoever knows only a daily head
+count types `N people`, which a rule of thumb turns into requests (`config.requests_from_users`,
+said under the list). The older answer-file key `users` still reads as it did. Then the size scale: six levels from XS to XXL,
 each with its number of tokens, roughly how many words that is, an example of what it is good
 for, and how many of the packages of this results folder still fit
 the machine being checked. The last column is the whole point of the scale: it is the fit of
@@ -18,8 +19,9 @@ Everything the scale knows comes from somewhere else: the formula from `modelroo
 from `[machines.<name>]`. It is read when the question is asked, like every other list of this
 dialog; the write that follows reads the configuration again on its own.
 
-The head count comes first because the last column of the scale counts with its requests: a
-column computed for one request would show a number the ranking of the same run then contradicts.
+The people at the same time come first because the last column of the scale counts with their
+requests: a column computed for one request would show a number the ranking of the same run then
+contradicts.
 
 This module asks both questions and writes the answers; the order of the steps stays in
 `modelroom/guided.py` (CONTRACTS.md, "Guided mode", step 3).
@@ -80,8 +82,41 @@ NO_PACKAGES = "no packages yet"
 
 _COLUMN_WIDTHS = (6, 6, 14, 36)
 
-# The head count (decided 2026-09-26): asked in people, because that is the number a user knows;
-# the ranking computes with parallel requests, and the rule between the two stands under the list.
+# The question about people at the same time (decided 2026-10-10): one request at a time per
+# person, so the number answered is the requests; `N people` names a daily head count instead and
+# the rule of thumb between the two stands under the list. `at_once` is a key of the answer file
+# only, never a field of `[guided]`.
+AT_ONCE_KEY = "at_once"
+AT_ONCE_QUESTION = "How many people work with it at the same time?"
+AT_ONCE_EXPLANATION = (
+    f"one request at a time per person; a daily head count is about {round(1 / ACTIVE_SHARE)} times as many "
+    "(rule of thumb, not measured)"
+)
+AT_ONCE_NUMBER_QUESTION = "How many at the same time? (or: N people)"
+AT_ONCE_LEVELS = (1, 5, 10, 50, 100)
+AT_ONCE_FORMS = (
+    f"a whole number of people at the same time (1 to {MAX_REQUESTS}) or `N people` for a daily head count "
+    f"(1 to {MAX_USERS})"
+)
+AT_ONCE_INVALID = "{answered!r} is not a valid answer for step 3: answer {forms}"
+AT_ONCE_BOTH_KEYS = "the answer file holds both users and at_once; answer only one of them"
+# What each level is, the second cell of its line in the list.
+_AT_ONCE_LABELS = {
+    1: "one person",
+    5: "a small team",
+    10: "a department; consider a serving stack such as vLLM",
+    50: "a serving stack such as vLLM",
+    100: "a serving stack such as vLLM",
+}
+KEPT_VALUE = "kept"
+KEPT_LABEL = "kept in this folder"
+_AT_ONCE_WIDTHS = (5,)
+# The singular is for 1 only: `5 requests` and `5 people`, but `1 request` and `1 person`.
+_AT_ONCE_REQUESTS = re.compile(r"(?:([0-9]+)(?: requests)?|(1) request)")
+_AT_ONCE_PEOPLE = re.compile(r"(?:([0-9]+) people|(1) person)")
+
+# The earlier head count (decided 2026-09-26): kept for the answer-file key `users`, which still
+# reads as it did (a number is a daily head count, `N requests` names requests outright).
 USERS_KEY = "users"
 USERS_QUESTION = "How many people use it on a typical day?"
 USERS_EXPLANATION = f"assumes 1 in {round(1 / ACTIVE_SHARE)} of them at once (rule of thumb, not measured)"
@@ -138,7 +173,9 @@ class Checked:
 
 @dataclass(frozen=True)
 class RequestsAnswer:
-    """The answer to the head count: the people, the requests the ranking assumes, and why."""
+    """The answer to the question about people at the same time: the daily head count when one was
+    named, the requests the ranking computes with (the number answered, or derived from the head
+    count), and which of the two it was."""
 
     users: int | None
     requests: int
@@ -150,11 +187,72 @@ def requests_words(requests: int) -> str:
     return f"{requests} request" if requests == 1 else f"{requests} requests"
 
 
+def people_words(people: int) -> str:
+    """`1 person`, `25 people`."""
+    return "1 person" if people == 1 else f"{people} people"
+
+
 def answer_words(answer: RequestsAnswer) -> str:
-    """The answer line: `25 (3 requests)` for a head count, `12 requests` for requests named outright."""
+    """The answer line: `5 at once`, or `25 people (3 at once)` for a daily head count."""
     if answer.origin == "from_users":
-        return f"{answer.users} ({requests_words(answer.requests)})"
-    return requests_words(answer.requests)
+        return f"{people_words(answer.users)} ({answer.requests} at once)"  # type: ignore[arg-type]  -- from_users has users
+    return f"{answer.requests} at once"
+
+
+def kept_offered(guided: GuidedConfig) -> bool:
+    """Whether the list gets a line for the answer this folder kept: a number that is no level of
+    the list, or any answer derived from a daily head count. A folder that kept nothing has none."""
+    if guided.requests_origin == "default":
+        return False
+    return guided.requests_origin == "from_users" or guided.requests not in AT_ONCE_LEVELS
+
+
+def at_once_choices(guided: GuidedConfig) -> list[Choice]:
+    """The list offers five levels, a kept line for a nonstandard number or any daily head count, and a number of your own.
+
+    The pointer starts on the requests this folder kept (origin not `default`), else on 1. The line
+    of a kept answer is the pointer's start when it exists, not the level with the same number.
+    """
+    start = guided.requests if guided.requests_origin != "default" else 1
+    offered = kept_offered(guided)
+    rows = [[str(level), _AT_ONCE_LABELS[level]] for level in AT_ONCE_LEVELS]
+    choices = [
+        Choice(str(level), label, checked=level == start and not offered)
+        for level, label in zip(AT_ONCE_LEVELS, columns(rows, _AT_ONCE_WIDTHS))
+    ]
+    if offered:
+        text = KEPT_LABEL if guided.requests_origin != "from_users" else f"{KEPT_LABEL} ({people_words(guided.users)})"  # type: ignore[arg-type]
+        choices.append(Choice(KEPT_VALUE, columns([[str(guided.requests), text]], _AT_ONCE_WIDTHS)[0], checked=True))
+    choices.append(Choice(NUMBER_VALUE, NUMBER_LABEL))
+    return choices
+
+
+def at_once_answer(answered: str, guided: GuidedConfig) -> RequestsAnswer:
+    """People at the same time, `N people` or `kept` as the answer; anything else ends the run (exit `2`).
+
+    A whole number (also `N requests`) is the requests: `entered`, and the head count stays what
+    the folder holds, which only the display uses. `N people` is a daily head count: `from_users`.
+    `kept` is the stored triple, and only when the list offered its line. Digits 0-9 only, the
+    whole answer matched; the bounds are the configuration's own, checked by its model.
+    """
+    from .guided import GuidedError  # imported here: that module calls this step in turn
+
+    try:
+        number = _AT_ONCE_REQUESTS.fullmatch(answered)
+        people = _AT_ONCE_PEOPLE.fullmatch(answered)
+        if number is not None:
+            answer = RequestsAnswer(guided.users, int(number.group(1) or number.group(2)), "entered")
+        elif people is not None:
+            head = int(people.group(1) or people.group(2))
+            answer = RequestsAnswer(head, requests_from_users(head), "from_users")
+        elif answered == KEPT_VALUE and kept_offered(guided):
+            return RequestsAnswer(guided.users, guided.requests, guided.requests_origin)
+        else:
+            raise ValueError("neither people at the same time, N people nor the kept line")
+        GuidedConfig(users=answer.users, requests=answer.requests, requests_origin=answer.origin)
+    except (ValueError, ValidationError) as exc:
+        raise GuidedError(AT_ONCE_INVALID.format(answered=answered, forms=AT_ONCE_FORMS)) from exc
+    return answer
 
 
 def users_choices(default_users: int) -> list[Choice]:
@@ -176,8 +274,9 @@ def users_choices(default_users: int) -> list[Choice]:
 
 
 def requests_answer(answered: str, kept_users: int | None) -> RequestsAnswer:
-    """A head count or `N requests` as the answer; anything else ends the run (exit `2`).
+    """The answer-file key `users`: a head count or `N requests`; anything else ends the run (exit `2`).
 
+    Kept for answer-file compatibility: the question of the dialog is `at_once_answer`'s.
     A head count is `from_users`, one person included: the user named it. Requests named outright
     are `entered` and keep the head count this folder holds, which only the display uses. The
     bounds are the configuration's own, checked by its model.
@@ -200,13 +299,13 @@ def requests_answer(answered: str, kept_users: int | None) -> RequestsAnswer:
 
 
 def context_scenario(context: int, requests: int = 1) -> Scenario:
-    """The scenario of one chosen context and the requests of the head count; all `entered`.
+    """The scenario of one chosen context and the requests answered at the same time; all `entered`.
 
     Not `measurements.default_scenario`: that one is 8192 as `default`, the context the three
     automation commands assume when nobody chose one. A user who picks `S` in the scale has
     chosen it, so it is `entered` like every other level, and `render_cmd.scenario_from_config`
     reads a kept context back the same way (CONTRACTS.md, "Guided mode", step 3). The requests
-    are the ones the head count stands for; the load test gets a copy of one request.
+    are the ones the answer stands for; the load test gets a copy of one request.
     """
     return Scenario(
         context_requested=context, context_origin="entered", kv_type="f16", kv_type_assumed=True, requests=requests
@@ -227,9 +326,9 @@ def scale_words(context: int) -> str:
 
 
 def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> tuple[Scenario, Configuration]:
-    """Ask the head count, then the scale; keep both in `[guided]` -- one scenario for the ranking.
+    """Ask how many people work at the same time, then the scale; keep both in `[guided]` -- one scenario for the ranking.
 
-    The head count is written as `[guided].users`, `requests` and `requests_origin` together
+    The answer is written as `[guided].users`, `requests` and `requests_origin` together
     (`guided_write.with_requests`), right after it is answered, and the scale is then asked with
     its requests.
 
@@ -251,7 +350,7 @@ def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> 
     from .guided import _write_config  # imported here: the step is called by that module in turn
 
     answer = _answered_requests(run, config)
-    run.screen.answer(USERS_QUESTION, answer_words(answer))
+    run.screen.answer(AT_ONCE_QUESTION, answer_words(answer))
     # Read, compare, write -- and once more on the new state when another run wrote in between.
     requests = with_requests(answer.users, answer.requests, answer.origin)
     config = _write_config(run, config_file, requests)
@@ -259,7 +358,7 @@ def context_step(run: "GuidedRun", config_file: Path, config: Configuration) -> 
     checked = _checked_again(run, config, config_file, checked)
     context = _answered_context(run, config, checked, answer.requests)
     run.screen.answer(QUESTION, scale_words(context))
-    # The whole answer once more, so a head count another run wrote meanwhile cannot split the run.
+    # The whole answer once more, so an answer another run wrote meanwhile cannot split the run.
     config = _write_config(run, config_file, combined(requests, with_context(context)))
     return context_scenario(context, config.guided.requests), config
 
@@ -352,7 +451,7 @@ def fit_texts(
 ) -> dict[int, str]:
     """The last column, one text per context: `all N packages fit`, `k of N`, `none of N`.
 
-    Computed for the requests of the head count, so the scale and the ranking of the run agree --
+    Computed for the requests answered at the same time, so the scale and the ranking of the run agree --
     through `runtimes.fit_for` (AP9-SV2-F), the one function a render's own row reads, not
     `fit.compute_fit_v2` on its own: a Hugging Face tensor package counts here exactly as the
     finished ranking would judge it. `packages` already is the set `runtimes.visible_packages`
@@ -468,21 +567,37 @@ def snapshot_facts(
 
 
 def _answered_requests(run: "GuidedRun", config: Configuration) -> RequestsAnswer:
-    """The head count the user gave, or the requests named outright; the list starts on the kept one.
+    """The people at the same time the user named, as the requests the ranking computes with.
 
-    Only a kept head count moves the pointer: requests named outright say nothing about how many
-    people there are, so a folder that kept `12 requests` and no head count starts on 1.
+    An answer file may still answer the older key `users` (a number is a daily head count, read
+    by `requests_answer` as before); a file holding both keys ends the run (exit `2`). Anything
+    else is the key `at_once`, read by `at_once_answer`; the list starts on the kept answer.
     """
-    kept = config.guided.users
-    answered = run.asker.select_or_text(
-        USERS_KEY,
-        USERS_QUESTION,
-        users_choices(kept if kept is not None else 1),
+    from .guided import GuidedError  # imported here: that module calls this step in turn
+
+    asker = run.asker
+    if asker.holds(USERS_KEY) and asker.holds(AT_ONCE_KEY):
+        raise GuidedError(AT_ONCE_BOTH_KEYS)
+    if asker.holds(USERS_KEY):
+        kept = config.guided.users
+        answered = asker.select_or_text(
+            USERS_KEY,
+            USERS_QUESTION,
+            users_choices(kept if kept is not None else 1),
+            NUMBER_VALUE,
+            USERS_NUMBER_QUESTION,
+            USERS_EXPLANATION,
+        ).strip()
+        return requests_answer(answered, kept)
+    answered = asker.select_or_text(
+        AT_ONCE_KEY,
+        AT_ONCE_QUESTION,
+        at_once_choices(config.guided),
         NUMBER_VALUE,
-        USERS_NUMBER_QUESTION,
-        USERS_EXPLANATION,
+        AT_ONCE_NUMBER_QUESTION,
+        AT_ONCE_EXPLANATION,
     ).strip()
-    return requests_answer(answered, kept)
+    return at_once_answer(answered, config.guided)
 
 
 def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked, requests: int = 1) -> int:
@@ -548,6 +663,9 @@ def _fit_text(fitting: int, total: int) -> str:
 
 
 __all__ = [
+    "AT_ONCE_EXPLANATION",
+    "AT_ONCE_KEY",
+    "AT_ONCE_QUESTION",
     "DEFAULT_CONTEXT",
     "DEFAULT_LEVEL",
     "EXPLANATION",
@@ -564,6 +682,8 @@ __all__ = [
     "RequestsAnswer",
     "SnapshotFacts",
     "answer_words",
+    "at_once_answer",
+    "at_once_choices",
     "context_cap",
     "context_scenario",
     "context_step",
