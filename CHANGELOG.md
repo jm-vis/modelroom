@@ -5,28 +5,19 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-### FR-M
+## [1.0.0] - 2026-10-10
 
-Speed measurement protocol v2 for Ollama (AP9-FR-M). No schema version changes.
+Version 1.0.0 ends the alpha stage. The guided mode and the subcommands work end to end, and the
+data shapes are versioned contracts. LM Studio is now measured with one loaded model: the number
+is shown in step 4 and on the card, nothing is saved or ranked. The Ollama speed measurement uses
+protocol v2, which sends the prompt through the template of the model, so a thinking model such as
+Qwen3.8-27B reaches the 128 tokens and gets a speed. Records written with protocol v1 stay valid
+and still count in the ranking. The catalog grammar reads two more name forms. A proposal takes new
+rows without a reading only with an explicit approval, and candidates open for more than 30 days
+are listed first. The README is regrouped and rewritten for reading, with a glossary. No schema
+version changes.
 
-- **Protocol v2** (`modelroom/protocol_v2.toml`): the load test sends the prompt with `raw = false`, so the
-  daemon applies the template (and the system text) of the model's Modelfile. A thinking model such as
-  Qwen3.8-27B reaches the 128 tokens instead of ending after 2 and now gets a speed. Prompt, sampling,
-  warm-up, three measured runs, the four `/api/ps` readings and the validity rule are those of v1.
-  `protocol_v1.toml` stays for the records it wrote; `protocol_for("v1" or "v2")` reads either,
-  `shipped_protocol()` is v2 and `load_protocol(path)` has no default path any more.
-- **Records**: a new measurement is stored as `protocol: v2`; a stored `v1` record is read unchanged, is
-  checked against the file of its own version and still counts in the ranking (v1 and v2 count alike).
-- **Version on screen**: step 4 says `measured <name>: ..., context 8k, protocol v2` and the card says
-  `fastest <name> at <x> tok/s, protocol v2`; the render document carries `speed_protocol` per measured row
-  (a document written before has none, and the card then names no version). A run that ends early names
-  the version of its record; only a stored `v1` record gets `; protocol v2 sends the prompt through the
-  model's template, say Yes to measure again`.
-- **Stored records in step 4**: before the question, step 4 now names the newest stored record of each
-  offered package (same context, one request) that is no measurement, so a stored `v1` record that ended
-  early is seen and the hint to measure again is reached.
-
-### LS-M
+### Added
 
 - **LM Studio is measured with one loaded model** (AP9-LS-M; `modelroom/loadtest_lmstudio.py`,
   `modelroom/guided_lmstudio.py`): step 4 offers `LM Studio server  <id>, context <n>` for exactly one loaded
@@ -42,11 +33,27 @@ Speed measurement protocol v2 for Ollama (AP9-FR-M). No schema version changes.
   with a limit of 600 s beside `GET /api/v1/models` with 10 s. A limit of time is told apart at the
   connection, at the body and at the body of an error; at the chat a `401`, a `403` and a body that cannot be
   read or is too large keep their status instead of raising. `401` and `403` still mean a token at the list.
+- **Protocol v2** (`modelroom/protocol_v2.toml`): the load test sends the prompt with `raw = false`, so the
+  daemon applies the template (and the system text) of the model's Modelfile. A thinking model such as
+  Qwen3.8-27B reaches the 128 tokens instead of ending after 2 and now gets a speed. Prompt, sampling,
+  warm-up, three measured runs, the four `/api/ps` readings and the validity rule are those of v1.
+  `protocol_v1.toml` stays for the records it wrote; `protocol_for("v1" or "v2")` reads either,
+  `shipped_protocol()` is v2 and `load_protocol(path)` has no default path any more.
+- **Version on screen**: step 4 says `measured <name>: ..., context 8k, protocol v2` and the card says
+  `fastest <name> at <x> tok/s, protocol v2`; the render document carries `speed_protocol` per measured row
+  (a document written before has none, and the card then names no version). A run that ends early names
+  the version of its record; only a stored `v1` record gets `; protocol v2 sends the prompt through the
+  model's template, say Yes to measure again`.
+- **Stored records in step 4**: before the question, step 4 now names the newest stored record of each
+  offered package (same context, one request) that is no measurement, so a stored `v1` record that ended
+  early is seen and the hint to measure again is reached.
+
+### Changed
+
+- **Records**: a new measurement is stored as `protocol: v2`; a stored `v1` record is read unchanged, is
+  checked against the file of its own version and still counts in the ranking (v1 and v2 count alike).
 - The hint after an LM Studio entry reads `then run modelroom again: it finds the server and measures the loaded
   model` (the printed block and the line after `lms get`).
-
-### KA-H
-
 - **Catalog hardened** (AP9-KA-H; `modelroom/search_release.py`, `scripts/catalog_scan.py`, `scripts/catalog_scan_rules.py`,
   `scripts/catalog_scan_notes.py`, `scripts/catalog_scan_latest.py`, `scripts/catalog_publish_rules.py`, `scripts/catalog_publish.py`). The grammar reads two
   more forms: a `\d+s` attribute (`MERT-v2-30s`) and a date `yyyy-mm-dd` as one `iso` date (`moondream-2b-2025-04-14`);
@@ -58,13 +65,7 @@ Speed measurement protocol v2 for Ollama (AP9-FR-M). No schema version changes.
   shipped row whose family the grammar no longer makes from its name (`reading drift`, named when it is new or has changed since the last proposal, which keeps the drift triples as `drift`). A candidate open for more than 30 days
   is listed first under `## Candidates past 30 days (decide now)`, before the limit of ten; a candidate of the old form
   without `open_since` gets the day of the first run. No schema version changes; `catalog.json` is not changed.
-
-### RD
-
 - README regrouped: quick start first, the guided run, the runtimes, a reference part; no sentence of the program changed.
-
-### RD-L
-
 - README rewritten for reading: shorter sentences, one fact in one place, the same form for every step of the guided run, a glossary; no command, picture or rule changed.
 
 ## [0.3.0] - 2026-10-09

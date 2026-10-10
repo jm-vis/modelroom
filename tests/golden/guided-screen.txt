@@ -1,6 +1,6 @@
  ██ ██ ▓▓ ██   ModelRoom
  ██ ██ ██ ░░   Which local model packages fit your machine.
- ▓▓ ██ ░░ ░░   modelroom 0.3.0 · github.com/jm-vis/modelroom
+ ▓▓ ██ ░░ ░░   modelroom 1.0.0 · github.com/jm-vis/modelroom
 
  folder    not chosen yet          the first question asks where results live
  daemon    Ollama                  not reachable

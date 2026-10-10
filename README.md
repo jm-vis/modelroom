@@ -25,10 +25,8 @@ Start: [Quick start](#quick-start). Depth: [The guided run](#the-guided-run), [R
 
 ## Status
 
-Alpha, version 0.3.0 (see `CHANGELOG.md`, which lists what has landed). The guided mode and the
+Version 1.0.0 (see `CHANGELOG.md`, which lists what has landed). The guided mode and the
 subcommands work end to end. The data shapes are versioned contracts (see `CONTRACTS.md`).
-
-Expect changes to the rendered layout and to the fit rules before a stable release.
 
 The branch `main` runs ahead of the release on PyPI. What `CHANGELOG.md` lists under "Unreleased"
 is in this repository and not yet in the package an installer fetches.
@@ -1101,6 +1099,6 @@ to size on-premise deployments before anyone buys hardware.
 
 ### License
 
-MIT, see [LICENSE](https://github.com/jm-vis/modelroom/blob/v0.3.0/LICENSE). The optional
+MIT, see [LICENSE](https://github.com/jm-vis/modelroom/blob/v1.0.0/LICENSE). The optional
 tool [llmfit](https://github.com/AlexsJones/llmfit) (MIT) runs as a separate program and is not
 part of this package.
