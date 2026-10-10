@@ -3699,14 +3699,20 @@ the disk rule (U11) as `n` plus the margin; `null` as the whole download.
 
 **`vllm-measure`.** First a look at what the server serves now: no answer is `vllm_unreachable`, a `401`
 `vllm_asks_key`, any model but `packages[package]` (or no single model) `other_model`. Then one warm-up request and three
-batches of `min(requests, 64)` at once (`loadtest_vllm.run_vllm_load_test`, SV1's protocol, unchanged), with a `progress`
+batches of `min(requests, 256)` at once (`loadtest_vllm.run_vllm_load_test`, `MAX_REQUESTS` = 256 since AP9-PM-1, SV1's protocol otherwise unchanged), with a `progress`
 line after the warm-up (`{"stage": "warmup", "number": 1, "of": 1}`) and after each batch (`{"stage": "batch", "number":
 n, "of": 3}`) -- numbers only. The result is numbers and **one code** of the fixed set `invalid_status`, `invalid_finish`,
 `invalid_tokens`, `other_context`, `other_requests`, `foreign_load`, `foreign_tokens`, `server_gone`: the laptop builds the
 words itself (`loadtest_vllm.PROBLEM_WORDS`, SV1's sentences with the numbers it knows -- the context and the requests it
 asked for and the ones the server reports). An unknown code is a form fault; speeds come all together and only without an
-`invalid_*` code or `server_gone`. The laptop requires the requests the server states to be the ones asked for. The
-measurement stays in memory (E3): the step's note, the card (`identity stated by the server; not ranked, nothing written`),
+`invalid_*` code or `server_gone`. The laptop requires the requests the server states to be the ones asked for, and
+checks an answer in this order (AP9-PM-1): `server_gone` first, as before; a `ranking_requests` other than the scenario's
+is a form fault; fewer requests than `min(requests, 256)` are `modelroom on <alias> reported <got> requests per batch
+where this one asks for <asked>; update the older one` (an older modelroom at the server, which measures at most 64);
+every other deviation, more than asked included, is a form fault. In all of them no number is taken. A modelroom at the
+laptop older than this change refuses a server answer of more than 64 requests as a form fault (`le=64`): that is
+the old code and stays so; no pairing of old and new produces a wrong number. `remote_protocol` states the limit
+(`le=256`) without importing `loadtest_vllm`; a test keeps the two equal. The measurement stays in memory (E3): the step's note, the card (`identity stated by the server; not ranked, nothing written`),
 no file on either side.
 
 **What the server never does.** It writes nothing (the cache is only `stat`ed, never read), stores no measurement,
@@ -5817,20 +5823,35 @@ token and its linear-layer state once per request: `at_once = floor(kv_bytes / (
 + state_bytes))` (P1).
 
 **The load test** (`modelroom/loadtest_vllm.py`). One warm-up request, then three batches of `n =
-min(scenario.requests, 64)` requests at once; the scenario itself never changes. Each request is
+min(scenario.requests, 256)` requests at once (`MAX_REQUESTS`; it was 64 until AP9-PM-1); the scenario
+itself never changes. Each request is
 the one recorded against vLLM 0.30.0: a chat of 128 tokens, temperature 0.0, seed 42, not streamed,
 `Describe how a public library shelves a new book. Request <i>.` (`0` the warm-up, `1..n` in each
 batch). Per batch: `GET /metrics`, n threads behind one `threading.Barrier`, `perf_counter_ns` per
 request and for the batch, `GET /metrics` -- `1 + 3 x n` chats and 6 metrics calls in all, the
 warm-up in no number.
 
+- **The time of a batch** (`modelroom/loadtest_batch.py`, one helper for vLLM and LM Studio, AP9-PM-1): the start
+  is read in the barrier's own action, before any request is released; each request takes its own end the moment its
+  answer is in; the batch's wall time is the latest end minus that start. Until AP9-PM-1 the start was read in the
+  main thread after the barrier, and a late start could make the total throughput of a batch read too high. A wall
+  time of 0 or less is the existing invalid path of vLLM, `invalid (batch <k>: no measurable wall time)` with the code
+  `invalid_tokens` (the rule of `loadtest_vllm.invalid_reason`; a request without a time of its own is named first).
+- **Measuring condition (decision of 2026-10-10):** the measurement is made under the cache setting the server has.
+  Requests that differ in their prompt do not exclude cache effects.
+- **Known limit of time:** a batch has a nominal HTTP budget of 10 + 600 + 10 s, plus the local run time (threads,
+  synchronisation); the effective limit stays 660 s between two lines of the protocol (a progress line goes out after
+  each batch). A single request that runs into its 600 s ends the run as before, without a partial result. vLLM puts
+  requests beyond its limit of concurrent sequences (`--max-num-seqs`) into its queue, and the waiting counts toward
+  the 600 s.
+
 - **Valid**: every request answered 200, `finish_reason` `length`, 128 completion tokens, and
   `prompt_tokens + 128 <= max_model_len`. The first rule that fails is the reason: `invalid (batch 3:
   finish_reason stop)`, and then there are no speeds.
 - **Comparable**: `n` equals the ranking's requests, no request running or waiting before and after
   each batch, `vllm:generation_tokens_total` grew by `n x 128` in each batch, and `max_model_len`
-  is the ranking's context. The first rule that fails is the reason: `not comparable (64 requests
-  measured, the ranking assumes 65)`, `not comparable (context 4096, the ranking's 32768)`.
+  is the ranking's context. The first rule that fails is the reason: `not comparable (256 requests
+  measured, the ranking assumes 257)`, `not comparable (context 4096, the ranking's 32768)`.
 - **Speeds**: the total of a batch is its completion tokens over its wall time; the total speed is
   the mean of the three, its range their minimum and maximum. The speed per request is the mean over
   all `3 x n` requests, with their range. Each mean is held inside its range (`loadtest._mean_within`).
@@ -5984,7 +6005,8 @@ when `lms` is in the `PATH` or at `~/.lmstudio/bin/lms` (`lms.exe` on Windows), 
 `PATH` search and a file test, **never an `lms` call**. `lms_call` says `path`, `home` or `None` for the form
 of a later command and starts nothing.
 
-**Measurement: one loaded model, one request after the other, on the wall (AP9-LS-M, protocol v2 contract
+**Measurement: one loaded model, one request after the other (several at once where the instance allows it,
+see below), on the wall (AP9-LS-M, protocol v2 contract
 section 4; GF decisions of 2026-10-09: E2 the prompt of the protocol, E3 thinking tokens counted, E4 measure
 although the server may load on its own).** The start screen names the server as before: `server  LM Studio
 <k> loaded: <id>, context <n>`, `<k> models loaded`, or `127.0.0.1:1234  asks for an API token`. Step 4 offers a
@@ -5997,7 +6019,8 @@ asks for <n>` before the question, and a yes sends no chat.
 The request is `POST /v1/chat/completions` with `model` the **instance id** of `loaded_instances[]` (not the
 `key`), `max_tokens 128`, `temperature 0.0`, `seed 42`, `stream false` and one user message, the prompt of the
 shipped protocol (`shipped_protocol().prompt`, the Ollama prompt). One warm-up and three runs, one request at a
-time, and the list is read five times: before the warm-up, after the warm-up, and after each of the three runs.
+time (this is the course for n = 1, see "Several at once" below), and the list is read five times: before the
+warm-up, after the warm-up, and after each of the three runs.
 Every read has to show the same instance with the same `context_length`, else the measurement ends. A request is
 valid with status `200`, `choices[0].finish_reason` `length`, `usage.completion_tokens` 128 (thinking tokens are
 part of them; `reasoning_tokens`, `content` and the draft counters of a speculative decoder are not read, an
@@ -6023,6 +6046,40 @@ order), every line has the prefix `LM Studio: `:
 | 10 | `prompt_tokens + 128 > context_length` | `a request did not fit the context <n>` |
 | 11 | wall time `<= 0` | `a request took no measurable time` |
 
+**Several at once (AP9-PM-1).** `n = min(scenario.requests, instance.parallel, MAX_REQUESTS)` with `MAX_REQUESTS` of
+`loadtest_vllm` (256). Where `parallel` is not stated or below 2, or the scenario names one request, `n = 1` and
+everything above and below holds **byte for byte**: the same request bodies, the same order and number of calls, the
+same lines. modelroom never changes `parallel` in LM Studio. With `n >= 2` the course is: read the list, a warm-up of
+one request, read, then three batches of n requests each released together (the helper of the time of a batch, see
+"The load test" above), and a read after every batch: five reads and `1 + 3n` chats, `calls = 6 + 3n` in the
+success (five reads stay five; a measurement that ends early counts the calls actually made, as it does at n = 1).
+Every request has its own prompt, `<prompt> Request <k>.`, `k` running on from the warm-up (0), batch 1 `1..n`,
+batch 2 `n+1..2n`, batch 3 `2n+1..3n`; no number repeats in a run. That does not exclude cache effects: the
+measurement is made under the cache setting the server has.
+
+*A failing batch.* All threads of the batch end first. Then the answers are judged by request index, ascending; for
+each request rows 3 to 11 apply in the order of the table, and the first request that failed gives the row; the
+measurement ends without a further read. Only if no request failed, the read after the batch follows (rows 1 and 2),
+and a batch whose own wall time is 0 or less is row 11. A request failure therefore always goes before a read failure
+of the same batch; failures of the warm-up and of the reads before stay as they were. In every case all threads
+have ended, no speed exists and `calls` is the number of calls actually made.
+
+*The numbers.* The total of a batch is `n x 128 / wall time`, the wall time running from the release to the last
+answer; `total_tps` is the mean of the three, held inside its range (`_mean_within`), with `total_min` and `total_max`.
+The speed of one request is `128 / its seconds` over all `3n` requests (`request_tps`, `request_min`,
+`request_max`). `LmStudioMeasurement` carries `requests` (n), `ranking_requests` (the scenario's), `parallel` and
+the `total_*` fields (`None` at n = 1). With `n >= 2`, step 4 says (every number with one decimal): `<n> of <N>
+requests measured` (only where `n < N`), `measured LM Studio <id>: <t> tok/s total (<min>-<max>), <n> at once, wall
+time, context <c>`, `per request: <r> tok/s (<min>-<max>)`, where `parallel` was the limit (`n == parallel < N`) `LM
+Studio allows <parallel> at once for this model (Max Concurrent Predictions in LM Studio)`, and the not-ranked line;
+the card note reads `<t> tok/s total, <n> at once, wall time` (at most 52 characters: with whole nanoseconds, a
+positive wall time and at most `256 x 128` tokens, `t` cannot exceed `32768000000000.0`; the column holds 65) and
+the three further rows stay. `1 of 1 measured` is unchanged.
+
+*What the reads still say.* The assurance below, "before and after every request", holds for n = 1. For `n >= 2` it
+holds for the **borders of the batches**: a load that LM Studio does inside a batch can lie unseen in its wall time.
+The short test does not show that every request that runs at the same time had the full reported context available.
+
 Row 5 is a failed attempt to load, which is no observed change of state (row 2). The result is an
 `LmStudioMeasurement` in memory: **nothing is written, nothing is ranked**, no record, no profile, no snapshot,
 and nothing from `measurements.py` is imported but the prompt. Step 4 says `measured LM Studio <id>: <x> tok/s
@@ -6034,7 +6091,7 @@ time`, each note at most 65 characters), and only where no row of the table ende
 a throughput of this runtime configuration (the speculative decoder may stay on), one request on the wall, and
 is never mixed with an Ollama number. **The assurance, public in this text, in the README and on the card in its
 short form:** modelroom never asks LM Studio to load, unload or download a model. It reads the model list before
-and after every request and drops the measurement when the loaded model changed; a load the server does on its
+and after every request (at n of 2 or more: before and after every batch) and drops the measurement when the loaded model changed; a load the server does on its
 own inside a request can stay unseen and then sits in the measured time. A chat to the id of a model that was
 unloaded a moment ago may make LM Studio load it again (just-in-time loading is on by default), which is why the
 reads stand before and after every request; unloading and loading the same id with the same context inside one
@@ -7068,8 +7125,8 @@ The number **counts** where the served `root` is a base model of this run (the o
 none where it chose none, Codex F1) **and** the server runs this run's context; vLLM is never ranked. A
 line wider than 100 columns breaks before the name, indented like a note; no name is cut. A
 measurement is `measured vLLM: <t> tok/s total (<a>–<b>), context 4k` and `per request: <r> tok/s
-(<c>–<e>)`; an invalid or not comparable one is `vLLM: <reason>` in their place, a capped one says `64
-of 65 requests measured` first; then `identity stated by the server; not ranked, nothing written`.
+(<c>–<e>)`; an invalid or not comparable one is `vLLM: <reason>` in their place, a capped one says `256
+of 257 requests measured` first; then `identity stated by the server; not ranked, nothing written`.
 The fit follows for the package the server serves (`vLLM fit, computed: ...`, `32 requests of context
 4k at once, from size: fits`); without a profile the fit may compute for, `no vLLM fit: <reason>`;
 without the package, the reason of `match_served`. A server that asks for a key says so and offers no

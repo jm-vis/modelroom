@@ -391,6 +391,23 @@ def test_each_new_error_code_maps_to_its_sentence(tmp_path, code, sentence, serv
     assert str(excinfo.value) == sentence
 
 
+def test_a_server_lost_in_the_run_reports_the_limit_of_256_for_300_requests(tmp_path):
+    """AP9-PM-1: the `server_gone` form of the wire states `min(requests, MAX_REQUESTS)`, not a fixed 64."""
+    from modelroom.vllm_server import VllmServerError
+
+    server = FixtureVllmServer(
+        {
+            ("GET", MODELS_PATH): _models(MODEL, None, 4096),
+            ("POST", CHAT_PATH): VllmServerError("http://127.0.0.1:8000/v1/chat/completions: the vLLM server did not answer"),
+        }
+    )
+
+    measurement = _call("vllm-measure", _measure_request([_small()], scenario=_scenario(requests=300)), _context(tmp_path, vllm=server))[-1]["result"]["measurement"]
+
+    assert measurement["problem"] == "server_gone"
+    assert (measurement["requests"], measurement["ranking_requests"]) == (256, 300)
+
+
 def _measure_request(packages: list, index: int = 0, scenario: Scenario | None = None) -> dict:
     from modelroom.remote_vllm import package_ref
 
@@ -1050,11 +1067,11 @@ def _speeds_wire(**changes) -> dict:
 @pytest.mark.parametrize(
     "scenario, change",
     [
-        (_scenario(requests=128), {"requests": 64, "ranking_requests": 128}),  # fewer requests measured, no code
+        (_scenario(requests=300), {"requests": 256, "ranking_requests": 300}),  # fewer requests measured, no code
         (_scenario(), {"problem": "other_requests"}),  # the code without the numbers
         (_scenario(), {"context": 2048}),  # a shorter context, no code
         (_scenario(), {"problem": "other_context"}),  # the code without the numbers
-        (_scenario(requests=128), {"requests": 64, "ranking_requests": 128, "problem": "other_context", "context": 4096}),
+        (_scenario(requests=300), {"requests": 256, "ranking_requests": 300, "problem": "other_context", "context": 4096}),
     ],
     ids=["requests no code", "other_requests no numbers", "context no code", "other_context no numbers", "wrong code for requests"],
 )
@@ -1066,15 +1083,63 @@ def test_a_measurement_that_contradicts_its_own_scenario_is_a_form_fault(scenari
 
 def test_a_measurement_whose_numbers_and_code_agree_is_taken():
     """R1-2: the same deviations, stated with their code, are not comparable -- and nothing else changes."""
-    short = _measure_wire(_speeds_wire(requests=64, ranking_requests=128, problem="other_requests"), _scenario(requests=128))
+    short = _measure_wire(_speeds_wire(requests=256, ranking_requests=300, problem="other_requests"), _scenario(requests=300))
     assert short.comparable is False and short.comparable_reason.code == "other_requests" and short.validity == "valid"
     other = _measure_wire(_speeds_wire(context=2048, problem="other_context"), _scenario())
     assert other.comparable is False and other.comparable_reason.code == "other_context"
     fine = _measure_wire(_speeds_wire(), _scenario())
     assert fine.comparable is True and fine.validity == "valid"
     nothing = {name: None for name in ("total_tps", "total_min", "total_max", "request_tps", "request_min", "request_max")}
-    masked = _measure_wire(_speeds_wire(requests=64, ranking_requests=128, problem="invalid_tokens", **nothing), _scenario(requests=128))
+    masked = _measure_wire(_speeds_wire(requests=256, ranking_requests=300, problem="invalid_tokens", **nothing), _scenario(requests=300))
     assert masked.validity == "invalid"  # an invalid answer names its own rule first, whatever else deviates
+
+
+def _older(got: int, asked: int, alias: str = "gpu1") -> str:
+    return f"modelroom on {alias} reported {got} requests per batch where this one asks for {asked}; update the older one"
+
+
+def test_the_wire_takes_256_requests_and_refuses_257_and_its_limit_is_the_load_tests():
+    import re
+
+    from modelroom.loadtest_vllm import MAX_REQUESTS
+    from modelroom.remote_protocol import VllmMeasurementWire
+
+    field = VllmMeasurementWire.model_fields["requests"]
+    assert [m.le for m in field.metadata if hasattr(m, "le")] == [MAX_REQUESTS] == [256]
+    assert _measure_wire(_speeds_wire(requests=256, ranking_requests=256), _scenario(requests=256)).requests == 256
+    with pytest.raises(SshError, match=re.escape("gpu1 answered in a form this modelroom does not read")):
+        _measure_wire(_speeds_wire(requests=257, ranking_requests=257), _scenario(requests=257))
+
+
+@pytest.mark.parametrize(
+    "got, ranking",
+    [(64, 128), (100, 128), (255, 300)],
+    ids=["an older server at 64", "100 of 128", "255 of 300"],
+)
+def test_a_server_that_reports_fewer_requests_than_asked_is_an_older_modelroom(got, ranking):
+    """A.1 step 3: fewer than `min(requests, 256)` has its own sentence, and no number is taken."""
+    asked = min(ranking, 256)
+
+    with pytest.raises(SshError) as raised:
+        _measure_wire(_speeds_wire(requests=got, ranking_requests=ranking), _scenario(requests=ranking))
+
+    assert str(raised.value) == _older(got, asked)
+
+
+def test_the_four_steps_of_a_server_answer_in_their_order():
+    """A.1: `server_gone` first; a wrong `ranking_requests` is a form fault; fewer than asked is the sentence of
+    the older server; every other deviation, `got > asked` included, is a form fault. No number is taken."""
+    nothing = {name: None for name in ("total_tps", "total_min", "total_max", "request_tps", "request_min", "request_max")}
+    gone = _speeds_wire(requests=1, ranking_requests=7, problem="server_gone", **nothing)
+    with pytest.raises(SshError, match="vLLM on gpu1 stopped answering during the measurement"):
+        _measure_wire(gone, _scenario(requests=128))
+    with pytest.raises(SshError, match=FORM):  # the ranking is wrong, and fewer are measured too: the form fault goes first
+        _measure_wire(_speeds_wire(requests=64, ranking_requests=20), _scenario(requests=128))
+    with pytest.raises(SshError) as fewer:
+        _measure_wire(_speeds_wire(requests=64, ranking_requests=128), _scenario(requests=128))
+    assert str(fewer.value) == _older(64, 128)
+    with pytest.raises(SshError, match=FORM):  # more than asked
+        _measure_wire(_speeds_wire(requests=129, ranking_requests=128), _scenario(requests=128))
 
 
 def _server_without_model_disk(tmp_path, missing: int | None):

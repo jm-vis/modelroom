@@ -1,17 +1,26 @@
-"""The measurement of a local LM Studio server: one request after the other, timed on the wall, nothing written.
+"""The measurement of a local LM Studio server, timed on the wall, nothing written: one request at a time, or
+several at once where the loaded instance allows it.
 
 The rule is the contract's (CONTRACTS.md, "Local servers and the vLLM load test", LM Studio). One chat of 128
 tokens at temperature 0.0 and seed 42, not streamed, to the **instance id** of the one loaded model, as one
-warm-up and three runs, one request at a time. The model list is read before the warm-up and after every
-request: five reads, each of which has to show the same instance with the same context, or the measurement
-ends and gives no number. A run counts with status 200, `finish_reason` `length`, 128 `completion_tokens`
-(thinking tokens are part of them and `reasoning_tokens` is not read), room in the context and a wall time
-above 0. The time is `clock()` before the call and after the whole body is in; the reads and the warm-up lie
-outside it. The number is the mean of the three `128 / seconds` held inside its range.
+warm-up and three runs. The model list is read before the warm-up and after every run: five reads, each of
+which has to show the same instance with the same context, or the measurement ends and gives no number. A
+request counts with status 200, `finish_reason` `length`, 128 `completion_tokens` (thinking tokens are part
+of them and `reasoning_tokens` is not read), room in the context and a wall time above 0.
 
-**modelroom never asks LM Studio to load, unload or download a model. It reads the model list before and
-after every request and drops the measurement when the loaded model changed; a load the server does on its
-own inside a request can stay unseen and then sits in the measured time.**
+- **n = 1** (the instance states no `parallel` or less than 2, or the scenario names one request): a run is
+  one request, the course is the serial one -- one request after the other, five reads, nine calls. The time
+  is `clock()` before the call and after the whole body is in; the reads and the warm-up lie outside it. The
+  number is the mean of the three `128 / seconds` held inside its range.
+- **n of 2 or more** (`batch_size`, AP9-PM-1): a run is a batch of n requests released together
+  (`loadtest_batch`), the batch's time running from the release to the last answer. The number is the total
+  `n x 128 / wall time` per batch, as a mean of the three held inside its range, and the speed of one request
+  over all 3 x n. The calls are `6 + 3n` in the success.
+
+**modelroom never asks LM Studio to load, unload or download a model, and never changes its `parallel`. It
+reads the model list before and after every request (n = 1) or every batch (n of 2 or more) and drops the
+measurement when the loaded model changed; a load the server does on its own inside a request, or inside a
+batch, can stay unseen and then sits in the measured time.**
 
 The result is an `LmStudioMeasurement` in memory: no record, no profile, no ranking, nothing on the disk.
 Every row of the table of the contract ends the measurement as a `problem` of the result, never as an
@@ -26,6 +35,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from .lmstudio_server import CHAT_PATH, LmStudioServer, LmStudioServerError, LmStudioTimeoutError, LoadedModel, read_lmstudio_models
 from .loadtest import _mean_within
+from .loadtest_batch import release_batch
+from .loadtest_vllm import MAX_REQUESTS
 from .vllm_server import CHAT_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:  # pragma: no cover - a type only, never imported at run time
@@ -62,7 +73,12 @@ class LmStudioMeasurement:
     """What one measurement of an LM Studio server found, in memory only.
 
     The speeds are set when `problem` is `None`; `problem` is the words of a row of the table (without the
-    prefix `LM Studio: `) and then no speed exists. `calls` counts the calls made to the server (at most nine).
+    prefix `LM Studio: `) and then no speed exists. `calls` counts the calls actually made to the server:
+    nine in the serial case (`requests` is 1) and `6 + 3n` in the parallel success (n = `requests`); a
+    measurement that ends early counts fewer. `requests` is n, `ranking_requests` what the scenario asks
+    for, `parallel` what the instance states (or `None`); the `total_*` speeds (n x 128 tokens over the
+    batch's wall time, mean and range of the three batches) exist only for n of 2 or more, where
+    `request_*` is the speed of one request over all 3 x n.
     """
 
     instance_id: str
@@ -72,6 +88,12 @@ class LmStudioMeasurement:
     request_max: float | None
     problem: str | None
     calls: int
+    requests: int = 1
+    ranking_requests: int = 1
+    parallel: int | None = None
+    total_tps: float | None = None
+    total_min: float | None = None
+    total_max: float | None = None
 
 
 class _Stop(Exception):
@@ -100,34 +122,62 @@ def run_lmstudio_load_test(
     """Read, warm up, read, then three runs each followed by a read; a row of the table ends it with a `problem`.
 
     `scenario` is the run's: that the context of the instance is the one it asks for is judged before the
-    call (`guided_lmstudio`), a request does not change.
+    call (`guided_lmstudio`), a request does not change. With `n` of 2 or more (`batch_size`) each run is a
+    batch of n requests released together (AP9-PM-1); with 1 the course is the serial one, call for call.
     """
-    session = _Session(server, instance, prompt, clock)
+    n = batch_size(instance, scenario)
+    session = _Session(server, instance, prompt, clock, numbered=n >= 2)
     seconds: list[float] = []
+    totals: list[float] = []
     try:
         session.read()
-        session.chat()
+        session.chat(0)
         session.read()
-        for _ in range(RUNS):
-            seconds.append(session.chat() / 1e9)
+        for run in range(RUNS):
+            if n == 1:
+                seconds.append(session.chat() / 1e9)
+            else:
+                spans, wall = session.batch(n, 1 + run * n)
+                seconds += [span / 1e9 for span in spans]
+                totals.append(n * MAX_TOKENS / (wall / 1e9))
             session.read()
     except _Stop as stop:
         words = PROBLEM_WORDS[stop.row].format(context=instance.context_length)
-        return LmStudioMeasurement(instance.instance_id, instance.context_length, None, None, None, words, session.calls)
+        return LmStudioMeasurement(
+            instance.instance_id, instance.context_length, None, None, None, words, session.calls,
+            n, scenario.requests, instance.parallel,
+        )
     speeds = sorted(MAX_TOKENS / each for each in seconds)
+    totals.sort()
     return LmStudioMeasurement(
-        instance.instance_id, instance.context_length, _mean_within(speeds), speeds[0], speeds[-1], None, session.calls
+        instance.instance_id, instance.context_length, _mean_within(speeds), speeds[0], speeds[-1], None, session.calls,
+        n, scenario.requests, instance.parallel,
+        _mean_within(totals), totals[0] if totals else None, totals[-1] if totals else None,
     )
 
 
-class _Session:
-    """The calls of one measurement: each read and each chat counted, each failing as a row of the table."""
+def batch_size(instance: LoadedModel, scenario: "Scenario") -> int:
+    """n: the requests of a batch, `min(scenario.requests, instance.parallel, MAX_REQUESTS)`, and 1 where the
+    instance states no `parallel` or less than 2 or the scenario names one request (the serial course)."""
+    parallel = instance.parallel
+    if parallel is None or parallel < 2 or scenario.requests < 2:
+        return 1
+    return min(scenario.requests, parallel, MAX_REQUESTS)
 
-    def __init__(self, server: LmStudioServer, instance: LoadedModel, prompt: str, clock: Clock) -> None:
+
+class _Session:
+    """The calls of one measurement: each read and each chat counted, each failing as a row of the table.
+
+    `numbered` (n of 2 or more) gives every request its own prompt, `<prompt> Request <k>.`, `k` running on
+    from the warm-up's 0 so that no number repeats in a measurement (AP9-PM-1).
+    """
+
+    def __init__(self, server: LmStudioServer, instance: LoadedModel, prompt: str, clock: Clock, numbered: bool = False) -> None:
         self._server = server
         self._instance = instance
         self._prompt = prompt
         self._clock = clock
+        self._numbered = numbered
         self.calls = 0
 
     def read(self) -> None:
@@ -141,10 +191,35 @@ class _Session:
         if not any(m.context_length == self._instance.context_length for m in same):
             raise _Stop(2)
 
-    def chat(self) -> int:
+    def _body(self, k: int) -> dict:
+        return chat_body(self._instance.instance_id, f"{self._prompt} Request {k}." if self._numbered else self._prompt)
+
+    def batch(self, n: int, first: int) -> tuple[list[int], int]:
+        """n chats released together, numbered `first..first+n-1`: their wall times and the batch's, in nanoseconds.
+
+        All threads end first; then the answers are judged by index, rows 3 to 11 each, and the first request
+        that failed gives the row. The batch's own time is judged last (row 11) -- the read after the batch is
+        the caller's and does not happen where a request failed.
+        """
+        released = release_batch(n, lambda index: self._post(self._body(first + index)), self._clock)
+        self.calls += n
+        for response, span in zip(released.results, released.spans):
+            if isinstance(response, Exception):
+                raise _row_of(response)
+            if span > CHAT_TIMEOUT_SECONDS * 1e9:
+                raise _Stop(4)
+            _judge(response, span, self._instance.context_length)
+        if released.wall_ns <= 0:
+            raise _Stop(11)
+        return list(released.spans), released.wall_ns
+
+    def _post(self, body: dict) -> "Response":
+        return self._server("POST", CHAT_PATH, body)
+
+    def chat(self, k: int = 0) -> int:
         """One chat: its wall time in nanoseconds, or the row of the table it ended on."""
         self.calls += 1
-        body = chat_body(self._instance.instance_id, self._prompt)
+        body = self._body(k)
         started = self._clock()
         try:
             response = self._server("POST", CHAT_PATH, body)
@@ -157,6 +232,13 @@ class _Session:
             raise _Stop(4)
         _judge(response, wall, self._instance.context_length)
         return wall
+
+
+def _row_of(error: Exception) -> "_Stop | Exception":
+    """The row a failed call ends on (3 or 4), or the error itself where it is none of the server's."""
+    if isinstance(error, LmStudioTimeoutError):
+        return _Stop(4)
+    return _Stop(3) if isinstance(error, LmStudioServerError) else error
 
 
 def _judge(response: "Response", wall: int, context: int) -> None:
@@ -200,6 +282,7 @@ __all__ = [
     "MAX_TOKENS",
     "PROBLEM_WORDS",
     "LmStudioMeasurement",
+    "batch_size",
     "chat_body",
     "run_lmstudio_load_test",
 ]

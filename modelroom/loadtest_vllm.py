@@ -7,8 +7,9 @@ behind one `threading.Barrier`, times each request and the whole batch with the 
 streamed, `Describe how a public library shelves a new book. Request <i>.` -- `0` for the
 warm-up, `1..n` in every batch.
 
-n is `min(scenario.requests, 64)`; the scenario itself never changes. A wall time includes the
-prefill and the queue of the server, so such a speed is never mixed with the one-request speed of
+n is `min(scenario.requests, MAX_REQUESTS)`; the scenario itself never changes. The time of a batch runs
+from its release (taken in the barrier's action) to the latest answer (`loadtest_batch`). A wall time
+includes the prefill and the queue of the server, so such a speed is never mixed with the one-request speed of
 an Ollama measurement (protocol v1). The result is a `VllmMeasurement` in memory: **nothing is
 persisted** -- no measurement file, no profile, no snapshot (CONTRACTS.md, "Local servers and
 the vLLM load test", ADR 0008).
@@ -17,12 +18,12 @@ the vLLM load test", ADR 0008).
 from __future__ import annotations
 
 import re
-import threading
 import time
 from dataclasses import dataclass
 from typing import Callable
 
 from .loadtest import LoadTestError, _mean_within
+from .loadtest_batch import release_batch
 from .measurements import Scenario
 from .vllm_server import CHAT_PATH, METRICS_PATH, ServedModel, VllmServer, VllmServerError
 
@@ -31,7 +32,7 @@ MAX_TOKENS = 128
 TEMPERATURE = 0.0
 SEED = 42
 BATCHES = 3
-MAX_REQUESTS = 64
+MAX_REQUESTS = 256
 FINISH_REASON = "length"
 RUNNING = "vllm:num_requests_running"
 WAITING = "vllm:num_requests_waiting"
@@ -170,36 +171,17 @@ def _call(server: VllmServer, method: str, path: str, body: dict | None = None):
 
 
 def _batch(server: VllmServer, model_id: str, n: int, clock: Clock) -> Batch:
-    """n requests released together; the batch's time runs from the release to the last answer."""
+    """n requests released together; the batch's time runs from the release to the last answer (`loadtest_batch`)."""
     before = read_metrics(server)
-    barrier = threading.Barrier(n + 1)
-    answers: list = [None] * n
-    threads = [
-        threading.Thread(target=_request, args=(server, model_id, index, barrier, clock, answers), daemon=True)
-        for index in range(n)
-    ]
-    for thread in threads:
-        thread.start()
-    barrier.wait()
-    started = clock()
-    for thread in threads:
-        thread.join()
-    wall = clock() - started
-    for answer in answers:
-        if not isinstance(answer, Answer):
-            raise answer if isinstance(answer, LoadTestError) else LoadTestError("a request ended without an answer")
-    return Batch(tuple(answers), wall, before, read_metrics(server))
-
-
-def _request(server: VllmServer, model_id: str, index: int, barrier: threading.Barrier, clock: Clock, answers: list) -> None:
-    """One request of a batch, in its own thread: wait for the others, then time the call."""
-    barrier.wait()
-    started = clock()
-    try:
-        response = _call(server, "POST", CHAT_PATH, chat_body(model_id, index + 1))
-        answers[index] = _answer(response.status, response, clock() - started)
-    except LoadTestError as exc:
-        answers[index] = exc
+    released = release_batch(n, lambda index: _call(server, "POST", CHAT_PATH, chat_body(model_id, index + 1)), clock)
+    answers = []
+    for response, span in zip(released.results, released.spans):
+        if isinstance(response, LoadTestError):
+            raise response
+        if isinstance(response, Exception) or response is None:
+            raise LoadTestError("a request ended without an answer")
+        answers.append(_answer(response.status, response, span))
+    return Batch(tuple(answers), released.wall_ns, before, read_metrics(server))
 
 
 def _answer(status: int, response, ns: int) -> Answer:

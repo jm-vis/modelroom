@@ -36,6 +36,7 @@ from .vllm_server import ServedModel
 KEY_NOTE = "the vLLM server on {alias} asks for an API key; modelroom reads an open server only"
 NO_PACKAGE_NOTE = "the vLLM server on {alias} serves a model that is no package of this run"
 SERVER_GONE = "vLLM on {alias} stopped answering during the measurement"
+OLDER_SERVER = "modelroom on {alias} reported {got} requests per batch where this one asks for {asked}; update the older one"
 
 
 def package_ref(package: Package) -> dict | None:
@@ -167,13 +168,20 @@ def vllm_measure(
 
 def to_measurement(alias: str, wire: dict, scenario: Scenario) -> VllmMeasurement:
     """The `VllmMeasurement` of a server's numbers and code. The requests it states must be the ones asked
-    for (`min(requests, 64)` measured, `ranking_requests` the scenario's), else a form fault; the sentence
-    of the code is built here from the fields this computer knows."""
-    if wire["ranking_requests"] != scenario.requests or wire["requests"] != min(scenario.requests, MAX_REQUESTS):
-        raise SshError(FORM_ERROR.format(alias=alias))
+    for (`min(requests, MAX_REQUESTS)` measured, `ranking_requests` the scenario's), else a form fault; the
+    sentence of the code is built here from the fields this computer knows. The order: `server_gone` first;
+    a wrong `ranking_requests` is a form fault; fewer requests than asked is an older modelroom at the server
+    (its own sentence, AP9-PM-1); any other deviation, more included, is a form fault. No number is taken."""
     code = wire["problem"]
     if code == "server_gone":
         raise SshError(SERVER_GONE.format(alias=alias))
+    asked = min(scenario.requests, MAX_REQUESTS)
+    if wire["ranking_requests"] != scenario.requests:
+        raise SshError(FORM_ERROR.format(alias=alias))
+    if wire["requests"] < asked:
+        raise SshError(OLDER_SERVER.format(alias=alias, got=wire["requests"], asked=asked))
+    if wire["requests"] != asked:
+        raise SshError(FORM_ERROR.format(alias=alias))
     _agrees_with_the_scenario(alias, wire, scenario)
     reason = None
     if code is not None:

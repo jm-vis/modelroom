@@ -40,7 +40,7 @@ ALLOWED_CALLS: frozenset[tuple[str, str]] = frozenset(
     {("GET", MODELS_PATH), ("GET", METRICS_PATH), ("POST", CHAT_PATH)}
 )
 
-# A short call answers at once; one chat of 128 tokens among 64 at once may take minutes.
+# A short call answers at once; one chat of 128 tokens among up to 256 at once may take minutes.
 SHORT_TIMEOUT_SECONDS = 10.0
 CHAT_TIMEOUT_SECONDS = 600.0
 # The metrics page of vLLM 0.30.0 is 57 KB; an answer above 4 MiB is no answer of this server.

@@ -45,7 +45,7 @@ from .daemon import ALLOWED_CALLS, Daemon, DaemonError, LocalDaemon
 from .hf_cache import CacheProbes
 from .llmfit import read_llmfit_reference
 from .loadtest import LoadTestError, installed_candidates, installed_models, run_load_test, weight_digest
-from .loadtest_vllm import run_vllm_load_test
+from .loadtest_vllm import MAX_REQUESTS, run_vllm_load_test
 from .measure import MeasuredHardware, Probes, build_profile, measure_hardware, read_os_identity
 from .measurements import EXPORT_SCHEMA_VERSION, ExportObject, Scenario, shipped_protocol
 from .neutral import neutral_record, neutral_version
@@ -440,7 +440,7 @@ def _measurement_fields(measurement: Any, scenario: Scenario, served: Any) -> di
     during the run is `server_gone` with no speed."""
     if measurement is None:
         return {
-            "requests": min(scenario.requests, 64), "ranking_requests": scenario.requests, "context": served.max_model_len,
+            "requests": min(scenario.requests, MAX_REQUESTS), "ranking_requests": scenario.requests, "context": served.max_model_len,
             "total_tps": None, "total_min": None, "total_max": None, "request_tps": None, "request_min": None,
             "request_max": None, "problem": "server_gone",
         }

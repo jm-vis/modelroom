@@ -2,9 +2,10 @@
 
 A server that answers on `127.0.0.1:1234` with the model list of LM Studio gets a row on the start screen
 that says how many models it has loaded. With **exactly one loaded GGUF instance** step 4 offers it as a row
-of the one list; the measurement (`loadtest_lmstudio`) is one request at a time, timed on the wall, and the
-number is shown in step 4 and on the card with what it is: not ranked, nothing written, a busy server reads
-slower, and the server's own load can stay unseen. With no or several loaded models there is a note and no
+of the one list; the measurement (`loadtest_lmstudio`) is timed on the wall -- one request at a time where the
+instance states no `parallel` (or less than 2) or the scenario names one request, else batches of up to
+`parallel` requests at once (AP9-PM-1) -- and the number is shown in step 4 and on the card with what it is:
+not ranked, nothing written, a busy server reads slower, and the server's own load can stay unseen. With no or several loaded models there is a note and no
 row; with a context other than the one this run asks for the number would not count, so there is a note and
 no chat. The four functions are the ones the entry of the table takes (`LocalServer.start_fact`, `offer`,
 `measure`, `card_facts`).
@@ -44,7 +45,8 @@ MEASURED = "1 of 1 measured"
 NO_MODEL_NOTE = "LM Studio: no model loaded, nothing to measure"
 SEVERAL_NOTE = "LM Studio: {count} models loaded, measure with one loaded model"
 OTHER_CONTEXT_NOTE = "the number will not count: LM Studio runs context {server}, this run asks for {run}"
-NOT_RANKED_NOTE = "LM Studio states no load, so a busy server reads slower; not ranked, nothing written"
+PARALLEL_NOTE = "LM Studio allows {parallel} at once for this model (Max Concurrent Predictions in LM Studio)"
+NOT_RANKED_NOTE ="LM Studio states no load, so a busy server reads slower; not ranked, nothing written"
 # The three further rows of the card under the number (each at most 65 characters, the note column).
 CARD_NOT_RANKED = "package unknown; not ranked, nothing written"
 CARD_BUSY = "LM Studio states no load, so a busy server reads slower"
@@ -139,12 +141,26 @@ def measure(
 
 
 def measurement_lines(measurement: LmStudioMeasurement, dash: str) -> list[str]:
-    """The two notes of a number: the speed with its range, and what it is."""
+    """The notes of a number: the speed with its range, and what it is. With several requests at once (n of 2
+    or more) the form of `guided_vllm.measurement_lines`: the total, the speed of one request, and the line
+    that names the `parallel` of the instance where it was the limit."""
     speed = f"{measurement.request_tps:.1f} tok/s ({measurement.request_min:.1f}{dash}{measurement.request_max:.1f})"
-    return [
-        f"measured {NAME} {measurement.instance_id}: {speed}, one request, wall time, context {measurement.context}",
-        NOT_RANKED_NOTE,
-    ]
+    n = measurement.requests
+    if n == 1:
+        return [
+            f"measured {NAME} {measurement.instance_id}: {speed}, one request, wall time, context {measurement.context}",
+            NOT_RANKED_NOTE,
+        ]
+    lines = []
+    if n < measurement.ranking_requests:
+        lines.append(f"{n} of {measurement.ranking_requests} requests measured")
+    total = f"{measurement.total_tps:.1f} tok/s total ({measurement.total_min:.1f}{dash}{measurement.total_max:.1f})"
+    lines.append(f"measured {NAME} {measurement.instance_id}: {total}, {n} at once, wall time, context {measurement.context}")
+    lines.append(f"per request: {speed}")
+    if n == measurement.parallel < measurement.ranking_requests:
+        lines.append(PARALLEL_NOTE.format(parallel=n))
+    lines.append(NOT_RANKED_NOTE)
+    return lines
 
 
 def card_facts(run: "GuidedRun") -> tuple[Fact, ...]:
@@ -152,8 +168,12 @@ def card_facts(run: "GuidedRun") -> tuple[Fact, ...]:
     measurement = run.servers.measured.get(ROW)
     if not isinstance(measurement, LmStudioMeasurement) or measurement.problem is not None:
         return ()
+    if measurement.requests == 1:
+        note = f"{measurement.request_tps:.1f} tok/s, one request, wall time"
+    else:  # at most 52 characters: n x 128 tokens cannot make a total beyond 32768000000000.0 (the column holds 65)
+        note = f"{measurement.total_tps:.1f} tok/s total, {measurement.requests} at once, wall time"
     return (
-        Fact(LABEL, f"{NAME} server", f"{measurement.request_tps:.1f} tok/s, one request, wall time"),
+        Fact(LABEL, f"{NAME} server", note),
         Fact("", "", CARD_NOT_RANKED),
         Fact("", "", CARD_BUSY),
         Fact("", "", CARD_UNSEEN),
