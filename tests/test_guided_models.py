@@ -651,24 +651,55 @@ def test_the_default_context_of_the_list_is_the_one_the_scale_starts_on():
 
 def test_the_hint_line_explains_the_release_words_and_names_the_context():
     """`nothing marked keeps the folder as it is` went with the Enter rule (decided 2026-09-25)."""
-    line = hint_line(_measured(), 32768)
+    line = hint_line(_measured(), 32768, 1, context_kept=False, requests_kept=False)
 
     assert line == (
         "latest: the publisher's current release of its family · legacy: a successor is named · "
         "*: computed from the version numbers of the family, not stated by the publisher · "
         "Fit is memory only: the package's need against a pool · ample: up to 60 % of the pool · "
-        "fits: up to 85 % · tight: up to 98 % · no fit: more · (RAM): the pool is the system memory · "
-        "fit from the size at 32k context, the best is fits, exact after the fetch"
+        "fits: up to 85 % · tight: up to 98 % · no fit: more · (RAM): the pool is the system memory\n"
+        "fit from size at 32k context and 1 at once (up to fits); exact after the fetch"
     )
     assert "nothing marked" not in line
 
 
 def test_a_context_of_its_own_is_not_floored_into_a_k_it_is_not():
-    assert "at 5000 tokens context" in hint_line(_measured(), 5000)
+    assert "at 5000 tokens context" in hint_line(_measured(), 5000, 1, context_kept=False, requests_kept=False)
+
+
+@pytest.mark.parametrize(
+    ("context_kept", "requests_kept", "added"),
+    [
+        (False, False, None),
+        (True, False, "context kept in this folder; step 3 asks again"),
+        (False, True, "requests kept in this folder; step 3 asks again"),
+        (True, True, "context and requests kept in this folder; step 3 asks again"),
+    ],
+)
+def test_the_hint_line_names_what_step_3_kept_by_where_it_came_from(context_kept, requests_kept, added):
+    """The origin decides, never the number: a kept 32k context and 1 request still say so."""
+    line = hint_line(_measured(), 32768, 1, context_kept=context_kept, requests_kept=requests_kept)
+
+    fit = "fit from size at 32k context and 1 at once (up to fits); exact after the fetch"
+    assert line.endswith("\n" + fit if added is None else f"\n{fit} · {added}")
+    assert line.count("\n") == 1
+
+
+def test_the_hint_line_names_the_requests_it_was_computed_for():
+    line = hint_line(_measured(), 131072, 250, context_kept=True, requests_kept=True)
+
+    assert "fit from size at 128k context and 250 at once (up to fits); exact after the fetch" in line
+
+
+def test_the_unmeasured_hint_line_takes_no_origin_addition():
+    line = hint_line(_unmeasured(), 32768, 250, context_kept=True, requests_kept=True)
+
+    assert line.endswith("fit unknown until this machine is measured")
+    assert "\n" not in line
 
 
 def test_the_hint_line_of_an_unmeasured_machine_says_the_fit_is_unknown():
-    line = hint_line(_unmeasured(), 32768)
+    line = hint_line(_unmeasured(), 32768, 1, context_kept=False, requests_kept=False)
 
     assert line.startswith("latest: the publisher's current release of its family")
     assert line.endswith("fit unknown until this machine is measured")

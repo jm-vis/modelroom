@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from .config import Configuration
 from .dialog import Choice
+from .guided_context import again_choices
 from .guided_write import Said, with_entered_machine
 from .measure import DISPLAY_NAME_MAX
 from .neutral import neutral_profile
@@ -96,7 +97,7 @@ def _guided_error(message: str) -> Exception:
 
 
 def gib_of(key: str, answered: str) -> float:
-    """An answer as a number of GiB above 0; anything else ends the run (exit `2`) and names it."""
+    """An answer as a number of GiB above 0; anything else raises `GuidedError` and names it."""
     try:
         value = float(answered)
     except ValueError:
@@ -106,12 +107,21 @@ def gib_of(key: str, answered: str) -> float:
     return value
 
 
-def _ask_name(run: "GuidedRun") -> str:
-    name = run.asker.text("entered_name", QUESTIONS["entered_name"]).strip()
+def _name_of(name: str) -> str:
+    """A machine name of 1 to `DISPLAY_NAME_MAX` characters; anything else raises `GuidedError`."""
     if not 1 <= len(name) <= DISPLAY_NAME_MAX:
         raise _guided_error(
             f"entered_name: a machine name has 1 to {DISPLAY_NAME_MAX} characters, this one has {len(name)}"
         )
+    return name
+
+
+def _ask_name(run: "GuidedRun") -> str:
+    from .guided import ask_checked  # imported here: the guided mode imports this module in turn
+
+    name = ask_checked(
+        run, lambda _again: run.asker.text("entered_name", QUESTIONS["entered_name"], required=True).strip(), _name_of
+    )
     # Not even the answer line repeats it: the machine is named by its class and id (FR-N).
     run.screen.answer(QUESTIONS["entered_name"], NAME_NOT_KEPT)
     return name
@@ -120,14 +130,19 @@ def _ask_name(run: "GuidedRun") -> str:
 def _ask_gib(run: "GuidedRun", key: str, question: str | None = None) -> float:
     asked = question or QUESTIONS[key]
     choices = [Choice(size, f"{size} GiB") for size in _SIZES[key]] + [Choice(NUMBER_VALUE, NUMBER_LABEL)]
-    answered = run.asker.select_or_text(key, asked, choices, NUMBER_VALUE, _NUMBER_QUESTIONS[key])
-    value = gib_of(key, answered.strip())
+    from .guided import ask_checked  # imported here: the guided mode imports this module in turn
+
+    def ask(again: bool) -> str:
+        shown = again_choices(choices) if again else choices
+        return run.asker.select_or_text(key, asked, shown, NUMBER_VALUE, _NUMBER_QUESTIONS[key], required=True).strip()
+
+    value = ask_checked(run, ask, lambda answered: gib_of(key, answered))
     run.screen.answer(asked, gib_words(value))
     return value
 
 
 def cards_of(answered: str) -> int:
-    """An answer as a number of graphics cards, 2 to `MAX_CARDS`; anything else ends the run (exit `2`)."""
+    """An answer as a number of graphics cards, 2 to `MAX_CARDS`; anything else raises `GuidedError`."""
     digits = answered.isascii() and answered.isdigit() and len(answered) <= len(str(MAX_CARDS))
     count = int(answered) if digits else 0
     if not 2 <= count <= MAX_CARDS:
@@ -138,7 +153,15 @@ def cards_of(answered: str) -> int:
 def _ask_cards(run: "GuidedRun") -> int:
     choices = [Choice(count, count) for count in _CARD_COUNTS] + [Choice(NUMBER_VALUE, NUMBER_LABEL)]
     question = QUESTIONS["entered_cards"]
-    count = cards_of(run.asker.select_or_text("entered_cards", question, choices, NUMBER_VALUE, _NUMBER_QUESTIONS["entered_cards"]).strip())
+    from .guided import ask_checked  # imported here: the guided mode imports this module in turn
+
+    def ask(again: bool) -> str:
+        shown = again_choices(choices) if again else choices
+        return run.asker.select_or_text(
+            "entered_cards", question, shown, NUMBER_VALUE, _NUMBER_QUESTIONS["entered_cards"], required=True
+        ).strip()
+
+    count = ask_checked(run, ask, cards_of)
     run.screen.answer(question, str(count))
     return count
 

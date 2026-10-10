@@ -76,8 +76,10 @@ def search_answer(text: str) -> str:
 class SearchStep:
     """What the search of step 2 leaves the choice with: the models, and what they were computed on.
 
-    `checked` and `context` are the machine and the context the fit of every line was computed for,
-    so the instruction line of the list says the same numbers the list shows.
+    `checked`, `context` and `requests` are the machine, the context and the requests at once the fit
+    of every line was computed for, so the instruction line of the list says the same numbers the
+    list shows. `context_kept` and `requests_kept` say whether step 3 kept them in this folder
+    (where the values come from, never read off the numbers).
 
     `tensor_repos` (P1) maps a resolved base model to the tensor
     repositories P1's search found for it -- a read only, no write: which of them end up in the
@@ -90,6 +92,9 @@ class SearchStep:
     models: list[ModelChoice]
     checked: Checked
     context: int
+    requests: int
+    context_kept: bool
+    requests_kept: bool
     filtered: bool
     tensor_repos: dict[str, list[str]] = field(default_factory=dict)
 
@@ -169,7 +174,16 @@ def _searched(
         configured_ollama=configured,
         requests=config.guided.requests,
     )
-    return SearchStep(outcome=outcome, models=models, checked=checked, context=context, filtered=filtered)
+    return SearchStep(
+        outcome=outcome,
+        models=models,
+        checked=checked,
+        context=context,
+        requests=config.guided.requests,
+        context_kept=config.guided.context is not None,
+        requests_kept=config.guided.requests_origin != "default",
+        filtered=filtered,
+    )
 
 
 def _tensor_hits(run: GuidedRun, wanted: bool, hits: Sequence) -> dict[str, list[str]]:

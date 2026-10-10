@@ -34,6 +34,8 @@ NO = "no"
 # What stands in front of a row's label: the one space, the pointer and its space, the marker and its
 # space -- the column a head outside the list is indented by (`guided_models.POINTER_WIDTH`).
 HEAD_INDENT = 5
+# The gray line under a required text field; Esc does not leave a text field, Ctrl-C does.
+REQUIRED_TEXT_HINT = "an answer is needed (Ctrl-C leaves)"
 
 
 @dataclass(frozen=True)
@@ -88,7 +90,7 @@ class Asker(Protocol):
     a list has nothing to say once the list is gone (decided 2026-09-24).
     """
 
-    def text(self, key: str, question: str, default: str = "") -> str: ...
+    def text(self, key: str, question: str, default: str = "", *, required: bool = False) -> str: ...
 
     def select(self, key: str, question: str, choices: Sequence[Choice], instruction: str | None = None) -> str: ...
 
@@ -111,6 +113,8 @@ class Asker(Protocol):
         text_value: str,
         text_question: str,
         instruction: str | None = None,
+        *,
+        required: bool = False,
     ) -> str: ...
 
     def holds(self, key: str) -> bool: ...
@@ -214,7 +218,7 @@ class TerminalAsker:
         built.application.erase_when_done = True
         return self._ask(built)
 
-    def text(self, key: str, question: str, default: str = "") -> str:
+    def text(self, key: str, question: str, default: str = "", *, required: bool = False) -> str:
         """A typed answer. It erases itself too, for the same reason a list does.
 
         Without `erase_when_done` the library leaves `? What are you looking for? qwen` on screen
@@ -224,7 +228,12 @@ class TerminalAsker:
         import questionary
 
         built = questionary.text(
-            question, default=default, style=self._style(), erase_when_done=True, **self._streams
+            question,
+            default=default,
+            instruction=f"\n{REQUIRED_TEXT_HINT}\n" if required else None,
+            style=self._style(),
+            erase_when_done=True,
+            **self._streams,
         )
         return self._ask(built)
 
@@ -283,6 +292,8 @@ class TerminalAsker:
         text_value: str,
         text_question: str,
         instruction: str | None = None,
+        *,
+        required: bool = False,
     ) -> str:
         """A selection list with one entry that leads to a text question (the scale's own number).
 
@@ -294,7 +305,7 @@ class TerminalAsker:
         chosen = self.select(key, question, choices, instruction)
         if chosen != text_value:
             return chosen
-        return self.text(key, text_question)
+        return self.text(key, text_question, required=required)
 
     def holds(self, key: str) -> bool:
         """A terminal has no answer file, so it holds no key."""
@@ -521,7 +532,7 @@ class FileAsker:
             raise AnswerMissingError(key, question)
         return self._answers[key]
 
-    def text(self, key: str, question: str, default: str = "") -> str:
+    def text(self, key: str, question: str, default: str = "", *, required: bool = False) -> str:
         value = self._answer(key, question)
         if isinstance(value, bool) or not isinstance(value, (str, int)):
             raise AnswerInvalidError(f"the answer for {key!r} is not text: {value!r}")
@@ -563,6 +574,8 @@ class FileAsker:
         text_value: str,
         text_question: str,
         instruction: str | None = None,
+        *,
+        required: bool = False,
     ) -> str:
         """The answer as text, whether it names an entry of the list or is the free text itself.
 

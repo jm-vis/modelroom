@@ -102,7 +102,13 @@ RELEASE_HINT = (
 # The fit words of the list, in the words of every other view (`screen.FIT_SCALE_HINT`), and its one
 # pool the list names: the list shows no mode, only `(RAM)` (decided 2026-09-27).
 FIT_RAM_HINT = f"{_RAM_SUFFIX.strip()}: the pool is the system memory"
-FIT_FROM_SIZE_HINT = "fit from the size at {context} context, the best is fits, exact after the fetch"
+FIT_FROM_SIZE_HINT = "fit from size at {context} context and {requests} at once (up to fits); exact after the fetch"
+# Appended when step 3 kept a value in this folder: step 2 computes with it, step 3 asks again.
+FIT_KEPT_HINTS = {
+    (True, False): "context kept in this folder; step 3 asks again",
+    (False, True): "requests kept in this folder; step 3 asks again",
+    (True, True): "context and requests kept in this folder; step 3 asks again",
+}
 FIT_UNKNOWN_HINT = "fit unknown until this machine is measured"
 
 
@@ -419,7 +425,7 @@ def list_choices(models: Sequence[ModelChoice]) -> list[Choice]:
     return [Choice(model.base_model, label, dim=model.legacy) for model, label in zip(models, labels)]
 
 
-def hint_line(checked: Checked, context: int) -> str:
+def hint_line(checked: Checked, context: int, requests: int, *, context_kept: bool, requests_kept: bool) -> str:
     """What this list has to say about itself: the release words, the star, the fit words and where
     its fit is from.
 
@@ -428,12 +434,20 @@ def hint_line(checked: Checked, context: int) -> str:
     the one the fit was really computed for, which is the one the next question starts on. What
     nothing marked does is no longer said here -- `Enter` takes the row under the pointer now
     (`dialog.TerminalAsker.checkbox`, decided 2026-09-25).
+
+    The fit words also name the requests at once the fit was computed for, and say when the context
+    or the requests come from what step 3 kept in this folder (`context_kept`, `requests_kept` are
+    where the values come from, never read off the numbers). The release words, the star, the fit
+    words and the pool stand on the first line, the fit's origin on a line of its own.
     """
     measured = checked.profile is not None and checked.machine_config is not None
     if not measured:
         return f"{RELEASE_HINT} · {FIT_UNKNOWN_HINT}"
-    fit = FIT_FROM_SIZE_HINT.format(context=context_tokens_text(context))
-    return " · ".join([RELEASE_HINT, *FIT_SCALE_HINT, FIT_RAM_HINT, fit])
+    fit = FIT_FROM_SIZE_HINT.format(context=context_tokens_text(context), requests=requests)
+    kept = FIT_KEPT_HINTS.get((context_kept, requests_kept))
+    fit_with_origin = fit if kept is None else f"{fit} · {kept}"
+    prefix = " · ".join([RELEASE_HINT, *FIT_SCALE_HINT, FIT_RAM_HINT])
+    return prefix + "\n" + fit_with_origin
 
 
 def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instruction: str) -> list[str]:

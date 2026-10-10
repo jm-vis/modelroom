@@ -30,7 +30,7 @@ This module asks both questions and writes the answers; the order of the steps s
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
@@ -228,7 +228,7 @@ def at_once_choices(guided: GuidedConfig) -> list[Choice]:
 
 
 def at_once_answer(answered: str, guided: GuidedConfig) -> RequestsAnswer:
-    """People at the same time, `N people` or `kept` as the answer; anything else ends the run (exit `2`).
+    """People at the same time, `N people` or `kept` as the answer; anything else raises `GuidedError`.
 
     A whole number (also `N requests`) is the requests: `entered`, and the head count stays what
     the folder holds, which only the display uses. `N people` is a daily head count: `from_users`.
@@ -274,7 +274,7 @@ def users_choices(default_users: int) -> list[Choice]:
 
 
 def requests_answer(answered: str, kept_users: int | None) -> RequestsAnswer:
-    """The answer-file key `users`: a head count or `N requests`; anything else ends the run (exit `2`).
+    """The answer-file key `users`: a head count or `N requests`; anything else raises `GuidedError`.
 
     Kept for answer-file compatibility: the question of the dialog is `at_once_answer`'s.
     A head count is `from_users`, one person included: the user named it. Requests named outright
@@ -573,7 +573,7 @@ def _answered_requests(run: "GuidedRun", config: Configuration) -> RequestsAnswe
     by `requests_answer` as before); a file holding both keys ends the run (exit `2`). Anything
     else is the key `at_once`, read by `at_once_answer`; the list starts on the kept answer.
     """
-    from .guided import GuidedError  # imported here: that module calls this step in turn
+    from .guided import GuidedError, ask_checked  # imported here: that module calls this step in turn
 
     asker = run.asker
     if asker.holds(USERS_KEY) and asker.holds(AT_ONCE_KEY):
@@ -589,15 +589,29 @@ def _answered_requests(run: "GuidedRun", config: Configuration) -> RequestsAnswe
             USERS_EXPLANATION,
         ).strip()
         return requests_answer(answered, kept)
-    answered = asker.select_or_text(
-        AT_ONCE_KEY,
-        AT_ONCE_QUESTION,
-        at_once_choices(config.guided),
-        NUMBER_VALUE,
-        AT_ONCE_NUMBER_QUESTION,
-        AT_ONCE_EXPLANATION,
-    ).strip()
-    return at_once_answer(answered, config.guided)
+    choices = at_once_choices(config.guided)
+
+    def ask(again: bool) -> str:
+        return asker.select_or_text(
+            AT_ONCE_KEY,
+            AT_ONCE_QUESTION,
+            again_choices(choices) if again else choices,
+            NUMBER_VALUE,
+            AT_ONCE_NUMBER_QUESTION,
+            AT_ONCE_EXPLANATION,
+            required=True,
+        ).strip()
+
+    return ask_checked(run, ask, lambda answered: at_once_answer(answered, config.guided))
+
+
+def again_choices(choices: Sequence[Choice]) -> list[Choice]:
+    """The same list for a question asked again: the pointer starts on the number of your own.
+
+    The kept row and its label stay as they were; only the start of the pointer moves, off the row
+    the refused answer came from and onto the entry that leads to the number field.
+    """
+    return [replace(choice, checked=choice.value == NUMBER_VALUE) for choice in choices]
 
 
 def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked, requests: int = 1) -> int:
@@ -609,14 +623,24 @@ def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked,
     fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts, requests)
     choices = scale_choices(LEVELS, default_context, fits, context_cap(base_models))
     instruction = EXPLANATION.format(machine=checked.shown) if fits else None
-    answered = run.asker.select_or_text(
-        "context", QUESTION, choices, NUMBER_VALUE, NUMBER_QUESTION, instruction
-    ).strip()
-    return tokens_of(answered)
+    from .guided import ask_checked  # imported here: that module calls this step in turn
+
+    def ask(again: bool) -> str:
+        return run.asker.select_or_text(
+            "context",
+            QUESTION,
+            again_choices(choices) if again else choices,
+            NUMBER_VALUE,
+            NUMBER_QUESTION,
+            instruction,
+            required=True,
+        ).strip()
+
+    return ask_checked(run, ask, tokens_of)
 
 
 def tokens_of(answered: str) -> int:
-    """A level name or a number of tokens as a number; anything else ends the run (exit `2`)."""
+    """A level name or a number of tokens as a number; anything else raises `GuidedError`."""
     from .guided import GuidedError  # imported here: that module calls this step in turn
 
     level = next((level for level in LEVELS if level.name == answered), None)

@@ -188,9 +188,9 @@ class _Instructions(FileAsker):
         self.instructions: dict[str, str | None] = {}
         self.lists: dict[str, list] = {}
 
-    def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
+    def select_or_text(self, key, question, choices, text_value, text_question, instruction=None, *, required=False):
         self.instructions[key] = instruction
-        return super().select_or_text(key, question, choices, text_value, text_question, instruction)
+        return super().select_or_text(key, question, choices, text_value, text_question, instruction, required=required)
 
     def select(self, key, question, choices, instruction=None):
         self.lists[key] = list(choices)

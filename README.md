@@ -408,6 +408,8 @@ KV cache in memory. From about 10 at once a serving stack such as vLLM is the ru
 Then how much text a model should handle at once, as a scale from XS to XXL. **L** (32k, a report
 or a long contract) is the default for a new folder. A number of tokens can be typed instead.
 
+In the terminal, a required field asks again after an empty or invalid answer.
+
 **What you see.** The scale shows the tokens, the words that are and an example for each level.
 
 The last column is the point of the question. It shows how many of the packages just fetched still
@@ -562,6 +564,7 @@ takes the answers from a TOML file instead, for a self-test or a CI run (continu
 `at_once` there is a number of people at the same time, `"250 people"` for a daily head count
 or `"12 requests"`; `context` a level (`"L"`) or a number of tokens. The older key `users` still
 works with its earlier meaning (a number is a daily head count); a file may hold one of the two.
+With --answers, invalid required input keeps its existing error handling. An invalid import path is reported as a failed import and the run continues.
 
 An answer file written for 0.1.0 needs `at_once` or `users` added (`users = 1` sizes for one
 person, as 0.1.0 did). `modelroom --config <file>` works on that configuration rather than the

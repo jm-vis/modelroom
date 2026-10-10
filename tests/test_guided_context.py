@@ -417,7 +417,7 @@ def _asked(config: Configuration, checked: Checked, snapshot=None) -> tuple[str 
     seen: dict = {}
 
     class _Asker:
-        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None):
+        def select_or_text(self, key, question, choices, text_value, text_question, instruction=None, *, required=False):
             seen["instruction"], seen["choices"] = instruction, list(choices)
             return "L"
 
