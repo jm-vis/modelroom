@@ -291,15 +291,15 @@ def test_the_start_screen_names_the_served_model_and_the_card_its_speed(tmp_path
     assert labels[labels.index("speed") : labels.index("result") + 1] == ["speed", "server", "result"]
 
 
-def test_sixty_five_requests_measure_sixty_four_and_are_not_comparable(tmp_path: Path):
-    code, lines = _run(tmp_path, {**ANSWERS, "users": "65 requests"}, servers=vllm_servers(requests=65))
+def test_257_requests_measure_256_and_are_not_comparable(tmp_path: Path):
+    code, lines = _run(tmp_path, {**ANSWERS, "users": "257 requests"}, servers=vllm_servers(requests=257))
 
     step = _step(lines, 4)
     assert code == 0
-    assert "64 of 65 requests measured" in step
-    assert "vLLM: not comparable (64 requests measured, the ranking assumes 65)" in step
+    assert "256 of 257 requests measured" in step
+    assert "vLLM: not comparable (256 requests measured, the ranking assumes 257)" in step
     assert not any(line.startswith(("measured vLLM", "per request")) for line in step)
-    assert " server    vLLM                    not comparable (64 requests measured, the ranking assumes 65)" in _card(lines)
+    assert " server    vLLM                    not comparable (256 requests measured, the ranking assumes 257)" in _card(lines)
 
 
 def test_an_invalid_measurement_says_its_reason_instead_of_the_speeds(tmp_path: Path):
@@ -679,7 +679,7 @@ def test_the_balance_never_says_measured_when_nothing_counts(tmp_path: Path):
     "answers, servers",
     [
         (ANSWERS, lambda: vllm_servers(finish="stop")),  # invalid: the balance reads the card's problem
-        ({**ANSWERS, "users": "65 requests"}, lambda: vllm_servers(requests=65)),  # capped: not comparable
+        ({**ANSWERS, "users": "257 requests"}, lambda: vllm_servers(requests=257)),  # capped: not comparable
     ],
     ids=["invalid", "not comparable"],
 )

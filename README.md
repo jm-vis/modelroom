@@ -692,22 +692,32 @@ version 1 list of its models.
 **What is measured.**
 
 **Measurement.** With exactly one GGUF model loaded, step 4 offers the server as a row of its own,
-`LM Studio server <id>, context <n>`. A yes sends the model one chat of 128 tokens after the other,
-a warm-up and three runs, with the prompt of the protocol, and times each on the wall. modelroom reads the model list
-before and after every request, including the warm-up, and the measurement ends without a number
-when the loaded model or its context changed, a request fails, does not answer with status 200, does not end with
-`length` after 128 tokens, or takes more than 600 s; the line says which. A load the server does on
-its own inside a request can stay unseen and then sits in the measured time.
+`LM Studio server <id>, context <n>`. Where the loaded instance states no `parallel` (the "Max
+Concurrent Predictions" of LM Studio) or less than 2, or this run names one request, a yes sends the model one
+chat of 128 tokens after the other, a warm-up and three runs, with the prompt of the protocol, and times each on
+the wall. modelroom reads the model list before and after every request, including the warm-up, and the
+measurement ends without a number when the loaded model or its context changed, a request fails, does not answer
+with status 200, does not end with `length` after 128 tokens, or takes more than 600 s; the line says which. A load
+the server does on its own inside a request can stay unseen and then sits in the measured time.
 
-The number is tokens per second for one request on the wall: thinking tokens count, a busy server
-reads slower (LM Studio states no load), and it is never mixed with an Ollama number. Step 4 shows
-it, and the card carries it with `package unknown; not ranked, nothing written`.
+Where the instance states a `parallel` of 2 or more and this run names more than one request, the three runs are
+batches of n requests sent at once, n being the smallest of the run's requests, the `parallel` of the instance and
+256; modelroom never changes `parallel` in LM Studio. Each request has its own number in its prompt, so no two are
+equal, which does not rule out that the server's cache helps. The list is read before the warm-up and after the
+warm-up and every batch, and the measurement ends without a number when a request of a batch fails (the first
+failing request by its number gives the line) or the loaded model changed. A load the server does inside a batch can
+stay unseen in its time, and the short test does not show that every request that runs at the same time had the
+full reported context.
+
+The number is tokens per second on the wall: for one request, or for n at once the total of a batch from its release
+to its last answer, with the speed of one request beside it. Thinking tokens count, a busy server reads slower (LM
+Studio states no load), and it is never mixed with an Ollama number. Step 4 shows it, and the card carries it with
+`package unknown; not ranked, nothing written`.
 
 With no model loaded, with several, or with a context other than the one this run asks for, step 4
 says so and sends no chat.
 
-**What is not there yet.** There is no measurement of several requests at once, because LM Studio
-has no metrics page to count them.
+**What is not there yet.** There is no measurement of several requests at once for Ollama.
 
 **What is never done.**
 
@@ -1083,8 +1093,7 @@ procedure is in `AGENTS.md`, "Versioning and releases".
 In the order we plan to build it, none of it dated:
 
 - **Throughput for many people.** Step 3 sizes the memory for the parallel requests a head count
-  stands for; how fast those requests are served is measured only for one vLLM server you started
-  (see "vLLM"). Beyond roughly eight at once it is a job for a serving stack such as vLLM; the
+  stands for; a measurement of several requests at once is still missing for Ollama. Beyond roughly eight at once it is a job for a serving stack such as vLLM; the
   ranking itself stays the rule of thumb of "Step 3, Context".
 - **Unified memory, measured.** The rule is in; a measured profile of such a computer is what is
   missing -- an export from one is welcome.

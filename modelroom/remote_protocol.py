@@ -318,7 +318,7 @@ class VllmMeasurementWire(_Strict):
     """What one vLLM load test at the server found (AP9-SV2-R, R2): numbers and one code -- never a name,
     never a sentence. The laptop builds the sentence of `problem` itself (`loadtest_vllm.PROBLEM_WORDS`)."""
 
-    requests: StrictInt = Field(ge=1, le=64)
+    requests: StrictInt = Field(ge=1, le=256)  # `loadtest_vllm.MAX_REQUESTS`; a test keeps the two equal
     ranking_requests: StrictInt = Field(ge=1, le=1024)
     context: StrictInt = Field(ge=1)
     total_tps: _SPEED | None = None

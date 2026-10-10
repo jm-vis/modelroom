@@ -75,3 +75,23 @@ A100 recording, with 1.31 from the L4 recording as the second measured value (P2
 - Deferred to SV2 or later: tensor parallel, the package class, a persisted measurement, document
   schema 4, the load hint of `fit.py`, a start command, `/version` and `/health`, port or
   utilization in the configuration, an API key, LM Studio.
+
+## Addendum 2026-10-10 (AP9-PM-1)
+
+Decision 4 above stands as history. Three things changed in the load test, and nothing else in this ADR:
+
+- **The limit is 256, not 64.** `loadtest_vllm.MAX_REQUESTS` is 256; the same constant limits the batch of an LM Studio
+  measurement. The wire form of a server answer states the same limit (`le=256`) without importing the load test, and a
+  test keeps the two equal. An older modelroom at the server, which measures at most 64, is named as such by the
+  laptop (`update the older one`); no number is taken from such an answer.
+- **LM Studio measures several requests at once** where the loaded instance states a `parallel` of 2 or more and the
+  scenario names more than one request: n is the smallest of the scenario's requests, `parallel` and 256. modelroom
+  never changes `parallel` in LM Studio. With n = 1 the course stays the serial one, byte for byte. The result stays
+  in memory, as for vLLM; nothing is persisted and the measurement schema does not change.
+- **The time of a batch is corrected.** It now runs from the release (read in the barrier's action) to the latest
+  answer, for vLLM and LM Studio alike (`modelroom/loadtest_batch.py`). Before, the start was read in the main thread
+  after the barrier, so a late start could make a batch look shorter and its total throughput too high. A number
+  measured before this change may read too high; none was persisted.
+
+The measuring condition stays as decided: a measurement is made under the cache setting the server has, and prompts
+that differ per request do not exclude cache effects.

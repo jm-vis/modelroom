@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- vLLM measures up to 256 requests at once (was 64), and a batch's time now runs from its release to the last answer. LM Studio measures several requests at once when the loaded instance allows it.
 - Step 3 now asks how many people work with the model at the same time: 1, 5, 10, 50, 100 or a number of your own; `N people` still takes a daily head count. Answer files accept `at_once`; `users` keeps its previous meaning.
 - In the terminal, required input asks again after an empty or invalid answer. Answer-file behavior is unchanged. Step 2 names the context and request count used for fit.
 

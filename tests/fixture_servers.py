@@ -291,11 +291,12 @@ def vllm_chat_answer(finish: str | None = None):
 
 def vllm_servers(requests: int = 20, models: str = "vllm_v1_models_l4.json", finish: str | None = None) -> dict:
     """A machine with a vLLM server that answers every call of the start screen and one load test."""
+    from modelroom.loadtest_vllm import MAX_REQUESTS
     from modelroom.vllm_server import CHAT_PATH, METRICS_PATH, MODELS_PATH, FixtureVllmServer
 
     answers = {
         ("GET", MODELS_PATH): json_response(models),
-        ("GET", METRICS_PATH): vllm_metrics_pages(min(requests, 64)),
+        ("GET", METRICS_PATH): vllm_metrics_pages(min(requests, MAX_REQUESTS)),
         ("POST", CHAT_PATH): vllm_chat_answer(finish),
     }
     return {"vllm": FixtureVllmServer(answers)}
