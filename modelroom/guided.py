@@ -21,7 +21,7 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Sequence, TypeVar
 
 from .binding import KnownProfile, PointerFileError, default_pointer_path, read_pointer, resolve_profile_target, write_pointer
 from .catalog import Catalog, load_catalog
@@ -31,7 +31,7 @@ from .config import (
 )
 from .contracts import SchemaVersionError
 from .daemon import Daemon, LocalDaemon
-from .dialog import Asker, Choice
+from .dialog import Asker, Choice, FileAsker
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
 from .guided_context import AT_ONCE_KEY, AT_ONCE_QUESTION, USERS_KEY, USERS_QUESTION
@@ -62,7 +62,7 @@ from .guided_remote_measure import QUESTIONS as REMOTE_MEASURE_QUESTIONS
 from .guided_remote_measure import combine_measured
 from .local_servers import QUESTIONS as SERVER_QUESTIONS, ServerRun, card_facts, default_transports, load_tests
 from .guided_models import (
-    ModelChoice, ask_models, chosen_hits, hint_line, list_context, model_choices, picked_names, unusable_counts,
+    ModelChoice, ask_models, chosen_hits, fit_line, hint_line, list_context, model_choices, picked_names, unusable_counts,
 )
 from .guided_search import DID_YOU_MEAN_KEY, DID_YOU_MEAN_QUESTION, FILTER_QUESTION, SEARCH_QUESTION, search_step
 from .http import RequestBudget, Transport, UrllibTransport
@@ -100,6 +100,9 @@ MODE_NEW_IDENTITY = "new_identity"
 MODE_SAME_MACHINE = "same_machine"
 _FRESH_ID_ATTEMPTS = 8
 _UNKNOWN = "unknown"
+# What the terminal says under a required field that was left empty (`ask_checked`).
+REQUIRED_AGAIN = "an answer is needed here"
+T = TypeVar("T")
 
 QUESTIONS: dict[str, str] = {
     **FOLDER_QUESTIONS,  # `results`, `results_path` and `write_home` (`modelroom/guided_folder.py`)
@@ -130,7 +133,7 @@ QUESTIONS: dict[str, str] = {
 
 
 class GuidedError(Exception):
-    """The guided run cannot go on, and the message says why (the caller ends with exit `2`)."""
+    """An input or step failed; the caller decides whether to ask again or end the run."""
 
 
 @dataclass
@@ -173,6 +176,28 @@ class GuidedRun:
         """Say it once and remember it: the run continues, its exit code does not stay `0`."""
         self.out(message)
         self.problems.append(message)
+
+
+def ask_checked(run: "GuidedRun", ask: Callable[[bool], str], check: Callable[[str], T]) -> T:
+    """Ask until `check` takes the answer, in the terminal; from an answer file ask once.
+
+    `ask(again)` puts the question (`again` is `False` the first time and `True` after a refused
+    answer, so a list can move its pointer off the remembered row). `check` raises `GuidedError` for
+    an answer it cannot take. An answer file cannot be asked again: its error is raised unchanged
+    (exit `2`). In the terminal the note names what was wrong -- or says an answer is needed when
+    nothing was typed -- and the question comes back. Ctrl-C, end of input and every error of
+    `ask` itself pass through untouched; there is no limit on the attempts.
+    """
+    again = False
+    while True:
+        answer = ask(again)
+        try:
+            return check(answer)
+        except GuidedError as exc:
+            if isinstance(run.asker, FileAsker):
+                raise
+            run.screen.note(REQUIRED_AGAIN if answer.strip() == "" else str(exc))
+            again = True
 
 
 # --- step 1: which folder, which configuration in it, which machines -----------------------------
@@ -463,8 +488,23 @@ def _import_a_profile(run: GuidedRun, config_file: Path, config: Configuration) 
     Returns the configuration and the profile ids this import brought or named: the result of the
     run covers their machines (AP9-UX B).
     """
-    answered = Path(run.asker.text("import_file", QUESTIONS["import_file"]).strip()).expanduser()
-    path = answered if answered.is_absolute() else run.here / answered
+    def import_path(raw: str) -> Path:
+        # The terminal asks again for an empty path and for a path with no file; an answer file goes
+        # on as before and lets the import report what is wrong.
+        in_terminal = not isinstance(run.asker, FileAsker)
+        if in_terminal and raw == "":
+            raise GuidedError(REQUIRED_AGAIN)
+        answered = Path(raw).expanduser()
+        found = answered if answered.is_absolute() else run.here / answered
+        if in_terminal and not found.is_file():
+            raise GuidedError(f"no file at {found}")
+        return found
+
+    path = ask_checked(
+        run,
+        lambda _again: run.asker.text("import_file", QUESTIONS["import_file"], required=True).strip(),
+        import_path,
+    )
     run.screen.answer(QUESTIONS["import_file"], str(path), path=True)
     before = set(scan_profiles(config.paths.hardware_dir).profiles)
     try:
@@ -573,7 +613,19 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tu
         # nothing an answer could add (test round of 2026-09-24, `mistral` with the filter on).
         run.screen.note("no repository of a publisher or a listed packager was resolved; nothing added")
         return _load(config_file), 0
-    picked = ask_models(run.asker, QUESTIONS["select"], step.models, hint_line(step.checked, step.context))
+    picked = ask_models(
+        run.asker,
+        QUESTIONS["select"],
+        step.models,
+        hint_line(step.checked),
+        fit_line(
+            step.checked,
+            step.context,
+            step.requests,
+            context_kept=step.context_kept,
+            requests_kept=step.requests_kept,
+        ),
+    )
     run.screen.answer(QUESTIONS["select"], names_words(picked_names(step.models, picked)))
     chosen = chosen_hits(step.models, picked, config.packagers or run.catalog.packagers or DEFAULT_PACKAGERS)
     if not chosen:

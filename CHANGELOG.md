@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 ### Changed
 
 - Step 3 now asks how many people work with the model at the same time: 1, 5, 10, 50, 100 or a number of your own; `N people` still takes a daily head count. Answer files accept `at_once`; `users` keeps its previous meaning.
+- In the terminal, required input asks again after an empty or invalid answer. Answer-file behavior is unchanged. Step 2 names the context and request count used for fit.
 
 ## [1.0.0] - 2026-10-10
 

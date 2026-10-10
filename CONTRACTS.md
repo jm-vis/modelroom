@@ -6351,7 +6351,7 @@ matter, so the move is invisible to it.
 | 1 | `write_home` | Write the results into this folder anyway? | true/false, default false (only when the chosen folder is the home folder or the top of a drive, AP9-UX2 U7; an answer file whose `results_path` names one again ends with exit 2) |
 | 1 | `write_config` | Write a configuration into this folder? | true/false (only when the folder already holds results but no `modelroom.toml`) |
 | 1 | `machines` | Which machines should the result cover? | a list out of `this-machine`, `import`, `share`, `enter` and `profile:<profile_id>` for a profile of the folder a machine names (AP9-UX C1; `share` FR-S) |
-| 1 | `import_file` | Path to the profile file to import | text (only after `import`) |
+| 1 | `import_file` | Path to the profile file to import | text (only after `import`); in the terminal an empty path or a path with no file asks again, an answer file goes on as before |
 | 1 | `share_setup` | What should modelroom do with the shared folder? | `use`, `choose`, `none` (only after `share`, FR-S) |
 | 1 | `share_folder` | Folder for the profile exports: | text, the form "Shared folder" checks (only after `choose`) |
 | 1 | `share_files` | Which profiles should be imported? | a list of `profile_id`s the shared folder holds (only once that list is shown) |
@@ -6516,9 +6516,7 @@ automatic measurement covers NVIDIA only). The questions, in this order: `entere
 `entered_class`, `entered_ram`, `entered_gpu`, only for `cards` `entered_cards`, and for `card`
 or `cards` `entered_vram` (keys in the table above). The sizes are GiB above 0, decimals allowed;
 an empty name, a name over 128 characters, a size that is no number, `0` or below, or a card count
-that is no whole number of 2 to 1024, or cards whose sizes add up to no number, ends the run with
-exit `2` and names the key, before anything
-is written. An answer file written before 2026-09-26 has no `entered_class` and ends with exit `2`
+that is no whole number of 2 to 1024, or cards whose sizes add up to no number, is asked again in the terminal, the note naming the key; from an answer file it ends the run with exit `2` and names the key, before anything is written. An answer file written before 2026-09-26 has no `entered_class` and ends with exit `2`
 naming it. The answers make one of the four shapes of a machine entered by hand ("Hardware
 profile v2", the table under "A machine entered by hand"): `card` → `gpu_state` `entered` with
 its graphics memory, `cards` → `multi_gpu` with n cards of the size per card and their sum,
@@ -6674,11 +6672,15 @@ list has to say about itself is its **instruction line** (`guided_models.hint_li
 list and behind the line of the keys: `latest: the publisher's current release of its family ·
 legacy: a successor is named · *: computed from the version numbers of the family, not stated by
 the publisher · Fit is memory only: the package's need against a pool · ample: up to 60 % of the
-pool · fits: up to 85 % · tight: up to 98 % · no fit: more · (RAM): the pool is the system memory ·
-fit from the size at 32k context, the best is fits, exact after the fetch` (a line longer than the
-window wraps, it is never cut; the fit words since 2026-09-27, `screen.FIT_SCALE_HINT`)
--- with `fit unknown until this machine is measured` in place of every fit piece when this folder
-holds no measured machine, and always the context the fit was really computed for. What nothing
+pool · fits: up to 85 % · tight: up to 98 % · no fit: more · (RAM): the pool is the system memory`
+(a line longer than the window wraps, it is never cut; the fit words since 2026-09-27,
+`screen.FIT_SCALE_HINT`). Where the fit comes from stands **on top of the list** instead
+(`guided_models.fit_line`, passed as the `notice` of the list): a line of its own between the line of
+the keys and the column head, indented like the head, so it is in sight whatever the length of the
+list -- `fit from size at 32k context and 1 at once (up to fits); exact after the fetch`, always with
+the context and the requests the fit was really computed for. -- With no measured machine in this
+folder the legend holds the release words alone, and the line on top is `fit unknown until this
+machine is measured`. What nothing
 marked would do is no longer said there: `Enter` takes the row under the pointer now.
 
 **The fit of the list** is `fit.fit_from_parameters` ("Fit from size", basis `size`) against the
@@ -6740,8 +6742,7 @@ the list, and every kept `from_users` answer, gets a line of its own, `kept in t
 - **`N people`** (also `1 person`) is a daily head count: `requests = requests_from_users(users)`,
   origin `from_users`.
 - **`kept`** keeps the stored `users`, `requests` and `requests_origin` unchanged.
-- **Anything else**, `0`, `-1`, `abc`, more than 1024 at once, a head count above 10240, ends the
-  run with exit `2`: `'<answer>' is not a valid answer for step 3: answer a whole number of people
+- **Anything else**, `0`, `-1`, `abc`, more than 1024 at once, a head count above 10240, is asked again in the terminal, the note naming it; from an answer file it ends the run with exit `2`: `'<answer>' is not a valid answer for step 3: answer a whole number of people
   at the same time (1 to 1024) or `N people` for a daily head count (1 to 10240)`.
 - **The answer line**: `? How many people work with it at the same time?  5 at once`, or
   `25 people (3 at once)` for a head count.
@@ -6802,7 +6803,7 @@ in <toml>` all went (test round, 2026-09-24). A machine a fit cannot be computed
 - **The answer** is a level name or a number of tokens; the level is translated into its tokens
   before anything is written. An answer out of a file is stripped of surrounding blanks **before**
   it is held against the grayed-out entries, so `" XXL "` is refused exactly as `"XXL"` is.
-  Anything else ends the run with exit `2`, naming what was answered.
+  Anything else is asked again in the terminal, the note naming what was answered; from an answer file it ends the run with exit `2`.
   `context_origin` is **`entered`** for everything this dialog writes, 8192 included: `default` is
   what the three automation commands assume when nobody chose a context
   (`measurements.DEFAULT_CONTEXT_REQUESTED`, `measurements.default_scenario`), and choosing `S` is
