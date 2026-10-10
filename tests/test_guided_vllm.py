@@ -548,7 +548,7 @@ class _Counting(FileAsker):
         super().__init__(answers)
         self.lists: dict[str, list] = {}
 
-    def checkbox(self, key, question, choices, instruction=None, header=None):
+    def checkbox(self, key, question, choices, instruction=None, header=None, notice=None):
         self.lists[key] = list(choices)
         return super().checkbox(key, question, choices, instruction)
 

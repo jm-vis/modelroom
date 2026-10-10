@@ -278,7 +278,7 @@ def test_a_long_instruction_line_wraps_instead_of_being_cut():
         def get_size(self) -> Size:
             return Size(rows=40, columns=100)
 
-    hint = f"{RELEASE_HINT} · fit from size at 32k context and 1 at once (up to fits); exact after the fetch"
+    hint = f"{RELEASE_HINT} · fit from the size at 32k context, exact after the fetch"
     sink = io.StringIO()
     with create_pipe_input() as pipe:
         pipe.send_text(ENTER)

@@ -83,12 +83,14 @@ class _WatchingAsker(FileAsker):
         self.choices: dict[str, list[Choice]] = {}
         self.instructions: dict[str, str | None] = {}
         self.headers: dict[str, str | None] = {}
+        self.notices: dict[str, str | None] = {}
         self._lines = lines
 
-    def checkbox(self, key: str, question: str, choices, instruction=None, header=None) -> list[str]:
+    def checkbox(self, key: str, question: str, choices, instruction=None, header=None, notice=None) -> list[str]:
         self.choices[key] = list(choices)
         self.instructions[key] = instruction
         self.headers[key] = header
+        self.notices[key] = notice
         return super().checkbox(key, question, choices, instruction)
 
     def select(self, key: str, question: str, choices, instruction=None) -> str:
@@ -645,7 +647,7 @@ def _recorded_machines(tmp_path: Path, now, answers: dict) -> list:
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices, instruction=None, header=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None, notice=None):
             asked[key] = list(choices)
             return super().checkbox(key, question, choices, instruction)
 
@@ -765,7 +767,7 @@ def test_the_longest_name_in_row_one_stays_within_the_width_of_the_screen():
 class _EnterAsker(FileAsker):
     """`Enter` alone in the machine list: the answer is the first row that can be picked."""
 
-    def checkbox(self, key, question, choices, instruction=None, header=None):
+    def checkbox(self, key, question, choices, instruction=None, header=None, notice=None):
         if key == "machines":
             self.asked.append(key)
             return [next(choice.value for choice in choices if choice.disabled is None)]
@@ -828,7 +830,7 @@ def test_a_schema_one_profile_and_a_broken_one_are_listed_with_their_reason(tmp_
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices, instruction=None, header=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None, notice=None):
             asked[key] = list(choices)
             return super().checkbox(key, question, choices, instruction)
 
@@ -1003,7 +1005,7 @@ def _adding_a_machine(tmp_path: Path, when_key: str, name: str = "computer-0b0b0
                 add()
             return super().text(key, question, default)
 
-        def checkbox(self, key, question, choices, instruction=None, header=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None, notice=None):
             if key == when_key:
                 add()
             return super().checkbox(key, question, choices, instruction)
@@ -1561,11 +1563,12 @@ def test_the_hint_of_the_list_is_its_instruction_line_and_names_the_context_of_t
 
     instruction = asker.instructions["select"]
     assert instruction.startswith("latest: the publisher's current release of its family")
-    assert "at 32k context" in instruction
+    assert instruction.endswith("(RAM): the pool is the system memory")
+    # The fit's own sentence stands on top of the list, not under it; a first run keeps nothing yet,
+    # so it names its values and no origin.
+    assert asker.notices["select"] == "fit from size at 32k context and 1 at once (up to fits); exact after the fetch"
     assert not any(line.strip().startswith("fit at ") for line in lines)
     assert not any("can be picked;" in line for line in lines)
-    # A first run keeps nothing yet: the fit line names its values and no origin.
-    assert instruction.endswith("\nfit from size at 32k context and 1 at once (up to fits); exact after the fetch")
 
 
 def test_step_2_says_when_step_3_kept_the_values_its_fit_is_computed_with(tmp_path: Path):
@@ -1586,11 +1589,112 @@ def test_step_2_says_when_step_3_kept_the_values_its_fit_is_computed_with(tmp_pa
     )
 
     assert code == 0
-    instruction = asker.instructions["select"]
-    assert instruction.endswith(
-        "\nfit from size at 8k context and 1 at once (up to fits); exact after the fetch"
+    assert asker.notices["select"] == (
+        "fit from size at 8k context and 1 at once (up to fits); exact after the fetch"
         " · context and requests kept in this folder; step 3 asks again"
     )
+    assert "fit from size" not in asker.instructions["select"]
+
+
+class _Scripted:
+    """A terminal-like asker that is no `FileAsker`: answers from a script, key by key, and calls `seen(key)`
+    just before each answer, so a test can look at the folder while a question is open (AP9-RE)."""
+
+    def __init__(self, script: dict[str, list[str]], seen) -> None:
+        self.script = {key: list(answers) for key, answers in script.items()}
+        self.seen = seen
+
+    def holds(self, key: str) -> bool:
+        return False
+
+    def _next(self, key: str) -> str:
+        self.seen(key)
+        return self.script[key].pop(0)
+
+    def text(self, key, question, default="", *, required=False):
+        return self._next(key)
+
+    def select(self, key, question, choices, instruction=None):
+        return self._next(key)
+
+    def select_or_text(self, key, question, choices, text_value, text_question, instruction=None, *, required=False):
+        return self._next(key)
+
+
+def test_step_3_changes_the_file_only_with_an_answer_that_was_taken(tmp_path: Path):
+    """AP9-RE: the real step over a real configuration. The kept values differ from the answers on purpose."""
+    import tomllib
+
+    from modelroom.guided_context import context_step
+
+    assert _run(tmp_path)[0] == 0
+    config_file = _config_file(tmp_path)
+    before = config_file.read_text(encoding="utf-8")
+    kept = load_config(config_file).guided
+    assert (kept.requests, kept.context) == (1, 8192)
+    seen: list[tuple[str, str]] = []
+    run = _guided_run_for(tmp_path, [])
+    run.asker = _Scripted(
+        {"at_once": ["abc", "12"], "context": ["xyz", "16384"]},
+        lambda key: seen.append((key, config_file.read_text(encoding="utf-8"))),
+    )
+
+    scenario, config = context_step(run, config_file, load_config(config_file))
+
+    assert [key for key, _text in seen] == ["at_once", "at_once", "context", "context"]
+    assert seen[0][1] == before and seen[1][1] == before  # nothing written while the head count is refused
+    after_requests = tomllib.loads(seen[2][1])["guided"]  # written when the head count was taken, not the context
+    assert after_requests["requests"] == 12 and after_requests["requests_origin"] == "entered"
+    assert after_requests.get("context") == 8192  # still the kept one
+    assert seen[3][1] == seen[2][1]  # nothing written while the context is refused
+    final = load_config(config_file).guided
+    assert (final.requests, final.requests_origin, final.context, final.users) == (12, "entered", 16384, kept.users)
+    assert (config.guided.requests, config.guided.context) == (12, 16384)
+    assert scenario.context_requested == 16384 and scenario.requests == 12
+
+
+def test_a_machine_entered_by_hand_is_written_when_its_last_answer_is_taken_and_not_before(tmp_path: Path):
+    from modelroom.guided_entered import enter_step
+
+    assert _run(tmp_path)[0] == 0
+    config_file = _config_file(tmp_path)
+    config = load_config(config_file)
+    hardware = config.paths.hardware_dir
+
+    def state() -> tuple[str, list[str]]:
+        files = sorted(path.name for path in hardware.glob("*.json")) if hardware.is_dir() else []
+        return config_file.read_text(encoding="utf-8"), files
+
+    before = state()
+    seen: list[tuple[str, tuple[str, list[str]]]] = []
+    run = _guided_run_for(tmp_path, [])
+    run.asker = _Scripted(
+        {
+            "entered_name": ["x" * 129, "Office"],
+            "entered_class": ["laptop"],
+            "entered_ram": ["lots", "32"],
+            "entered_gpu": ["card"],
+            "entered_vram": ["0", "24"],
+        },
+        lambda key: seen.append((key, state())),
+    )
+
+    updated = enter_step(run, config_file, config)
+
+    assert [key for key, _state in seen] == [
+        "entered_name", "entered_name", "entered_class", "entered_ram", "entered_ram", "entered_gpu", "entered_vram", "entered_vram",
+    ]
+    assert all(snapshot == before for _key, snapshot in seen)  # not a file, not a line, at any of the eight questions
+    text, files = state()
+    assert len(files) == len(before[1]) + 1 and text != before[0]
+    assert len(updated.machines) == len(config.machines) + 1
+    import json
+
+    entered = next(
+        profile
+        for profile in (json.loads((hardware / name).read_text(encoding="utf-8")) for name in files if name not in before[1])
+    )
+    assert (entered["origin"], entered["ram_physical_gib"], entered["vram_gib"]) == ("entered", 32.0, 24.0)
 
 
 def test_a_model_is_fetched_from_the_publisher_and_from_one_listed_packager(tmp_path: Path):
@@ -1612,7 +1716,7 @@ def test_a_search_that_resolves_no_model_asks_no_list(tmp_path: Path):
     from modelroom.search_pages import account_downloads_url, account_search_url, search_accounts
 
     class _Refusing(FileAsker):
-        def checkbox(self, key: str, question: str, choices, instruction=None, header=None) -> list[str]:
+        def checkbox(self, key: str, question: str, choices, instruction=None, header=None, notice=None) -> list[str]:
             assert list(choices), f"{key}: a list with nothing in it was asked"
             return super().checkbox(key, question, choices, instruction)
 
@@ -2460,7 +2564,7 @@ def test_the_selection_list_shows_every_candidate_unchecked_with_its_four_facts(
     asked: dict[str, list] = {}
 
     class _Recording(FileAsker):
-        def checkbox(self, key, question, choices, instruction=None, header=None):
+        def checkbox(self, key, question, choices, instruction=None, header=None, notice=None):
             asked[key] = list(choices)
             return super().checkbox(key, question, choices, instruction)
 

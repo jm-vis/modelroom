@@ -443,13 +443,84 @@ def test_an_empty_number_field_asks_again_with_the_reminder():
     assert run.screen.notes == [REQUIRED_AGAIN]
 
 
-def test_esc_in_the_list_opened_again_leaves_as_it_does_in_the_first_one():
-    # A lone Esc after other keys of the same pipe is held back by the key parser until more input arrives
-    # (the pipe never ends), so the list opened again is left with Esc twice; the first list with one.
+class _Live(TerminalAsker):
+    """The real asker with a hand in every frame of a list: `on_list(number, control)` is called once per
+    render of the `number`-th list of this asker, with the library's own control (pointer, marks, rows).
+    Keys can be sent from there, so a key arrives only after the list it is meant for is really open."""
+
+    def __init__(self, pipe, on_list) -> None:
+        super().__init__(input=pipe, output=DummyOutput())
+        self.on_list = on_list
+        self.lists = 0
+
+    def _ask(self, question):
+        from modelroom.dialog import _list_window
+
+        try:
+            control = _list_window(question).content
+        except Exception:  # a text field has no list window
+            return super()._ask(question)
+        self.lists += 1
+        number = self.lists
+        question.application.after_render.add_handler(lambda _app: self.on_list(number, control))
+        return super()._ask(question)
+
+
+def _live_run(keys: str, on_list, *, limit: float = 20.0):
+    """The step-3 question over a pipe with `keys`, `on_list` driving the rest; returns the answer or raises.
+    A watchdog closes the pipe after `limit` seconds and the test fails then: a hang is no pass."""
+    import threading
+
+    kept = GuidedConfig(users=None, requests=7, requests_origin="entered")
+    timed_out: list[bool] = []
+    with create_pipe_input() as pipe:
+        pipe.send_text(keys)
+        asker = _Live(pipe, lambda number, control: on_list(pipe, number, control))
+        run = _run({})
+        run.asker = asker
+
+        def expire() -> None:
+            timed_out.append(True)
+            pipe.close()
+
+        watchdog = threading.Timer(limit, expire)
+        watchdog.start()
+        try:
+            return guided_context._answered_requests(run, SimpleNamespace(guided=kept)), run
+        finally:
+            watchdog.cancel()
+            assert not timed_out, "the dialog did not end within the time allowed"
+
+
+def test_the_list_opened_again_really_has_the_pointer_on_the_number_and_nothing_marked():
+    states: dict[int, tuple] = {}
+
+    def watch(pipe, number, control):
+        states.setdefault(number, (control.get_pointed_at().value, list(control.selected_options)))
+
+    answer, run = _live_run(DOWN + ENTER + "abc" + ENTER + ENTER + "12" + ENTER, watch)
+
+    assert answer == RequestsAnswer(None, 12, "entered")
+    assert states[1] == (guided_context.KEPT_VALUE, [])  # the first attempt starts on the kept line, nothing marked
+    assert states[2] == (NUMBER_VALUE, [])  # the second one on the number, nothing marked in the control itself
+
+
+@pytest.mark.parametrize("which", [1, 2])
+def test_a_single_esc_leaves_the_list_in_the_first_attempt_and_in_the_one_asked_again(which):
+    """Esc is sent by the same means in both: from the first render of that very list, so it is proven open."""
+    opened: list[int] = []
+
+    def esc(pipe, number, control):
+        if number == which and number not in opened:
+            opened.append(number)
+            pipe.send_text(ESC)
+
+    keys = "" if which == 1 else DOWN + ENTER + "abc" + ENTER
     with pytest.raises(Canceled):
-        _terminal_run(DOWN + ENTER + "abc" + ENTER + ESC + ESC)
-    with pytest.raises(Canceled):
-        _terminal_run(ESC)
+        _live_run(keys, esc)
+    assert opened == [which]
+    if which == 2:
+        assert len(opened) == 1  # the first list was left by Enter, not by Esc
 
 
 def test_ctrl_c_and_end_of_input_in_the_question_asked_again_go_through():
@@ -588,3 +659,76 @@ def test_an_answer_file_goes_on_with_whatever_path_it_names(monkeypatch, tmp_pat
     assert run.screen.notes == []
     assert run.problems == ["nothing imported: bad content"]
     assert result == (config, set())
+
+
+# --- the fit line on top of a long model list ----------------------------------------------------------
+
+
+def _list_frames(columns: int, rows: int, count: int, fit: str, legend: str, header: str):
+    """Every frame of a `count`-model checkbox with `notice=fit` in a window of `columns` x `rows`: the pointer is
+    sent to the last model once the list is open, and the list is answered once that row is on screen."""
+    import threading
+
+    from prompt_toolkit.data_structures import Size
+
+    class _Out(DummyOutput):
+        def get_size(self):
+            return Size(rows=rows, columns=columns)
+
+    class _Sized(TerminalAsker):
+        def _ask(self, question):
+            question.application.after_render.add_handler(lambda app: seen(app))
+            return super()._ask(question)
+
+    frames: list[list[str]] = []
+    timed_out: list[bool] = []
+    choices = [Choice(f"m{number}", f"model-{number:02d}  fits") for number in range(count)]
+    with create_pipe_input() as pipe:
+
+        def seen(app) -> None:
+            screen = app.renderer._last_screen
+            if screen is None:
+                return
+            buffer = {y: "".join(row[x].char for x in sorted(row)) for y, row in screen.data_buffer.items()}
+            frames.append([buffer[y].rstrip() for y in sorted(buffer)])
+            if len(frames) == 1:
+                pipe.send_text(DOWN * (count - 1))
+            elif any(f"model-{count - 1:02d}" in line for line in frames[-1]):
+                pipe.send_text(ENTER)
+
+        def expire() -> None:
+            timed_out.append(True)
+            pipe.close()
+
+        watchdog = threading.Timer(20.0, expire)
+        watchdog.start()
+        try:
+            _Sized(input=pipe, output=_Out()).checkbox("select", "Which?", choices, legend, header=header, notice=fit)
+        finally:
+            watchdog.cancel()
+        assert not timed_out
+    return frames
+
+
+@pytest.mark.parametrize("columns", [80, 100])
+def test_the_fit_line_is_in_sight_at_the_start_and_at_the_end_of_a_list_longer_than_the_window(columns):
+    from test_guided_models import _measured
+
+    from modelroom.guided_models import fit_line, hint_line, list_header
+
+    fit = fit_line(_measured(), 131072, 250, context_kept=True, requests_kept=True)
+    frames = _list_frames(columns, 30, 60, fit, hint_line(_measured()), list_header())
+
+    flat = "".join(fit.split())
+    start, end = frames[0], frames[-1]
+    assert "".join("".join(line.split()) for line in start).count(flat) == 1  # whole, once
+    assert "".join("".join(line.split()) for line in end).count(flat) == 1
+    assert any("model-59" in line for line in end) and not any("model-00" in line for line in end)  # it did scroll
+    assert all(len(line) <= columns for frame in (start, end) for line in frame)
+    # The fit line stands between the keys and the column head, which is the row above the list.
+    rows = [line for line in end if line.strip()]
+    keys_at = next(index for index, line in enumerate(rows) if line.startswith("? Which?"))
+    fit_at = next(index for index, line in enumerate(rows) if line.strip().startswith("fit from size"))
+    head_at = next(index for index, line in enumerate(rows) if "Model" in line and "Fit" in line)
+    assert keys_at < fit_at < head_at
+    assert rows[fit_at].startswith(" " * 5 + "fit from size")  # the indent of the column head

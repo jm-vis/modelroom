@@ -24,6 +24,7 @@ question of its step.
 from __future__ import annotations
 
 import sys
+import textwrap
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
@@ -101,6 +102,7 @@ class Asker(Protocol):
         choices: Sequence[Choice],
         instruction: str | None = None,
         header: str | None = None,
+        notice: str | None = None,
     ) -> list[str]: ...
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool: ...
@@ -161,6 +163,15 @@ class TerminalAsker:
         # The glyph set is a question about the console this process writes to, which is
         # `sys.stdout` -- prompt_toolkit's `Output` is not a text stream and has none of its own.
         self._glyphs = glyphs()
+
+    def _columns(self) -> int:
+        """The width of the window this asker draws in; 80 where it cannot be read."""
+        try:
+            from prompt_toolkit.output.defaults import create_output
+
+            return (self._streams.get("output") or create_output()).get_size().columns
+        except Exception:  # noqa: BLE001 -- a console that cannot say how wide it is
+            return 80
 
     def _ask(self, question):
         try:
@@ -263,12 +274,18 @@ class TerminalAsker:
         choices: Sequence[Choice],
         instruction: str | None = None,
         header: str | None = None,
+        notice: str | None = None,
     ) -> list[str]:
         """A list that marks. `Enter` takes the marked rows, and the row under the pointer where
         nothing is marked at all (`_bind_enter_takes_pointed`, decided 2026-09-25).
 
         `header` is a column head: it stands under the keys, outside the window the list scrolls in,
         indented by the pointer and the marker so its columns stand over the cells (AP9-UX D).
+
+        `notice` is a line of its own between the keys and the column head, indented like the head:
+        what the list has to say about itself that must not scroll out of sight (the fit's origin in
+        step 2, AP9-RE). It stands with the keys, in the window of the question, which does not
+        follow the pointer.
         """
         import questionary
 
@@ -276,7 +293,14 @@ class TerminalAsker:
             _bind_enter_takes_pointed(built)
             _bind_space_marks_row(built)
 
-        keys = self.checkbox_keys() if header is None else f"{self.checkbox_keys()}\n{' ' * HEAD_INDENT}{header}"
+        keys = self.checkbox_keys()
+        if notice is not None:
+            # Broken into lines of the window's width here: the library's message window gives a wrapped
+            # line its extra rows only for the last line of the message, and the head stands behind this one.
+            for line in textwrap.wrap(notice, max(20, self._columns() - HEAD_INDENT)):
+                keys = f"{keys}\n{' ' * HEAD_INDENT}{line}"
+        if header is not None:
+            keys = f"{keys}\n{' ' * HEAD_INDENT}{header}"
         return self._list_question(questionary.checkbox, question, choices, keys, instruction, bind=bind)
 
     def confirm(self, key: str, question: str, default: bool = True) -> bool:
@@ -552,8 +576,9 @@ class FileAsker:
         choices: Sequence[Choice],
         instruction: str | None = None,
         header: str | None = None,
+        notice: str | None = None,
     ) -> list[str]:
-        """A list of selectable values; `header` is a line for the eye and a file has none to read."""
+        """A list of selectable values; `header` and `notice` are lines for the eye and a file has none to read."""
         value = self._answer(key, question)
         allowed = selectable(choices)
         if not isinstance(value, list) or any(entry not in allowed for entry in value):

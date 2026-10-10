@@ -425,32 +425,42 @@ def list_choices(models: Sequence[ModelChoice]) -> list[Choice]:
     return [Choice(model.base_model, label, dim=model.legacy) for model, label in zip(models, labels)]
 
 
-def hint_line(checked: Checked, context: int, requests: int, *, context_kept: bool, requests_kept: bool) -> str:
-    """What this list has to say about itself: the release words, the star, the fit words and where
-    its fit is from.
+def hint_line(checked: Checked) -> str:
+    """What this list has to say about itself, under the list: the release words, the star, the fit
+    words and the pool.
 
     It is an instruction line of the question, not a line of the run (decided 2026-09-24): a
-    sentence that explains a list has nothing to say once the list is gone. The context it names is
-    the one the fit was really computed for, which is the one the next question starts on. What
-    nothing marked does is no longer said here -- `Enter` takes the row under the pointer now
-    (`dialog.TerminalAsker.checkbox`, decided 2026-09-25).
-
-    The fit words also name the requests at once the fit was computed for, and say when the context
-    or the requests come from what step 3 kept in this folder (`context_kept`, `requests_kept` are
-    where the values come from, never read off the numbers). The release words, the star, the fit
-    words and the pool stand on the first line, the fit's origin on a line of its own.
+    sentence that explains a list has nothing to say once the list is gone. What nothing marked does
+    is no longer said here -- `Enter` takes the row under the pointer now
+    (`dialog.TerminalAsker.checkbox`, decided 2026-09-25). A folder with no measured machine has no
+    fit to explain, so only the release words stand there. The fit's own sentence is `fit_line`.
     """
     measured = checked.profile is not None and checked.machine_config is not None
     if not measured:
-        return f"{RELEASE_HINT} · {FIT_UNKNOWN_HINT}"
+        return RELEASE_HINT
+    return " · ".join([RELEASE_HINT, *FIT_SCALE_HINT, FIT_RAM_HINT])
+
+
+def fit_line(checked: Checked, context: int, requests: int, *, context_kept: bool, requests_kept: bool) -> str:
+    """Where the fit of the list is from, for the top of the list (`ask_models`, `notice`).
+
+    It names the context and the requests at once the fit was computed for -- the context is the one
+    the next question starts on -- and says when either comes from what step 3 kept in this folder
+    (`context_kept`, `requests_kept` are where the values come from, never read off the numbers). It
+    stands above the rows, not under them, so it is in sight whatever the length of the list: the
+    window follows the pointer, and a line behind the last row is out of it.
+    """
+    measured = checked.profile is not None and checked.machine_config is not None
+    if not measured:
+        return FIT_UNKNOWN_HINT
     fit = FIT_FROM_SIZE_HINT.format(context=context_tokens_text(context), requests=requests)
     kept = FIT_KEPT_HINTS.get((context_kept, requests_kept))
-    fit_with_origin = fit if kept is None else f"{fit} · {kept}"
-    prefix = " · ".join([RELEASE_HINT, *FIT_SCALE_HINT, FIT_RAM_HINT])
-    return prefix + "\n" + fit_with_origin
+    return fit if kept is None else f"{fit} · {kept}"
 
 
-def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instruction: str) -> list[str]:
+def ask_models(
+    asker: Asker, question: str, models: Sequence[ModelChoice], instruction: str, notice: str | None = None
+) -> list[str]:
     """Ask the checkbox once, with what the asker can answer with.
 
     The list a person sees holds one line per model, and its values are base models. An answer
@@ -461,12 +471,13 @@ def ask_models(asker: Asker, question: str, models: Sequence[ModelChoice], instr
     a file's `select` is read once.
 
     The column head is handed over as the list's `header` (`list_header`), outside the rows; a file
-    reads no list and ignores it.
+    reads no list and ignores it. `notice` is the fit line (`fit_line`): a line of its own between the
+    keys and the column head, in sight whatever the length of the list.
     """
     choices = list_choices(models)
     if isinstance(asker, FileAsker):
         choices = [*choices, *_repo_choices(models)]
-    return asker.checkbox(SELECT_KEY, question, choices, instruction, header=list_header())
+    return asker.checkbox(SELECT_KEY, question, choices, instruction, header=list_header(), notice=notice)
 
 
 def _repo_choices(models: Sequence[ModelChoice]) -> list[Choice]:

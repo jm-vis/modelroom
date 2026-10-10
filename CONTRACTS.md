@@ -6673,11 +6673,14 @@ list and behind the line of the keys: `latest: the publisher's current release o
 legacy: a successor is named · *: computed from the version numbers of the family, not stated by
 the publisher · Fit is memory only: the package's need against a pool · ample: up to 60 % of the
 pool · fits: up to 85 % · tight: up to 98 % · no fit: more · (RAM): the pool is the system memory`
-and, on a line of its own, `fit from size at 32k context and 1 at once (up to fits); exact after the
-fetch` (a line longer than the
-window wraps, it is never cut; the fit words since 2026-09-27, `screen.FIT_SCALE_HINT`)
--- with `fit unknown until this machine is measured` in place of every fit piece when this folder
-holds no measured machine, and always the context the fit was really computed for. What nothing
+(a line longer than the window wraps, it is never cut; the fit words since 2026-09-27,
+`screen.FIT_SCALE_HINT`). Where the fit comes from stands **on top of the list** instead
+(`guided_models.fit_line`, passed as the `notice` of the list): a line of its own between the line of
+the keys and the column head, indented like the head, so it is in sight whatever the length of the
+list -- `fit from size at 32k context and 1 at once (up to fits); exact after the fetch`, always with
+the context and the requests the fit was really computed for. -- With no measured machine in this
+folder the legend holds the release words alone, and the line on top is `fit unknown until this
+machine is measured`. What nothing
 marked would do is no longer said there: `Enter` takes the row under the pointer now.
 
 **The fit of the list** is `fit.fit_from_parameters` ("Fit from size", basis `size`) against the

@@ -62,7 +62,7 @@ from .guided_remote_measure import QUESTIONS as REMOTE_MEASURE_QUESTIONS
 from .guided_remote_measure import combine_measured
 from .local_servers import QUESTIONS as SERVER_QUESTIONS, ServerRun, card_facts, default_transports, load_tests
 from .guided_models import (
-    ModelChoice, ask_models, chosen_hits, hint_line, list_context, model_choices, picked_names, unusable_counts,
+    ModelChoice, ask_models, chosen_hits, fit_line, hint_line, list_context, model_choices, picked_names, unusable_counts,
 )
 from .guided_search import DID_YOU_MEAN_KEY, DID_YOU_MEAN_QUESTION, FILTER_QUESTION, SEARCH_QUESTION, search_step
 from .http import RequestBudget, Transport, UrllibTransport
@@ -613,7 +613,12 @@ def _search_step(run: GuidedRun, config_file: Path, config: Configuration) -> tu
         # nothing an answer could add (test round of 2026-09-24, `mistral` with the filter on).
         run.screen.note("no repository of a publisher or a listed packager was resolved; nothing added")
         return _load(config_file), 0
-    picked = ask_models(run.asker, QUESTIONS["select"], step.models, hint_line(
+    picked = ask_models(
+        run.asker,
+        QUESTIONS["select"],
+        step.models,
+        hint_line(step.checked),
+        fit_line(
             step.checked,
             step.context,
             step.requests,
