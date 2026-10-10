@@ -129,6 +129,7 @@ def run_lmstudio_load_test(
     session = _Session(server, instance, prompt, clock, numbered=n >= 2)
     seconds: list[float] = []
     totals: list[float] = []
+    batches: list[tuple[list[int], int]] = []
     try:
         session.read()
         session.chat(0)
@@ -138,9 +139,13 @@ def run_lmstudio_load_test(
                 seconds.append(session.chat() / 1e9)
             else:
                 spans, wall = session.batch(n, 1 + run * n)
-                seconds += [span / 1e9 for span in spans]
-                totals.append(n * MAX_TOKENS / (wall / 1e9))
+                batches.append((spans, wall))
             session.read()
+            if n >= 2 and batches[-1][1] <= 0:  # the batch's own time, after its requests and the read (row 11)
+                raise _Stop(11)
+        for spans, wall in batches:  # no division before every check has passed
+            seconds += [span / 1e9 for span in spans]
+            totals.append(n * MAX_TOKENS / (wall / 1e9))
     except _Stop as stop:
         words = PROBLEM_WORDS[stop.row].format(context=instance.context_length)
         return LmStudioMeasurement(
@@ -198,8 +203,8 @@ class _Session:
         """n chats released together, numbered `first..first+n-1`: their wall times and the batch's, in nanoseconds.
 
         All threads end first; then the answers are judged by index, rows 3 to 11 each, and the first request
-        that failed gives the row. The batch's own time is judged last (row 11) -- the read after the batch is
-        the caller's and does not happen where a request failed.
+        that failed gives the row. The read after the batch is the caller's, and so is the batch's own time (row
+        11), judged after that read; neither happens where a request failed.
         """
         released = release_batch(n, lambda index: self._post(self._body(first + index)), self._clock)
         self.calls += n
@@ -209,8 +214,6 @@ class _Session:
             if span > CHAT_TIMEOUT_SECONDS * 1e9:
                 raise _Stop(4)
             _judge(response, span, self._instance.context_length)
-        if released.wall_ns <= 0:
-            raise _Stop(11)
         return list(released.spans), released.wall_ns
 
     def _post(self, body: dict) -> "Response":

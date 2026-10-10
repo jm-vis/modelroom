@@ -57,21 +57,27 @@ class _Bench:
     request of a batch (k of 1 or more) waits at, so an answer is only given once all n calls have arrived.
     """
 
-    def __init__(self, n: int, walls=None, replies=None, lists=None, gate: bool = False, ends_first=()) -> None:
+    def __init__(self, n: int, walls=None, replies=None, lists=None, gate: bool = False, release_late: int = 0) -> None:
         self.n = n
         self.walls = walls or {}
         self.replies = replies or {}
+        self.release_late = release_late  # the release is read this much later than the workers' common start
         self.local = threading.local()
         self.lock = threading.Lock()
         self.reads = 0
         self.prompts: list[str] = []
+        self.order: list[int] = []  # the k of every request, in the order its end time was taken
         self.gate = threading.Barrier(n, timeout=3.0) if gate else None
-        self.answered: dict[int, threading.Event] = {k: threading.Event() for k in ends_first}
-        self.waits: dict[int, int] = {}  # a request k waits until the request `waits[k]` has been answered
+        self.ended: dict[int, threading.Event] = {}
+        self.waits: dict[int, int] = {}  # a request k is answered only after the end time of request `waits[k]`
         good = json_response("lmstudio_chat_one.json")
         self._good = good
         self.server = lmstudio_servers(lists or [DISTINCT], chats=[])
         self.server._answers[("POST", CHAT_PATH)] = self._chat
+
+    def event(self, k: int) -> threading.Event:
+        with self.lock:
+            return self.ended.setdefault(k, threading.Event())
 
     def clock(self) -> int:
         with self.lock:
@@ -80,7 +86,15 @@ class _Bench:
         if read < 2:  # the warm-up, in the main thread
             return read * SECOND
         _batch, position = divmod(read - 2, 1 + 2 * self.n)
-        return 1_000 if position == 0 else getattr(self.local, "now", 1_000)
+        if position == 0:
+            return 1_000 + self.release_late
+        k = getattr(self.local, "returned", None)
+        if k is not None:  # the end time of request k is being taken: its call has just returned
+            self.local.returned = None
+            with self.lock:
+                self.order.append(k)
+            self.event(k).set()
+        return getattr(self.local, "now", 1_000)
 
     def _chat(self, body: dict) -> Response:
         prompt = body["messages"][0]["content"]
@@ -90,12 +104,10 @@ class _Bench:
         if self.gate is not None and k >= 1:
             self.gate.wait()
         if k in self.waits:
-            assert self.answered[self.waits[k]].wait(3.0)
+            assert self.event(self.waits[k]).wait(3.0)
         self.local.now = 1_000 + self.walls.get(k, SECOND)
-        reply = self.replies.get(k, self._good)
-        if k in self.answered:
-            self.answered[k].set()
-        return reply
+        self.local.returned = k
+        return self.replies.get(k, self._good)
 
     def run(self, instance: LoadedModel, scenario: Scenario) -> LmStudioMeasurement:
         return run_lmstudio_load_test(self.server, instance, scenario, PROMPT, self.clock)
@@ -235,15 +247,17 @@ def _failing(replies: dict, lists=None, **kwargs):
 
 def test_two_requests_failing_with_different_rows_in_reverse_order_give_the_row_of_the_lower_index():
     """Index 1 (k 2) has row 9, index 3 (k 4) row 8; index 3 is answered first, row 9 is the one."""
-    bench = _Bench(4, replies={2: _chat("lmstudio_chat_tokens_127.json"), 4: _chat("lmstudio_chat_finish_stop.json")}, ends_first=(4,))
-    bench.waits[2] = 4
+    bench = _Bench(4, replies={2: _chat("lmstudio_chat_tokens_127.json"), 4: _chat("lmstudio_chat_finish_stop.json")})
+    bench.waits[2] = 4  # request 2 returns only after the end time of request 4 was taken
     before = threading.active_count()
 
     measurement = bench.run(_instance(4), _scenario(10))
 
+    assert bench.order.index(4) < bench.order.index(2)  # the reverse order of completion, proven by the clock reads
     assert measurement.problem == LINES[9] != LINES[8]
     assert threading.active_count() == before
-    assert measurement.request_tps is None and measurement.calls == len(bench.server.calls) == 2 + 1 + 4
+    assert (measurement.request_tps, measurement.total_tps) == (None, None)
+    assert measurement.calls == len(bench.server.calls) == 2 + 1 + 4
     assert len(list_calls(bench.server)) == 2  # no read after the failed batch
 
 
@@ -280,12 +294,37 @@ def test_a_failing_request_and_a_failing_read_in_one_batch_give_the_request_and_
     assert len(list_calls(bench.server)) == 2
 
 
-def test_a_batch_that_took_no_time_is_row_11_and_a_request_beyond_600_s_is_row_4():
-    still = _Bench(4, walls={k: 0 for k in range(13)})
-    slow = _Bench(4, walls={2: 601 * SECOND})
+@pytest.mark.parametrize("late", [SECOND, 2 * SECOND], ids=["wall time 0", "wall time below 0"])
+def test_a_batch_of_no_wall_time_is_row_11_although_every_request_took_time(late):
+    """Every request takes 1 s; the release is read 1 s (or 2 s) after the common start, so the batch's own time
+    is 0 (or below) while the requests' times are positive: only the check of the batch's time can give row 11."""
+    before = threading.active_count()
+    bench = _Bench(4, release_late=late)
 
-    assert still.run(_instance(4), _scenario(10)).problem == LINES[11]
-    assert slow.run(_instance(4), _scenario(10)).problem == LINES[4]
+    measurement = bench.run(_instance(4), _scenario(10))
+
+    assert measurement.problem == LINES[11]
+    assert (measurement.request_tps, measurement.total_tps) == (None, None)
+    assert measurement.calls == len(bench.server.calls) == 3 + 1 + 4  # the read after the batch was made
+    assert len(list_calls(bench.server)) == 3 and threading.active_count() == before
+
+
+def test_a_read_that_fails_after_a_batch_of_no_wall_time_gives_the_row_of_the_read():
+    """The contested case (decision of 2026-10-10): positive request times, a batch time of 0 and a read after
+    the batch that shows another model give row 2, not row 11."""
+    lists = [DISTINCT, DISTINCT, "lmstudio_v1_models_empty.json"]
+    bench = _Bench(4, release_late=SECOND, lists=lists)
+
+    measurement = bench.run(_instance(4), _scenario(10))
+
+    assert measurement.problem == LINES[2]
+    assert measurement.calls == len(bench.server.calls) == 3 + 1 + 4 and measurement.request_tps is None
+
+
+def test_a_request_beyond_600_s_is_row_4():
+    bench = _Bench(4, walls={2: 601 * SECOND})
+
+    assert bench.run(_instance(4), _scenario(10)).problem == LINES[4]
 
 
 # --- (12) the words ------------------------------------------------------------------------------------------------

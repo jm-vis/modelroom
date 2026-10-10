@@ -28,9 +28,10 @@ WARM_UP = json.loads((FIXTURES / "vllm_chat_one_l4.json").read_text(encoding="ut
 RECORDED = {record["index"]: record for record in CONCURRENT["requests"]}
 METRICS = (FIXTURES / "vllm_metrics_before_l4.txt").read_text(encoding="utf-8")
 # Three batch times from the recorded 0.7203 s on, none shorter than the slowest request (0.7136 s):
-# 2560 tokens each give 3554.2, 3505.6 and 3458.2. (Before AP9-PM-1 the middle one was 0.7103 s, shorter than
-# its slowest request, which the old clock could show and a batch timed from its release cannot.)
-BATCH_NS = (720_266_104, 730_266_104, 740_266_104)
+# 2560 tokens each give 3554.2, 3458.2 and 3505.6. (Before AP9-PM-1 the middle one was 0.7103 s, shorter than
+# its slowest request, which the old clock could show and a batch timed from its release cannot; only that
+# batch changed, the other two are the old ones.)
+BATCH_NS = (720_266_104, 740_266_104, 730_266_104)
 
 
 def _metrics(generated: float, running: float = 0.0, waiting: float = 0.0) -> Response:
@@ -126,7 +127,7 @@ def test_every_body_is_the_recorded_request():
 
 
 def test_the_recorded_run_is_valid_and_comparable_at_its_own_speeds():
-    """2560 tokens in 0.7203, 0.7303 and 0.7403 s is 3554.2, 3505.6 and 3458.2 tok/s for all twenty; one request ran 179.4 to 185.2."""
+    """2560 tokens in 0.7203, 0.7403 and 0.7303 s is 3554.2, 3458.2 and 3505.6 tok/s for all twenty; one request ran 179.4 to 185.2."""
     measurement, _server, _scenario = _measure()
 
     assert (measurement.validity, measurement.comparable) == ("valid", True)

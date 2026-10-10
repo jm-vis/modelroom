@@ -6059,10 +6059,15 @@ measurement is made under the cache setting the server has.
 
 *A failing batch.* All threads of the batch end first. Then the answers are judged by request index, ascending; for
 each request rows 3 to 11 apply in the order of the table, and the first request that failed gives the row; the
-measurement ends without a further read. Only if no request failed, the read after the batch follows (rows 1 and 2),
-and a batch whose own wall time is 0 or less is row 11. A request failure therefore always goes before a read failure
-of the same batch; failures of the warm-up and of the reads before stay as they were. In every case all threads
-have ended, no speed exists and `calls` is the number of calls actually made.
+measurement ends without a further read. Only if no request failed, the read after the batch follows (rows 1 and
+2); only if that read passed, a batch whose own wall time is 0 or less is row 11; only after all of these has
+passed are the speeds computed (no division comes earlier). The order is therefore: the requests by index, then the
+read after the batch, then the batch's wall time, then the numbers. A request failure goes before a read failure of
+the same batch, and a read failure before a wall time of 0 (decision of 2026-10-10). Failures of the warm-up
+and of the reads before stay as they were. In every case all threads have ended, no speed exists and `calls` is
+the number of calls actually made. A failure of the batch itself (the clock raising, a broken barrier) is no row
+of the table: it ends the measurement as an error with no number, and a thread that cannot be started ends the
+started ones before the error is raised.
 
 *The numbers.* The total of a batch is `n x 128 / wall time`, the wall time running from the release to the last
 answer; `total_tps` is the mean of the three, held inside its range (`_mean_within`), with `total_min` and `total_max`.

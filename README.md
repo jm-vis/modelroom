@@ -1093,8 +1093,7 @@ procedure is in `AGENTS.md`, "Versioning and releases".
 In the order we plan to build it, none of it dated:
 
 - **Throughput for many people.** Step 3 sizes the memory for the parallel requests a head count
-  stands for; how fast those requests are served is measured for a vLLM server you started and for
-  an LM Studio server (see "vLLM" and "LM Studio"), and not yet for Ollama. Beyond roughly eight at once it is a job for a serving stack such as vLLM; the
+  stands for; a measurement of several requests at once is still missing for Ollama. Beyond roughly eight at once it is a job for a serving stack such as vLLM; the
   ranking itself stays the rule of thumb of "Step 3, Context".
 - **Unified memory, measured.** The rule is in; a measured profile of such a computer is what is
   missing -- an export from one is welcome.
