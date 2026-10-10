@@ -34,7 +34,7 @@ from .daemon import Daemon, LocalDaemon
 from .dialog import Asker, Choice
 from .guided_context import DEFAULT_CONTEXT, Checked
 from .guided_context import QUESTION as CONTEXT_QUESTION
-from .guided_context import USERS_KEY, USERS_QUESTION
+from .guided_context import AT_ONCE_KEY, AT_ONCE_QUESTION, USERS_KEY, USERS_QUESTION
 from .guided_context import chosen_runtimes, context_step, snapshot_facts, snapshot_packages, vllm_among_chosen
 from .guided_entered import QUESTIONS as ENTERED_QUESTIONS, CLASS_CHOICES
 from . import room as room_module
@@ -119,7 +119,8 @@ QUESTIONS: dict[str, str] = {
     DID_YOU_MEAN_KEY: DID_YOU_MEAN_QUESTION,
     "select": "Which of these models should the result cover?",
     "context": CONTEXT_QUESTION,
-    # Step 3 asks it before the scale: `N` people, or `N requests` named outright.
+    # Step 3 asks it before the scale: people at the same time, or N people for a daily head count; an answer file may still answer users.
+    AT_ONCE_KEY: AT_ONCE_QUESTION,
     USERS_KEY: USERS_QUESTION,
     # Step 4's own two (`modelroom/guided_loadtest.py`) and step 5's pull (`guided_install.py`),
     # then a package for another chosen machine (`pull_other.py`, A3).

@@ -113,6 +113,8 @@ class Asker(Protocol):
         instruction: str | None = None,
     ) -> str: ...
 
+    def holds(self, key: str) -> bool: ...
+
 
 def columns(rows: Sequence[Sequence[str]], widths: Sequence[int]) -> list[str]:
     """The labels of one list, aligned in columns, so a scale, a hit list and a load test read as
@@ -293,6 +295,10 @@ class TerminalAsker:
         if chosen != text_value:
             return chosen
         return self.text(key, text_question)
+
+    def holds(self, key: str) -> bool:
+        """A terminal has no answer file, so it holds no key."""
+        return False
 
     def checkbox_keys(self) -> str:
         """`Enter confirms` said nothing about what it would confirm: a run that pressed it without
@@ -504,6 +510,10 @@ class FileAsker:
     def __init__(self, answers: dict[str, object]) -> None:
         self._answers = dict(answers)
         self.asked: list[str] = []
+
+    def holds(self, key: str) -> bool:
+        """Whether the answer file has an answer for this key; asking it is not asking the question."""
+        return key in self._answers
 
     def _answer(self, key: str, question: str) -> object:
         self.asked.append(key)

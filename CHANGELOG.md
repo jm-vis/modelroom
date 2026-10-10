@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- Step 3 now asks how many people work with the model at the same time: 1, 5, 10, 50, 100 or a number of your own; `N people` still takes a daily head count. Answer files accept `at_once`; `users` keeps its previous meaning.
+
 ## [1.0.0] - 2026-10-10
 
 Version 1.0.0 ends the alpha stage. The guided mode and the subcommands work end to end, and the
