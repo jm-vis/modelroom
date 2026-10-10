@@ -63,6 +63,10 @@ Speed measurement protocol v2 for Ollama (AP9-FR-M). No schema version changes.
 
 - README regrouped: quick start first, the guided run, the runtimes, a reference part; no sentence of the program changed.
 
+### RD-L
+
+- README rewritten for reading: shorter sentences, one fact in one place, the same form for every step of the guided run, a glossary; no command, picture or rule changed.
+
 ## [0.3.0] - 2026-10-09
 
 The README now documents LM Studio: the list entries per GGUF package, the `lms get` download
