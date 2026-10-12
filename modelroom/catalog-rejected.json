@@ -134,5 +134,17 @@
   {
     "date": "2026-10-09",
     "hf_repo": "upstage/solar-pro4-tokenizer"
+  },
+  {
+    "account": "NANI-Nithin",
+    "date": "2026-10-12"
+  },
+  {
+    "date": "2026-10-12",
+    "hf_repo": "nvidia/agile_one_s_pick_ssd_n2_1120"
+  },
+  {
+    "date": "2026-10-12",
+    "hf_repo": "nvidia/agile_one_s_place_ssd_n2_1260"
   }
 ]

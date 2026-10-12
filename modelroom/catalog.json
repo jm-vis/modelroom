@@ -2803,9 +2803,9 @@
       "parameters_b": 18.876174592,
       "publisher": "Lightricks",
       "source": "https://huggingface.co/Lightricks/LTX-2",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "Lightricks/LTX-2.3",
+      "successor_checked": "2026-10-09",
+      "successor_source": "https://huggingface.co/Lightricks/LTX-2"
     },
     {
       "added": "2026-10-08",
@@ -5542,7 +5542,9 @@
     {
       "added": "2026-10-09",
       "family": "mimo",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/MiMo-V2.6-Flash-MOPD-GGUF"
+      ],
       "hf_repo": "XiaomiMiMo/MiMo-V2.6-Flash-MOPD",
       "hub_created": "2026-09-27",
       "hub_pipeline_tag": "text-generation",
@@ -5565,7 +5567,9 @@
     {
       "added": "2026-10-09",
       "family": "mimo",
-      "gguf_repos": [],
+      "gguf_repos": [
+        "ggml-org/MiMo-V2.6-Pro-MOPD-GGUF"
+      ],
       "hf_repo": "XiaomiMiMo/MiMo-V2.6-Pro-MOPD",
       "hub_created": "2026-09-27",
       "hub_pipeline_tag": "text-generation",
@@ -5814,6 +5818,121 @@
       "successor": null,
       "successor_checked": null,
       "successor_source": null
+    },
+    {
+      "added": "2026-10-10",
+      "family": "qwen",
+      "gguf_repos": [],
+      "hf_repo": "Qwen/Qwen-Image-2.1-Turbo",
+      "hub_created": "2026-10-09",
+      "hub_pipeline_tag": "text-to-image",
+      "kind": "image-generation",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "other",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 7.115124736,
+      "publisher": "Qwen",
+      "source": "https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-09",
+      "family": "mert",
+      "gguf_repos": [],
+      "hf_repo": "m-a-p/MERT-v2-30s",
+      "hub_created": "2026-09-09",
+      "hub_pipeline_tag": "feature-extraction",
+      "kind": "embedding",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "cc-by-nc-4.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 0.632429312,
+      "publisher": "m-a-p",
+      "source": "https://huggingface.co/m-a-p/MERT-v2-30s",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-10",
+      "family": "voxtral",
+      "gguf_repos": [],
+      "hf_repo": "mistralai/Voxtral-Mini-4B-Realtime-Arabic",
+      "hub_created": "2026-10-08",
+      "hub_pipeline_tag": "automatic-speech-recognition",
+      "kind": "speech-recognition",
+      "kind_source": null,
+      "latest": true,
+      "latest_checked": "2026-10-10",
+      "latest_source": "https://huggingface.co/mistralai",
+      "license": null,
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 4.42967936,
+      "publisher": "mistralai",
+      "source": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-Arabic",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-09",
+      "family": "moondream",
+      "gguf_repos": [],
+      "hf_repo": "moondream/moondream-2b-2025-04-14",
+      "hub_created": "2025-04-14",
+      "hub_pipeline_tag": "image-text-to-text",
+      "kind": "vision",
+      "kind_source": null,
+      "latest": false,
+      "latest_checked": null,
+      "latest_source": null,
+      "license": "apache-2.0",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 1.927237104,
+      "publisher": "moondream",
+      "source": "https://huggingface.co/moondream/moondream-2b-2025-04-14",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
+    },
+    {
+      "added": "2026-10-10",
+      "family": "youtu",
+      "gguf_repos": [],
+      "hf_repo": "tencent/Youtu-Parsing-Omni",
+      "hub_created": "2026-10-09",
+      "hub_pipeline_tag": "image-text-to-text",
+      "kind": "vision",
+      "kind_source": null,
+      "latest": true,
+      "latest_checked": "2026-10-10",
+      "latest_source": "https://huggingface.co/tencent",
+      "license": "other",
+      "note": null,
+      "ollama_base": null,
+      "ollama_tag": null,
+      "parameters_b": 5.334472192,
+      "publisher": "tencent",
+      "source": "https://huggingface.co/tencent/Youtu-Parsing-Omni",
+      "successor": null,
+      "successor_checked": null,
+      "successor_source": null
     }
   ],
   "packagers": [
@@ -5823,7 +5942,7 @@
     "lmstudio-community",
     "ggml-org"
   ],
-  "published": "2026-10-09",
+  "published": "2026-10-12",
   "publishers": [
     {
       "account": "mistralai",
@@ -6104,6 +6223,11 @@
       "account": "moondream",
       "name": "Moondream (M87 Labs)",
       "region": "US"
+    },
+    {
+      "account": "SupraLabs",
+      "name": "SupraLabs",
+      "region": null
     }
   ],
   "schema_version": 2
