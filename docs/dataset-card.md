@@ -34,7 +34,7 @@ A small table of the models their publishers call current: text, vision, embeddi
 recognition, image and video generation. Not every build on the Hub. One row per model, with the
 publisher page that says it is current and the date that was checked.
 
-**247 models · 56 publisher accounts watched · one JSON file (183 KB) · schema 2 · CC BY 4.0**
+**252 models · 57 publisher accounts watched · one JSON file (187 KB) · schema 2 · CC BY 4.0**
 
 ## What a row carries
 
@@ -54,7 +54,7 @@ The file also lists the `publishers` (account, display name, region such as `EU`
 
 ## How it stays current
 
-Every morning a scan reads the 56 publisher accounts and the trending page of each task and
+Every morning a scan reads the 57 publisher accounts and the trending page of each task and
 writes a proposal. Nothing goes live on its own: the maintainer approves every row by number,
 rejected accounts stay rejected, and the published file is compared byte for byte with the
 repository every day.
