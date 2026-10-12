@@ -120,8 +120,13 @@ def test_shipped_catalog_claims_no_latest_without_evidence_and_one_successor():
     catalog = load_catalog()
     latest = [model for family in catalog.families for model in family.models if model.latest]
     assert latest, "the catalog states no current model at all"
+    today = date.today()
     for model in latest:
-        assert model.latest_source is not None and model.latest_checked == LATEST_CHECKED, model.hf_repo
+        # Rule, not a fixed day: every `latest` row names its evidence and the day it was checked.
+        assert model.latest_source is not None, model.hf_repo
+        assert model.latest_checked is not None and model.latest_checked <= today, model.hf_repo
+        if model.hub_created is not None:
+            assert model.latest_checked >= model.hub_created, model.hf_repo
     assert catalog.age_of("utter-project/EuroLLM-9B-Instruct") == ("legacy", "utter-project/EuroLLM-9B-Instruct-2512")
     assert catalog.age_of("Qwen/Qwen3.5-9B") == ("unknown", None)
     assert catalog.age_of("mistralai/Ministral-3-14B-Instruct-2512") == ("latest", None)
@@ -148,7 +153,10 @@ CHECKED_WITHOUT_SUCCESSOR = (
 # A successor that is no `latest` row, with the reason. The model card of EuroLLM-9B-Instruct-2512
 # calls itself an improved version of EuroLLM-9B-Instruct, but the publisher's collection lists both
 # lines side by side, so nothing states the 2512 model current.
-SUCCESSORS_NOT_LATEST = {"utter-project/EuroLLM-9B-Instruct": "the successor's own card, no current collection"}
+SUCCESSORS_NOT_LATEST = {
+    "utter-project/EuroLLM-9B-Instruct": "the successor's own card, no current collection",
+    "Lightricks/LTX-2": "GF approval 2026-10-12; LTX-2.3 is an intermediate step, LTX-2.5 is newer",
+}
 
 
 def _rows_with_successor():
@@ -444,7 +452,17 @@ def test_todays_shipped_display_list_is_unchanged_by_the_kind_filter():
     filter changes nothing the list used to show."""
     catalog = load_catalog()
     names = latest_model_names(catalog)
-    assert len(names) == 22
+    assert names, "the display list is empty"
+    unfiltered: list[str] = []
+    for family in catalog.families:
+        for model in family.models:
+            # Rows of other kinds (speech, image, ...) may be `latest`; the filter must hide exactly those.
+            if model.latest and model.kind in ("text", "vision"):
+                assert model.kind in DISPLAYED_KINDS, model.hf_repo
+                name = model.hf_repo.partition("/")[2]
+                if name not in unfiltered:
+                    unfiltered.append(name)
+    assert names == unfiltered
     assert "GLM-5.3-Flash" in names
 
 
