@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from modelroom.measurements import shipped_protocol
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "selftest.py"
 if not (REPO / ".git").exists():
@@ -509,7 +511,7 @@ def test_criterion_four_names_packages_still_set_aside_as_not_covered():
 
 def _record(**changes) -> dict:
     data = {
-        "protocol": "v1",
+        "protocol": f"v{shipped_protocol().protocol_version}",
         "validity": "valid",
         "validity_reason": None,
         "comparable": True,
@@ -572,6 +574,16 @@ def test_criterion_five_names_a_measurement_that_does_not_count(change, expected
     problems = st.load_test_problems([_record(**change)], _row())
 
     assert any(expected in problem for problem in problems)
+
+
+def test_criterion_five_expects_the_shipped_protocol_and_names_it():
+    shipped = f"v{shipped_protocol().protocol_version}"
+    other = "v0" if shipped != "v0" else "v1"
+
+    assert st.load_test_problems([_record(protocol=shipped)], _row()) == []
+    assert st.load_test_problems([_record(protocol=other)], _row()) == [
+        f"protocol is {other!r}, expected {shipped!r}"
+    ]
 
 
 @pytest.mark.parametrize("row", [None, _row(measurement_group=1, speed_tps=None)], ids=["absent", "group 1"])
