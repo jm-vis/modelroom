@@ -1408,6 +1408,166 @@ def test_a_carried_unreadable_new_row_without_the_mark_is_marked_and_listed(env)
     assert "## Rows without a reading" in text and "| acme/Ovie-512 | reading: false | token '512' has no class" in text
 
 
+# --- a carried successor is checked again against the end of the run ----------------------------------------------------------
+
+
+def carried_link(row: str, target: str, day: str = YESTERDAY, n: int = 1, latest: bool = False) -> dict:
+    """A successor change as an earlier scan wrote it (`row -> target`, evidence = the card of `row`); `latest`: the row is
+    a latest row that gives up `latest` with its link."""
+    card = f"https://huggingface.co/{row}"
+    change = {
+        "change": "field", "field": "successor", "stage": "A3", "hf_repo": row, "kind": "text", "open_since": day, "evidence": [card], "n": n,
+        "fields": {"successor": {"old": None, "new": target}, "successor_source": {"old": None, "new": card}, "successor_checked": {"old": None, "new": day}},
+    }
+    if latest:
+        change["fields"].update(latest={"old": True, "new": False}, latest_source={"old": "https://huggingface.co/acme", "new": None},
+                                latest_checked={"old": None, "new": None})
+    return change
+
+
+def dropped_note(row: str, target: str) -> str:
+    return f"{row}: carried successor {target} dropped, it is no latest row without a successor at the end of this run"
+
+
+def test_a_carried_successor_whose_target_is_no_latest_row_is_dropped_with_a_note(env):
+    """The A3 line `LTX-2 -> LTX-2.3` of an older scan came back every day with its first date, while the target was no
+    `latest` row: nothing asked again. `Atlas-1-9B` is a shipped row that is not latest."""
+    env.prev(YESTERDAY, changes=[carried_link("acme/Atlas-2-9B", "acme/Atlas-1-9B", latest=True)])
+    p, _, _ = go(env, Hub())
+    assert successor_of(p, "acme/Atlas-2-9B") is None and fields_of(p, "acme/Atlas-2-9B", "latest") is None
+    assert dropped_note("acme/Atlas-2-9B", "acme/Atlas-1-9B") in p["notes"] and applied(p)
+
+
+def test_a_carried_successor_whose_target_is_a_latest_row_stays(env):
+    env.prev(YESTERDAY, changes=[carried_link("acme/Atlas-1-9B", "acme/Atlas-2-9B")])
+    p, _, _ = go(env, Hub())
+    assert successor_of(p, "acme/Atlas-1-9B") == "acme/Atlas-2-9B" and not any("dropped" in n for n in p["notes"])
+
+
+def test_a_carried_successor_whose_target_is_a_carried_new_latest_row_stays(env):
+    entry = rules.parse_entry(ent("acme/Atlas-3-9B", stamp(3)))
+    result = rules.cheap_kind(entry)
+    row = rules.build_row(entry, result, family="atlas", today=YESTERDAY, latest=True, latest_source="https://huggingface.co/acme")
+    env.prev(YESTERDAY, changes=[{**rules.new_row_change(row, result, YESTERDAY), "n": 1}, carried_link("acme/Atlas-1-9B", "acme/Atlas-3-9B", n=2)])
+    p, _, _ = go(env, Hub())
+    assert successor_of(p, "acme/Atlas-1-9B") == "acme/Atlas-3-9B" and "acme/Atlas-3-9B" in new_rows(p)
+
+
+def test_a_carried_successor_whose_target_has_a_successor_of_its_own_is_dropped_and_the_target_link_stays(env):
+    """`A -> B` and `B -> C` are both carried: `B` gives up `latest` with its own link, so `A -> B` points at no latest row."""
+    entry = rules.parse_entry(ent("acme/Atlas-3-9B", stamp(3)))
+    result = rules.cheap_kind(entry)
+    row = rules.build_row(entry, result, family="atlas", today=YESTERDAY, latest=True, latest_source="https://huggingface.co/acme")
+    own = carried_link("acme/Atlas-2-9B", "acme/Atlas-3-9B", n=2, latest=True)
+    env.prev(YESTERDAY, changes=[{**rules.new_row_change(row, result, YESTERDAY), "n": 1}, own, carried_link("acme/Atlas-1-9B", "acme/Atlas-2-9B", n=3)])
+    p, _, _ = go(env, Hub())
+    assert (successor_of(p, "acme/Atlas-2-9B"), successor_of(p, "acme/Atlas-1-9B")) == ("acme/Atlas-3-9B", None)
+    assert dropped_note("acme/Atlas-1-9B", "acme/Atlas-2-9B") in p["notes"]
+
+
+def test_a_carried_successor_whose_target_loses_latest_through_another_carried_change_is_dropped(env):
+    """`Atlas-1-9B -> Atlas-2-9B` is carried, and so is a change that takes `latest` from `Atlas-2-9B`: the link is checked
+    against that end state, not against the shipped row."""
+    leave = {"change": "field", "field": "latest", "stage": "A3", "hf_repo": "acme/Atlas-2-9B", "kind": "text", "open_since": YESTERDAY,
+             "evidence": ["https://huggingface.co/acme/Atlas-2-9B"], "n": 2,
+             "fields": {"latest": {"old": True, "new": False}, "latest_source": {"old": "https://huggingface.co/acme", "new": None},
+                        "latest_checked": {"old": None, "new": None}}}
+    env.prev(YESTERDAY, changes=[carried_link("acme/Atlas-1-9B", "acme/Atlas-2-9B"), leave])
+    p, _, _ = go(env, Hub())
+    assert successor_of(p, "acme/Atlas-1-9B") is None and dropped_note("acme/Atlas-1-9B", "acme/Atlas-2-9B") in p["notes"]
+
+
+def test_a_shipped_successor_that_points_at_no_latest_row_gives_a_note_and_changes_nothing(env):
+    document = json.loads(CATALOG_BYTES)
+    for row in document["models"]:
+        if row["hf_repo"] == "acme/Atlas-2-9B":
+            row.update(latest=False, latest_source=None, latest_checked=None)
+        if row["hf_repo"] == "acme/Atlas-1-9B":
+            row.update(successor="acme/Atlas-2-9B", successor_source="https://huggingface.co/acme/Atlas-1-9B", successor_checked="2026-10-01")
+    env.catalog.write_bytes(json.dumps(document).encode("utf-8"))
+    p, _, _ = go(env, Hub())
+    assert fields_of(p, "acme/Atlas-1-9B", "successor") is None
+    assert "successors that are no latest row (unchanged): acme/Atlas-1-9B -> acme/Atlas-2-9B" in p["notes"]
+
+
+@pytest.mark.parametrize("first, middle", [("acme/Atlas-1-9B", "acme/Atlas-2-9B"), ("acme/Atlas-2-9B", "acme/Atlas-1-9B")],
+                         ids=["link-name-sorts-first", "link-name-sorts-last"])
+def test_a_chain_of_carried_successors_is_cleaned_from_its_end_whatever_the_names(env, first, middle):
+    """`first -> middle` and `middle -> Atlas-3-9B` are carried; `middle` is a latest row that gives up `latest` with its
+    own link, and `Atlas-3-9B` is no latest row. Only `middle -> Atlas-3-9B` is wrong: once it is dropped `middle` is a
+    latest row again and `first -> middle` stays. The names must not change the result."""
+    document = json.loads(CATALOG_BYTES)
+    for row in document["models"]:
+        if row["hf_repo"] in ("acme/Atlas-1-9B", "acme/Atlas-2-9B"):
+            on = row["hf_repo"] == middle
+            row.update(latest=on, latest_source="https://huggingface.co/acme" if on else None, latest_checked="2026-10-01" if on else None)
+    env.catalog.write_bytes(json.dumps(document).encode("utf-8"))
+    entry = rules.parse_entry(ent("acme/Atlas-3-9B", stamp(3)))
+    result = rules.cheap_kind(entry)
+    third = rules.build_row(entry, result, family="atlas", today=YESTERDAY, latest=False, latest_source=None)
+    env.prev(YESTERDAY, changes=[{**rules.new_row_change(third, result, YESTERDAY), "n": 1},
+                                 carried_link(middle, "acme/Atlas-3-9B", n=2, latest=True), carried_link(first, middle, n=3)])
+    hub = Hub()
+    hub.put(rules.b2_url(middle), [])  # a latest text row has its own B2 page
+    p, _, _ = go(env, hub)
+    assert (successor_of(p, middle), successor_of(p, first)) == (None, middle)
+    assert dropped_note(middle, "acme/Atlas-3-9B") in p["notes"] and not any(n.startswith(f"{first}: carried") for n in p["notes"])
+
+
+def atlas_rows(env, latest: set[str]) -> Hub:
+    """The shipped catalog with `acme/Atlas-1-9B` .. `acme/Atlas-4-9B` (3 and 4 are copies of 2), of which `latest` are latest rows."""
+    document = json.loads(CATALOG_BYTES)
+    base = next(m for m in document["models"] if m["hf_repo"] == "acme/Atlas-2-9B")
+    for n in (3, 4):
+        copy = dict(base, hf_repo=f"acme/Atlas-{n}-9B", source=f"https://huggingface.co/acme/Atlas-{n}-9B", ollama_base=None, ollama_tag=None, gguf_repos=[])
+        document["models"].append(copy)
+    hub = Hub()
+    for row in document["models"]:
+        if row["hf_repo"].startswith("acme/Atlas-"):
+            on = row["hf_repo"] in latest
+            row.update(latest=on, latest_source="https://huggingface.co/acme" if on else None, latest_checked="2026-10-01" if on else None)
+            if on:
+                hub.put(rules.b2_url(row["hf_repo"]), [])  # a latest text row has its own B2 page
+    env.catalog.write_bytes(json.dumps(document).encode("utf-8"))
+    return hub
+
+
+ORDERS = [("acme/Atlas-1-9B", "acme/Atlas-2-9B", "acme/Atlas-3-9B", "acme/Atlas-4-9B"), ("acme/Atlas-4-9B", "acme/Atlas-3-9B", "acme/Atlas-2-9B", "acme/Atlas-1-9B")]
+
+
+@pytest.mark.parametrize("a, b, c, d", ORDERS, ids=["ascending", "descending"])
+def test_a_long_chain_of_carried_successors_keeps_every_link_that_ends_at_a_latest_row(env, a, b, c, d):
+    """`a -> b -> c -> d`, with `b`, `c` and `d` latest rows; the links of `b` and `c` demote them. `c -> d` is right,
+    `b -> c` is wrong, and once it is dropped `b` is a latest row again, so `a -> b` stays: no loop of names, no cycle."""
+    hub = atlas_rows(env, {b, c, d})
+    env.prev(YESTERDAY, changes=[carried_link(a, b, n=1), carried_link(b, c, n=2, latest=True), carried_link(c, d, n=3, latest=True)])
+    p, _, _ = go(env, hub)
+    assert (successor_of(p, a), successor_of(p, b), successor_of(p, c)) == (b, None, d)
+    assert dropped_note(b, c) in p["notes"] and not any(n.startswith(f"{a}: carried") or n.startswith(f"{c}: carried") for n in p["notes"])
+
+
+@pytest.mark.parametrize("w, x, y", [ORDERS[0][:3], ORDERS[1][:3]], ids=["ascending", "descending"])
+def test_a_cycle_of_carried_successors_drops_only_its_own_links_and_the_link_into_it_is_decided_normally(env, w, x, y):
+    """`x -> y` and `y -> x` (both latest rows that gave up `latest`) are a cycle; `w -> x` leads into it. The cycle links go,
+    `x` is a latest row again, and `w -> x` stays."""
+    hub = atlas_rows(env, {x, y})
+    env.prev(YESTERDAY, changes=[carried_link(x, y, n=1, latest=True), carried_link(y, x, n=2, latest=True), carried_link(w, x, n=3)])
+    p, _, _ = go(env, hub)
+    assert (successor_of(p, w), successor_of(p, x), successor_of(p, y)) == (x, None, None)
+    assert dropped_note(x, y) in p["notes"] and dropped_note(y, x) in p["notes"] and not any(n.startswith(f"{w}: carried") for n in p["notes"])
+
+
+def test_a_card_has_one_new_version_so_two_newer_models_make_no_second_candidate(env):
+    """`LTX-2` names `LTX-2.3` on its card while `LTX-2.5` is newer: the scanner takes the one `new_version` of the card
+    and picks nothing among the models that name the row in their text (those get a note, never a successor)."""
+    hub = Hub()
+    hub.page("acme", [ent("acme/Atlas-1-9B", stamp(6), cardData=card_of("acme/Atlas-2-9B")),
+                      ent("acme/Atlas-3-9B", stamp(2), cardData={"license": "mit", "text": "newer than acme/Atlas-1-9B"})])
+    p, _, _ = go(env, hub)
+    assert successor_of(p, "acme/Atlas-1-9B") == "acme/Atlas-2-9B"
+    assert len([c for c in p["changes"] if c["hf_repo"] == "acme/Atlas-1-9B" and c["field"] == "successor"]) == 1
+
+
 def test_a_carried_wrong_mark_is_cleaned(env):
     entry = rules.parse_entry(ent("acme/Zeta-1-3B", stamp(3)))
     result = rules.cheap_kind(entry)

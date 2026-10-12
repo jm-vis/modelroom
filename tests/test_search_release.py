@@ -159,7 +159,7 @@ KEYS = [
 # `KEYS` = the reference rows plus hand samples. This list: shipped names that deliberately have no reading (`line_key`
 # is `None`), each with a reason; every other shipped row outside the reference must give a `LineKey` (coverage test).
 # Empty as of the publication of 2026-10-07; the publication of 2026-10-08 (231 rows) added 24. AP9-KA-G (decided 2026-10-08)
-# reads 19 of them (see the last block of `KEYS`); these five stay out of the line comparison, each a decision of the
+# reads 19 of them (see the last block of `KEYS`); these stay out of the line comparison, each a decision of the
 # owner and not a grammar fault: reading them would extend the grammar, which is a product contract for the computed
 # release. Each entry is checked to stay unread (test below).
 SHIPPED_WITHOUT_READING: list[str] = [
@@ -171,6 +171,8 @@ SHIPPED_WITHOUT_READING: list[str] = [
     "sarvamai/sarvam-1-v0.5",
     "sbintuitions/sarashina2.2-0.5b-instruct-v0.1",
     "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+    # three digits (`512`) have no class; shipped without a reading by decision, the grammar stays as it is
+    "kyutai/ovie-512",
 ]
 
 NOT_INTERPRETABLE = [
@@ -198,7 +200,6 @@ NOT_INTERPRETABLE = [
     "acme/Nova-1999-04-14",  # not a year of `20xx`
     "acme/Nova-2025-04-14-2025-05-01",  # two ISO dates
     "acme/Nova-2025-04-14-2506",  # an ISO date and a YYMM date
-    "kyutai/ovie-512",  # three digits are no version, size or resolution (KA-G keeps `378` and `735` without a class)
 ]
 
 

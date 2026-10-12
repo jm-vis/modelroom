@@ -683,7 +683,7 @@ class _Run:
 
     def _successors(self) -> None:
         """The successors the cards name, against the table at the end of the run, resolved among themselves (AP9-KA-H)."""
-        state = L.end_state(self.rows, self.changes)
+        state = self._recheck_links()
         pointed = {target: repo for repo, (_, target) in sorted(state.items()) if target}
         candidates = {row.hf_repo: target for row, target in sorted(self.successors, key=lambda pair: pair[0].hf_repo)
                       if self._successor_ok(row, target, state)}
@@ -692,6 +692,40 @@ class _Run:
         for repo, target in sorted(chosen.items()):
             row, card = self.rows[repo], f"{R.HUB}/{repo}"
             self._put(("field", repo, "successor"), R.field_change(row, "A3", L.successor_pairs(row, target, card, self.today), [card], self.today, "successor"))
+
+    def _recheck_links(self) -> dict:
+        """The end state, after every carried successor change is checked again: one whose target is no `latest` row
+        without a successor at the end of the run is dropped with a note (an older scan did not ask, and a carried change
+        was never asked again). A link is decided when the link of its target is decided or the target has none, so a
+        chain is cleaned from its end and the names play no part; each round decides at least one link. When no chain
+        can be decided, the links of the cycles are dropped and the links that lead into them are decided normally.
+        A shipped link to such a row is only noted, in one line."""
+        links = {key[1]: change["fields"]["successor"]["new"] for key, change in self.changes.items() if key[0] == "field" and key[2] == "successor"}
+        undecided = set(links)
+        while undecided:
+            ready = {repo for repo in undecided if links[repo] not in undecided}
+            if ready:
+                state = L.end_state(self.rows, self.changes)
+                drop = {repo for repo in ready if state.get(links[repo]) != (True, None)}
+            else:  # only cycles (and links into them) are left: the cycle links go
+                for start in undecided:
+                    walk, node = [], start
+                    while node in undecided and node not in walk:
+                        walk.append(node)
+                        node = links[node]
+                    if node in walk:
+                        ready.update(walk[walk.index(node):])
+                drop = ready
+            for repo in sorted(drop):
+                del self.changes[("field", repo, "successor")]
+                self.notes.append(f"{repo}: carried successor {links[repo]} dropped, it is no latest row without a successor at the end of this run")
+            undecided -= ready
+        state = L.end_state(self.rows, self.changes)
+        old = [f"{repo} -> {row.successor}" for repo, row in sorted(self.rows.items())
+               if row.successor and not self._is_rejected(repo) and state.get(row.successor) != (True, None)]
+        if old:
+            self.notes.append(f"successors that are no latest row (unchanged): {', '.join(old)}")
+        return state
 
     def _successor_ok(self, row: CatalogModel, target: str, state: dict) -> bool:
         """`new_version` on the card names a same-account, same-kind `latest` row without a successor at the end of this run."""

@@ -153,9 +153,16 @@ CHECKED_WITHOUT_SUCCESSOR = (
 # A successor that is no `latest` row, with the reason. The model card of EuroLLM-9B-Instruct-2512
 # calls itself an improved version of EuroLLM-9B-Instruct, but the publisher's collection lists both
 # lines side by side, so nothing states the 2512 model current.
+# Each exception names the one successor it covers; a different successor of the same row fails the test.
 SUCCESSORS_NOT_LATEST = {
-    "utter-project/EuroLLM-9B-Instruct": "the successor's own card, no current collection",
-    "Lightricks/LTX-2": "GF approval 2026-10-12; LTX-2.3 is an intermediate step, LTX-2.5 is newer",
+    "utter-project/EuroLLM-9B-Instruct": (
+        "utter-project/EuroLLM-9B-Instruct-2512",
+        "the successor's own card, no current collection",
+    ),
+    "Lightricks/LTX-2": (
+        "Lightricks/LTX-2.3",
+        "approved as an intermediate step; LTX-2.5 is newer, see the scanner note",
+    ),
 }
 
 
@@ -164,16 +171,41 @@ def _rows_with_successor():
     return catalog, [(family, model) for family in catalog.families for model in family.models if model.successor]
 
 
+def _successor_faults(catalog, rows, exceptions):
+    """Rule faults of the successor rows; an exception covers only the successor it names."""
+    faults = []
+    for family, model in rows:
+        target = catalog.model_for(model.successor)
+        if target is None:
+            faults.append(f"{model.hf_repo}: successor {model.successor} is no row of the catalog")
+            continue
+        if model.successor.split("/", 1)[0] != family.publisher:
+            faults.append(f"{model.hf_repo}: successor {model.successor} has another publisher")
+        covered = exceptions.get(model.hf_repo, (None, None))[0] == model.successor
+        if not target.latest and not covered:
+            faults.append(f"{model.hf_repo}: successor {model.successor} is not a latest row")
+    return faults
+
+
 def test_every_successor_of_the_shipped_catalog_is_a_latest_row_of_the_same_publisher():
     catalog, rows = _rows_with_successor()
 
     assert rows, "the catalog names no successor at all"
-    for family, model in rows:
-        target = catalog.model_for(model.successor)
-        assert target is not None, f"{model.hf_repo}: successor {model.successor} is no row of the catalog"
-        assert model.successor.split("/", 1)[0] == family.publisher, model.hf_repo
-        if model.hf_repo not in SUCCESSORS_NOT_LATEST:
-            assert target.latest, f"{model.hf_repo}: successor {model.successor} is not a latest row"
+    assert _successor_faults(catalog, rows, SUCCESSORS_NOT_LATEST) == []
+
+
+def test_an_exception_for_a_successor_that_is_no_latest_row_covers_only_that_successor():
+    catalog, rows = _rows_with_successor()
+    ltx = [row for row in rows if row[1].hf_repo == "Lightricks/LTX-2"]
+    assert ltx and not catalog.model_for(ltx[0][1].successor).latest
+
+    changed = dict(SUCCESSORS_NOT_LATEST, **{"Lightricks/LTX-2": ("Lightricks/LTX-2.5", "another target")})
+    faults = _successor_faults(catalog, rows, changed)
+    assert any(f.startswith("Lightricks/LTX-2:") and "not a latest row" in f for f in faults)
+    # The EuroLLM exception keeps standing.
+    assert not any(f.startswith("utter-project/EuroLLM-9B-Instruct:") for f in faults)
+    # Without any exception both rows fail.
+    assert len(_successor_faults(catalog, rows, {})) >= 2
 
 
 def test_the_rows_given_a_successor_on_2026_09_25_are_legacy():
@@ -447,9 +479,9 @@ def test_display_selection_shows_only_latest_text_and_vision_kinds():
         assert kind not in DISPLAYED_KINDS
 
 
-def test_todays_shipped_display_list_is_unchanged_by_the_kind_filter():
-    """Every `latest` row of the shipped catalog is already `text` or `vision`, so the `kind`
-    filter changes nothing the list used to show."""
+def test_the_kind_filter_hides_exactly_the_latest_rows_that_are_not_text_or_vision():
+    """The shipped catalog holds `latest` rows of other kinds (speech, ...); the list shows only the
+    `text` and `vision` ones, in catalog order."""
     catalog = load_catalog()
     names = latest_model_names(catalog)
     assert names, "the display list is empty"
