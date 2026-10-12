@@ -263,10 +263,13 @@ def load_test_problems(records: list[dict], row: dict | None) -> list[str]:
         ]
     if len(records) != 1:
         return [f"{len(records)} measurement files, expected exactly one"]
+    from modelroom.measurements import shipped_protocol
+
     record = records[0]
     problems = []
-    if record["protocol"] != "v1":
-        problems.append(f"protocol is {record['protocol']!r}, expected 'v1'")
+    expected_protocol = f"v{shipped_protocol().protocol_version}"
+    if record["protocol"] != expected_protocol:
+        problems.append(f"protocol is {record['protocol']!r}, expected {expected_protocol!r}")
     if record["validity"] != "valid":
         problems.append(f"validity is {record['validity']!r}: {record['validity_reason']}")
     if not record["comparable"]:
