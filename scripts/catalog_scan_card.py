@@ -28,6 +28,10 @@ not); a version such as `v0.6.3` or a card name such as `A100-80GB` near the sen
 A sentence with a negation or an `optional`, one that speaks of training, tuning, quantizing, converting or building, and
 any sentence under a heading that speaks of those, give no name; so does a card that names two different packages.
 Instructions for another model, an install line alone and every other wording give no name.
+
+**Limit of the rule** (decision of the management, the measure of V5): it guards against realistic forms of model cards,
+not against a card written to deceive it. Of a card longer than the window the caller hands over the start alone and
+takes a positive finding only (`catalog_scan_packages`).
 """
 
 from __future__ import annotations
@@ -124,6 +128,26 @@ def _split(text: str) -> tuple[list[tuple[str, list[str]]], list[tuple[int, str,
     if fence is not None:  # an unclosed fence is a block to its end; the text in it is not prose
         blocks.append((fence[2], fence[3]))
     return blocks, paragraphs
+
+
+def whole_paragraphs(text: str) -> str:
+    """The start of a cut card up to its last whole paragraph: what follows the last blank line, heading or code block
+    that ended -- a paragraph or a code block still open at the cut -- goes, since it may go on with what limits it."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")[:-1]  # the text ends at a line end: the last is empty
+    boundary, fence = 0, None
+    for number, line in enumerate(lines):
+        if fence is not None:
+            if re.match(r"^ {0,3}(" + re.escape(fence[0]) + "{" + str(fence[1]) + r",})[ \t]*$", line):
+                fence, boundary = None, number + 1
+            continue
+        opening = _FENCE_RE.match(line)
+        if opening:
+            fence, boundary = (opening.group(1)[0], len(opening.group(1))), number
+        elif not line.strip():
+            boundary = number
+        elif _HEADING_RE.match(line):
+            boundary = number + 1
+    return "".join(line + "\n" for line in lines[:boundary])
 
 
 def _logical_lines(lines: list[str]) -> list[str]:

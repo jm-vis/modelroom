@@ -368,3 +368,116 @@ def test_the_card_of_a_model_that_is_not_a_text_or_vision_row_is_not_asked(env):
     F.quiet_world(hub)
     _, _, transport = run(env, hub)
     assert not any("Comet-Embed" in url or "Comet-Echo" in url for _, url in transport.calls)
+
+
+# --- the start of a card longer than the window (GF decision a) ---------------------------------------------------------------
+
+FILLER = "".join(f"| row {i} | " + "ä" * 120 + " |\n" for i in range(2000))  # bloated HTML-like tables, far over the window
+
+
+def big_card(hub, text: str, commit: str = F.SHA_A) -> bytes:
+    """A card longer than the window: the Hub answers the range with its first `CARD_MAX_BYTES` bytes (206)."""
+    raw = text.encode("utf-8")
+    assert len(raw) > CARD_MAX_BYTES
+    ranged(hub, raw[:CARD_MAX_BYTES], f"bytes 0-{CARD_MAX_BYTES - 1}/{len(raw)}", commit)
+    return raw
+
+
+def ranged(hub, body: bytes, content_range: str | None, commit: str = F.SHA_A) -> None:
+    """The model answer and a `206` for the card with `content_range` (None: the header is missing)."""
+    F.card(hub, ROW, None, F.SHA_A)
+    headers = {"X-Repo-Commit": commit} | ({"Content-Range": content_range} if content_range is not None else {})
+    F.put(hub, K.card_url(ROW, F.SHA_A), body, status=206, headers=headers)
+
+
+@pytest.mark.parametrize("body, content_range", [
+    (b"# Atlas\n\nNothing.\n", "bytes 0-17/200000"),  # short, of a longer card: no proof of a whole card
+    (b"# Atlas\n\nNothing.\n", None),  # no range said
+    (b"# Atlas\n\nNothing.\n", "bytes 0-9/18"),  # a range that is not the body
+    (b"# Atlas\n\nNothing.\n", "bytes 5-22/40"),  # not from the start
+    (b"# Atlas\n\nNothing.\n", "bytes 0-17/x"),  # no total
+], ids=["short of a longer card", "no range", "range not the body", "not from the start", "no total"])
+def test_a_206_whose_range_does_not_prove_a_whole_card_or_a_start_is_not_read(env, body, content_range):
+    store_note(env, stored_note(package="atlas-inference"))
+    hub = Hub()
+    F.quiet_world(hub)
+    ranged(hub, body, content_range)
+    proposal, _, _ = run(env, hub)
+    assert note_change(proposal) is None and any(note.startswith(f"{ROW}: model card not read") for note in proposal["notes"])
+
+
+def test_a_206_of_a_whole_card_of_exactly_the_window_is_the_whole_card(env):
+    store_note(env, stored_note(package="atlas-inference"))
+    hub = Hub()
+    F.quiet_world(hub)
+    body = ("# Atlas\n\n" + "x" * CARD_MAX_BYTES).encode("utf-8")[: CARD_MAX_BYTES - 1] + b"\n"
+    ranged(hub, body, f"bytes 0-{CARD_MAX_BYTES - 1}/{CARD_MAX_BYTES}")
+    proposal, _, _ = run(env, hub)
+    assert note_change(proposal)["fields"]["setup_note"]["new"]["status"] == "none_recognized"
+
+
+def test_a_statement_still_open_at_the_end_of_the_window_gives_no_package_name(env):
+    hub = Hub()
+    F.quiet_world(hub)
+    head = "# Atlas\n\n" + ATLAS_START + "\n"
+    tail = "Atlas requires the atlas-inference package for vLLM\n"
+    pad = CARD_MAX_BYTES - len((head + "\n\n" + tail).encode("utf-8"))
+    raw = big_card(hub, head + "x" * pad + "\n\n" + tail + "rollouts during training, not for inference.\n\n" + FILLER)
+    assert raw[:CARD_MAX_BYTES].endswith(tail.encode("utf-8"))
+    proposal, _, _ = run(env, hub)
+    new = note_change(proposal)["fields"]["setup_note"]["new"]
+    assert (new["status"], new["package"]) == ("instructions", None)
+
+
+def test_a_card_longer_than_the_window_is_read_at_its_start_and_a_start_block_there_counts(env):
+    hub = Hub()
+    F.quiet_world(hub)
+    big_card(hub, "# Atlas\n\n" + ATLAS_REQUIRES + "\n" + ATLAS_START + "\n" + FILLER)
+    proposal, _, transport = run(env, hub)
+    new = note_change(proposal)["fields"]["setup_note"]["new"]
+    assert (new["status"], new["package"], new["card_revision"]) == ("instructions", "atlas-inference", F.SHA_A)
+    asked = [i for i, (_, url) in enumerate(transport.calls) if url == K.card_url(ROW, F.SHA_A)]
+    assert len(asked) == 1 and transport.headers[asked[0]] == {"Range": f"bytes=0-{CARD_MAX_BYTES - 1}"}
+
+
+@pytest.mark.parametrize("text", [
+    "# Atlas\n\n" + FILLER,  # nothing at the start
+    "# Atlas\n\n" + FILLER + ATLAS_REQUIRES + "\n" + ATLAS_START,  # the start block only behind the window
+], ids=["nothing at the start", "the hit behind the window"])
+def test_a_start_of_a_card_without_a_hit_is_not_read_and_the_stored_note_stays(env, text):
+    store_note(env, stored_note(package="atlas-inference"))
+    hub = Hub()
+    F.quiet_world(hub)
+    big_card(hub, text)
+    proposal, result, _ = run(env, hub)
+    assert note_change(proposal) is None and result.exit_code == 1
+    assert any(note.startswith(f"{ROW}: model card not read") and "setup note is unchanged" in note for note in proposal["notes"])
+
+
+def test_a_start_of_a_card_without_a_hit_is_no_statement_that_nothing_was_recognized_without_a_stored_note(env):
+    hub = Hub()
+    F.quiet_world(hub)
+    big_card(hub, "# Atlas\n\n" + FILLER)
+    proposal, _, _ = run(env, hub)
+    assert note_change(proposal) is None
+    assert any(note.startswith(f"{ROW}: model card not read") for note in proposal["notes"])
+
+
+def test_the_window_may_end_inside_a_line_and_inside_a_character(env):
+    hub = Hub()
+    F.quiet_world(hub)
+    head = "# Atlas\n\n" + ATLAS_START + "\n"
+    pad = CARD_MAX_BYTES - len(head.encode("utf-8")) - 1  # the window ends on the first byte of an `ä`
+    raw = big_card(hub, head + "x" * pad + "ä" * 100 + "\n" + FILLER)
+    assert raw[CARD_MAX_BYTES - 1:CARD_MAX_BYTES + 1] == "ä".encode("utf-8")
+    proposal, _, _ = run(env, hub)
+    assert note_change(proposal)["fields"]["setup_note"]["new"]["status"] == "instructions"
+
+
+def test_a_start_of_a_card_from_another_revision_is_not_taken(env):
+    store_note(env, stored_note(package="atlas-inference"))
+    hub = Hub()
+    F.quiet_world(hub)
+    big_card(hub, "# Atlas\n\n" + ATLAS_START + "\n" + FILLER, commit=F.SHA_B)
+    proposal, _, _ = run(env, hub)
+    assert note_change(proposal) is None and any(note.startswith(f"{ROW}: model card not read") for note in proposal["notes"])

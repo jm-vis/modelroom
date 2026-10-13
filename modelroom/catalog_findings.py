@@ -188,7 +188,7 @@ SETUP_STATUSES = ("instructions", "none_recognized", "not_read")
 # V6: how much of the Hub one run of the scanner spends on the checks, and how many rows it takes.
 PACKAGE_ROWS_PER_RUN = 40
 PACKAGE_STAGE_BUDGET = 200
-CARD_MAX_BYTES = 128 * 1024  # the model card read for a setup note; a longer one is `not_read`
+CARD_MAX_BYTES = 128 * 1024  # the window of a model card read for a setup note; of a longer card only the start, positive findings only
 
 _REVISION_RE = re.compile(r"[0-9a-f]{40}")
 _ARCHITECTURE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")

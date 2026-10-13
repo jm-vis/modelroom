@@ -3,7 +3,9 @@
 For each catalog row of kind `text` or `vision` that a run takes (`catalog_findings.package_rows_for_run`), in this order:
 
 1. the card of the publisher's repository is read at a revision fixed first, and the rule of `catalog_scan_card` decides
-   whether it holds setup instructions for vLLM (`SetupNote`, V7);
+   whether it holds setup instructions for vLLM (`SetupNote`, V7); one range request for the window `CARD_MAX_BYTES`,
+   and of a longer card only the start counts, up to its last whole paragraph and for a positive finding only (no
+   finding there: `not_read`); whether a `206` is the whole card or a start its `Content-Range` must prove;
 2. the GGUF repositories that quantize the row are listed through the relation (`filter=base_model:quantized:<row>`,
    `gguf` and `sha` requested), whoever owns them, and every weight package of each is checked: the architecture it
    states is compared with the block of the llama.cpp source of one commit (`PackageCheck`, V1, V5).
@@ -14,19 +16,23 @@ size (`architecture_source` `hub_field`); every other package is read from the f
 
 The stage only reads. It returns the lists and notes it wants the proposal to carry; the scanner writes them as
 proposals, and setting or removing goes through the existing approval. A fault of the source, the network, the budget or a
-parser adds no `absent`, removes nothing, and leaves the day of every stored check as it was.
+parser adds no `absent`, removes nothing, and leaves the day of every stored check as it was. The measure of a fault is a
+realistic fault of the network or of an answer, and it fails only its unit (a card, a package, a repository, a row),
+never the run.
 
 **Every unit is reached in a finite number of runs, whatever the others do (V6).** Rows go by `package_attempts`
 (`package_rows_for_run`). Inside a row the same rule holds one level down, in the scanner's state `package_unit_attempts`
-(`record_units`: the form of `record_attempts`, the repository compared without case, the identity as written): a GGUF repository is recorded when its read ended, with a check or with a fault, and a
-package when the read of its head failed; the repositories of a row are read never-tried first, then the one tried longest
+(`record_units`: the form of `record_attempts`, the repository compared without case, the identity as written): a GGUF
+repository is recorded when its read ended, with a check or with a fault, and a package when the read of its head failed; the repositories of a row are read never-tried first, then the one tried longest
 ago (the order of downloads among equals), the packages of a repository likewise (a package with a check costs no request).
 So a repository or a package that fails every day goes behind the others. The budget is no fault of a unit: the one it cuts
 is not recorded and comes first next time, and what was read before it is kept. A row the budget cuts stays untried, so the
 next run takes it first and goes on behind what it recorded -- except the first row of a run that sent a request for it:
 it had the whole budget, waiting gives it no more, so it is tried and the rows behind it are not held back. A row for
 which no request was sent (the budget was spent before it) is never tried. Bound: a row whose list alone takes the
-whole budget of a run (some ten thousand repositories at `LIST_PAGE`) gets no repository read.
+whole budget of a run (some ten thousand repositories at `LIST_PAGE`) gets no repository read, and a file list over
+more than one page (some thousand entries) is a fault of its repository; both are taken as unrealistic (decision of the
+management, 2026-10-14), neither is continued page by page.
 """
 
 from __future__ import annotations
@@ -89,6 +95,7 @@ _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ARCH_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 _SHARD_RE = re.compile(r"-(?:split-)?(\d{5})-of-\d{5}\.gguf$", re.IGNORECASE)
 _NEXT_RE = re.compile(r'rel="?next"?', re.IGNORECASE)
+_CONTENT_RANGE_RE = re.compile(r"bytes (\d{1,12})-(\d{1,12})/(\d{1,12})")
 _RELATION_RE = re.compile(r"^(base_model:(?:[a-z]+:)?)(.+)$")
 
 
@@ -444,17 +451,42 @@ class PackageStage:
         base = self._base_note(row)
         if base is not None and base.card_revision == revision:
             return  # the card of the stored revision is not read again
-        response = self._get(self.files, card_url(model, revision), CARD_MAX_BYTES)
+        rng = {"Range": f"bytes=0-{CARD_MAX_BYTES - 1}"}
+        response = self._get(self.files, card_url(model, revision), CARD_MAX_BYTES, rng, ok=(200, 206))
         if response.header("X-Repo-Commit") not in (None, revision):
             raise _Fail("the card is not from the revision that was asked for")
+        body, start = response.body, False
+        if response.status == 206:
+            start = self._card_range(response.header("Content-Range"), len(body))
+        if start:
+            body = body[: body.rfind(b"\n") + 1]  # the last line may be cut, inside a character too: it goes
         try:
-            text = response.body.decode("utf-8")
+            text = body.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise _Fail("the card is no UTF-8 text") from exc
+        if start:
+            text = C.whole_paragraphs(text)  # a statement still open at the cut may go on with what limits it: it goes
         found = C.detect(text, model)
+        if start and found.status == "none_recognized":
+            raise _Fail(f"the card is longer than {CARD_MAX_BYTES} bytes and its start holds no instructions")
         if found.status == "none_recognized" and base is None:
             return
         self.result.setup_notes[model] = C.note_of(model, found, revision, self.today).model_dump(mode="json")
+
+    @staticmethod
+    def _card_range(content_range: str | None, size: int) -> bool:
+        """What a `206` of the card is, by its `Content-Range`: `False` the whole card (`bytes 0-<size-1>/<size>`), `True`
+        the start of a longer one (the window full, `bytes 0-<window-1>/<more>`); anything else -- missing, another range,
+        a total that does not fit -- proves neither and is a fault."""
+        match = _CONTENT_RANGE_RE.fullmatch((content_range or "").strip())
+        if match is None or int(match.group(1)) != 0 or int(match.group(2)) != size - 1:
+            raise _Fail("the range of the card answer does not show what part of the card it is")
+        total = int(match.group(3))
+        if total == size:
+            return False
+        if size == CARD_MAX_BYTES and total > size:
+            return True
+        raise _Fail("the range of the card answer does not show what part of the card it is")
 
     # --- the package checks (V1, V5, V6)
 

@@ -5050,17 +5050,44 @@ again. A stored check is compared again with every source that was read whole,
 without a Hub request, as long as the repository's revision in the list is the one stored; a revision that
 moved is read again.
 
+Inside a row the same rule holds one level down (P4): `package_unit_attempts` in the same state file holds the UTC
+day a GGUF repository was last read to its end (with a check or with a fault) and a package whose header read
+failed (`<repo>:<identity>`; the repository compared by `hf_id_key`, the identity as written; entries older than 60
+days are dropped). Repositories and packages are read never tried first, then the one tried longest ago, so a unit
+that fails every day goes behind the others. The budget is no fault of a unit: the one it cuts is not recorded.
+A row the budget cuts stays untried, except the first row of a run for which a request was sent; a row for which no
+request was sent is never tried. **Bound** (decision of the management, 2026-10-14): the list of a row and the file
+list of a repository are not continued over runs page by page -- a row whose list alone takes the whole budget
+(some ten thousand repositories) and a file list longer than one page (some thousand entries) are taken as
+unrealistic; the second is a fault of that repository with a note, and deletes nothing.
+
 ### Setup notes of model cards (V7)
 
 A `SetupNote` is a pointer to the model card of the **publisher's** repository, valid for that model and that card
-revision. The scanner reads the card's Markdown text (at most `CARD_MAX_BYTES`, 128 KiB; a longer or unreadable
-card is `not_read`) at a revision it fixed first (`resolve/<revision>/README.md`), and its rule is finite and
+revision. The scanner reads the card's Markdown text at a revision it fixed first (`resolve/<revision>/README.md`),
+by a range request for its first `CARD_MAX_BYTES` (128 KiB, the window; an unreadable card is `not_read`). **A card
+longer than the window** (decision of the management, 2026-10-14; measured: publisher cards 7-28 KB, one card of
+236 KB bloated by HTML tables) is read at its start. What a `206` is, its `Content-Range` alone proves: `bytes
+0-<n-1>/<n>` for a body of `n` bytes is the whole card; `bytes 0-<window-1>/<total>` with a body that fills the window
+and `total` above it is a start; anything else -- the header missing, another range, a total that fits neither -- is a
+fault (`not_read`). Of a start the last line (cut, inside a character too) and then the last paragraph or code block
+still open at the cut are dropped (a statement may go on with what limits it), and only a **positive** finding counts
+(`instructions`, with `package` where the rule names one); a start without one is `not_read`, never
+`none_recognized`, and the stored note stays. A `200` up to the window is the whole card, read as before; a `200`
+longer than the window and an `X-Repo-Commit` of another revision are faults (`not_read`). The rule is finite and
 documented with positive and negative fixtures (P4). `instructions`: an unambiguous `vllm serve` block of
 this model; `package` only for an explicit statement that a named package is required for inference (negation,
 training requirements and instructions for other models give none). `none_recognized` says only that the rule
 found nothing. `not_read` is the scanner's report of a card it could not read: it is never stored, a fresh
 `not_read` changes no stored note (`merge_setup_note`), and a note of another card revision is read again, not
 carried. Nothing of a card is executed or copied.
+
+**Limit of the rule** (decision of the management, 2026-10-14, the measure of V5): the rule guards against
+**realistic forms of model cards** -- a start block, a sentence that names a package, sections and lists of several
+models, negation, training -- and not against a card written to deceive it; in doubt it gives no package name (a
+missed name is allowed, a wrong one is not). **Faults of the run** (network, answer, form): the measure is realistic
+faults of the network and of answers, and one fault fails only its unit (a card, a package, a repository, a row),
+never the run.
 
 ### Origin of a package (V4)
 
