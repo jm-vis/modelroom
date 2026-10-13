@@ -32,7 +32,7 @@ from typing import Mapping, Sequence
 
 from .catalog import Catalog
 from .contracts import validate_hf_repo, validate_ollama_name
-from .guided_contracts import UNKNOWN, SearchHit
+from .guided_contracts import UNKNOWN, DirectLogEntry, SearchHit
 from .http import BudgetExhaustedError, BudgetedTransport, RedirectingTransport, RequestBudget, Transport
 from .relation import check_relation
 from .search_age import HF_API, MAX_SUCCESSOR_EDGES, AgeVerdict, decide_age
@@ -145,6 +145,11 @@ class SearchOutcome:
     # search followed, so `requests` has to count it -- otherwise the log says two requests for a
     # run that made three (second-model round, 2026-09-25).
     extra_requests: int = 0
+    # AP9-KO (V8, V9), both filled by the guided mode after the search and both empty otherwise, so a
+    # search without them writes the log it always wrote: one entry for every publisher model asked for
+    # as a direct find, and how many catalog models the knowledge hint could not show for its limit.
+    direct: list[DirectLogEntry] = field(default_factory=list)
+    knowledge_hint: int = 0
 
     @property
     def resolved(self) -> int:
@@ -197,7 +202,7 @@ class SearchOutcome:
         from this one reading of the search.
         """
         classes = {n: "packager" for n in self.listed_packagers} | {n: "publisher" for n in self.publishers}
-        return {
+        log = {
             "schema_version": SEARCH_LOG_SCHEMA_VERSION,
             "word": self.query,
             "mode": self.mode,
@@ -218,6 +223,11 @@ class SearchOutcome:
             "unresolved": [{"reason": reason, "count": count} for reason, count in sorted(unresolved.items())],
             "models": release_log(self.hits),
         }
+        if self.direct:
+            log["direct"] = [entry.model_dump(mode="json") for entry in self.direct]
+        if self.knowledge_hint:
+            log["knowledge_hint"] = self.knowledge_hint
+        return log
 
 
 @dataclass

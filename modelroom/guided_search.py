@@ -15,7 +15,10 @@ What lives here:
    publisher of the catalog was asked and answered with nothing at all, which used to read "at no
    publisher of this catalog that answered" and left the reader guessing which one that was;
 3. **the candidates** a typo leads to (`search.SearchOutcome.candidates`), as the entries of a
-   list, so a search that found nothing ends in a choice rather than in an empty step.
+   list, so a search that found nothing ends in a choice rather than in an empty step;
+4. **what the catalog adds** (AP9-KO, `search_direct.py`): with a vLLM machine among the chosen ones
+   the publisher's own models the input names are asked for directly and join the list before it
+   is built (V8); without one, a gray line says which of them no GGUF is known for (V9).
 
 Everything but `search_step` is pure. `GuidedRun` is only an annotation here (`TYPE_CHECKING`):
 `guided.py` imports this module, never the other way round at run time.
@@ -23,17 +26,21 @@ Everything but `search_step` is pure. `GuidedRun` is only an annotation here (`T
 
 from __future__ import annotations
 
+import textwrap
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from .config import Configuration
+from .contracts import Package, SchemaVersionError, hf_id_key
 from .dialog import Choice
 from .guided_context import Checked, machine_checked, vllm_among_chosen
-from .guided_models import ModelChoice, list_context, model_choices, unusable_counts
-from .screen import number_word, repositories_note, searched_note, yes_no
+from .guided_models import LINE_LIMIT, ModelChoice, hit_reason, list_context, model_choices, unusable_counts
+from .screen import NOTE_INDENT, number_word, repositories_note, searched_note, yes_no
 from .search import DEFAULT_PACKAGERS, SearchError, SearchOutcome, run_search
-from .state import write_search_log
+from .search_direct import find_direct, knowledge_hints
+from .search_word import parse_search
+from .state import UnreadableStateFileError, read_snapshot, write_search_log
 from .tensor_search import search_tensor_repos
 
 if TYPE_CHECKING:  # pragma: no cover -- the annotation only; no import at run time
@@ -97,6 +104,8 @@ class SearchStep:
     requests_kept: bool
     filtered: bool
     tensor_repos: dict[str, list[str]] = field(default_factory=dict)
+    # AP9-KO (V9): the gray lines of a search without a vLLM machine, shown after the two notes.
+    hints: list[str] = field(default_factory=list)
 
 
 def search_step(run: GuidedRun, config: Configuration, results_dir: Path) -> SearchStep:
@@ -120,18 +129,28 @@ def search_step(run: GuidedRun, config: Configuration, results_dir: Path) -> Sea
     run.screen.answer(FILTER_QUESTION, yes_no(filtered))
     context = list_context(config.guided.context)
     checked = machine_checked(run.pointer_path, config, results_dir)
-    step = _searched(run, config, name, filtered, checked, context)
+    vllm = vllm_among_chosen(run, config)
+    step = _searched(run, config, name, filtered, checked, context, direct=vllm)
     if not step.models and step.outcome.candidates:
         again = _did_you_mean(run, step.outcome.candidates)
         if again is not None:
-            step = _searched(run, config, again, filtered, checked, context)
-    step = replace(step, tensor_repos=_tensor_hits(run, vllm_among_chosen(run, config), step.outcome.hits))
+            step = _searched(run, config, again, filtered, checked, context, direct=vllm)
+    step = replace(step, tensor_repos=_tensor_hits(run, vllm, step.outcome.hits))
+    if not vllm:
+        step = _with_hints(run, config, step)
     _report(run, config, step)
     return step
 
 
 def _searched(
-    run: GuidedRun, config: Configuration, name: str, filtered: bool, checked: Checked, context: int
+    run: GuidedRun,
+    config: Configuration,
+    name: str,
+    filtered: bool,
+    checked: Checked,
+    context: int,
+    *,
+    direct: bool = False,
 ) -> SearchStep:
     """One search and the models it offers -- no line written yet, so a retry leaves none behind.
 
@@ -157,6 +176,8 @@ def _searched(
         )
     except SearchError as exc:
         raise GuidedError(str(exc)) from exc
+    if direct:
+        outcome = _with_direct_finds(run, name, filtered, outcome)
     # The pair the configuration holds per base model, for a model no hit names an Ollama name of:
     # the fetch uses it, so the list shows it rather than a dash (decided 2026-09-25).
     configured = {
@@ -184,6 +205,52 @@ def _searched(
         requests_kept=config.guided.requests_origin != "default",
         filtered=filtered,
     )
+
+
+def _with_direct_finds(run: GuidedRun, name: str, filtered: bool, outcome: SearchOutcome) -> SearchOutcome:
+    """AP9-KO (V8): the publisher's own models the input names, beside the packages found by GGUF.
+
+    Only with a vLLM machine among the chosen ones. Made before the list is built and before the question
+    after a typo, so a model with no GGUF at all is a choice even when the owner filter is on. A base model a
+    package hit already offers (`hit_reason` is `None`, by `hf_id_key`) is not asked for again. What is found
+    is only read: the configuration is written for the models a person chooses, through the existing change.
+    """
+    offered = {
+        hf_id_key(hit.resolved_base_model)
+        for hit in outcome.hits
+        if hit.resolved_base_model is not None and hit_reason(hit, filtered, typed=outcome.typed) is None
+    }
+    found = find_direct(run.transport, run.budget, run.catalog, parse_search(name), skip=offered)
+    # The requests of the direct find are booked in the log's budget as well: it says what is left for the fetch.
+    return replace(outcome, hits=[*outcome.hits, *found.hits], direct=found.log, budget_used=run.budget.used)
+
+
+def _with_hints(run: GuidedRun, config: Configuration, step: SearchStep) -> SearchStep:
+    """AP9-KO (V9): what the catalog knows about the models the input names, for a search with no vLLM machine.
+
+    No request. A GGUF hit of this very search that resolved to a model counts as a known GGUF for it.
+    """
+    found = {hf_id_key(hit.resolved_base_model) for hit in step.outcome.hits if hit.resolved_base_model is not None}
+    hints, left_out = knowledge_hints(run.catalog, parse_search(step.outcome.query), found, _tensor_proven(config))
+    return replace(step, hints=hints, outcome=replace(step.outcome, knowledge_hint=left_out))
+
+
+def _tensor_proven(config: Configuration) -> set[str]:
+    """The models the snapshot of this folder holds a tensor package of: the positive proof of the hint's second sentence."""
+    try:
+        snapshot = read_snapshot(config)
+    except (SchemaVersionError, UnreadableStateFileError):
+        return set()
+    return proven_tensor_models(snapshot.packages) if snapshot is not None else set()
+
+
+def proven_tensor_models(packages: Sequence[Package]) -> set[str]:
+    """The `hf_id_key` of every base model with an active, complete Hugging Face tensor package."""
+    return {
+        hf_id_key(package.base_model_hf_repo)
+        for package in packages
+        if package.source == "huggingface" and package.format == "tensor" and package.active and package.complete
+    }
 
 
 def _tensor_hits(run: GuidedRun, wanted: bool, hits: Sequence) -> dict[str, list[str]]:
@@ -215,6 +282,8 @@ def _tensor_hits(run: GuidedRun, wanted: bool, hits: Sequence) -> dict[str, list
         note = outcome.note()
         if note is not None:
             run.screen.note(f"{base}: {note}")
+        for error in outcome.errors:  # a diagnosis, not a sentence: the account and the kind of error
+            run.screen.note(f"{base}: {error}")
     return repos_by_base
 
 
@@ -244,8 +313,18 @@ def _report(run: GuidedRun, config: Configuration, step: SearchStep) -> None:
         # The search itself went through; its log is a record beside the run. A folder that cannot
         # hold it is said out loud and the run goes on with the choice it has to offer.
         run.failed(f"the log of this search was not written: {exc}")
-    for note in [*run.catalog_notes, *outcome.notes, *search_notes(log, len(outcome.hits), len(step.models), run.screen.glyphs.dot)]:
+    notes = [*run.catalog_notes, *outcome.notes, *search_notes(log, len(outcome.hits), len(step.models), run.screen.glyphs.dot)]
+    for note in [*notes, *(part for hint in step.hints for part in hint_lines(hint))]:
         run.screen.note(note)
+
+
+def hint_lines(hint: str) -> list[str]:
+    """One hint of the catalog (E3, fixed words) in the lines of a 100-column screen, broken at blanks only.
+
+    The sentence is longer than a note line for a model with a long name; the words are the fixed ones and
+    only the line break is ours (the layout rule of decision E3). The indent of a note is counted.
+    """
+    return textwrap.wrap(hint, LINE_LIMIT - len(NOTE_INDENT), break_long_words=False, break_on_hyphens=False)
 
 
 def search_notes(log: dict, repositories: int, models: int, dot: str = "·") -> list[str]:
