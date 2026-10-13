@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
+from .catalog import Catalog
+from .catalog_findings import SetupNote
 from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package, Rating, Snapshot
 from .document import (
@@ -37,6 +39,7 @@ from .fit import GIB
 from .guided_contracts import Note
 from .importer import ProfileScan
 from .measurements import MeasurementRecord, Scenario
+from .origin import listed_packagers_of, package_origin
 from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
 from .quantization import package_identity_key
 from .parameters import parameter_count
@@ -535,6 +538,46 @@ def _repos_with_rows(blocks: list[MachineRanking]) -> list[str]:
     return seen
 
 
+def _with_evidence(
+    blocks: list[MachineRanking], packages: Sequence[Package], catalog: Catalog | None
+) -> tuple[list[MachineRanking], dict[str, SetupNote]]:
+    """The blocks with the catalog's check on each row of a package it has one for, and the setup note of each
+    base model that has a row (AP9-KO, V11). No catalog gives the blocks back as they are and no note: the document
+    of release 1.0.0. A catalog that holds nothing for these rows gives that document only where it also changes the
+    origin of no row (`origin: "other"` needs no check). The rows keep their place and their class; what a check
+    changes in a view is not decided here."""
+    if catalog is None:
+        return blocks, {}
+    updates: dict[tuple[str, str, str], dict] = {}
+    listed = listed_packagers_of(catalog)
+    for package in packages:
+        update: dict = {}
+        found = catalog.package_check(package)
+        if found is not None:
+            update["load_check"] = found
+        if package.source == "huggingface" and package.format == "gguf" and package.repo is not None:
+            if package_origin(package.repo.split("/", 1)[0], package.base_model_hf_repo, listed) == "other":
+                update["origin"] = "other"
+        if update:
+            updates[package_identity_key(package)] = update
+
+    def checked(entries):
+        return [
+            entry.model_copy(update=updates[tuple(entry.package_identity)]) if tuple(entry.package_identity) in updates else entry
+            for entry in entries
+        ]
+
+    if updates:
+        blocks = [
+            block.model_copy(
+                update={"ranked": checked(block.ranked), "not_covered": checked(block.not_covered), "no_fit": checked(block.no_fit)}
+            )
+            for block in blocks
+        ]
+    notes = {repo: note for repo in _repos_with_rows(blocks) if (note := catalog.setup_note_for(repo)) is not None}
+    return blocks, notes
+
+
 def _collect_ratings(
     rating_source: RatingSource | None, base_model_repos: list[str]
 ) -> tuple[dict[str, Rating], str | None]:
@@ -575,8 +618,15 @@ def build_render_document(
     *,
     models: Mapping[str, ModelFacts] | None = None,
     live_vllm: Mapping[str, object] | None = None,
+    catalog: Catalog | None = None,
 ) -> RenderDocument:
     """The one object a render produces; pure, no I/O and no clock read.
+
+    `catalog` is the evidence (AP9-KO, V11): the check it holds for a package goes on that package's row
+    (`PackageLine.load_check`), the setup note it holds for a base model with rows into `setup_notes`. `None`
+    is the default and leaves the document exactly as it was: every package is `unknown`. A catalog that knows
+    nothing of these packages does so only where it changes the origin of no row (`_with_evidence`; CONTRACTS.md
+    V11).
 
     `profiles` maps every `config.machines` key to the `MachineProfile` the results folder
     holds for it (`machine_profile`); `measurements` maps a `profile_id` to that profile's
@@ -615,6 +665,7 @@ def build_render_document(
         )
         for machine, machine_config in config.machines.items()
     ]
+    blocks, setup_notes = _with_evidence(blocks, snapshot.packages, catalog)
     ratings, rating_error = _collect_ratings(rating_source, _repos_with_rows(blocks))
     rule = RANKING_RULE_PER_MODEL if per_model else RANKING_RULE
     # F5 (Codex r5-1): the rule says the per-runtime selection wherever a machine ranks both.
@@ -633,6 +684,7 @@ def build_render_document(
         ratings=ratings,
         areas=snapshot.areas,
         machines=blocks,
+        setup_notes=setup_notes,
     )
 
 

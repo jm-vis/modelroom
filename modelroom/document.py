@@ -15,10 +15,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
+from .catalog_findings import PackageCheck, SetupNote
 from .config import MAX_USERS, RequestsOrigin, check_requests_origin
-from .contracts import Area, Fit, Rating, check_aware_utc, validate_hf_repo
+from .contracts import Area, Fit, Rating, check_aware_utc, hf_id_key, validate_hf_repo
 from .guided_contracts import Note
 from .measurements import Scenario
 from .profile import HardwareProfile
@@ -41,6 +42,11 @@ class PackageLine(BaseModel):
 
     `quantization` and `package_context` are `unknown`/`None` when the package declares none --
     the renderer never substitutes a plausible value (CONTRACTS.md, "Language standard").
+
+    `load_check` (AP9-KO, additive, no new schema version) is the check the catalog holds for exactly
+    this package (`Catalog.package_check`); `None` is `unknown` -- the default, and then the key is not
+    written at all, so a document without evidence and without a changed origin is the document of release
+    1.0.0 byte for byte (CONTRACTS.md, V11).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -54,11 +60,25 @@ class PackageLine(BaseModel):
     package_context: int | None = Field(default=None, gt=0)
     provenance: str
     note: Note
+    load_check: PackageCheck | None = None
+    # V4, additive like `load_check`: `other` for a GGUF package of an account that neither owns this row's base
+    # model nor is a listed packager of the catalog the render was given (`origin.package_origin`). `None` is the
+    # default -- publisher, listed packager, an Ollama package, or no catalog -- and is not written. It steers the
+    # automatic recommendation only (P1); the document does not act on it.
+    origin: Literal["other"] | None = None
 
     @model_validator(mode="after")
     def _check_repo(self) -> "PackageLine":
         validate_hf_repo(self.base_model_hf_repo)
         return self
+
+    @model_serializer(mode="wrap")
+    def _leave_out_the_default(self, handler):
+        data = handler(self)
+        for name in ("load_check", "origin"):
+            if data.get(name) is None:
+                data.pop(name, None)
+        return data
 
 
 class RankedEntry(PackageLine):
@@ -178,6 +198,23 @@ class RenderDocument(BaseModel):
     machines: list[MachineRanking] = Field(default_factory=list)
     users: int | None = Field(default=None, ge=1, le=MAX_USERS)
     requests_origin: RequestsOrigin | None = None
+    # AP9-KO, additive like the load check of a row: the setup note of the catalog for each base model that
+    # has a row here, by its repository id. Empty is the default, and then the key is not written.
+    setup_notes: dict[str, SetupNote] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _leave_out_the_default(self, handler):
+        data = handler(self)
+        if not data.get("setup_notes"):
+            data.pop("setup_notes", None)
+        return data
+
+    @model_validator(mode="after")
+    def _check_notes(self) -> "RenderDocument":
+        for repo, note in self.setup_notes.items():
+            if hf_id_key(note.model) != hf_id_key(repo) or note.status != "instructions":
+                raise ValueError(f"setup_notes[{repo!r}] is not a note of {repo} that found instructions")
+        return self
 
     @model_validator(mode="after")
     def _check_requests(self) -> "RenderDocument":

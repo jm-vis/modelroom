@@ -84,6 +84,14 @@ def validate_hf_repo(value: str) -> str:
     return value
 
 
+def hf_id_key(value: str) -> str:
+    """The form in which two Hugging Face account or repository ids are compared (AP9-KO): the Hub treats them
+    case-insensitively, so `othercorp/Nova-7B-GGUF` and `OtherCorp/nova-7b-gguf` are one repository. Only for
+    comparing, indexing and keying -- an id is stored and shown as it was written; file names and revisions
+    are never folded."""
+    return value.casefold()
+
+
 def validate_repo_aliases(value: list[str]) -> list[str]:
     """Validate that every alias is a non-empty repo *name*, never `owner/name`.
 

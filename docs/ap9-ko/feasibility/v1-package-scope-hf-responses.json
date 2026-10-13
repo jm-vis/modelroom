@@ -1,0 +1,491 @@
+[
+  {
+    "base_model": "Aleph-Alpha/Kolibri-1",
+    "file_header_request": {
+      "fetched_utc": "2026-10-13T17:02:40Z",
+      "general_architecture_by_file": {
+        "Kolibri-1-Q2_K.gguf": "kolibri1",
+        "Kolibri-1-Q3_K_M.gguf": "kolibri1",
+        "Kolibri-1-Q4_K_M.gguf": "kolibri1",
+        "Q5_K_M/Kolibri-1-Q5_K_M-00001-of-00002.gguf": "kolibri1",
+        "Q5_K_M/Kolibri-1-Q5_K_M-00002-of-00002.gguf": null,
+        "Q6_K/Kolibri-1-Q6_K-00001-of-00002.gguf": "kolibri1",
+        "Q6_K/Kolibri-1-Q6_K-00002-of-00002.gguf": null,
+        "Q8_0/Kolibri-1-Q8_0-00001-of-00002.gguf": "kolibri1",
+        "Q8_0/Kolibri-1-Q8_0-00002-of-00002.gguf": null
+      },
+      "range": "bytes=0-65535",
+      "url": "https://huggingface.co/Hob-forge/Kolibri-1-GGUF/resolve/40eaa5cf6cfca3afaf8b8832bac962652edb0bde/<path>"
+    },
+    "file_matching_totalFileSize": [
+      "Kolibri-1-Q2_K.gguf"
+    ],
+    "gguf_files": [
+      {
+        "path": "Kolibri-1-Q2_K.gguf",
+        "size": 28634017760
+      },
+      {
+        "path": "Kolibri-1-Q3_K_M.gguf",
+        "size": 37523996640
+      },
+      {
+        "path": "Kolibri-1-Q4_K_M.gguf",
+        "size": 47454113472
+      },
+      {
+        "path": "Q5_K_M/Kolibri-1-Q5_K_M-00001-of-00002.gguf",
+        "size": 44739588864
+      },
+      {
+        "path": "Q5_K_M/Kolibri-1-Q5_K_M-00002-of-00002.gguf",
+        "size": 10849180800
+      },
+      {
+        "path": "Q6_K/Kolibri-1-Q6_K-00001-of-00002.gguf",
+        "size": 44711048544
+      },
+      {
+        "path": "Q6_K/Kolibri-1-Q6_K-00002-of-00002.gguf",
+        "size": 19520793120
+      },
+      {
+        "path": "Q8_0/Kolibri-1-Q8_0-00001-of-00002.gguf",
+        "size": 44679459296
+      },
+      {
+        "path": "Q8_0/Kolibri-1-Q8_0-00002-of-00002.gguf",
+        "size": 38455934400
+      }
+    ],
+    "model_gguf_field": {
+      "architecture": "kolibri1",
+      "context_length": 262144,
+      "eos_token": "<|im_end|>",
+      "total": 78103074560,
+      "totalFileSize": 28634017760
+    },
+    "model_request": {
+      "fetched_utc": "2026-10-13T17:02:40Z",
+      "url": "https://huggingface.co/api/models/Hob-forge/Kolibri-1-GGUF?expand[]=gguf&expand[]=sha"
+    },
+    "repo": "Hob-forge/Kolibri-1-GGUF",
+    "sha": "40eaa5cf6cfca3afaf8b8832bac962652edb0bde",
+    "tree_request": {
+      "fetched_utc": "2026-10-13T17:02:40Z",
+      "url": "https://huggingface.co/api/models/Hob-forge/Kolibri-1-GGUF/tree/main?recursive=true"
+    }
+  },
+  {
+    "base_model": "Aleph-Alpha/Kolibri-1",
+    "file_header_request": {
+      "fetched_utc": "2026-10-13T17:02:47Z",
+      "general_architecture_by_file": {
+        "Kolibri-1-APEX-2.4bpw.gguf": "kolibri1",
+        "Kolibri-1-APEX-i-compact.gguf": "kolibri1",
+        "Kolibri-1-APEX-i-mini.gguf": "kolibri1",
+        "Kolibri-1-APEX-i-quality.gguf": "kolibri1",
+        "Kolibri-1-uniform-IQ3_S.gguf": "kolibri1",
+        "Kolibri-1-uniform-Q4_K.gguf": "kolibri1",
+        "imatrix-kolibri1-de_en_code-filled.gguf": "imatrix"
+      },
+      "range": "bytes=0-65535",
+      "url": "https://huggingface.co/Myric/Kolibri-1-APEX-GGUF/resolve/ed6030d74fc73634b9b75d48ff6419afa283ffcf/<path>"
+    },
+    "file_matching_totalFileSize": [
+      "Kolibri-1-APEX-2.4bpw.gguf"
+    ],
+    "gguf_files": [
+      {
+        "path": "Kolibri-1-APEX-2.4bpw.gguf",
+        "size": 24379194880
+      },
+      {
+        "path": "Kolibri-1-APEX-i-compact.gguf",
+        "size": 34006433280
+      },
+      {
+        "path": "Kolibri-1-APEX-i-mini.gguf",
+        "size": 27164474880
+      },
+      {
+        "path": "Kolibri-1-APEX-i-quality.gguf",
+        "size": 42853793280
+      },
+      {
+        "path": "Kolibri-1-uniform-IQ3_S.gguf",
+        "size": 34950151680
+      },
+      {
+        "path": "Kolibri-1-uniform-Q4_K.gguf",
+        "size": 44977159680
+      },
+      {
+        "path": "imatrix-kolibri1-de_en_code-filled.gguf",
+        "size": 437263744
+      }
+    ],
+    "model_gguf_field": {
+      "architecture": "kolibri1",
+      "context_length": 262144,
+      "eos_token": "<|im_end|>",
+      "total": 78103074560,
+      "totalFileSize": 24379194880
+    },
+    "model_request": {
+      "fetched_utc": "2026-10-13T17:02:46Z",
+      "url": "https://huggingface.co/api/models/Myric/Kolibri-1-APEX-GGUF?expand[]=gguf&expand[]=sha"
+    },
+    "repo": "Myric/Kolibri-1-APEX-GGUF",
+    "sha": "ed6030d74fc73634b9b75d48ff6419afa283ffcf",
+    "tree_request": {
+      "fetched_utc": "2026-10-13T17:02:46Z",
+      "url": "https://huggingface.co/api/models/Myric/Kolibri-1-APEX-GGUF/tree/main?recursive=true"
+    }
+  },
+  {
+    "base_model": "sarvamai/sarvam-30b",
+    "file_header_request": {
+      "fetched_utc": "2026-10-13T17:02:52Z",
+      "general_architecture_by_file": {
+        "sarvamai.sarvam-30b.f16.gguf.Q2_K.gguf": "sarvam_moe",
+        "sarvamai.sarvam-30b.f16.gguf.Q3_K_M.gguf": "sarvam_moe",
+        "sarvamai.sarvam-30b.f16.gguf.Q4_K_M.gguf": "sarvam_moe",
+        "sarvamai.sarvam-30b.f16.gguf.Q5_K_M.gguf": "sarvam_moe",
+        "sarvamai.sarvam-30b.f16.gguf.Q6_K.gguf": "sarvam_moe",
+        "sarvamai.sarvam-30b.f16.gguf.Q8_0.gguf": "sarvam_moe"
+      },
+      "range": "bytes=0-65535",
+      "url": "https://huggingface.co/DevQuasar/sarvamai.sarvam-30b-GGUF/resolve/7016584b7282796b530f4b961fea2acf551f1862/<path>"
+    },
+    "file_matching_totalFileSize": [
+      "sarvamai.sarvam-30b.f16.gguf.Q2_K.gguf"
+    ],
+    "gguf_files": [
+      {
+        "path": "sarvamai.sarvam-30b.f16.gguf.Q2_K.gguf",
+        "size": 12155840352
+      },
+      {
+        "path": "sarvamai.sarvam-30b.f16.gguf.Q3_K_M.gguf",
+        "size": 15678498656
+      },
+      {
+        "path": "sarvamai.sarvam-30b.f16.gguf.Q4_K_M.gguf",
+        "size": 19582216032
+      },
+      {
+        "path": "sarvamai.sarvam-30b.f16.gguf.Q5_K_M.gguf",
+        "size": 22923421536
+      },
+      {
+        "path": "sarvamai.sarvam-30b.f16.gguf.Q6_K.gguf",
+        "size": 26422847328
+      },
+      {
+        "path": "sarvamai.sarvam-30b.f16.gguf.Q8_0.gguf",
+        "size": 34207491936
+      }
+    ],
+    "model_gguf_field": {
+      "architecture": "sarvam_moe",
+      "bos_token": "[@BOS@]",
+      "context_length": 131072,
+      "eos_token": "<|end_of_turn|>",
+      "total": 32152650368,
+      "totalFileSize": 12155840352
+    },
+    "model_request": {
+      "fetched_utc": "2026-10-13T17:02:52Z",
+      "url": "https://huggingface.co/api/models/DevQuasar/sarvamai.sarvam-30b-GGUF?expand[]=gguf&expand[]=sha"
+    },
+    "repo": "DevQuasar/sarvamai.sarvam-30b-GGUF",
+    "sha": "7016584b7282796b530f4b961fea2acf551f1862",
+    "tree_request": {
+      "fetched_utc": "2026-10-13T17:02:52Z",
+      "url": "https://huggingface.co/api/models/DevQuasar/sarvamai.sarvam-30b-GGUF/tree/main?recursive=true"
+    }
+  },
+  {
+    "base_model": "sarvamai/sarvam-30b",
+    "file_header_request": {
+      "fetched_utc": "2026-10-13T17:02:56Z",
+      "general_architecture_by_file": {
+        "sarvam-30B-Q4_K_M.gguf": "bailingmoe2",
+        "sarvam-30B-Q6_K.gguf": "bailingmoe2",
+        "sarvam-30B-Q8_0.gguf": "bailingmoe2",
+        "sarvam-30B-full-BF16.gguf": "bailingmoe2"
+      },
+      "range": "bytes=0-65535",
+      "url": "https://huggingface.co/Sumitc13/sarvam-30b-GGUF/resolve/15355e8fd54f45ef3bcf7cc1189137c06c74e766/<path>"
+    },
+    "file_matching_totalFileSize": [
+      "sarvam-30B-full-BF16.gguf"
+    ],
+    "gguf_files": [
+      {
+        "path": "sarvam-30B-Q4_K_M.gguf",
+        "size": 19579101888
+      },
+      {
+        "path": "sarvam-30B-Q6_K.gguf",
+        "size": 26420765376
+      },
+      {
+        "path": "sarvam-30B-Q8_0.gguf",
+        "size": 34205409984
+      },
+      {
+        "path": "sarvam-30B-full-BF16.gguf",
+        "size": 64339518144
+      }
+    ],
+    "model_gguf_field": {
+      "architecture": "bailingmoe2",
+      "bos_token": "[@BOS@]",
+      "context_length": 131072,
+      "eos_token": "<|end_of_turn|>",
+      "total": 32152650368,
+      "totalFileSize": 64339518144
+    },
+    "model_request": {
+      "fetched_utc": "2026-10-13T17:02:56Z",
+      "url": "https://huggingface.co/api/models/Sumitc13/sarvam-30b-GGUF?expand[]=gguf&expand[]=sha"
+    },
+    "repo": "Sumitc13/sarvam-30b-GGUF",
+    "sha": "15355e8fd54f45ef3bcf7cc1189137c06c74e766",
+    "tree_request": {
+      "fetched_utc": "2026-10-13T17:02:56Z",
+      "url": "https://huggingface.co/api/models/Sumitc13/sarvam-30b-GGUF/tree/main?recursive=true"
+    }
+  },
+  {
+    "base_model": "sarvamai/sarvam-30b",
+    "file_header_request": {
+      "fetched_utc": "2026-10-13T17:03:00Z",
+      "general_architecture_by_file": {
+        "sarvam-30b.Q4_K_M.gguf": "sarvam_moe"
+      },
+      "range": "bytes=0-65535",
+      "url": "https://huggingface.co/ThatCultivator/sarvam-30b-gguf/resolve/15c7a9b78d5ab7fcf2cdbcbaa9be8f2a7cea82bf/<path>"
+    },
+    "file_matching_totalFileSize": [
+      "sarvam-30b.Q4_K_M.gguf"
+    ],
+    "gguf_files": [
+      {
+        "path": "sarvam-30b.Q4_K_M.gguf",
+        "size": 19582216064
+      }
+    ],
+    "model_gguf_field": {
+      "architecture": "sarvam_moe",
+      "bos_token": "[@BOS@]",
+      "context_length": 131072,
+      "eos_token": "<|end_of_turn|>",
+      "total": 32152650368,
+      "totalFileSize": 19582216064
+    },
+    "model_request": {
+      "fetched_utc": "2026-10-13T17:02:59Z",
+      "url": "https://huggingface.co/api/models/ThatCultivator/sarvam-30b-gguf?expand[]=gguf&expand[]=sha"
+    },
+    "repo": "ThatCultivator/sarvam-30b-gguf",
+    "sha": "15c7a9b78d5ab7fcf2cdbcbaa9be8f2a7cea82bf",
+    "tree_request": {
+      "fetched_utc": "2026-10-13T17:02:59Z",
+      "url": "https://huggingface.co/api/models/ThatCultivator/sarvam-30b-gguf/tree/main?recursive=true"
+    }
+  },
+  {
+    "base_model": "upstage/Solar-Open-100B",
+    "file_header_request": {
+      "fetched_utc": "2026-10-13T17:03:01Z",
+      "general_architecture_by_file": {
+        "Solar-Open-100B.IQ4_XS.gguf": "glm4moe",
+        "Solar-Open-100B.Q2_K.gguf": "glm4moe",
+        "Solar-Open-100B.Q3_K_L.gguf": "glm4moe",
+        "Solar-Open-100B.Q3_K_M.gguf": "glm4moe",
+        "Solar-Open-100B.Q3_K_S.gguf": "glm4moe",
+        "Solar-Open-100B.Q4_K_M.gguf": "glm4moe",
+        "Solar-Open-100B.Q4_K_S.gguf": "glm4moe",
+        "Solar-Open-100B.Q5_K_M.gguf": "glm4moe",
+        "Solar-Open-100B.Q5_K_S.gguf": "glm4moe",
+        "Solar-Open-100B.Q6_K.gguf": "glm4moe",
+        "Solar-Open-100B.Q8_0.gguf": "glm4moe"
+      },
+      "range": "bytes=0-65535",
+      "url": "https://huggingface.co/mradermacher/Solar-Open-100B-GGUF/resolve/e72e988e2a4e736a4f015261084d03e6315f0dcd/<path>"
+    },
+    "file_matching_totalFileSize": [
+      "Solar-Open-100B.IQ4_XS.gguf"
+    ],
+    "gguf_files": [
+      {
+        "path": "Solar-Open-100B.IQ4_XS.gguf",
+        "size": 55529476256
+      },
+      {
+        "path": "Solar-Open-100B.Q2_K.gguf",
+        "size": 37689462944
+      },
+      {
+        "path": "Solar-Open-100B.Q3_K_L.gguf",
+        "size": 53359513760
+      },
+      {
+        "path": "Solar-Open-100B.Q3_K_M.gguf",
+        "size": 49329705120
+      },
+      {
+        "path": "Solar-Open-100B.Q3_K_S.gguf",
+        "size": 44522770592
+      },
+      {
+        "path": "Solar-Open-100B.Q4_K_M.gguf",
+        "size": 62256615584
+      },
+      {
+        "path": "Solar-Open-100B.Q4_K_S.gguf",
+        "size": 58555207840
+      },
+      {
+        "path": "Solar-Open-100B.Q5_K_M.gguf",
+        "size": 72942653600
+      },
+      {
+        "path": "Solar-Open-100B.Q5_K_S.gguf",
+        "size": 70773477536
+      },
+      {
+        "path": "Solar-Open-100B.Q6_K.gguf",
+        "size": 84296568992
+      },
+      {
+        "path": "Solar-Open-100B.Q8_0.gguf",
+        "size": 109151359136
+      }
+    ],
+    "model_gguf_field": {
+      "architecture": "glm4moe",
+      "bos_token": "<|startoftext|>",
+      "context_length": 131072,
+      "eos_token": "<|endoftext|>",
+      "total": 102651799552,
+      "totalFileSize": 55529476256
+    },
+    "model_request": {
+      "fetched_utc": "2026-10-13T17:03:00Z",
+      "url": "https://huggingface.co/api/models/mradermacher/Solar-Open-100B-GGUF?expand[]=gguf&expand[]=sha"
+    },
+    "repo": "mradermacher/Solar-Open-100B-GGUF",
+    "sha": "e72e988e2a4e736a4f015261084d03e6315f0dcd",
+    "tree_request": {
+      "fetched_utc": "2026-10-13T17:03:00Z",
+      "url": "https://huggingface.co/api/models/mradermacher/Solar-Open-100B-GGUF/tree/main?recursive=true"
+    }
+  },
+  {
+    "base_model": "upstage/Solar-Open-100B",
+    "file_header_request": {
+      "fetched_utc": "2026-10-13T17:03:08Z",
+      "general_architecture_by_file": {
+        "Solar-Open-100B.q2_k.gguf": "glm4moe",
+        "Solar-Open-100B.q3_k_l.gguf": "glm4moe",
+        "Solar-Open-100B.q3_k_m.gguf": "glm4moe",
+        "Solar-Open-100B.q3_k_s.gguf": "glm4moe",
+        "Solar-Open-100B.q4_0.gguf": "glm4moe",
+        "Solar-Open-100B.q4_1.gguf": "glm4moe",
+        "Solar-Open-100B.q4_k_m.gguf": "glm4moe",
+        "Solar-Open-100B.q4_k_s.gguf": "glm4moe",
+        "Solar-Open-100B.q5_0.gguf": "glm4moe",
+        "Solar-Open-100B.q5_1.gguf": "glm4moe",
+        "Solar-Open-100B.q5_k_m.gguf": "glm4moe",
+        "Solar-Open-100B.q5_k_s.gguf": "glm4moe",
+        "Solar-Open-100B.q6_k.gguf": "glm4moe",
+        "Solar-Open-100B.q8_0.gguf": "glm4moe"
+      },
+      "range": "bytes=0-65535",
+      "url": "https://huggingface.co/AaryanK/Solar-Open-100B-GGUF/resolve/cfe3fc26a5bfa6401071c97126130bfd25d5ace5/<path>"
+    },
+    "file_matching_totalFileSize": [
+      "Solar-Open-100B.q2_k.gguf"
+    ],
+    "gguf_files": [
+      {
+        "path": "Solar-Open-100B.q2_k.gguf",
+        "size": 37689462496
+      },
+      {
+        "path": "Solar-Open-100B.q3_k_l.gguf",
+        "size": 53359513312
+      },
+      {
+        "path": "Solar-Open-100B.q3_k_m.gguf",
+        "size": 49329704672
+      },
+      {
+        "path": "Solar-Open-100B.q3_k_s.gguf",
+        "size": 44522770144
+      },
+      {
+        "path": "Solar-Open-100B.q4_0.gguf",
+        "size": 58045861600
+      },
+      {
+        "path": "Solar-Open-100B.q4_1.gguf",
+        "size": 64409669344
+      },
+      {
+        "path": "Solar-Open-100B.q4_k_m.gguf",
+        "size": 62256615136
+      },
+      {
+        "path": "Solar-Open-100B.q4_k_s.gguf",
+        "size": 58555207392
+      },
+      {
+        "path": "Solar-Open-100B.q5_0.gguf",
+        "size": 70773477088
+      },
+      {
+        "path": "Solar-Open-100B.q5_1.gguf",
+        "size": 77137284832
+      },
+      {
+        "path": "Solar-Open-100B.q5_k_m.gguf",
+        "size": 72942653152
+      },
+      {
+        "path": "Solar-Open-100B.q5_k_s.gguf",
+        "size": 70773477088
+      },
+      {
+        "path": "Solar-Open-100B.q6_k.gguf",
+        "size": 84296568544
+      },
+      {
+        "path": "Solar-Open-100B.q8_0.gguf",
+        "size": 109151358688
+      }
+    ],
+    "model_gguf_field": {
+      "architecture": "glm4moe",
+      "bos_token": "<|startoftext|>",
+      "context_length": 131072,
+      "eos_token": "<|endoftext|>",
+      "total": 102651799552,
+      "totalFileSize": 37689462496
+    },
+    "model_request": {
+      "fetched_utc": "2026-10-13T17:03:07Z",
+      "url": "https://huggingface.co/api/models/AaryanK/Solar-Open-100B-GGUF?expand[]=gguf&expand[]=sha"
+    },
+    "repo": "AaryanK/Solar-Open-100B-GGUF",
+    "sha": "cfe3fc26a5bfa6401071c97126130bfd25d5ace5",
+    "tree_request": {
+      "fetched_utc": "2026-10-13T17:03:07Z",
+      "url": "https://huggingface.co/api/models/AaryanK/Solar-Open-100B-GGUF/tree/main?recursive=true"
+    }
+  }
+]

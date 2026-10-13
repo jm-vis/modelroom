@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
 from modelroom.catalog import CATALOG_MAX_GGUF_REPOS, CATALOG_MAX_TASK_LEN, CATALOG_MAX_TEXT_LEN, PIPELINE_TAG_TO_KIND, CatalogError, CatalogModel
-from modelroom.catalog_schema import build_catalog_v2
+from modelroom.catalog_schema import SCHEMA3_ROW_DEFAULTS, build_catalog
 from modelroom.contracts import SchemaVersionError, validate_hf_repo
 from modelroom.parameters import parameters_from_name
 from modelroom.relation import _tag_facts
@@ -394,6 +394,8 @@ def build_row(entry: Entry, result: KindResult, *, family: str, today: str, late
         "license": license_name if isinstance(license_name, str) and 0 < len(license_name) <= CATALOG_MAX_TEXT_LEN else None,
         "note": None, "ollama_base": None, "ollama_tag": None, "parameters_b": size, "publisher": entry.owner,
         "source": f"{HUB}/{entry.repo}", "successor": None, "successor_checked": None, "successor_source": None,
+        # schema 3 (AP9-KO): a new row knows no finding yet -- the defaults, which are the fact "unknown"
+        "gguf_checks": [], "setup_note": None,
     }
 
 
@@ -705,11 +707,18 @@ def order_proposal(changes: list[dict], candidates: list[dict]) -> None:
 
 
 def apply_changes(document: dict, changes: list[dict]) -> dict:
-    """A copy of the catalog document (as read from JSON) with `changes` applied; the original is untouched."""
+    """A copy of the catalog document (as read from JSON) with `changes` applied; the original is untouched.
+
+    A new row goes into a document of schema 2 without the fields of schema 3 at their default (`SCHEMA3_ROW_DEFAULTS`):
+    a schema-2 row carries none of those keys, release 1.0.0 would refuse it. A finding is no default and stays,
+    so that the schema-2 check names it and leaves the change out."""
     result = copy.deepcopy(document)
     for change in changes:
         if change["change"] == "new_row":
-            result["models"].append({name: pair["new"] for name, pair in change["fields"].items()})
+            row = {name: pair["new"] for name, pair in change["fields"].items()}
+            if result.get("schema_version") == 2:
+                row = {name: value for name, value in row.items() if not (name in SCHEMA3_ROW_DEFAULTS and value == SCHEMA3_ROW_DEFAULTS[name])}
+            result["models"].append(row)
             continue
         row = next(m for m in result["models"] if m["hf_repo"] == change["hf_repo"])
         row.update({name: pair["new"] for name, pair in change["fields"].items()})
@@ -725,15 +734,15 @@ def check_changes(document: dict, changes: list[dict]) -> tuple[list[dict], list
     kept, notes = [], []
     for change in changes:
         try:
-            build_catalog_v2(json.dumps(apply_changes(document, [change])), Path("catalog.json"))
+            build_catalog(json.dumps(apply_changes(document, [change])), Path("catalog.json"))
         except (CatalogError, SchemaVersionError) as exc:
             notes.append(f"{change['hf_repo']}: left out, it would not validate ({' '.join(str(exc).split())[:120]})")
         else:
             kept.append(change)
     try:
-        build_catalog_v2(json.dumps(apply_changes(document, kept)), Path("catalog.json"))
+        build_catalog(json.dumps(apply_changes(document, kept)), Path("catalog.json"))
     except (CatalogError, SchemaVersionError) as exc:
-        raise ValueError(f"the proposal does not validate against schema 2: {' '.join(str(exc).split())[:200]}") from exc
+        raise ValueError(f"the proposal does not validate against schema {document.get('schema_version', 2)}: {' '.join(str(exc).split())[:200]}") from exc
     return kept, notes
 
 

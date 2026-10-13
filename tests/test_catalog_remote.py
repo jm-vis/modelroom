@@ -508,13 +508,14 @@ def test_a_stamp_that_overflows_in_utc_counts_as_absent_and_the_run_goes_on(cach
 def test_an_envelope_longer_than_the_bound_counts_as_absent_even_when_its_start_is_valid(cache: Path):
     write_envelope(cache, age=timedelta(hours=1), sha=SHA, doc=doc_text())
     path = cache / CACHE_FILE_NAME
-    path.write_bytes(path.read_bytes() + b" " * (catalog_remote._ENVELOPE_MAX_BYTES + 1))
+    bound = catalog_remote.DEFAULT_CHANNEL.envelope_max_bytes  # 2 MiB + 4 KiB for the schema-2 channel
+    path.write_bytes(path.read_bytes() + b" " * (bound + 1))
     transport = FixtureTransport(hub())
 
     run(cache, transport)
 
     assert len(transport.calls) == 3
-    assert path.stat().st_size < catalog_remote._ENVELOPE_MAX_BYTES  # replaced whole by the new envelope
+    assert path.stat().st_size < bound  # replaced whole by the new envelope
 
 
 def test_two_runs_one_after_the_other_replace_the_envelope_whole_never_a_mixture(cache: Path):
@@ -744,7 +745,13 @@ def test_only_the_guided_run_imports_the_loader_and_only_readers_of_schema_two_f
         if re.search(r"^\s*(from \.catalog_remote import|from \. import .*catalog_remote|import .*catalog_remote)",
                      path.read_text(encoding="utf-8"), re.MULTILINE)
     )
-    assert users == ["guided.py"]  # 0.1.0 ships no such module at all; that is a fact of the release, not something this test proves
+    # `cli.py` is the second user since AP9-KO, for `offline_catalog` alone: it reads the stored file and asks no one.
+    # The loader that asks (`current_catalog`) stays with the guided run (checked below).
+    assert users == ["cli.py", "guided.py"]  # 0.1.0 ships no such module at all; that is a fact of the release, not something this test proves
+    askers = sorted(
+        path.name for path in package.glob("*.py") if "current_catalog" in path.read_text(encoding="utf-8") and path.name != "catalog_remote.py"
+    )
+    assert askers == ["guided.py"]
     low, high = CATALOG_JSON_SCHEMA_RANGE
     assert low <= 2 < high  # the file the 0.2.0 reader asks for is one this reader accepts
     assert catalog_remote.REMOTE_FILE_NAME == "catalog-v2.json" and catalog_remote.CACHE_FILE_NAME.startswith("catalog-v2.")

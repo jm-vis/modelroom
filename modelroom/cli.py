@@ -43,6 +43,8 @@ from .binding import (
     resolve_profile_target,
     write_pointer,
 )
+from .catalog import Catalog
+from .catalog_remote import offline_catalog
 from .cli_pull import run_pull
 from .cli_remote import OPS as REMOTE_OPS
 from .cli_remote import run_remote
@@ -197,6 +199,7 @@ def main(
     servers: dict | None = None,
     room: "RoomProbes | None" = None,
     ssh: "SshRunner | None" = None,
+    catalog: "Catalog | None" = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -213,7 +216,7 @@ def main(
     if args.command == "hardware":
         return _cmd_hardware(args, probes, pointer_path, now, daemon, servers, room)
     if args.command == "render":
-        return _cmd_render(args, now, pointer_path, host)
+        return _cmd_render(args, now, pointer_path, host, catalog)
     if args.command == "migrate":
         return _cmd_migrate(args, now, pointer_path, host)
     if args.command == "export-profile":
@@ -732,7 +735,15 @@ def _gib(value: float | None) -> str:
     return "unknown" if value is None else f"{value:.2f} GiB"
 
 
-def _cmd_render(args: argparse.Namespace, now: datetime | None, pointer_path: Path | None, host: Callable[[], str]) -> int:
+def _cmd_render(
+    args: argparse.Namespace,
+    now: datetime | None,
+    pointer_path: Path | None,
+    host: Callable[[], str],
+    catalog: "Catalog | None" = None,
+) -> int:
+    """`render`: the evidence is the catalog read offline -- the shipped one, or the published one the guided
+    mode stored next to the pointer file when that is newer (`catalog_remote.offline_catalog`); nothing is asked."""
     code, _swept = sweep_for_command(args.config, "render", now, pointer_path, host)
     if code is not None:
         return code
@@ -745,7 +756,8 @@ def _cmd_render(args: argparse.Namespace, now: datetime | None, pointer_path: Pa
         print(str(exc), file=sys.stderr)
         return 2
 
-    code = render_with_config(config, now=now)  # prints its `note:` lines itself; the guided mode calls it too
+    evidence = catalog if catalog is not None else offline_catalog((pointer_path or default_pointer_path()).parent / "catalog")
+    code = render_with_config(config, now=now, catalog=evidence)  # prints its `note:` lines itself; the guided mode calls it too
     if code == 0:
         # stdout order: notes (above), the Ollama setting of a saving context choice (T-K fills it here), the link.
         print(QUALITY_LINK_LINE)
