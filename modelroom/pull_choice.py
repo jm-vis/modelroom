@@ -36,6 +36,7 @@ from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
 from . import runtimes
+from .catalog_findings import NO_RECOMMENDATION, community_conversion_text, load_blocked_text
 from .contracts import Package
 from .disk_fit import entry_download_gib, entry_over_disk, entry_place, too_big_words
 from .document import MachineRanking, RankedEntry, RenderDocument
@@ -203,6 +204,17 @@ class PullRow:
     # Whether its download needs more than the free disk as its runtime sees it, whatever lock its
     # name has: the disk decides before the name which row is offered (`offered`).
     too_big: bool = False
+    # AP9-KO. `blocked`: the red line of an `absent` check (`load_blocked_text`); the row is locked with it, so
+    # not even an explicit choice takes it. `community`: the packager of a GGUF package of an account that is
+    # neither the publisher of the base model nor a listed packager -- the row stays a choice by name but is
+    # never the automatic one (V4). Both leave a row out of the recommendation (`recommendable`).
+    blocked: str | None = None
+    community: str | None = None
+
+    @property
+    def recommendable(self) -> bool:
+        """Whether this row may be the automatic recommendation: not blocked and not a community conversion."""
+        return self.blocked is None and self.community is None
 
     @property
     def value(self) -> str:
@@ -284,13 +296,65 @@ def block_rows(
         for key, name in row_names(entry, package, block.profile):
             own = runtime_disk(key, disk, held)
             too_big = entry_over_disk(entry, own, runtime=key)  # a package held already is never over (U11c)
-            locked = _name_lock(key, name, entry, package, block.profile, ambiguous)
+            blocked = _load_block(key, entry)
+            locked = blocked or _name_lock(key, name, entry, package, block.profile, ambiguous)
             over = locked is None and too_big
             locked = too_big_words(entry_download_gib(entry, own, runtime=key), entry_place(entry, own, key)) if over else locked
             identity = tuple(entry.package_identity)
             shown = cell if key == runtimes.OLLAMA.key else f"{runtimes.runtime_of(key).name} {dot} {cell}"
-            rows.append(PullRow(entry.rank, shown, entry.weights_gib, name, locked, identity, over, key, too_big))
+            community = entry.packager if _is_community(key, entry) else None
+            rows.append(PullRow(entry.rank, shown, entry.weights_gib, name, locked, identity, over, key, too_big, blocked, community))
     return rows
+
+
+def _gguf_runtime(key: str) -> bool:
+    """Whether the runtime with this key loads a GGUF file through llama.cpp: the two a check of the llama.cpp source is about."""
+    return key in (runtimes.OLLAMA.key, runtimes.LMSTUDIO.key)
+
+
+def _load_block(key: str, entry: RankedEntry) -> str | None:
+    """The red line that locks a row for its runtime, or `None`: only a check that says `absent` blocks (V2) --
+    the installation over Ollama and LM Studio, not a vLLM row (which loads a tensor package, never this file)."""
+    check = entry.load_check
+    if check is None or check.result != "absent" or not _gguf_runtime(key) or entry.fit.runtime == runtimes.VLLM.key:
+        return None
+    return load_blocked_text(runtimes.runtime_of(key).name, entry.base_model_hf_repo, check)
+
+
+def _is_community(key: str, entry: RankedEntry) -> bool:
+    """A GGUF row of an unlisted account (`origin` `other`, V4): selectable by name, never the automatic choice."""
+    return entry.origin == "other" and _gguf_runtime(key)
+
+
+def blocked_runtimes(profile: HardwareProfile | None) -> str:
+    """The runtimes of a machine a blocked GGUF package would be installed over, as the red line names them:
+    `Ollama`, or `Ollama and LM Studio` -- the table shows the package once, whatever it is installed with."""
+    present = runtimes.machine_runtime_keys(profile)
+    names = [runtime.name for runtime in runtimes.RUNTIMES if runtime.key in present and _gguf_runtime(runtime.key)]
+    return " and ".join(names) or runtimes.OLLAMA.name
+
+
+def blocked_lines_of(block: MachineRanking) -> list[tuple[str, str]]:
+    """`(label, red line)` of every package of the block an `absent` check blocks -- what the table says about it;
+    the same words the pull list locks a ranked row with (`PullRow.blocked`). A ranked row is named by its rank
+    (`#2`); a package set aside (`not_covered`, `no_fit`) has no rank and is named by `packager · quantization`, so
+    the block is said whatever reason the package was set aside for (the `shown` line leaves a lone reason out)."""
+    names = blocked_runtimes(block.profile)
+    blocked = [
+        entry
+        for entry in [*block.ranked, *block.not_covered, *block.no_fit]
+        if entry.load_check is not None and entry.load_check.result == "absent" and entry.fit.runtime != runtimes.VLLM.key
+    ]
+    short = {id(e): f"#{e.rank}" if isinstance(e, RankedEntry) else f"{e.packager} · {e.quantization}" for e in blocked}
+    lines = []
+    for entry in blocked:
+        label = short[id(entry)]
+        if sum(1 for other in blocked if short[id(other)] == label) > 1:  # two alike: name the repository, then the file
+            label = f"{label} {entry.package_identity[1]}"
+            if sum(1 for other in blocked if other.package_identity[1] == entry.package_identity[1] and short[id(other)] == short[id(entry)]) > 1:
+                label = f"{label} {entry.package_identity[2]}"
+        lines.append((label, load_blocked_text(names, entry.base_model_hf_repo, entry.load_check)))
+    return lines
 
 
 def _name_lock(
@@ -325,6 +389,27 @@ class Offered:
     skipped: tuple[int, ...] = ()
     stop: PullRow | None = None
     all_over: bool = False
+    # AP9-KO (V4): the first row of each rank passed over for the automatic recommendation -- blocked by an
+    # `absent` check, or a community conversion. With no `row` and some `passed`, nothing is left to recommend.
+    passed: tuple[PullRow, ...] = ()
+
+
+def recommendation_lines(offer: Offered, nothing_left: bool | None = None) -> list[tuple[str, str]]:
+    """`(style, text)` of what a skipped recommendation says, in the order of the ranks: `COMMUNITY_CONVERSION`
+    for a community conversion (once per packager), then `NO_RECOMMENDATION` where no row is offered at all. A
+    blocked row says why under its table (`blocked_lines_of`), so it adds no line of its own here. Nothing where no
+    row was passed over. `nothing_left` overrides "no row is offered at all" for a search that looked at rank 1
+    alone (an answer file without `pull_package`): the line is true only if no shown row at all is recommendable."""
+    lines: list[tuple[str, str]] = []
+    for row in offer.passed:
+        if row.blocked is None:
+            line = ("class:warn", community_conversion_text(str(row.community)))
+            if line not in lines:
+                lines.append(line)
+    none_left = offer.row is None and offer.stop is None if nothing_left is None else nothing_left
+    if offer.passed and none_left:
+        lines.append(("class:note", NO_RECOMMENDATION))
+    return lines
 
 
 def offered(
@@ -340,20 +425,32 @@ def offered(
     that fits is locked by its name, nothing is offered and that row says why (`stop`). A rank with
     no row at all (a package no runtime of the machine accepts) ends the search with nothing,
     unless it is in `over` (its download is over the disk, judged as Ollama's: `rank_over`).
+
+    AP9-KO (V4): only the shown rows are looked at, and a rank none of whose fitting rows is `recommendable`
+    (blocked by an `absent` check, or a community conversion) is passed over for the recommendation, never
+    pulled: with `past_disk` the search goes on to the next rank (`passed` keeps what was skipped), without it
+    (`#1` alone, an answer file without `pull_package`) it ends -- it never moves to another rank.
     """
     ranks = list(ranks) or list(dict.fromkeys(row.rank for row in rows))
     skipped: list[int] = []
+    passed: list[PullRow] = []
     for rank in ranks:
         group = [row for row in rows if row.rank == rank]
         fitting = [row for row in group if not row.too_big]
         if not fitting and (group or rank in over):
             if not past_disk:
-                return Offered(None, tuple(skipped))
+                return Offered(None, tuple(skipped), passed=tuple(passed))
             skipped.append(rank)
             continue
-        free = next((row for row in fitting if row.locked is None), None)
-        return Offered(free, tuple(skipped), None if free is not None or not fitting else fitting[0])
-    return Offered(None, tuple(skipped), all_over=bool(ranks) and len(skipped) == len(ranks))
+        eligible = [row for row in fitting if row.recommendable]
+        if fitting and not eligible:
+            passed.append(fitting[0])
+            if not past_disk:
+                return Offered(None, tuple(skipped), passed=tuple(passed))
+            continue
+        free = next((row for row in eligible if row.locked is None), None)
+        return Offered(free, tuple(skipped), None if free is not None or not eligible else eligible[0], passed=tuple(passed))
+    return Offered(None, tuple(skipped), all_over=bool(ranks) and len(skipped) == len(ranks), passed=tuple(passed))
 
 
 def rank_over(block: MachineRanking, rows: Sequence[PullRow], disk: Disk | None) -> list[int]:
@@ -417,6 +514,8 @@ __all__ = [
     "Offered",
     "ambiguous_names",
     "block_rows",
+    "blocked_lines_of",
+    "blocked_runtimes",
     "collision_pieces",
     "default_row",
     "entry_pull_name",
@@ -427,6 +526,7 @@ __all__ = [
     "pull_collisions",
     "pull_rows",
     "rank_over",
+    "recommendation_lines",
     "repo_lines",
     "row_names",
     "runtime_disk",

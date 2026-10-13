@@ -46,6 +46,7 @@ from .binding import (
 from .catalog import Catalog
 from .catalog_remote import offline_catalog
 from .cli_pull import run_pull
+from .pull_choice import PULL_NAME_RE
 from .cli_remote import OPS as REMOTE_OPS
 from .cli_remote import run_remote
 from .config import ConfigError, Configuration, load_config
@@ -225,7 +226,11 @@ def main(
         return _cmd_import_profile(args, now, pointer_path, host)
     if args.command == "pull":
         # No results folder and no configuration (A4): nothing here is swept, nothing bound.
-        return run_pull(args.name, args.weights_bytes, args.yes, daemon=daemon, room=room, now=now, out=out)
+        # The catalog is read offline for the one check of V10 (`render` reads it the same way): nothing is asked of the network.
+        # V10: the name is validated first (`run_pull` refuses an invalid one), so nothing is read for it.
+        valid = PULL_NAME_RE.fullmatch(args.name) is not None
+        evidence = None if not valid else catalog if catalog is not None else offline_catalog((pointer_path or default_pointer_path()).parent / "catalog")
+        return run_pull(args.name, args.weights_bytes, args.yes, daemon=daemon, room=room, now=now, out=out, catalog=evidence)
     if args.command == "remote":
         # The counterpart (B2): stdin/stdout only, no results folder, nothing swept, nothing bound.
         return run_remote(args.op)

@@ -33,7 +33,7 @@ from .disk_fit import vllm_only
 from .room import Disk
 from .runtimes import LMSTUDIO, OLLAMA, VLLM
 from .screen_names import shown_as, shown_names
-from .views_install import INSTALL_LABEL
+from .views_install import INSTALL_LABEL, setup_note_of
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
@@ -174,7 +174,9 @@ def vllm_handover_lines(context: "PullContext", machine: str, row: PullRow, vllm
     relative = vllm_disk is not None and vllm_disk.relative
     install = vllm_install(package_of(row, context.packages), entry.fit, block.profile, relative_cache=relative)
     there = vllm_disk is not None and row.identity in vllm_disk.held
-    return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=shown_as(shown_names(context.document), machine))]
+    note = setup_note_of(context.document.setup_notes, entry.base_model_hf_repo)  # E4-B, over both commands
+    where = shown_as(shown_names(context.document), machine)
+    return [[], *install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=where, setup_note=note)]
 
 
 def lmstudio_handover_lines(context: "PullContext", machine: str, row: PullRow) -> list:

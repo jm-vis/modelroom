@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .catalog_findings import SetupNote, setup_note_lines
 from .contracts import Fit, Package, _HF_REPO_RE
 from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, chosen_cards, equal_size_group
 from .hf_cache import HF_CACHE_EXPRESSION
@@ -132,7 +133,7 @@ def vllm_install(
 
 def install_block_lines(
     label: str, rank: int, install: VllmInstall, *, repo: str | None = None, served: object = None,
-    on_disk: bool = False, where: str = "",
+    on_disk: bool = False, where: str = "", setup_note: SetupNote | None = None,
 ) -> list[Line]:
     """The lines of one vLLM install, under `label` (`install`): the `vllm serve` line, the Docker line
     (or why it is left out), then what to do -- the one block of the table, of the choice in step 5 and,
@@ -141,11 +142,23 @@ def install_block_lines(
     `served`: what the local server states it serves (`vllm_server.ServedModel`); another model than
     `repo` adds the stop line. `on_disk`: the package is on disk already, so the download clause goes.
     Without a command (`serve` is `None`) the one line says why.
+
+    `setup_note` (AP9-KO, E4-B): the note of the model card over both command variants, the one place every
+    view that draws these commands (the table, the choice in step 5, the handover) takes it from. Its lines
+    (`catalog_findings.setup_note_lines`, red) stand before the commands and only where the card gave
+    instructions; no automatic switch is added to either command.
     """
     if install.serve is None:
         return [label_line(label, [("class:note", f"#{rank} {install.reason or NO_SAFE_COMMAND}")])]
     place = f"#{rank} on {where}" if where else f"#{rank}"
-    lines: list[Line] = [label_line(label, [("class:note", place), ("", "  "), ("class:command", install.serve)])]
+    warned: list[Line] = (
+        [label_line(label if index == 0 else "", [("class:warn", text)]) for index, text in enumerate(setup_note_lines(setup_note))]
+        if setup_note is not None
+        else []
+    )
+    lines: list[Line] = [
+        *warned, label_line(label if not warned else "", [("class:note", place), ("", "  "), ("class:command", install.serve)])
+    ]
     if install.docker is not None:
         # Under the command above it, which starts four columns behind the label: `#2  `.
         lines.append([("", "    "), ("class:note", "docker"), ("", "    "), ("class:command", install.docker)])
