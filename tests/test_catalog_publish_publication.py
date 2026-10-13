@@ -29,8 +29,8 @@ def test_publish_pending_pushes_the_recorded_commit_uploads_its_bytes_and_checks
     assert result.code == 0 and work.state() == "published" and result.out.splitlines()[-1] == "published"
     assert work.git.calls == [["show", f"{COMMIT}:modelroom/catalog.json"], ["push", "forgejo", f"{COMMIT}:refs/heads/main"]]  # the bytes are read and checked before the push
     (args, child), = work.runner.calls
-    assert args[:6] + args[7:] == ["uvx", "--from", f"huggingface_hub=={P.HF_HUB_VERSION}", "hf", "upload", "jm-vis/modelroom-catalog", "catalog-v2.json",
-                                   "--repo-type", "dataset", "--commit-message", COMMIT]
+    assert args[:6] + args[7:] == ["uvx", "--from", f"huggingface_hub=={P.HF_HUB_VERSION}", "hf", "upload", "jm-vis/modelroom-catalog", ".",
+                                   "--repo-type", "dataset", "--commit-message", COMMIT]  # both channel files, one folder, one commit (AP9-KO)
     assert work.runner.uploaded == [work.decision()["result_catalog"].encode()] and P.sha256_of(work.runner.uploaded[0]) == work.decision()["result_sha256"]
     assert str(work.catalog) not in args and not Path(args[6]).exists() and child["HF_TOKEN_PATH"] == env["HF_TOKEN_PATH"] and "HF_TOKEN" not in child
     assert TOKEN_TEXT not in result.out + result.err and [url for _, url in work.transport.calls][0].endswith("/revision/main")
@@ -92,15 +92,15 @@ def test_a_failure_of_the_upload_file_after_the_push_is_exit_1_and_leaves_pushed
     work.committed()
     checks, real = [], publish.Tool._hygiene
 
-    def second_check_fails(self, data):  # the check of the temporary file, after `_ready` passed and the push was made
+    def third_check_fails(self, data, name="catalog-v2.json"):  # the first check of a temporary file: `_ready` checked both channel files before the push
         checks.append(data)
-        if len(checks) == 2:
+        if len(checks) == 3:
             raise publish.PublishError("the file fails the hygiene check")
-        real(self, data)
+        real(self, data, name)
 
-    monkeypatch.setattr(publish.Tool, "_hygiene", second_check_fails)
+    monkeypatch.setattr(publish.Tool, "_hygiene", third_check_fails)
     result = work.call("--publish-pending", work.folder, env=upload_env(tmp_path))
-    assert (result.code, work.state(), len(checks), work.runner.calls) == (1, "pushed", 2, []) and "state stays" in result.err
+    assert (result.code, work.state(), len(checks), work.runner.calls) == (1, "pushed", 3, []) and "state stays" in result.err
 
 
 def test_a_failed_check_after_the_upload_leaves_uploaded_and_the_next_call_checks_without_uploading_again(work, tmp_path):
@@ -151,25 +151,27 @@ def test_nothing_is_uploaded_or_pushed_when_a_check_before_the_process_fails_and
 def test_verify_compares_the_published_file_with_the_working_tree_without_a_token_path(work):
     work.transport = hub_answers(CATALOG_BYTES)
     result = work.call("--verify", env={})
-    assert (result.code, result.out) == (0, "catalog: published file equals working tree\n")
+    assert (result.code, result.out) == (0, "catalog: published files equal working tree\n")
     assert [url for _, url in work.transport.calls] == ["https://huggingface.co/api/datasets/jm-vis/modelroom-catalog/revision/main",
+                                                        f"https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/{PUBLISHED}/catalog-v3.json",
                                                         f"https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/{PUBLISHED}/catalog-v2.json"]
     assert work.git.calls == [] and work.runner.calls == []
 
 
 def test_verify_against_a_commit_compares_the_bytes_of_that_commit_and_not_the_working_tree(work):
-    work.git.commits[COMMIT] = b"bytes of the commit"
-    work.transport = hub_answers(b"bytes of the commit")
-    assert work.call("--verify", "--commit", COMMIT).out == f"catalog: published file equals {COMMIT}\n"
+    of_the_commit = R.dump_json({**json.loads(CATALOG_BYTES), "published": "2026-10-01"})
+    work.git.commits[COMMIT] = of_the_commit
+    work.transport = hub_answers(of_the_commit)
+    assert work.call("--verify", "--commit", COMMIT).out == f"catalog: published files equal {COMMIT}\n"
     work.transport = hub_answers(CATALOG_BYTES)
     result = work.call("--verify", "--commit", COMMIT)
-    assert result.code == 1 and result.out == f"ALARM: the published catalog differs from {COMMIT}\n"
+    assert result.code == 1 and result.out == f"ALARM: the published catalog-v3.json differs from {COMMIT}\nALARM: the published catalog-v2.json differs from {COMMIT}\n"
 
 
 def test_verify_gives_an_alarm_line_and_exit_1_when_the_published_file_differs(work):
     work.transport = hub_answers(CATALOG_BYTES + b" ")
     result = work.call("--verify")
-    assert (result.code, result.out) == (1, "ALARM: the published catalog differs from working tree\n")
+    assert (result.code, result.out) == (1, "ALARM: the published catalog-v2.json differs from working tree\n")  # the new channel's file is made from it and still equal
 
 
 @pytest.mark.parametrize("status", [404, 500])

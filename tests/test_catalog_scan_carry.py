@@ -384,14 +384,14 @@ def test_a_fresh_row_that_the_table_would_not_take_is_left_out_before_it_is_a_su
 
 
 def test_a_fresh_higher_version_the_table_would_not_take_does_not_keep_a_lower_one_from_latest(env, monkeypatch):
-    real = scanner.build_catalog_v2
+    real = scanner.build_catalog
 
     def refuse(text, path):
         if "acme/Atlas-4-9B" in text:
             raise scanner.CatalogError("the table would not take acme/Atlas-4-9B")
         return real(text, path)
 
-    monkeypatch.setattr(scanner, "build_catalog_v2", refuse)
+    monkeypatch.setattr(scanner, "build_catalog", refuse)
     hub = Hub()
     hub.page("acme", [ent("acme/Atlas-4-9B", stamp(2)), ent("acme/Atlas-3-9B", stamp(3))])
     p, result, _ = go(env, hub)

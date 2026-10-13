@@ -37,8 +37,8 @@ import catalog_scan_rules as R  # noqa: E402
 from catalog_scan import DiskFiles  # noqa: E402  (the scanner's one way to touch a disk: atomic writes, a test hands in a subclass)
 
 from modelroom.catalog import CatalogError  # noqa: E402
-from modelroom.catalog_remote import _FAULTS, _SHA_RE, DATASET, FILE_MAX_BYTES, REMOTE_FILE_NAME, REVISION_MAX_BYTES, _clean, _Fault, _get  # noqa: E402
-from modelroom.catalog_schema import build_catalog_v2  # noqa: E402
+from modelroom.catalog_remote import _FAULTS, _SHA_RE, CHANNEL_V2, CHANNEL_V3, DATASET, REMOTE_FILE_NAME, REVISION_MAX_BYTES, _clean, _Fault, _get  # noqa: E402
+from modelroom.catalog_schema import build_catalog  # noqa: E402
 from modelroom.contracts import SchemaVersionError  # noqa: E402
 from modelroom.http import RequestBudget, Transport, UrllibTransport  # noqa: E402
 
@@ -100,7 +100,7 @@ class Tool:
         """The catalog read as a table, validated; the bytes were compared before this is called."""
         try:
             document = json.loads(data.decode("utf-8"))
-            build_catalog_v2(data.decode("utf-8"), self.catalog_path)
+            build_catalog(data.decode("utf-8"), self.catalog_path)
         except (ValueError, CatalogError, SchemaVersionError) as exc:
             raise PublishError(f"{self.catalog_path}: not a valid catalog: {_clean(exc)}") from exc
         return document
@@ -279,7 +279,8 @@ class Tool:
             return 0
         commit, remote = P.check_commit(decision.get("commit") or ""), P.check_remote(remote)
         data = self._commit_bytes(commit, decision["result_sha256"])
-        token = self._ready(data) if state in ("committed", "pushed") else None  # every refusal of the upload comes before the push
+        files = P.channel_files(data)  # both files of the dataset, made from the bytes of the commit
+        token = self._ready(files) if state in ("committed", "pushed") else None  # every refusal of the upload comes before the push
         if state == "committed":
             try:
                 self.run_git(["push", remote, f"{commit}:refs/heads/main"])
@@ -288,10 +289,10 @@ class Tool:
             decision, state = self._state(folder, decision, "pushed"), "pushed"
             self.say("pushed")
         if state == "pushed":
-            self._upload(DATASET, data, commit, token)
+            self._upload(DATASET, files, commit, token, whole_folder=True)
             decision, state = self._state(folder, decision, "uploaded"), "uploaded"
             self.say("uploaded")
-        if self._verified(DATASET, data, commit) != 0:
+        if self._verified(DATASET, files, commit) != 0:
             raise StepFailed("the check of the published file failed, the state stays uploaded")
         self._state(folder, decision, "published")
         self.say("published")
@@ -313,75 +314,95 @@ class Tool:
             raise PublishError(f"the file {PRIVATE_WORDS_ENV} names cannot be read") from exc
         return sorted({line.strip() for line in lines if line.strip() and not line.strip().startswith("#")}, key=len, reverse=True)
 
-    def _hygiene(self, data: bytes) -> None:
+    def _hygiene(self, data: bytes, name: str = REMOTE_FILE_NAME) -> None:
         """The release gate's own reading of a file (`scripts/release-check.py`, loaded as it is) with the private words."""
         words = self._words()
         try:
             spec = importlib.util.spec_from_file_location("release_check", self.root / "scripts" / "release-check.py")
             gate = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(gate)
-            findings = gate.scan_data(REMOTE_FILE_NAME, REMOTE_FILE_NAME, data, gate.with_private_words(gate.load_negative_list(), words))
+            findings = gate.scan_data(name, name, data, gate.with_private_words(gate.load_negative_list(), words))
         except (OSError, AttributeError, ImportError, SyntaxError, TypeError) as exc:
             raise PublishError(f"the hygiene check cannot run: {type(exc).__name__}") from exc
         if findings:
             raise PublishError("the file fails the hygiene check, nothing is uploaded: " + "; ".join(findings[:5]))
 
-    def _ready(self, data: bytes) -> str:
-        """What an upload needs, checked before any step is taken: the hygiene gate over these bytes (with the private
+    def _ready(self, files: dict[str, bytes]) -> str:
+        """What an upload needs, checked before any step is taken: the hygiene gate over every file (with the private
         words) and the token path (never its content). Returns the token path."""
-        self._hygiene(data)
+        for name, data in files.items():
+            self._hygiene(data, name)
         token = self.env.get(TOKEN_PATH_ENV, "")
         if not token or not os.path.isfile(token) or not os.access(token, os.R_OK):
             raise PublishError(f"{TOKEN_PATH_ENV} is not set or names no readable file")
         return token
 
-    def _upload(self, dataset: str, data: bytes, message: str, token: str) -> None:
-        """The one upload process, for these bytes: a file of its own in a folder of its own, read back and checked by
-        the hygiene gate again, then the fixed argument list with the token path in the environment. `_ready` came
-        before: what fails here is a step, exit 1, the state stays."""
+    def _upload(self, dataset: str, files: dict[str, bytes], message: str, token: str, *, whole_folder: bool = False) -> None:
+        """The one upload process, for these files: each in a folder of its own, read back and checked by the hygiene gate
+        again, then the fixed argument list with the token path in the environment (`whole_folder`: the folder to the root
+        of the dataset, both channel files in one commit; else the one file under its name). `_ready` came before: what
+        fails here is a step, exit 1, the state stays."""
         with tempfile.TemporaryDirectory(prefix="catalog-upload-") as folder:
-            target = Path(folder) / REMOTE_FILE_NAME
             try:
-                target.write_bytes(data)
-                again = target.read_bytes()
-                if P.sha256_of(again) != P.sha256_of(data):
-                    raise StepFailed("the upload file does not hold the bytes it was made from, the state stays")
-                self._hygiene(again)
+                for name, data in files.items():
+                    written = Path(folder) / name
+                    written.write_bytes(data)
+                    again = written.read_bytes()
+                    if P.sha256_of(again) != P.sha256_of(data):
+                        raise StepFailed("the upload file does not hold the bytes it was made from, the state stays")
+                    self._hygiene(again, name)
             except (OSError, PublishError) as exc:
                 raise StepFailed(f"the upload file could not be made and checked, the state stays: {_clean(exc)}") from exc
+            target = Path(folder) if whole_folder else Path(folder) / REMOTE_FILE_NAME
             child = {k: v for k, v in self.env.items() if k not in TOKEN_VARIABLES}
             child[TOKEN_PATH_ENV] = token
             try:
-                code = self.run(P.upload_args(dataset, target, message), child)
+                code = self.run((P.upload_folder_args if whole_folder else P.upload_args)(dataset, target, message), child)
             except OSError as exc:
                 raise StepFailed(f"the upload process cannot be started: {type(exc).__name__}") from exc
             if code != 0:
                 raise StepFailed(f"the upload failed (exit {code}), the state stays")
 
-    def _published(self, dataset: str) -> bytes:
-        """The published file as modelroom reads it, without a token: the revision of the main line, then the file at it."""
-        budget = RequestBudget(3)  # the three requests of an attempt, booked
-        base = "https://huggingface.co"
-        sha = _get(self.transport, budget, 1, f"{base}/api/datasets/{dataset}/revision/main", REVISION_MAX_BYTES).json()
+    def _revision(self, dataset: str, budget: RequestBudget) -> str:
+        """The revision of the main line of the dataset, without a token."""
+        sha = _get(self.transport, budget, 1, f"https://huggingface.co/api/datasets/{dataset}/revision/main", REVISION_MAX_BYTES).json()
         sha = sha.get("sha") if isinstance(sha, dict) else None
         if not isinstance(sha, str) or not _SHA_RE.fullmatch(sha):
             raise _Fault("the revision names no commit")
-        answer = _get(self.transport, budget, 2, f"{base}/datasets/{dataset}/resolve/{sha}/{REMOTE_FILE_NAME}", FILE_MAX_BYTES)
+        return sha
+
+    def _published(self, dataset: str, sha: str, name: str, budget: RequestBudget) -> bytes:
+        """One published file as modelroom reads it, at the revision; the size limit is that of its channel."""
+        limit = (CHANNEL_V3 if name == CHANNEL_V3.file_name else CHANNEL_V2).max_bytes
+        answer = _get(self.transport, budget, 2, f"https://huggingface.co/datasets/{dataset}/resolve/{sha}/{name}", limit)
         if answer.header("X-Repo-Commit") != sha:
             raise _Fault("the file is not from the commit that was asked for")
         return answer.body
 
-    def _verified(self, dataset: str, expected: bytes, label: str) -> int:
+    def _verified(self, dataset: str, expected: dict[str, bytes], label: str) -> int:
+        """Every file of `expected` as published equals its bytes. One file (a probe) keeps the plain lines; with more,
+        a line names the file it speaks of."""
+        many = len(expected) > 1
+        budget = RequestBudget(1 + 2 * len(expected))  # the revision, and a file with one redirect at most, all booked
         try:
-            published = self._published(dataset)
+            sha = self._revision(dataset, budget)
         except _FAULTS as exc:
             self.say(f"catalog: the published file could not be read ({_clean(exc)})")
             return 1
-        if published == expected:
-            self.say(f"catalog: published file equals {label}")
-            return 0
-        self.say(f"ALARM: the published catalog differs from {label}")
-        return 1
+        code = 0
+        for name, wanted in expected.items():
+            try:
+                published = self._published(dataset, sha, name, budget)
+            except _FAULTS as exc:
+                self.say(f"catalog: the published file {name} could not be read ({_clean(exc)})" if many else f"catalog: the published file could not be read ({_clean(exc)})")
+                code = 1
+                continue
+            if published != wanted:
+                self.say(f"ALARM: the published {name} differs from {label}" if many else f"ALARM: the published catalog differs from {label}")
+                code = 1
+        if code == 0:
+            self.say(f"catalog: published {'files equal' if many else 'file equals'} {label}")
+        return code
 
     def verify(self, commit: str | None, probe: str | None) -> int:
         dataset = DATASET if probe is None else PROBE_DATASET
@@ -390,13 +411,14 @@ class Tool:
             if probe:
                 raise PublishError("--commit and a probe file name two things to compare with")
             try:
-                expected = self.run_git(["show", f"{commit}:{P.CATALOG_IN_REPO}"])
+                expected = P.channel_files(self.run_git(["show", f"{commit}:{P.CATALOG_IN_REPO}"]))
             except GitError as exc:
                 self.say(f"catalog: the commit cannot be read ({exc})")
                 return 1
             return self._verified(dataset, expected, commit)
         path = Path(probe) if probe else self.catalog_path
-        return self._verified(dataset, self._read(path, "file to compare with"), "the probe file" if probe else "working tree")
+        data = self._read(path, "file to compare with")
+        return self._verified(dataset, {REMOTE_FILE_NAME: data} if probe else P.channel_files(data), "the probe file" if probe else "working tree")
 
     def upload_probe(self, fixture: str) -> int:
         """The setup test: a fixture of the repository, unchanged, to the probe dataset only."""
@@ -411,8 +433,8 @@ class Tool:
             raise PublishError(f"git cannot tell whether the file is unchanged: {exc}") from exc
         if not tracked.strip() or status.strip():
             raise PublishError("the probe file is not a tracked, unchanged file of the repository")
-        data = self._read(path, "probe file")
-        self._upload(PROBE_DATASET, data, "probe", self._ready(data))
+        files = {REMOTE_FILE_NAME: self._read(path, "probe file")}
+        self._upload(PROBE_DATASET, files, "probe", self._ready(files))
         self.say(f"uploaded the probe file to {PROBE_DATASET}")
         return 0
 

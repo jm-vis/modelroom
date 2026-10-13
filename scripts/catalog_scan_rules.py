@@ -24,6 +24,8 @@ from typing import NamedTuple
 from modelroom.catalog import CATALOG_MAX_GGUF_REPOS, CATALOG_MAX_TASK_LEN, CATALOG_MAX_TEXT_LEN, PIPELINE_TAG_TO_KIND, CatalogError, CatalogModel
 from modelroom.catalog_schema import SCHEMA3_ROW_DEFAULTS, build_catalog
 from modelroom.contracts import SchemaVersionError, validate_hf_repo
+from modelroom.catalog_findings import PackageCheck, SetupNote, merge_package_checks
+from modelroom.contracts import hf_id_key
 from modelroom.parameters import parameters_from_name
 from modelroom.relation import _tag_facts
 from modelroom.search import _created_at
@@ -494,10 +496,57 @@ def refresh_field(change: dict, row: CatalogModel, rejected=lambda repo: False) 
         change["fields"]["gguf_repos"] = {"old": now["gguf_repos"], "new": target}
         change["evidence"] = [e for e in change["evidence"] if e in {f"{HUB}/{r}" for r in added if r in target}]  # what is still added
         return change if target != now["gguf_repos"] else None  # a full list takes nothing more
+    if change["field"] == "gguf_checks":
+        return _refresh_checks(change, row, rejected)
+    if change["field"] == "setup_note":
+        return _refresh_note(change, row)
     if all(now.get(name) == pair["new"] for name, pair in change["fields"].items()):
         return None
     for name, pair in change["fields"].items():
         pair["old"] = now.get(name)
+    return change
+
+
+def _package_key(check: PackageCheck) -> tuple[str, str]:
+    return hf_id_key(check.repo), check.identity
+
+
+def _refresh_checks(change: dict, row: CatalogModel, rejected) -> dict | None:
+    """A carried `gguf_checks` change (stage A9, AP9-KO) against the table as it is now: what the change did to its own
+    `old` list is done again to the table's list, and nothing else. A check it added or replaced goes in by
+    `merge_package_checks` (one of an earlier day never replaces the table's), none for a repo the rejection list now
+    holds; a package it removed goes only where the table still holds the very check it removed (a newer one stays). So a
+    carried proposal never sets back what the table got since. `None` when the table has the result or the change does
+    not read."""
+    pair = change["fields"]["gguf_checks"]
+    try:
+        old = [PackageCheck.model_validate(c) for c in pair["old"]]
+        new = [PackageCheck.model_validate(c) for c in pair["new"]]
+    except (ValueError, TypeError):
+        return None
+    kept = {_package_key(c) for c in new}
+    removed = [c for c in old if _package_key(c) not in kept]
+    added = [c for c in new if c not in old and not rejected(c.repo)]
+    now = sorted(row.gguf_checks, key=_package_key)
+    target = sorted(merge_package_checks([c for c in now if c not in removed], added), key=_package_key)
+    if target == now:
+        return None
+    change["fields"]["gguf_checks"] = {"old": [c.model_dump(mode="json") for c in row.gguf_checks], "new": [c.model_dump(mode="json") for c in target]}
+    return change
+
+
+def _refresh_note(change: dict, row: CatalogModel) -> dict | None:
+    """A carried `setup_note` change against the table as it is now: `None` when the table holds it, holds a note of a
+    later day, or the change does not read; else the change with the table's note as `old`."""
+    pair = change["fields"]["setup_note"]
+    try:
+        new = SetupNote.model_validate(pair["new"])
+    except (ValueError, TypeError):
+        return None
+    now = row.setup_note
+    if new == now or (now is not None and now.checked > new.checked):
+        return None
+    pair["old"] = now.model_dump(mode="json") if now is not None else None
     return change
 
 
@@ -596,6 +645,8 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
     returned too, for the whole run: the repos of its new rows and B3 candidates (in `known`), every `(repo, field)`
     pair its field changes touch and the accounts of its B1 and B2 candidates. Unreadable entries are skipped. A candidate
     of the old form without `open_since` gets `today` (the day of the run, UTC) once and keeps it from then on (AP9-KA-H).
+    A change or a B3 candidate is matched to the table's rows by `hf_id_key` (AP9-KO): a row the table now spells
+    otherwise keeps what is open for it, under the table's spelling.
     """
     taken = decision if isinstance(decision, dict) and decision.get("state") in DECISION_STATES else {}
     decided = set().union(*(_ids(taken, key) for key in ("approved", "rejected", "admitted")))
@@ -603,9 +654,13 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
     done_fields: set[tuple] = set()
     done_accounts: set[str] = set()
     changes: dict[tuple, dict] = {}
+    by_key = {hf_id_key(name): row for name, row in rows.items()}
     for change in _entries(proposal, "changes"):
         try:
-            repo, row = change["hf_repo"], rows.get(change["hf_repo"])
+            row = by_key.get(hf_id_key(change["hf_repo"]))
+            if row is not None:  # an id has no case: a change of a row the table now spells otherwise takes the table's spelling
+                change["hf_repo"] = row.hf_repo
+            repo = change["hf_repo"]
             if str(change.get("n")) in decided:
                 done_repos.add(repo) if change["change"] == "new_row" else done_fields.update(touched(change))
                 continue
@@ -631,6 +686,7 @@ def _carried_candidates(proposal: dict, decided: set[str], rows: dict, listed: s
     """The candidates of `carry_over`; what the decision took is added to `done_repos` and `done_accounts`. A candidate
     Initializes open_since before _sound_candidate; _thinned preserves it."""
     candidates: dict[tuple, dict] = {}
+    row_keys = {hf_id_key(name) for name in rows}
     for cand in _entries(proposal, "candidates"):
         try:
             if today and "open_since" not in cand:
@@ -642,7 +698,7 @@ def _carried_candidates(proposal: dict, decided: set[str], rows: dict, listed: s
                 continue
             if kind not in ("B1", "B2", "B3") or not _sound_candidate(cand) or rejected(f"{cand['account']}/x") or rejected(key):
                 continue
-            if (kind == "B3" and key in rows) or (kind != "B3" and key in listed):
+            if (kind == "B3" and hf_id_key(key) in row_keys) or (kind != "B3" and key in listed):
                 continue
             kept = cand if kind == "B3" else _thinned(cand, rejected)  # a rejected model is no evidence; what remains must still make the case
             if kept is not None:
