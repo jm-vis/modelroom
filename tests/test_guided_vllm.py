@@ -504,7 +504,21 @@ def test_a_run_with_a_vllm_server_writes_the_same_bytes_as_one_without(tmp_path:
     assert "✓ Measurement     vLLM measured" in [line.strip() for line in lines]
     assert set(first) == set(second)
     assert tensor_sensitive <= set(first)
-    assert [name for name in first if name not in tensor_sensitive and first[name] != second[name]] == []
+    # AP9-KO (P2): the search log is the one other file that differs, and only in the two keys of the machine
+    # kind -- without vLLM the count of the hint the limit cut off, with vLLM the direct finds that were asked.
+    search_log = "results/state/search.json"
+    assert [name for name in first if name not in tensor_sensitive | {search_log} and first[name] != second[name]] == []
+    keys_without, keys_with = json.loads(first[search_log]), json.loads(second[search_log])
+    assert {key for key in keys_without.keys() | keys_with.keys() if keys_without.get(key) != keys_with.get(key)} <= {
+        "direct",
+        "knowledge_hint",
+        "budget",
+    }
+    # The budget differs by exactly the requests the direct find spent, one per model asked.
+    spent = sum(entry["requests"] for entry in keys_with["direct"])
+    assert spent == len(keys_with["direct"]) > 0
+    assert keys_with["budget"]["used"] - keys_without["budget"]["used"] == spent
+    assert keys_with["budget"]["limit"] == keys_without["budget"]["limit"]
 
     def _qwen25_package(written: dict) -> dict:
         snapshot = json.loads(written["results/state/modelroom.json"])

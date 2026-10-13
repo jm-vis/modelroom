@@ -28,15 +28,31 @@ test suite are recorded against exactly them.
 
 from __future__ import annotations
 
+import http.client
 import urllib.parse
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
 from .catalog import Catalog
 from .guided_contracts import UNKNOWN, SearchHit
+from .http import RedirectLimitError, ResponseTooLargeError, TransportSecurityError
 from .search_word import SearchWord, family_matches, parse_search
 
 HF_API = "https://huggingface.co/api"
+
+# AP9-KO (sweep p2-b3): what a request through `http.py`'s transports can end in when it did not go through, for
+# every search that asks one model or one account at a time (`search_direct`, `tensor_search`): a socket, URL or
+# timeout error (`OSError`), an answer cut off or garbled on the wire (`http.client.HTTPException`: `IncompleteRead`,
+# `BadStatusLine`, `LineTooLong`, `InvalidURL`), a `Location` that cannot be parsed or is no ASCII URL (`ValueError`,
+# `UnicodeError` among them: `urljoin` in `RedirectingTransport`, urllib's redirect handler), a refused host, an answer
+# longer than allowed, a redirect chain that did not end. Caught only around the call itself, never around reading the
+# answer (that is `ANSWER_ERRORS`). `BudgetExhaustedError` is not on the list -- an ended budget is the caller's to
+# see -- and neither is anything else: a bug goes up.
+TRANSPORT_ERRORS = (
+    OSError, http.client.HTTPException, ValueError, TransportSecurityError, ResponseTooLargeError, RedirectLimitError,
+)
+# What `Response.json` raises for an answer that is no JSON: bad UTF-8 or bad JSON (`ValueError`), too deep (`RecursionError`).
+ANSWER_ERRORS = (ValueError, RecursionError)
 # One account's page. 20 is a compromise measured against the live Hub on 2026-09-24: `unsloth`
 # answers `qwen` with far more than 20 repositories, and a longer page makes the selection list
 # unreadable rather than more useful -- the summary says when a page was full, so a full page is
@@ -323,12 +339,14 @@ def format_downloads(value: int | None) -> str:
 
 
 __all__ = [
+    "ANSWER_ERRORS",
     "HF_ACCOUNT_LIMIT",
     "HF_CATALOG_LIMIT",
     "HF_MOST_DOWNLOADED_LIMIT",
     "HF_OPEN_LIMIT",
     "MOST_DOWNLOADED_LABEL",
     "NEWEST_LABEL",
+    "TRANSPORT_ERRORS",
     "TYPED_LABEL",
     "GroupPlan",
     "SearchGroup",

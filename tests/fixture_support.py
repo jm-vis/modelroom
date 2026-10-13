@@ -493,6 +493,23 @@ def no_tensor_hits_mapping() -> dict[tuple[str, str], Response]:
     }
 
 
+def direct_find_mapping() -> dict[tuple[str, str], Response]:
+    """The publisher's own repository of every shipped catalog model (AP9-KO, `search_direct.find_direct`), as not found.
+
+    A run with a vLLM machine asks the Hub directly for the catalog rows its word names. No such answer is
+    recorded, so every one is bound to a plain `404`: the direct find logs it as not read and the recorded
+    run's list stays the one it was. Read from the catalog, so a row added later is bound too. Put it first
+    when mappings are merged, so a recorded answer for the same request wins.
+    """
+    from modelroom.catalog import load_catalog
+    from modelroom.search_pages import model_url
+
+    missing = Response(status=404, headers={"Content-Type": "application/json"}, body=b'{"error":"Repository not found"}')
+    return {
+        ("GET", model_url(model.hf_repo)): missing for family in load_catalog().families for model in family.models
+    }
+
+
 def guided_transport_mapping() -> dict[tuple[str, str], Response]:
     """Every request one whole guided run makes: the catalog's revision, the search, its age lookups and the fetch.
 
@@ -502,6 +519,7 @@ def guided_transport_mapping() -> dict[tuple[str, str], Response]:
     suite's conftest does.
     """
     return {
+        **direct_find_mapping(),
         ("GET", f"https://huggingface.co/api/datasets/{DATASET}/revision/main"): Response(
             status=404, headers={"Content-Type": "application/json"}, body=b'{"error":"Repository not found"}'
         ),
