@@ -39,7 +39,7 @@ from .intro import label_line
 from .loadtest import installed_candidates, installed_models, weight_digest
 from .pull_choice import KEY as CHOICE_KEY
 from .pull_choice import LOCAL_ALREADY, NONE_VALUE, QUESTION as CHOICE_QUESTION
-from .pull_choice import PullRow, default_row, package_of, pull_rows, weights_bytes_of
+from .pull_choice import PullRow, default_row, offered, package_of, pull_rows, recommendation_lines, weights_bytes_of
 from .quantization import package_identity_key
 from .room import Disk, free_disk, gb, pull_need_bytes
 from .install_vllm import install_block_lines, vllm_install
@@ -49,6 +49,7 @@ from .screen import Screen
 from .screen import PULL_LABEL, download_question, install_local_note, install_pull_line, plain, pull_progress_text, pull_question
 from .screen import DEFAULT_PULLED_HINT, pulled_line, yes_no
 from .views import INSTALL_LABEL, install_target
+from .views_install import setup_note_of
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
     from .guided import GuidedRun
@@ -214,7 +215,8 @@ def _show_vllm(run: "GuidedRun", context: PullContext, row: PullRow, package: Pa
     relative = disk is not None and disk.vllm is not None and disk.vllm.relative
     install = vllm_install(package, entry.fit, block.profile, relative_cache=relative)
     served = run.servers.found.get("vllm")
-    for line in install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=served, on_disk=local):
+    note = setup_note_of(context.document.setup_notes, entry.base_model_hf_repo)  # E4-B, over both commands
+    for line in install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=served, on_disk=local, setup_note=note):
         run.screen.write(line)
 
 
@@ -329,7 +331,12 @@ def _choose(run: "GuidedRun", rows: Sequence[PullRow], locals_: set[tuple[str, t
     try:
         value = run.asker.select(CHOICE_KEY, question, pull_choices(rows, locals_))
     except AnswerMissingError:
-        return default_row(rows)
+        row = default_row(rows)
+        if row is None:  # V4: `#1` is no automatic choice -- say so, and pull nothing, nor move to another rank
+            whole = offered(rows)  # every shown rank: the "nothing left" line only if not one of them is recommendable
+            for style, text in recommendation_lines(offered(rows, [1], past_disk=False), whole.row is None and whole.stop is None):
+                run.screen.write(label_line(INSTALL_LABEL, [(style, text)]))
+        return row
     chosen = next((row for row in rows if row.locked is None and row.value == value), None)
     run.screen.answer(question, NONE_WORDS if chosen is None else f"#{chosen.rank}  {chosen.name}")
     return chosen
@@ -340,11 +347,19 @@ def pull_choices(rows: Sequence[PullRow], locals_: set[tuple[str, tuple[str, str
     says what it needs in place of its name and cannot be taken; the pointer starts on the first row
     that can, else on `none` (AP9-RM U11). `locals_` holds `(runtime, identity)` of every row its own
     runtime holds already: "local already" is a fact of one runtime's inventory, not of the package."""
+    # V4: the pointer never starts on a row the recommendation passed over (a community conversion): it starts on
+    # the first recommendable row, else on `none`. Where the first row it could start on is recommendable, nothing changes.
+    start = next((row for row in rows if row.locked is None), None)
+    sound = next((row for row in rows if row.locked is None and row.recommendable), None)
+    moved = start is not None and not start.recommendable
     choices = [
-        Choice(row.value, _row_words(row, (row.runtime, row.identity) in locals_), disabled=row.locked, warn=row.over_disk)
+        Choice(
+            row.value, _row_words(row, (row.runtime, row.identity) in locals_), checked=moved and row is sound,
+            disabled=row.locked, warn=row.over_disk,
+        )
         for row in rows
     ]
-    return choices + [Choice(NONE_VALUE, NONE_WORDS)]
+    return choices + [Choice(NONE_VALUE, NONE_WORDS, checked=moved and sound is None)]
 
 
 def _row_words(row: PullRow, local: bool) -> str:

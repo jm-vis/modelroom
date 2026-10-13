@@ -18,17 +18,21 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 
 from . import runtimes
-from .contracts import Package
+from .catalog_findings import SetupNote
+from .contracts import Package, hf_id_key
 from .disk_fit import block_place, known, none_fits_words, skipped_words, vllm_only
 from .document import MachineRanking, RankedEntry
 from .install_vllm import COMPUTED_ONLY, NO_SAFE_COMMAND, install_block_lines, vllm_install
 from .intro import label_line
 from .lmstudio_install import is_lms_lock, on_disk_text
-from .pull_choice import NOT_UNIQUE, Offered, PullRow, block_rows, offered, package_of, rank_over
+from .pull_choice import (
+    NOT_UNIQUE, Offered, PullRow, block_rows, blocked_lines_of, offered, package_of, rank_over, recommendation_lines,
+)
 from .room import Disk
 from .screen import Line, install_pull_line
 
 INSTALL_LABEL = "install"
+BLOCKED_LABEL = "blocked"  # AP9-KO: the label of a row an `absent` check blocks (`blocked_label_lines`)
 OTHER_INSTALL_NOTE = "run it on that computer; this run pulls only onto this one"
 # A3 (AP9-FR): said only for a block in `pull_other_machines` -- the guided run passes exactly the
 # machines `pull_other_step` will list a row for (`pull_other.eligible_other_machines`), so this
@@ -101,6 +105,7 @@ def install_lines(
     held: Held = None,
     live_vllm: object = None,
     over_ssh: bool = False,
+    setup_notes: Mapping[str, SetupNote] | None = None,
 ) -> list[Line]:
     """The install line of a block, behind a blank line; nothing where a row has no local name.
 
@@ -130,37 +135,61 @@ def install_lines(
     offer = install_offer(block, rule, packages, held, ambiguous)
     if reads and offer.all_over:
         return [[], label_line(INSTALL_LABEL, [("class:warn", none_fits_words(read))])]
+    # AP9-KO (V4): where the recommendation passed a community conversion over, or found nothing left, the
+    # install line says so (a blocked row says why under its table); those lines stand before the command.
+    said = [label_line(INSTALL_LABEL if index == 0 else "", [(style, text)]) for index, (style, text) in enumerate(recommendation_lines(offer))]
     if offer.row is None:
         stop = offer.stop
         note = f"#{stop.rank} {NOT_UNIQUE_INSTALL}" if stop is not None and stop.locked == NOT_UNIQUE else None
         note = f"#{stop.rank} {COMPUTED_ONLY}" if stop is not None and stop.locked == COMPUTED_ONLY else note
         note = f"#{stop.rank} {NO_SAFE_COMMAND}" if stop is not None and stop.locked == NO_SAFE_COMMAND else note
         note = f"#{stop.rank} {stop.locked}" if stop is not None and stop.runtime == runtimes.LMSTUDIO.key and is_lms_lock(stop.locked) else note
-        return [] if note is None else [[], label_line(INSTALL_LABEL, [("class:note", note)])]
+        if note is not None:
+            said.append(label_line(INSTALL_LABEL if not said else "", [("class:note", note)]))
+        return [[], *said] if said else []
     row, runtime = offer.row, runtimes.runtime_of(offer.row.runtime)
     if runtime.key == runtimes.VLLM.key:
-        return _vllm_lines(block, row, own, disk, packages, held, live_vllm, offer.skipped if reads else (), dash)
+        return _ahead(said, _vllm_lines(block, row, own, disk, packages, held, live_vllm, offer.skipped if reads else (), dash, setup_notes))
     lms = disk.lmstudio if disk is not None else None
     if runtime.key == runtimes.LMSTUDIO.key and own and (
         row.identity in (held or {}).get(runtime.key, frozenset()) or (lms is not None and row.identity in lms.held)
     ):
         # LM Studio holds the package already (S8): the line says so in place of a download that is not needed.
-        return [[], label_line(INSTALL_LABEL, [("class:note", on_disk_text(row.rank))])]
+        return _ahead(said, [[], label_line(INSTALL_LABEL, [("class:note", on_disk_text(row.rank))])])
     command = runtime.command(str(row.name))
     if own:
         # The one line of this view that may pass 100 characters: it is a command to copy, and a
         # command that was cut is worse than a line that wraps (second-model round, 2026-09-24).
         lines = [[], label_line(INSTALL_LABEL, install_pull_line(row.rank, str(row.name), command=command))]
         skipped = list(offer.skipped)
-        return lines + ([label_line("", [("class:note", skipped_words(skipped, dash))])] if skipped else [])
+        return _ahead(said, lines + ([label_line("", [("class:note", skipped_words(skipped, dash))])] if skipped else []))
     other = [("class:note", f"#{row.rank} on {block.label}"), ("", "  "), ("class:command", command)]
     note = OTHER_INSTALL_NOTE_WITH_LIST if block.machine in pull_other_machines else OTHER_INSTALL_NOTE
-    return [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", note)])]
+    return _ahead(said, [[], label_line(INSTALL_LABEL, other), label_line("", [("class:note", note)])])
+
+
+def setup_note_of(notes: Mapping[str, SetupNote] | None, repo: str) -> SetupNote | None:
+    """The note of a document for the base model `repo`: Hugging Face ids are case-insensitive, so the key of the
+    document and the id of the row are compared by `hf_id_key`; the note keeps the id as it was written."""
+    key = hf_id_key(repo)
+    return next((note for name, note in (notes or {}).items() if hf_id_key(name) == key), None)
+
+
+def _ahead(said: list[Line], lines: list[Line]) -> list[Line]:
+    """`lines` (behind their blank line) with what the recommendation said placed before the command."""
+    return [lines[0], *said, *lines[1:]] if said else lines
+
+
+def blocked_label_lines(block: MachineRanking) -> list[Line]:
+    """What the table says about a shown row an `absent` check blocks (AP9-KO, L1): its rank and the red line
+    `LOAD_BLOCKED`, whatever the view -- the guided result and the stand-alone `render` alike, with or without an
+    install line. The row keeps its place; it is never the install line's and its pull entry is locked."""
+    return [label_line(BLOCKED_LABEL if index == 0 else "", [("class:warn", f"{label} {text}")]) for index, (label, text) in enumerate(blocked_lines_of(block))]
 
 
 def _vllm_lines(
     block: MachineRanking, row: PullRow, own: bool, disk: Disk | None, packages: Sequence[Package], held: Held,
-    live_vllm: object, skipped: Sequence[int], dash: str,
+    live_vllm: object, skipped: Sequence[int], dash: str, setup_notes: Mapping[str, SetupNote] | None = None,
 ) -> list[Line]:
     """The install block of a vLLM row under a table: this machine's with its notes (on disk already,
     another model served), another machine's with the machine named and no promise about this run."""
@@ -169,19 +198,23 @@ def _vllm_lines(
     relative = vllm is not None and vllm.relative
     install = vllm_install(package_of(row, packages), entry.fit, block.profile, relative_cache=relative)
     there = row.identity in (held or {}).get(runtimes.VLLM.key, frozenset()) or (vllm is not None and row.identity in vllm.held)
+    note = setup_note_of(setup_notes, entry.base_model_hf_repo)  # E4-B: over both commands, in `install_block_lines`
     if not own:
-        lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=block.label)
+        lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=block.label, setup_note=note)
         if skipped:
             lines.append(label_line("", [("class:note", skipped_words(list(skipped), dash))]))
         return [[], *lines]
-    lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=live_vllm, on_disk=there)
+    lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=live_vllm, on_disk=there, setup_note=note)
     if skipped:
         lines.append(label_line("", [("class:note", skipped_words(list(skipped), dash))]))
     return [[], *lines]
 
 
 __all__ = [
+    "BLOCKED_LABEL",
     "INSTALL_LABEL",
+    "blocked_label_lines",
+    "setup_note_of",
     "NOT_UNIQUE_INSTALL",
     "OTHER_INSTALL_NOTE",
     "OTHER_INSTALL_NOTE_WITH_LIST",

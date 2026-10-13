@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
 from .catalog import Catalog
-from .catalog_findings import SetupNote
+from .catalog_findings import PackageCheck, SetupNote, load_blocked_text
 from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package, Rating, Snapshot
 from .document import (
@@ -35,11 +35,12 @@ from .document import (
     RenderDocument,
     SetAsideEntry,
 )
-from .fit import GIB
+from .fit import GIB, unknown_fit
 from .guided_contracts import Note
 from .importer import ProfileScan
 from .measurements import MeasurementRecord, Scenario
 from .origin import listed_packagers_of, package_origin
+from .pull_choice import blocked_runtimes
 from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
 from .quantization import package_identity_key
 from .parameters import parameter_count
@@ -454,13 +455,24 @@ def _ranked_entries(
     return entries
 
 
-def _set_aside_entries(items: list[SetAside], covered: bool, shared_memory: bool = False) -> list[SetAsideEntry]:
+def _set_aside_entries(
+    items: list[SetAside], covered: bool, shared_memory: bool = False, blocked: Mapping[tuple[str, str, str], str] | None = None
+) -> list[SetAsideEntry]:
+    """`blocked` maps a package whose `no_fit` became `not_covered` by an `absent` check (`_blocked_or`) to the red
+    line that is its reason; its note is that line, not a statement about the fit rule."""
     return [
         SetAsideEntry(
-            fit=item.fit, reason=item.reason, **_package_line(item.package, _set_aside_note(item, covered, shared_memory))
+            fit=item.fit,
+            reason=item.reason,
+            **_package_line(item.package, _blocked_note(item.reason) if (blocked or {}).get(package_identity_key(item.package)) == item.reason else _set_aside_note(item, covered, shared_memory)),
         )
         for item in items
     ]
+
+
+def _blocked_note(reason: str) -> Note:
+    """The note of a blocked package: the red line itself."""
+    return Note(code="load_blocked", subject="package", origin="computed", text=_clip(reason), facts=["fit.reason"])
 
 
 def _machine_block(
@@ -473,6 +485,7 @@ def _machine_block(
     scenario: Scenario,
     models: Mapping[str, ModelFacts] | None = None,
     per_model: bool = False,
+    checks: Mapping[tuple[str, str, str], PackageCheck] | None = None,
 ) -> MachineRanking:
     """One machine's block: its three lists, or its reason when no fit can be computed at all.
 
@@ -492,10 +505,14 @@ def _machine_block(
         return MachineRanking(
             machine=machine, status=found.status, label=found.label, reason=found.reason, **reserves
         )
-    entries = [
-        (package, fit_for(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config))
-        for package in packages
-    ]
+    entries: list[tuple[Package, Fit]] = []
+    blocked: dict[tuple[str, str, str], str] = {}  # packages whose `no_fit` an `absent` check turned into `not_covered`
+    for package in packages:
+        fit = fit_for(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config)
+        gated = _blocked_or(fit, package, found.profile, checks)
+        if gated is not fit:
+            blocked[package_identity_key(package)] = str(gated.reason)
+        entries.append((package, gated))
     shared = found.profile.gpu_state == "unified_memory"  # one memory, both reserves taken from it
     ranked: list[RankedEntry] = []
     rankings = _rankings_by_runtime(entries, measurements, scenario, models)
@@ -509,10 +526,23 @@ def _machine_block(
         profile=found.profile,
         ranked=ranked,
         ranked_total=sum(len(ranking.ranked) for ranking in rankings),
-        not_covered=[entry for ranking in rankings for entry in _set_aside_entries(ranking.not_covered, covered=False)],
+        not_covered=[
+            entry for ranking in rankings for entry in _set_aside_entries(ranking.not_covered, covered=False, blocked=blocked)
+        ],
         no_fit=[entry for ranking in rankings for entry in _set_aside_entries(ranking.no_fit, True, shared)],
         **reserves,
     )
+
+
+def _blocked_or(fit: Fit, package: Package, profile: HardwareProfile, checks: Mapping[tuple[str, str, str], PackageCheck] | None) -> Fit:
+    """`fit`, except that a package an `absent` check blocks which the fit would set aside as `no_fit` is `unknown`
+    with the red line of the block as its reason: it is carried as `not_covered`, with the reason, not as `no_fit`
+    (V5; `catalog_findings.load_blocked_text`). A ranked row keeps its place and its class -- it is locked in the
+    views and in the pull list; a package the fit already cannot judge keeps its own reason."""
+    check = (checks or {}).get(package_identity_key(package))
+    if check is None or check.result != "absent" or fit.fit_class != "no_fit":
+        return fit
+    return unknown_fit(load_blocked_text(blocked_runtimes(profile), package.base_model_hf_repo, check))
 
 
 def _rankings_by_runtime(
@@ -536,6 +566,13 @@ def _repos_with_rows(blocks: list[MachineRanking]) -> list[str]:
             if entry.base_model_hf_repo not in seen:
                 seen.append(entry.base_model_hf_repo)
     return seen
+
+
+def _package_checks(packages: Sequence[Package], catalog: Catalog | None) -> dict[tuple[str, str, str], PackageCheck]:
+    """The check the catalog holds for each package that has one, by package identity; none without a catalog."""
+    if catalog is None:
+        return {}
+    return {package_identity_key(package): found for package in packages if (found := catalog.package_check(package)) is not None}
 
 
 def _with_evidence(
@@ -651,6 +688,7 @@ def build_render_document(
     shown = list(machine_runtimes.values())
     per_model = len({package.base_model_hf_repo for package in _eligible_packages(snapshot, shown)}) > 1
     facts = models if models is not None else snapshot_model_facts(snapshot)
+    checks = _package_checks(snapshot.packages, catalog)
     blocks = [
         _machine_block(
             machine,
@@ -662,6 +700,7 @@ def build_render_document(
             scenario,
             facts,
             per_model,
+            checks,
         )
         for machine, machine_config in config.machines.items()
     ]
