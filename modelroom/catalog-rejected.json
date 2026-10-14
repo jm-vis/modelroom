@@ -146,5 +146,25 @@
   {
     "date": "2026-10-12",
     "hf_repo": "nvidia/agile_one_s_place_ssd_n2_1260"
+  },
+  {
+    "date": "2026-10-14",
+    "hf_repo": "LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct",
+    "successor": "LGAI-EXAONE/EXAONE-4.0-32B"
+  },
+  {
+    "date": "2026-10-14",
+    "hf_repo": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",
+    "successor": "LGAI-EXAONE/EXAONE-4.0-32B"
+  },
+  {
+    "date": "2026-10-14",
+    "hf_repo": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+    "successor": "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+  },
+  {
+    "date": "2026-10-14",
+    "hf_repo": "upstage/SOLAR-0-70b-16bit",
+    "successor": "upstage/SOLAR-10.7B-Instruct-v1.0"
   }
 ]

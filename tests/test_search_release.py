@@ -978,7 +978,9 @@ def test_ka_g_yi_200k_is_legacy_to_yi_one_five():
     catalog = load_catalog()
     repos = [m.hf_repo for f in catalog.families for m in f.models if m.hf_repo.lower().startswith("01-ai/")]
     assert "01-ai/Yi-6B-200K" in repos
+    # The shipped catalog carries the successor the rule found (approved 2026-10-14); the rule itself on the bare rows.
+    assert catalog.age_of("01-ai/Yi-6B-200K") == ("legacy", "01-ai/Yi-1.5-9B-Chat")
 
-    result = _compare(catalog, repos)
+    result = _compare(_fixture_catalog(dict.fromkeys(repos), "01-ai"), repos)
 
     assert result["01-ai/Yi-6B-200K"] == Release("legacy", "01-ai/Yi-1.5-9B-Chat")

@@ -2017,9 +2017,9 @@
       "parameters_b": 34.388917248,
       "publisher": "01-ai",
       "source": "https://huggingface.co/01-ai/Yi-34B-Chat",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "01-ai/Yi-1.5-34B-Chat",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/01-ai/Yi-1.5-34B-Chat"
     },
     {
       "added": "2026-10-08",
@@ -2040,9 +2040,9 @@
       "parameters_b": 6.061037568,
       "publisher": "01-ai",
       "source": "https://huggingface.co/01-ai/Yi-6B-200K",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "01-ai/Yi-1.5-9B-Chat",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/01-ai/Yi-1.5-9B-Chat"
     },
     {
       "added": "2026-10-08",
@@ -2063,9 +2063,9 @@
       "parameters_b": 6.06103552,
       "publisher": "01-ai",
       "source": "https://huggingface.co/01-ai/Yi-6B-Chat",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "01-ai/Yi-1.5-9B-Chat",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/01-ai/Yi-1.5-9B-Chat"
     },
     {
       "added": "2026-10-08",
@@ -2999,9 +2999,9 @@
       "parameters_b": 0.030427676,
       "publisher": "Cactus-Compute",
       "source": "https://huggingface.co/Cactus-Compute/needle",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "Cactus-Compute/needle3",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/Cactus-Compute/needle3"
     },
     {
       "added": "2026-10-08",
@@ -3045,9 +3045,9 @@
       "parameters_b": null,
       "publisher": "Cactus-Compute",
       "source": "https://huggingface.co/Cactus-Compute/needle2",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "Cactus-Compute/needle3",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/Cactus-Compute/needle3"
     },
     {
       "added": "2026-10-08",
@@ -3275,9 +3275,9 @@
       "parameters_b": 32.0032,
       "publisher": "LGAI-EXAONE",
       "source": "https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-32B-Instruct",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "LGAI-EXAONE/EXAONE-4.0-32B",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B"
     },
     {
       "added": "2026-10-08",
@@ -3394,9 +3394,9 @@
       "parameters_b": null,
       "publisher": "Lightricks",
       "source": "https://huggingface.co/Lightricks/LTX-2.3",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "Lightricks/LTX-2.5",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/Lightricks/LTX-2.5"
     },
     {
       "added": "2026-10-08",
@@ -3764,9 +3764,9 @@
       "parameters_b": 0.334092288,
       "publisher": "Snowflake",
       "source": "https://huggingface.co/Snowflake/snowflake-arctic-embed-l",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "Snowflake/snowflake-arctic-embed-l-v2.0",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/Snowflake/snowflake-arctic-embed-l-v2.0"
     },
     {
       "added": "2026-10-08",
@@ -3810,9 +3810,9 @@
       "parameters_b": 0.108891648,
       "publisher": "Snowflake",
       "source": "https://huggingface.co/Snowflake/snowflake-arctic-embed-m",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "Snowflake/snowflake-arctic-embed-m-v1.5",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v1.5"
     },
     {
       "added": "2026-10-08",
@@ -4205,9 +4205,9 @@
       "parameters_b": 13.0,
       "publisher": "baichuan-inc",
       "source": "https://huggingface.co/baichuan-inc/Baichuan-13B-Chat",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "baichuan-inc/Baichuan2-13B-Chat",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/baichuan-inc/Baichuan2-13B-Chat"
     },
     {
       "added": "2026-10-08",
@@ -4228,9 +4228,9 @@
       "parameters_b": 7.0,
       "publisher": "baichuan-inc",
       "source": "https://huggingface.co/baichuan-inc/Baichuan-7B",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "baichuan-inc/Baichuan2-7B-Chat",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat"
     },
     {
       "added": "2026-10-08",
@@ -4343,9 +4343,9 @@
       "parameters_b": 15.819446272,
       "publisher": "bigcode",
       "source": "https://huggingface.co/bigcode/starcoder",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "bigcode/starcoder2-7b",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/bigcode/starcoder2-7b"
     },
     {
       "added": "2026-10-08",
@@ -4458,9 +4458,9 @@
       "parameters_b": 11.90140832,
       "publisher": "black-forest-labs",
       "source": "https://huggingface.co/black-forest-labs/FLUX.1-dev",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "black-forest-labs/FLUX.2-dev",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/black-forest-labs/FLUX.2-dev"
     },
     {
       "added": "2026-10-08",
@@ -4780,9 +4780,9 @@
       "parameters_b": 16.255643392,
       "publisher": "inclusionAI",
       "source": "https://huggingface.co/inclusionAI/LLaDA2.0-mini",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "inclusionAI/LLaDA2.1-mini",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/inclusionAI/LLaDA2.1-mini"
     },
     {
       "added": "2026-10-08",
@@ -4899,9 +4899,9 @@
       "parameters_b": 7.0,
       "publisher": "internlm",
       "source": "https://huggingface.co/internlm/internlm-chat-7b",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "internlm/internlm3-8b-instruct",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/internlm/internlm3-8b-instruct"
     },
     {
       "added": "2026-10-08",
@@ -4922,9 +4922,9 @@
       "parameters_b": 7.0,
       "publisher": "internlm",
       "source": "https://huggingface.co/internlm/internlm2-7b",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "internlm/internlm3-8b-instruct",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/internlm/internlm3-8b-instruct"
     },
     {
       "added": "2026-10-08",
@@ -4945,9 +4945,9 @@
       "parameters_b": 7.737708544,
       "publisher": "internlm",
       "source": "https://huggingface.co/internlm/internlm2-chat-7b",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "internlm/internlm3-8b-instruct",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/internlm/internlm3-8b-instruct"
     },
     {
       "added": "2026-10-08",
@@ -4968,9 +4968,9 @@
       "parameters_b": 7.737708544,
       "publisher": "internlm",
       "source": "https://huggingface.co/internlm/internlm2_5-7b-chat",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "internlm/internlm3-8b-instruct",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/internlm/internlm3-8b-instruct"
     },
     {
       "added": "2026-10-08",
@@ -5384,9 +5384,9 @@
       "parameters_b": 0.136731648,
       "publisher": "nomic-ai",
       "source": "https://huggingface.co/nomic-ai/nomic-embed-text-v1",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "nomic-ai/nomic-embed-text-v1.5",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5"
     },
     {
       "added": "2026-10-08",
@@ -7053,9 +7053,9 @@
       "parameters_b": 1.927237104,
       "publisher": "moondream",
       "source": "https://huggingface.co/moondream/moondream-2b-2025-04-14",
-      "successor": null,
-      "successor_checked": null,
-      "successor_source": null
+      "successor": "moondream/moondream3.1-9B-A2B",
+      "successor_checked": "2026-10-14",
+      "successor_source": "https://huggingface.co/moondream/moondream3.1-9B-A2B"
     },
     {
       "added": "2026-10-10",
