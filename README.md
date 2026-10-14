@@ -1163,7 +1163,10 @@ In the order we plan to build it, none of it dated:
   missing -- an export from one is welcome.
 - **The catalog's successors.** A model shows `legacy` only when the catalog names its
   successor with the page that says so; many families still carry no such line, and those
-  rows show `–`. The catalog is a data file in this repository and takes pull requests.
+  rows show `–`. The maintainer's scanner proposes successors from the version numbers in the names
+  (one publisher, one family, one kind, a higher version, created later), and each one is approved by
+  hand before it reaches the catalog; the dataset carries it to every release without an update. The
+  catalog is a data file in this repository and takes pull requests.
 
 ### Contributing and conventions
 

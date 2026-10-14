@@ -100,6 +100,36 @@ python scripts/catalog_scan.py --catalog modelroom/catalog.json --rejected model
 - **Approving.** By number, as every change (`--approve 30,31,...`). The checks and the note of one row are two numbers.
   Removing a finding is a change too and goes the same way.
 
+## Successors from the names (stage `A4`, decided 2026-10-14)
+
+Every scan, with or without `--packages`, also runs the name rule of the search over the rows of the working catalog and
+proposes successors (`CONTRACTS.md`, "How a successor is proven in the shipped catalog"). It needs no request.
+
+```
+python scripts/catalog_scan.py --catalog modelroom/catalog.json --rejected modelroom/catalog-rejected.json --out <out> --offline
+```
+
+- **`--offline`** asks nobody and moves no mark: the run makes only these proposals and carries the open ones. The daily scan
+  makes them as well; use `--offline` to look at them on their own, or without a network. Run on a day that already has a
+  proposal (a normal scan with the same `--out`), it takes that proposal over like an earlier day's: the open changes and
+  candidates stay, only the name-rule successors are made again.
+- **Reading a proposal.** Each is a number of its own, stage `A4`, with a line `basis: name rule: version 4.0 stands over
+  version 3.5 in <publisher>/<family> (<kind>)` and the successor's Hub page as evidence. Read the pair, not only the
+  numbers: the rule compares names, so it cannot see a variation that is no replacement (a LoRA, an editing or audio model
+  of the same family, a text embedding for a vision embedding). Approve the numbers you can vouch for:
+  `--approve 1,2,5`, as for every change. An approved row becomes `legacy` with that successor in the list.
+- **A `latest` row** with a higher version gets no number: a note names it (`latest in the catalog, but ... stands over it by
+  version; no successor proposed, decide separately`). Decide it apart, by hand.
+- **Same variation.** A proposal needs the same variation words on the row and the successor (in any case), and the successor
+  is the highest of that subgroup: a LoRA, an audio, an Omni or a Flash/MOPD build is never proposed for the plain model.
+  The size may differ; look at it when you approve.
+- **Rejecting** a number turns down the **pair**: `catalog-rejected.json` gets `{"hf_repo": <row>, "successor": <target>, "date":
+  ...}` and that proposal never comes back. Another successor of the row (a new higher version) and every other field of the
+  row are still proposed. Leave a number you merely doubt open: it is carried with its first day and made again each run while
+  the rule holds.
+- **Nothing is approved by the rule.** A scan changes no file of the table; only `--apply` with the numbers does. The
+  publication then runs as under "A publication"; the new `successor` fields read in releases 1.0.0 and 1.1.0 alike.
+
 ### First approval of findings: the table becomes schema 3
 
 The shipped table stays schema 2 and unchanged until findings are approved (decision of 2026-10-14). The steps, in this order:

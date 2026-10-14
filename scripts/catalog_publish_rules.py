@@ -227,6 +227,15 @@ def _rejection(proposal_parts: tuple[dict, dict], name: str) -> tuple[str, str]:
     return ("hf_repo", candidate["hf_repo"]) if candidate["candidate"] == "B3" else ("account", candidate["account"])
 
 
+def _name_pair(proposal_parts: tuple[dict, dict], name: str) -> tuple[str, str] | None:
+    """`(repo, successor)` of a rejected number that is a successor of the name rule (stage `A4`), else `None`: the entry a
+    rejection makes for it names the pair, so the row is proposed other successors and other fields still."""
+    change = proposal_parts[0].get(name)
+    if change is None or change.get("stage") != "A4" or change.get("field") != "successor":
+        return None
+    return change["hf_repo"], change["fields"]["successor"]["new"]
+
+
 def _check_reading(change: dict, name: str, request: Request) -> None:
     """A new row whose name the grammar cannot read is taken only with `--approve-unread` for its number. The reading is
     worked out here from the repo and the size of the row; the `reading` mark of the proposal is for the reader only, so a
@@ -257,9 +266,16 @@ def plan_apply(document: dict, catalog_bytes: bytes, rejected_bytes: bytes, prop
     catalog_text = R.dump_json(target).decode("utf-8") if taken or request.admit else catalog_bytes.decode("utf-8")
     try:
         repos, accounts = R.parse_rejected(rejected_bytes)
+        pairs = R.parse_rejected_pairs(rejected_bytes)
         entries = list(json.loads(rejected_bytes.decode("utf-8")))
         before = len(entries)
         for name in _order(request.reject):
+            pair = _name_pair(parts, str(name))
+            if pair is not None:  # a name-rule proposal: the pair is turned down, never the row
+                if pair not in pairs:
+                    pairs.add(pair)
+                    entries.append({"hf_repo": pair[0], "successor": pair[1], "date": today})
+                continue
             key, value = _rejection(parts, str(name))
             if value in (repos if key == "hf_repo" else accounts):
                 continue  # on the list already: no duplicate

@@ -461,15 +461,36 @@ DECISION_STATES = ("approved", "applied", "committed", "pushed", "uploaded", "pu
 
 def parse_rejected(raw: bytes) -> tuple[set[str], set[str]]:
     """`(repos, accounts)` of the rejection list: names, or objects with a name under `hf_repo` (else `account`); a `/`
-    makes it a repo. Any other entry is a `ValueError`, never skipped: a damaged entry must not lift a rejection."""
+    makes it a repo. Any other entry is a `ValueError`, never skipped: a damaged entry must not lift a rejection. An
+    entry with a `successor` is a rejected pair (`parse_rejected_pairs`): it rejects neither the repo nor its account."""
     entries = json.loads(raw.decode("utf-8"))
     if not isinstance(entries, list):
         raise ValueError("not a list")
+    parse_rejected_pairs(raw)
+    entries = [e for e in entries if not (isinstance(e, dict) and "successor" in e)]
     names = [e if isinstance(e, str) else e.get("hf_repo", e.get("account")) if isinstance(e, dict) else None for e in entries]
     for number, name in enumerate(names, start=1):
         if not (isinstance(name, str) and name):
             raise ValueError(f"entry {number} is neither a name nor an object with a name under hf_repo or account")
     return {n for n in names if "/" in n}, {n for n in names if "/" not in n}
+
+
+def parse_rejected_pairs(raw: bytes) -> set[tuple[str, str]]:
+    """`{(repo, successor)}` of the rejection list: the entries `{"hf_repo": ..., "successor": ..., "date": ...}` that the
+    maintainer's `--reject` of a name-rule proposal writes (NF, Fix 1). The pair is turned down, not the row. Entries
+    without a `successor` are no pair; a pair whose two names are not non-empty strings is a `ValueError`. A list that is no
+    list is the error of `parse_rejected`."""
+    entries = json.loads(raw.decode("utf-8"))
+    if not isinstance(entries, list):
+        raise ValueError("not a list")
+    pairs = set()
+    for number, entry in enumerate(entries, start=1):
+        if isinstance(entry, dict) and "successor" in entry:
+            repo, target = entry.get("hf_repo"), entry["successor"]
+            if not (isinstance(repo, str) and repo and isinstance(target, str) and target):
+                raise ValueError(f"entry {number} has a successor but no pair of names under hf_repo and successor")
+            pairs.add((repo, target))
+    return pairs
 
 
 def touched(change: dict) -> set[tuple]:
@@ -662,6 +683,8 @@ def carry_over(proposal: dict, decision: object, rows: dict, listed: set[str], r
                 change["hf_repo"] = row.hf_repo
             repo = change["hf_repo"]
             if str(change.get("n")) in decided:
+                if str(change.get("n")) in _ids(taken, "rejected") and change.get("stage") == "A4" and change.get("field") == "successor":
+                    continue  # a name-rule pair turned down: locked by the rejection list's pair alone, no field of the row is
                 done_repos.add(repo) if change["change"] == "new_row" else done_fields.update(touched(change))
                 continue
             if not _sound_change(change) or rejected(repo) or any(isinstance(r, str) and rejected(r) for r in _named(change)):
@@ -844,6 +867,8 @@ def render_proposal(data: dict, sha256: str | None = None) -> str:
                      f"evidence {' '.join(change.get('evidence', []))} | open since {change['open_since']}")
         if change.get("kind_evidence"):
             lines.append("  kind evidence: " + json.dumps(change["kind_evidence"], sort_keys=True))
+        if change.get("basis"):
+            lines.append("  basis: " + change["basis"])
         for name in sorted(change["fields"]):
             pair = change["fields"][name]
             lines.append(f"  {name}: {json.dumps(pair['old'])} -> {json.dumps(pair['new'])}")

@@ -10,6 +10,10 @@ in between leaves the old state and the next run reads the same pages again. It 
 exit 1 when the budget ended, a page failed or a stored position was lost (the proposal is written all the same); exit 2
 when the call or a file is wrong or the proposal cannot be made (nothing is written). The rules are in `catalog_scan_rules.py`.
 
+Every run also proposes successors from the names (stage `A4`, `catalog_scan_latest.name_successors`, NF): the name rule of the
+search over the rows of the table, one numbered change each, approved one by one by the maintainer. `--offline` makes only
+these proposals, from the table alone, with no request and no mark moved.
+
 With `--packages` (AP9-KO, `catalog_scan_packages.py`) the run also checks the GGUF packages of the catalog rows against the
 llama.cpp source and reads the model cards for setup notes, for the rows it takes this day (`PACKAGE_ROWS_PER_RUN`, at most
 `PACKAGE_STAGE_BUDGET` requests); that needs a working catalog of schema 3 and opens `api.github.com` and the Hub's CDN for
@@ -140,8 +144,9 @@ class _Both:
 
 class _Run:
     def __init__(self, catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files, packages=False,
-                 package_budget=PACKAGE_STAGE_BUDGET, package_rows=PACKAGE_ROWS_PER_RUN) -> None:
+                 package_budget=PACKAGE_STAGE_BUDGET, package_rows=PACKAGE_ROWS_PER_RUN, offline=False) -> None:
         self.packages, self.package_budget, self.package_rows, self.package_attempts = packages, package_budget, package_rows, {}
+        self.offline = offline
         self.unit_attempts: dict = {}
         self.files, self.out, self.now = files, Path(out_dir), now.astimezone(timezone.utc)
         self.today = self.now.date().isoformat()
@@ -167,7 +172,9 @@ class _Run:
         self.packagers = list(self.catalog.packagers)
         self.accounts = self.publishers + [a for a in self.packagers if a not in self.publishers]
         try:
-            self.rejected_repos, self.rejected_accounts = R.parse_rejected(self._read(Path(rejected_path), "rejection list"))
+            rejection_list = self._read(Path(rejected_path), "rejection list")
+            self.rejected_repos, self.rejected_accounts = R.parse_rejected(rejection_list)
+            self.rejected_pairs = R.parse_rejected_pairs(rejection_list)  # (row, successor) pairs turned down, not the rows
         except ValueError as exc:
             raise UsageError(f"{rejected_path}: not a valid rejection list: {_clean(exc)}") from exc
         self.main, self.sub = RequestBudget(budget), RequestBudget(sub_budget)
@@ -210,7 +217,8 @@ class _Run:
         """The marks, the newest earlier proposal (to carry over) and any decision that is not yet published."""
         if self.files.exists(self.out / self.today / "decision.json"):
             raise UsageError(f"{self.out / self.today}: a decision exists for this day, the proposal would no longer match it")
-        days = sorted(n for n in self.files.folders(self.out) if _DAY.fullmatch(n) and n < self.today)
+        # an offline run replaces today's proposal like a normal one does, so it takes today's over as an earlier day's
+        days = sorted(n for n in self.files.folders(self.out) if _DAY.fullmatch(n) and (n <= self.today if self.offline else n < self.today))
         for name in reversed(days):
             decision = self._json(self.out / name / "decision.json")
             if isinstance(decision, dict) and isinstance(decision.get("state"), str) and decision["state"] != "published":
@@ -698,6 +706,7 @@ class _Run:
 
     def _successors(self) -> None:
         """The successors the cards name, against the table at the end of the run, resolved among themselves (AP9-KA-H)."""
+        named = self._take_name_links()
         state = self._recheck_links()
         pointed = {target: repo for repo, (_, target) in sorted(state.items()) if target}
         candidates = {row.hf_repo: target for row, target in sorted(self.successors, key=lambda pair: pair[0].hf_repo)
@@ -707,6 +716,28 @@ class _Run:
         for repo, target in sorted(chosen.items()):
             row, card = self.rows[repo], f"{R.HUB}/{repo}"
             self._put(("field", repo, "successor"), R.field_change(row, "A3", L.successor_pairs(row, target, card, self.today), [card], self.today, "successor"))
+        self._name_successors(named)
+
+    def _take_name_links(self) -> dict[str, str]:
+        """The carried successor changes of the name rule leave `self.changes`, `repo -> open_since`: the rule makes them
+        again from the table in this run (`_name_successors`), so one it no longer makes is gone, and the check of
+        `_recheck_links` -- a target that is a `latest` row -- is the card's rule and never theirs. A change of the name
+        rule is told by its proof: the page of the successor, where a card's is the page of the row."""
+        taken = {key[1]: self.changes[key]["open_since"] for key in sorted(self.changes) if key[0] == "field" and key[2] == "successor"
+                 and self.changes[key]["fields"]["successor_source"]["new"] == f"{R.HUB}/{self.changes[key]['fields']['successor']['new']}"}
+        for repo in taken:
+            del self.changes[("field", repo, "successor")]
+        return taken
+
+    def _name_successors(self, open_since: dict[str, str]) -> None:
+        """The successors the name rule proposes (`L.name_successors`), against the end of the run: after the cards', so a
+        row a card gave a successor is not asked again. Each is a change of its own with the page of the successor as proof."""
+        found, notes = L.name_successors(list(self.rows.values()), L.end_state(self.rows, self.changes), self._is_rejected, self.rejected_pairs)
+        self.notes += notes
+        for repo, named in sorted(found.items()):
+            row, page = self.rows[repo], f"{R.HUB}/{named.target}"
+            change = R.field_change(row, "A4", L.successor_pairs(row, named.target, page, self.today), [page], open_since.get(repo, self.today), "successor")
+            self._put(("field", repo, "successor"), {**change, "basis": named.basis})
 
     def _recheck_links(self) -> dict:
         """The end state, after every carried successor change is checked again: one whose target is no `latest` row
@@ -836,19 +867,23 @@ class _Run:
         self.left_out: dict[str, str] = {}  # repo -> kind of a new row the last `_takes` refused
         self._history()
         self._carry()
-        self._recheck()
-        for account in self.accounts:
-            if self.budget_end:
-                self.unread["accounts"].append(account)
-            else:
-                self._account(account)
-        self._seed()
-        self._open_pages()
-        self._build()
-        self._stage_packages()
-        self._unread_notes()
-        oldest = min(covered for covered, _ in self.marks.values()) - R.OVERLAP
-        self.notes.append(f"watermark: entries created before {oldest.date().isoformat()} are read for existing rows only")
+        if self.offline:
+            self.carried = set()
+            self._successors()  # the name rule over the table: no request, no mark moves
+        else:
+            self._recheck()
+            for account in self.accounts:
+                if self.budget_end:
+                    self.unread["accounts"].append(account)
+                else:
+                    self._account(account)
+            self._seed()
+            self._open_pages()
+            self._build()
+            self._stage_packages()
+            self._unread_notes()
+            oldest = min(covered for covered, _ in self.marks.values()) - R.OVERLAP
+            self.notes.append(f"watermark: entries created before {oldest.date().isoformat()} are read for existing rows only")
         try:
             changes, left_out = R.check_changes(self.document, list(self.changes.values()))
         except ValueError as exc:
@@ -893,11 +928,12 @@ def _attempts_of(raw_state: object, name: str = "package_attempts") -> dict[str,
 
 def scan(catalog_path, rejected_path, out_dir, *, transport: Transport, now: datetime, budget: int = DEFAULT_BUDGET,
          sub_budget: int = STAGE_BUDGET, files: DiskFiles | None = None, packages: bool = False,
-         package_budget: int = PACKAGE_STAGE_BUDGET, package_rows: int = PACKAGE_ROWS_PER_RUN) -> ScanResult:
+         package_budget: int = PACKAGE_STAGE_BUDGET, package_rows: int = PACKAGE_ROWS_PER_RUN, offline: bool = False) -> ScanResult:
     """One run. `transport` is the only way out to the network, `now` the only clock, `files` the only disk. `packages`
-    switches on the package stage (off, the run asks what it asked before AP9-KO)."""
+    switches on the package stage (off, the run asks what it asked before AP9-KO). `offline` asks nobody: the run makes the
+    proposals of the name rule from the table and carries the open ones, and moves no mark."""
     try:
-        run = _Run(catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files or DiskFiles(), packages, package_budget, package_rows)
+        run = _Run(catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files or DiskFiles(), packages, package_budget, package_rows, offline)
         return run.execute()
     except UsageError as exc:
         return ScanResult(exit_code=2, error=str(exc))
@@ -911,6 +947,7 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None, n
     parser.add_argument("--today", help="the day of the run, YYYY-MM-DD (default: today, UTC)")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
     parser.add_argument("--packages", action="store_true", help="also check the GGUF packages and the model cards (needs a catalog of schema 3)")
+    parser.add_argument("--offline", action="store_true", help="no request: only the successors of the name rule, made from the table")
     args = parser.parse_args(argv)
     try:
         moment = datetime.combine(datetime.fromisoformat(args.today).date(), time.min, tzinfo=timezone.utc) if args.today else now or datetime.now(timezone.utc)
@@ -919,7 +956,7 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None, n
         return 2
     # the hosts of the source and the Hub's CDN are the scanner's alone: `http._ALLOWED_HTTPS_HOSTS` stays what it is
     transport = transport or (UrllibTransport(allowed_https_hosts=K.ScannerHosts()) if args.packages else UrllibTransport())
-    result = scan(args.catalog, args.rejected, args.out, transport=transport, now=moment, budget=args.budget, packages=args.packages)
+    result = scan(args.catalog, args.rejected, args.out, transport=transport, now=moment, budget=args.budget, packages=args.packages, offline=args.offline)
     if result.error:
         print(result.error, file=sys.stderr)
     elif result.proposal:
