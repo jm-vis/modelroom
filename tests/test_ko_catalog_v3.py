@@ -107,7 +107,9 @@ def test_a_schema_3_document_without_any_finding_is_valid_and_reads_like_schema_
 def test_the_shipped_catalog_stays_a_schema_2_document_until_it_holds_findings():
     raw = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
     holds_finding = any(row.get("gguf_checks") or row.get("setup_note") for row in raw["models"])
-    assert raw["schema_version"] == (3 if holds_finding else 2)  # decided in P5: schema 3 as soon as a finding is approved
+    holds_switch = any((row.get("setup_note") or {}).get("vllm_args") for row in raw["models"])
+    # decided in P5: schema 3 as soon as a finding is approved; schema 4 as soon as a note carries switches (release 1.2.0)
+    assert raw["schema_version"] == (4 if holds_switch else 3 if holds_finding else 2)
 
 
 # --- schema 2 stays exactly the shape release 1.0.0 reads -------------------------------------------------------
@@ -207,7 +209,7 @@ def test_the_release_1_0_0_reader_takes_the_old_channel_unchanged_and_never_meet
 
     shipped = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
     shipped_bytes = CATALOG_FILE.read_bytes()
-    if shipped["schema_version"] == 3:  # once findings are approved the shipped file is schema 3: this is its form for the old channel
+    if shipped["schema_version"] in (3, 4):  # once findings are approved the shipped file is schema 3 (4 with switches): this is its form for the old channel
         shipped["schema_version"] = 2
         for row in shipped["models"]:
             row.pop("gguf_checks", None)

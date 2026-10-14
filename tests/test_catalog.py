@@ -479,7 +479,8 @@ def _row(index: int = 0, **overrides) -> dict:
 def test_shipped_catalog_is_schema_2_until_it_holds_a_finding_with_the_fixed_license_and_attribution():
     raw = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
     holds_finding = any(row.get("gguf_checks") or row.get("setup_note") for row in raw["models"])
-    assert raw["schema_version"] == (3 if holds_finding else 2)  # CONTRACTS.md, "The forms and their versions" (P5)
+    holds_switch = any((row.get("setup_note") or {}).get("vllm_args") for row in raw["models"])
+    assert raw["schema_version"] == (4 if holds_switch else 3 if holds_finding else 2)  # CONTRACTS.md, "The forms and their versions" (P5, V7)
     assert raw["data_license"] == CATALOG_DATA_LICENSE == "CC-BY-4.0"
     assert raw["attribution"] == CATALOG_ATTRIBUTION
     catalog = load_catalog()

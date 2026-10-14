@@ -5013,7 +5013,9 @@ finding is in it, and not before: until the maintainer approves findings it stay
 byte. The step is one line (`"schema_version": 2` to `3`, the working catalog of the scanner with `--packages` being
 that very file) followed by the approval of the proposal that was made against it; `catalog_publish.py` then makes both
 channel files of the dataset from it (the old one by projection without the findings, the new one as it is). The shipped
-file is read by `load_catalog` as either schema, so a release that ships a schema-3 file reads it offline too.
+file is read by `load_catalog` as either schema, so a release that ships a schema-3 file reads it offline too. This
+paragraph describes release 1.1.0; since release 1.2.0 the file becomes schema 4 once a note carries switches (V7), and
+the publication makes three channel files (see "Published catalog").
 
 A schema-2 document is also **written** as schema 2 (`CatalogDocumentV2` leaves the two keys out when it
 serializes), so reading and writing an old file again stays what 1.0.0 reads. A schema-2 catalog is exactly the

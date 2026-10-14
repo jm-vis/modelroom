@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 latest = importlib.import_module("catalog_scan_latest")
 publish = importlib.import_module("catalog_publish_rules")
 
-from modelroom.catalog_schema import build_catalog_v2, build_catalog_v3, project_to_schema2  # noqa: E402
+from modelroom.catalog_schema import build_catalog_v2, build_catalog_v3, build_catalog_v4, project_to_schema2, project_to_schema3  # noqa: E402
 from modelroom.http import FixtureTransport  # noqa: E402
 from test_catalog_scan import (  # noqa: E402,F401  (the recorded Hub, the run and the readers of a proposal)
     CATALOG_BYTES, FIX, NOW, TODAY, YESTERDAY, Hub, ent, env, fields_of, go, new_of, rules, scanner, stamp,
@@ -385,6 +385,9 @@ def test_the_proposal_over_the_shipped_catalog_validates_in_both_readers_whateve
     scanner.scan(env.catalog, env.rejected, env.out, transport=FixtureTransport({}), now=NOW, offline=True)
     changes = env.proposal()["changes"]
     document = rules.apply_changes(json.loads(shipped), changes)
+    if document["schema_version"] == 4:  # the shipped file of release 1.2.0: its own reader, then the projection for 1.1.0
+        assert build_catalog_v4(json.dumps(document), Path("catalog-v4.json")) is not None
+        document = project_to_schema3(document)
     assert build_catalog_v3(json.dumps(document), Path("catalog-v3.json")) is not None
     for model in document["models"]:  # the projection refuses a finding by design: the old channel is made without them
         model.update(gguf_checks=[], setup_note=None)

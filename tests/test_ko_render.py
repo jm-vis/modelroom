@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from modelroom.catalog import CATALOG_FILE, Catalog, load_catalog
 from modelroom.catalog_findings import llamacpp_page_url
-from modelroom.catalog_schema import build_catalog_v3
+from modelroom.catalog_schema import build_catalog_v3, build_catalog_v4
 from modelroom.document import RenderDocument
 from modelroom.measurements import default_scenario
 from modelroom.quantization import identity_stem, package_identity_key
@@ -221,15 +221,16 @@ def _first_gguf_row(payload: dict) -> tuple[int, dict]:
 
 
 def _catalog_checking(config, entry: dict) -> Catalog:
-    """The shipped catalog as a schema 3 document that holds a check for the package of `entry`."""
+    """The shipped catalog as a schema 3 (or, once it is, schema 4) document that holds a check for the package of `entry`."""
     from modelroom.state import read_snapshot
 
     package = next(p for p in read_snapshot(config).packages if list(package_identity_key(p)) == entry["package_identity"])
     shipped = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
-    shipped["schema_version"] = 3
+    shipped["schema_version"] = max(3, shipped["schema_version"])
     row = next(m for m in shipped["models"] if m["hf_repo"] == package.base_model_hf_repo)
     row["gguf_checks"] = [_check_for(package)]
-    return build_catalog_v3(json.dumps(shipped), Path("catalog.json"))
+    build = build_catalog_v4 if shipped["schema_version"] == 4 else build_catalog_v3
+    return build(json.dumps(shipped), Path("catalog.json"))
 
 
 def test_the_stand_alone_render_hands_the_catalog_to_the_document(tmp_path: Path):
