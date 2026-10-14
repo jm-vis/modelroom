@@ -481,3 +481,225 @@ def test_a_start_of_a_card_from_another_revision_is_not_taken(env):
     big_card(hub, "# Atlas\n\n" + ATLAS_START + "\n" + FILLER, commit=F.SHA_B)
     proposal, _, _ = run(env, hub)
     assert note_change(proposal) is None and any(note.startswith(f"{ROW}: model card not read") for note in proposal["notes"])
+
+
+# --- the switches of the start block (V7, schema 4) ---------------------------------------------------------------------------
+
+QWEN_LIKE = (
+    "```bash\nvllm serve acme/Nova-7B \\\n  --reasoning-parser qwen3 \\\n  --tool-call-parser hermes \\\n"
+    "  --enable-auto-tool-choice \\\n  --max-model-len 8192\n```\n"
+)
+ALL_THREE = ("--reasoning-parser qwen3", "--tool-call-parser hermes", "--enable-auto-tool-choice")
+
+
+def args_of(*parts: str) -> tuple[str, ...]:
+    return C.detect(card(*parts), MODEL).vllm_args
+
+
+def test_a_qwen_like_block_gives_the_reasoning_and_the_tool_parser_and_the_flag():
+    assert C.detect(card(QWEN_LIKE), MODEL) == C.Detection("instructions", None, ALL_THREE)
+
+
+def test_a_block_without_a_listed_switch_gives_none():
+    assert C.detect(card("## Serving\n\n" + START), MODEL) == C.Detection("instructions", None, ())
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("vllm serve acme/Nova-7B --kv-cache-dtype fp8", ("--kv-cache-dtype fp8",)),
+    ("vllm serve acme/Nova-7B --kv-cache-dtype=fp8_e4m3", ("--kv-cache-dtype fp8_e4m3",)),
+    ("vllm serve acme/Nova-7B --reasoning-parser=qwen3 --tool-call-parser=hermes", ("--reasoning-parser qwen3", "--tool-call-parser hermes")),
+    ("$ vllm serve acme/Nova-7B --enable-auto-tool-choice --tool-call-parser hermes", ("--tool-call-parser hermes", "--enable-auto-tool-choice")),
+    ("vllm serve ACME/nova-7b --kv-cache-dtype fp8 --reasoning-parser qwen3", ("--reasoning-parser qwen3", "--kv-cache-dtype fp8")),
+], ids=["kv-cache", "equals form", "two equals forms", "prompt and fixed order", "case of the model id"])
+def test_both_forms_are_read_and_the_order_is_fixed(line, expected):
+    assert args_of(f"```bash\n{line}\n```\n") == expected
+
+
+def test_the_switches_of_another_model_in_the_same_block_or_card_are_not_this_models():
+    other = "```bash\nvllm serve other/Another-1 --reasoning-parser other --enable-auto-tool-choice\n```\n"
+    mixed = "```bash\nvllm serve acme/Nova-7B\nvllm serve other/Another-1 --tool-call-parser other\n```\n"
+    variant = "```bash\nvllm serve acme/Nova-7B-FP8 --kv-cache-dtype fp8\n```\n"
+    assert args_of(other, START) == ()
+    assert args_of(mixed) == ()
+    assert C.detect(card(variant, START), MODEL) == C.Detection("instructions", None, ())
+    assert C.detect(card(other), MODEL).status == "none_recognized"
+
+
+@pytest.mark.parametrize("tail", [
+    "--trust-remote-code",
+    "--trust-remote-code --reasoning-parser qwen3",
+    "--max-model-len 4096 --tensor-parallel-size 2 --gpu-memory-utilization 0.9 --download-dir /data/models --host 0.0.0.0 --port 9000",
+    "--attention-backend FLASHINFER --quantization fp8 --dtype bfloat16 --served-model-name x --api-key secret",
+    "--chat-template ./template.jinja --revision main --hf-overrides {}",
+], ids=["trust-remote-code", "trust-remote-code beside a listed switch", "memory, size, paths and ports", "backend, quantization, key", "paths and overrides"])
+def test_a_switch_that_is_not_on_the_list_is_never_taken(tail):
+    found = args_of(f"```bash\nvllm serve acme/Nova-7B {tail}\n```\n")
+    assert found == (("--reasoning-parser qwen3",) if "qwen3" in tail else ())
+
+
+@pytest.mark.parametrize("value", [
+    '"qwen 3"', "$PARSER", "$(id)", "`id`", "qwen3\\\\x", "a" * 41, "--enable-auto-tool-choice", "-x", "ä", "../x", "qwen3/x", "",
+], ids=["space", "variable", "command substitution", "backtick", "backslash", "41 characters", "a switch as value", "dash value", "non ascii", "dots", "slash", "empty"])
+def test_a_broken_value_drops_that_switch_and_not_the_note(value):
+    found = C.detect(card(f"```bash\nvllm serve acme/Nova-7B --reasoning-parser {value} --kv-cache-dtype fp8\n```\n"), MODEL)
+    assert found.status == "instructions"
+    assert not any(arg.startswith("--reasoning-parser") for arg in found.vllm_args)
+    if not any(c in value for c in "$`\\\"ä"):  # a shell character gives no switch of the line at all
+        assert "--kv-cache-dtype fp8" in found.vllm_args
+
+
+def test_a_value_of_exactly_forty_characters_is_taken():
+    name = "a" + "b" * 39
+    assert args_of(f"```bash\nvllm serve acme/Nova-7B --tool-call-parser {name}\n```\n") == (f"--tool-call-parser {name}",)
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("vllm serve acme/Nova-7B --reasoning-parser", ()),
+    ("vllm serve acme/Nova-7B --reasoning-parser=", ()),
+    ("vllm serve acme/Nova-7B --kv-cache-dtype --enable-auto-tool-choice", ("--enable-auto-tool-choice",)),
+    ("vllm serve acme/Nova-7B --enable-auto-tool-choice=true", ()),
+], ids=["no value at the end", "empty equals", "next token is a switch", "a flag with a value"])
+def test_a_switch_without_a_sound_value_is_dropped(line, expected):
+    assert args_of(f"```bash\n{line}\n```\n") == expected
+
+
+UNSAFE = [";", "&&", "||", "|", "&", ">", ">>", "2>", "<", "(", ")", "$(id)", "$X", "`id`", "#", "'", '"', "\\", "ä"]
+
+
+@pytest.mark.parametrize("char", UNSAFE)
+@pytest.mark.parametrize("place", ["attached to a flag", "attached to a value", "free standing", "attached to the next word", "before a value switch", "after the switches"])
+def test_a_start_line_with_a_shell_character_anywhere_gives_no_switch_at_all(char, place):
+    """One strict rule, in doubt none: the note stays `instructions`, but it takes no switch from that line."""
+    other = "vllm serve other/Another-1 --reasoning-parser other --tool-call-parser hermes --enable-auto-tool-choice --kv-cache-dtype fp8"
+    line = {
+        "attached to a flag": f"vllm serve acme/Nova-7B --enable-auto-tool-choice{char} {other}",
+        "attached to a value": f"vllm serve acme/Nova-7B --max-model-len 8192{char} {other}",
+        "free standing": f"vllm serve acme/Nova-7B --max-model-len 8192 {char} {other}",
+        "attached to the next word": f"vllm serve acme/Nova-7B --max-model-len 8192 {char}{other}",
+        "before a value switch": f"vllm serve acme/Nova-7B --reasoning-parser{char} {other}",
+        "after the switches": f"vllm serve acme/Nova-7B --reasoning-parser qwen3 --enable-auto-tool-choice {char}",
+    }[place]
+    if char == "\\" and place == "after the switches":
+        return  # a backslash at the end of a line is a continuation, not a character of the command
+    found = C.detect(card(f"```bash\n{line}\n```\n"), MODEL)
+    assert found.vllm_args == ()
+    if char not in "'\"":  # an unbalanced quote makes the line no start line at all (E4-B, unchanged)
+        assert found.status == "instructions"
+
+
+def test_the_examples_of_the_reviews():
+    for line in (
+        "vllm serve acme/Nova-7B --port 8000; vllm serve other/Another-1 --reasoning-parser other",
+        "vllm serve acme/Nova-7B --reasoning-parser; vllm serve other/Another-1 --tool-call-parser hermes",
+        "vllm serve acme/Nova-7B --reasoning-parser=qwen3$(id) --kv-cache-dtype fp8",
+        "vllm serve acme/Nova-7B --reasoning-parser qwen3 && vllm serve other/Another-1 --reasoning-parser other",
+        "vllm serve acme/Nova-7B --kv-cache-dtype fp8 # --tool-call-parser hermes",
+    ):
+        assert args_of(f"```bash\n{line}\n```\n") == (), line
+
+
+@pytest.mark.parametrize("tail", ["false", "true", "0", "x --kv-cache-dtype fp8"])
+def test_a_flag_followed_by_a_word_that_is_no_switch_is_dropped(tail):
+    found = args_of(f"```bash\nvllm serve acme/Nova-7B --enable-auto-tool-choice {tail}\n```\n")
+    assert "--enable-auto-tool-choice" not in found
+    assert args_of("```bash\nvllm serve acme/Nova-7B --enable-auto-tool-choice --kv-cache-dtype fp8\n```\n") == ("--enable-auto-tool-choice", "--kv-cache-dtype fp8")
+    assert args_of("```bash\nvllm serve acme/Nova-7B --reasoning-parser qwen3 --enable-auto-tool-choice\n```\n") == ("--reasoning-parser qwen3", "--enable-auto-tool-choice")
+
+
+@pytest.mark.parametrize("control", ["\x0b", "\x0c", "\x00", "\x1f", "\x7f"])  # a `\r` never reaches the line: `detect` turns it into a line break first
+def test_an_ascii_control_character_in_the_start_line_gives_no_switch_at_all(control):
+    line = f"vllm serve acme/Nova-7B --reasoning-parser qwen3{control}--kv-cache-dtype fp8"
+    assert args_of(f"```bash\n{line}\n```\n") == ()
+    assert args_of("```bash\nvllm serve acme/Nova-7B --reasoning-parser qwen3\t--kv-cache-dtype fp8\n```\n") == ("--reasoning-parser qwen3", "--kv-cache-dtype fp8")
+
+
+@pytest.mark.parametrize("control", ["\x0b", "\x0c", "\x1f", "\x7f"])
+@pytest.mark.parametrize("edge", ["end", "end of a continued line", "start"])
+def test_a_control_character_at_the_edge_of_a_start_line_gives_no_switch_at_all(control, edge):
+    if edge == "end":
+        block = f"vllm serve acme/Nova-7B --reasoning-parser qwen3{control}"
+    elif edge == "end of a continued line":
+        block = f"vllm serve acme/Nova-7B --reasoning-parser qwen3{control} \\\n  --kv-cache-dtype fp8"
+    else:
+        block = f"vllm serve acme/Nova-7B --reasoning-parser qwen3 \\\n{control}--kv-cache-dtype fp8"
+    assert args_of(f"```bash\n{block}\n```\n") == ()
+
+
+def test_an_unsafe_line_takes_the_switches_of_a_safe_line_of_the_same_model_with_it():
+    text = "```bash\nvllm serve acme/Nova-7B --reasoning-parser qwen3\n```\n```bash\nvllm serve acme/Nova-7B --kv-cache-dtype fp8 | tee log\n```\n"
+    assert args_of(text) == ()
+
+
+@pytest.mark.parametrize("value", ["qwen3$(x)", "qwen3:custom", "qwen3ä", "qwen3;", "qwen3.x/y", "qwen3/x", "qwen3@1"])
+def test_a_value_off_the_rule_is_dropped_whole_never_cut_to_a_valid_part(value):
+    assert args_of(f"```bash\nvllm serve acme/Nova-7B --reasoning-parser={value} --tool-call-parser {value}\n```\n") == ()
+    assert args_of(f"```bash\nvllm serve acme/Nova-7B --kv-cache-dtype fp8 --tool-call-parser {value}\n```\n") in ((), ("--kv-cache-dtype fp8",))
+
+
+def test_two_values_of_one_switch_in_the_card_leave_that_switch_out_and_the_same_value_twice_keeps_it():
+    two = "```bash\nvllm serve acme/Nova-7B --reasoning-parser qwen3 --enable-auto-tool-choice\n```\n```bash\nvllm serve acme/Nova-7B --reasoning-parser other\n```\n"
+    same = "```bash\nvllm serve acme/Nova-7B --reasoning-parser qwen3\n```\n```bash\nvllm serve acme/Nova-7B --reasoning-parser qwen3 --kv-cache-dtype fp8\n```\n"
+    inside = "```bash\nvllm serve acme/Nova-7B --kv-cache-dtype fp8 --kv-cache-dtype auto\n```\n"
+    assert args_of(two) == ("--enable-auto-tool-choice",)
+    assert args_of(same) == ("--reasoning-parser qwen3", "--kv-cache-dtype fp8")
+    assert args_of(inside) == ()
+
+
+def test_a_broken_value_in_one_line_leaves_the_switch_out_of_every_line():
+    text = "```bash\nvllm serve acme/Nova-7B --reasoning-parser qwen3\n```\n```bash\nvllm serve acme/Nova-7B --reasoning-parser $X\n```\n"
+    assert args_of(text) == ()
+
+
+def test_a_switch_outside_a_start_line_of_this_model_is_no_switch_of_it():
+    assert C.detect(card("Use `--reasoning-parser qwen3` and `--enable-auto-tool-choice` when serving.\n", START), MODEL).vllm_args == ()
+    assert C.detect(card("```bash\npip install x --reasoning-parser qwen3\n```\n", START), MODEL).vllm_args == ()
+    assert C.detect(card("```python\n# vllm serve acme/Nova-7B --reasoning-parser qwen3\n```\n"), MODEL).status == "none_recognized"
+    assert C.detect(card("```yaml\nvllm serve acme/Nova-7B --reasoning-parser qwen3\n```\n"), MODEL).status == "none_recognized"
+
+
+def test_the_note_of_a_card_with_switches_carries_them_and_one_without_writes_no_key():
+    note = C.note_of(MODEL, C.detect(card(QWEN_LIKE), MODEL), F.SHA_A, TODAY)
+    assert note.vllm_args == list(ALL_THREE) and note.model_dump(mode="json")["vllm_args"] == list(ALL_THREE)
+    plain = C.note_of(MODEL, C.detect(card(START), MODEL), F.SHA_A, TODAY)
+    assert plain.vllm_args == [] and "vllm_args" not in plain.model_dump(mode="json")
+
+
+@pytest.fixture
+def env4(tmp_path):
+    e = Env(tmp_path)
+    document = json.loads(e.catalog.read_bytes())
+    document["schema_version"] = 4
+    e.catalog.write_bytes((json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    return e
+
+
+ATLAS_QWEN_LIKE = (
+    "```bash\nvllm serve acme/Atlas-2-9B --reasoning-parser qwen3 --tool-call-parser hermes --enable-auto-tool-choice --trust-remote-code\n```\n"
+)
+
+
+def test_a_schema_4_working_catalog_gets_the_switches_in_the_proposed_note(env4):
+    hub = Hub()
+    F.quiet_world(hub)
+    F.card(hub, ROW, "# Atlas\n\n" + ATLAS_QWEN_LIKE, F.SHA_A)
+    proposal, result, _ = run(env4, hub)
+    new = note_change(proposal)["fields"]["setup_note"]["new"]
+    assert new["vllm_args"] == list(ALL_THREE) and new["status"] == "instructions" and result.exit_code == 0
+
+
+def test_a_schema_3_working_catalog_gets_the_note_without_the_switches_and_says_so(env):
+    hub = Hub()
+    F.quiet_world(hub)
+    F.card(hub, ROW, "# Atlas\n\n" + ATLAS_QWEN_LIKE, F.SHA_A)
+    proposal, result, _ = run(env, hub)
+    new = note_change(proposal)["fields"]["setup_note"]["new"]
+    assert "vllm_args" not in new and new["status"] == "instructions" and result.exit_code == 0
+    assert any(note.startswith(f"{ROW}: the card names vLLM switches") and "schema 3" in note for note in proposal["notes"])
+
+
+def test_the_stage_runs_on_a_schema_4_working_catalog(env4):
+    hub = Hub()
+    F.quiet_world(hub)
+    F.card(hub, ROW, "# Atlas\n\n" + ATLAS_START, F.SHA_A)
+    proposal, _, _ = run(env4, hub)
+    assert note_change(proposal) is not None and not any("the stage did not run" in note for note in proposal["notes"])

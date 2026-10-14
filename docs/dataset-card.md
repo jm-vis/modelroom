@@ -26,6 +26,7 @@ configs:
     data_files:
       - catalog-v2.json
       - catalog-v3.json
+      - catalog-v4.json
 ---
 
 ![Open Model Catalog](catalog-banner.png)
@@ -36,19 +37,20 @@ A small table of the models their publishers call current: text, vision, embeddi
 recognition, image and video generation. Not every build on the Hub. One row per model, with the
 publisher page that says it is current and the date that was checked.
 
-**252 models · 57 publisher accounts watched · one JSON file (241 KB) · schema 2, and schema 3 with findings · CC BY 4.0**
+**252 models · 57 publisher accounts watched · one JSON file (241 KB) · schema 2, and schemas 3 and 4 with findings · CC BY 4.0**
 
-## Two files, two schemas
+## Three files, three schemas
 
-The dataset holds the same table twice, one file per schema, so that each release of the reader finds the file it knows:
+The dataset holds the same table three times, one file per schema, so that each release of the reader finds the file it knows:
 
 | File | Schema | Read by |
 |---|---|---|
-| `catalog-v2.json` | 2 | release 1.0.0 and later; unchanged in form, it carries no findings |
-| `catalog-v3.json` | 3 | releases that read the findings below; the rows of schema 2, plus `gguf_checks` and `setup_note` |
+| `catalog-v2.json` | 2 | release 1.0.0; unchanged in form, it carries no findings |
+| `catalog-v3.json` | 3 | release 1.1.0; the rows of schema 2, plus `gguf_checks` and `setup_note` (a note without `vllm_args`) |
+| `catalog-v4.json` | 4 | releases that read the findings and the switches below; schema 3, plus `vllm_args` in a `setup_note` |
 
-Both files are made from one working table and published together; the published files are compared byte for byte with
-the repository every day. A row of schema 3 without findings reads as "not checked".
+The files are made from one working table and published together; the published files are compared byte for byte with
+the repository every day. A row of schema 3 or 4 without findings reads as "not checked".
 
 ## What a row carries
 
@@ -63,12 +65,14 @@ the repository every day. A row of schema 3 without findings reads as "not check
 | `hub_pipeline_tag`, `kind_source` | the task the Hub states, and where the kind came from (the tag, the base model, the config, or a decision) |
 | `source`, `added`, `note` | the page the row was read from, the day it was added, a short note where a decision needed one |
 
-Schema 3 (`catalog-v3.json`) adds two findings to a row. Each says what was compared and when, and nothing else.
+Schema 3 (`catalog-v3.json`) adds two findings to a row, and schema 4 (`catalog-v4.json`) one field to the second. Each says what
+was compared and when, and nothing else.
 
 | Field | Meaning |
 |---|---|
 | `gguf_checks` | one entry per GGUF package, bound to its repository, revision and weight file (or first shard): the architecture the file states, compared with the `LLM_ARCH_NAMES` block of the `src/llama-arch.cpp` file of one llama.cpp commit. `present` or `absent`, the commit, the page, the day, and where the architecture was read (the Hub's field for the one file it describes, else the first bytes of the file) |
 | `setup_note` | a pointer to the model card of the publisher's repository at one revision: whether the card holds a `vllm serve` start block for the model, and the name of a package the card states as required for inference, where its wording is explicit |
+| `setup_note.vllm_args` | schema 4 only: the switches that the start block names for this model, of a closed list (`--reasoning-parser`, `--tool-call-parser`, `--enable-auto-tool-choice`, `--kv-cache-dtype`), each with a value of letters, digits, `.`, `_` and `-`; nothing else of a start block (no path, no `--trust-remote-code`, no memory or GPU switch) is kept |
 
 What these findings do not say: `present` is no promise that a runtime loads the file, and `absent` is a statement about one
 package against one commit of one source, never about a runtime version. A package or a card without an entry was not
@@ -107,7 +111,7 @@ catalog = json.load(urllib.request.urlopen(url))
 current = [m for m in catalog["models"] if m["latest"]]
 ```
 
-The file with the findings is `catalog-v3.json`, at the same address.
+The files with the findings are `catalog-v3.json` and `catalog-v4.json`, at the same address.
 
 The first consumer is [ModelRoom](https://github.com/jm-vis/modelroom), which reads the catalog at
 the start of each run to answer "which model fits this machine".

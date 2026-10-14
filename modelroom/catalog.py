@@ -4,11 +4,11 @@ The search uses it to tell a publisher from a packager, to call a model `latest`
 when the repo itself says nothing (`new_version`), and to know an Ollama name. Every model row
 names its evidence; nothing in it is inferred (CONTRACTS.md, "Catalog rules").
 
-Three forms build the same in-memory `Catalog`, told apart by their **content**, never by a file
+Four forms build the same in-memory `Catalog`, told apart by their **content**, never by a file
 name: schema 1 (legacy, nested by family, TOML), schema 2 (flat, the publicly published form,
-JSON; every row carries its own `family` and `publisher`; validated in `catalog_schema.py`) or
+JSON; every row carries its own `family` and `publisher`; validated in `catalog_schema.py`),
 schema 3 (schema 2 plus the findings of AP9-KO, `catalog_findings.py`: the package checks and the
-setup note of a row). `load_catalog` reads any of them into the same `Catalog`/`CatalogFamily`/
+setup note of a row) or schema 4 (schema 3 plus the switches a setup note carries, `SetupNote.vllm_args`). `load_catalog` reads any of them into the same `Catalog`/`CatalogFamily`/
 `CatalogModel` shape, so every other reader of this package keeps working against one search API
 regardless of which schema shipped it: `model_for`, `is_publisher`, `age_of`, `families`; the
 findings are read through `package_check`, `pull_check` and `setup_note_for`, which answer `None`
@@ -40,17 +40,18 @@ CATALOG_REJECTED_FILE = Path(__file__).with_name("catalog-rejected.json")
 # Half-open, like every schema range here. Each content shape keeps its own, narrower range --
 # content that sniffs as TOML but claims schema 2 is still refused; CATALOG_SCHEMA_RANGE is the
 # safety net a direct `Catalog.model_validate` call falls back on.
-CATALOG_SCHEMA_RANGE: tuple[int, int] = (1, 4)
+CATALOG_SCHEMA_RANGE: tuple[int, int] = (1, 5)
 CATALOG_TOML_SCHEMA_RANGE: tuple[int, int] = (1, 2)
-CATALOG_JSON_SCHEMA_RANGE: tuple[int, int] = (2, 4)  # every JSON catalog this release reads ...
+CATALOG_JSON_SCHEMA_RANGE: tuple[int, int] = (2, 5)  # every JSON catalog this release reads ...
 CATALOG_V2_SCHEMA_RANGE: tuple[int, int] = (2, 3)  # ... and the one each published channel holds
 CATALOG_V3_SCHEMA_RANGE: tuple[int, int] = (3, 4)
+CATALOG_V4_SCHEMA_RANGE: tuple[int, int] = (4, 5)
 
 # A publicly published file is adversarial input: read at most one byte past this limit, then
 # reject, on both forms (catalog_schema.py carries the document-wide limits: models, publishers,
 # packagers). Every text value, list entries included, caps at CATALOG_MAX_TEXT_LEN.
 CATALOG_MAX_BYTES = 1024 * 1024
-CATALOG_V3_MAX_BYTES = 4 * 1024 * 1024  # schema 3 holds findings; schema 1 and 2 keep the limit they always had
+CATALOG_V3_MAX_BYTES = 4 * 1024 * 1024  # schema 3 and 4 hold findings; schema 1 and 2 keep the limit they always had
 CATALOG_MAX_TEXT_LEN = 300
 CATALOG_MAX_GGUF_REPOS = 50
 CATALOG_MAX_PACKAGE_CHECKS = 200  # per row

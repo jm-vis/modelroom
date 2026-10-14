@@ -37,7 +37,7 @@ import catalog_scan_rules as R  # noqa: E402
 from catalog_scan import DiskFiles  # noqa: E402  (the scanner's one way to touch a disk: atomic writes, a test hands in a subclass)
 
 from modelroom.catalog import CatalogError  # noqa: E402
-from modelroom.catalog_remote import _FAULTS, _SHA_RE, CHANNEL_V2, CHANNEL_V3, DATASET, REMOTE_FILE_NAME, REVISION_MAX_BYTES, _clean, _Fault, _get  # noqa: E402
+from modelroom.catalog_remote import _FAULTS, _SHA_RE, CHANNEL_V2, CHANNEL_V3, CHANNEL_V4, DATASET, REMOTE_FILE_NAME, REVISION_MAX_BYTES, _clean, _Fault, _get  # noqa: E402
 from modelroom.catalog_schema import build_catalog  # noqa: E402
 from modelroom.contracts import SchemaVersionError  # noqa: E402
 from modelroom.http import RequestBudget, Transport, UrllibTransport  # noqa: E402
@@ -279,7 +279,7 @@ class Tool:
             return 0
         commit, remote = P.check_commit(decision.get("commit") or ""), P.check_remote(remote)
         data = self._commit_bytes(commit, decision["result_sha256"])
-        files = P.channel_files(data)  # both files of the dataset, made from the bytes of the commit
+        files = P.channel_files(data)  # the three files of the dataset, made from the bytes of the commit
         token = self._ready(files) if state in ("committed", "pushed") else None  # every refusal of the upload comes before the push
         if state == "committed":
             try:
@@ -373,7 +373,7 @@ class Tool:
 
     def _published(self, dataset: str, sha: str, name: str, budget: RequestBudget) -> bytes:
         """One published file as modelroom reads it, at the revision; the size limit is that of its channel."""
-        limit = (CHANNEL_V3 if name == CHANNEL_V3.file_name else CHANNEL_V2).max_bytes
+        limit = next((channel for channel in (CHANNEL_V4, CHANNEL_V3) if name == channel.file_name), CHANNEL_V2).max_bytes
         answer = _get(self.transport, budget, 2, f"https://huggingface.co/datasets/{dataset}/resolve/{sha}/{name}", limit)
         if answer.header("X-Repo-Commit") != sha:
             raise _Fault("the file is not from the commit that was asked for")

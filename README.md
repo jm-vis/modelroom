@@ -25,7 +25,7 @@ Start: [Quick start](#quick-start). Depth: [The guided run](#the-guided-run), [R
 
 ## Status
 
-Version 1.1.0 (see `CHANGELOG.md`, which lists what has landed). The guided mode and the
+Version 1.2.0 (see `CHANGELOG.md`, which lists what has landed). The guided mode and the
 subcommands work end to end. The data shapes are versioned contracts (see `CONTRACTS.md`).
 
 The branch `main` runs ahead of the release on PyPI. What `CHANGELOG.md` lists under "Unreleased"
@@ -891,8 +891,14 @@ the publisher's repository holds a `vllm serve` block of that model, a red line 
 `<model> has setup instructions in its model card: <url>`; the link is the card at the revision the scanner
 read. Where the card also states that a named package is required for inference, a second line says `it names
 the package <package> as required; the commands below are templates without it`. A card that was not read, or
-whose wording the rule does not know, gives no line, which is no statement that nothing is needed. The commands
-are the ones below: modelroom adds no switch from a card and starts nothing.
+whose wording the rule does not know, gives no line, which is no statement that nothing is needed. modelroom
+starts nothing. The only things it takes from the block are the switches of a short, fixed list that the block
+names for exactly that model: `--reasoning-parser <name>`, `--tool-call-parser <name>`,
+`--enable-auto-tool-choice` and `--kv-cache-dtype <value>`, each with a plain value of letters, digits, `.`, `_`
+and `-`. They stand in both commands below, after the values modelroom computes itself (a switch modelroom sets
+itself is never set twice). Everything else a card's start line says stays out of the commands: paths, memory and
+GPU switches, environment variables and `--trust-remote-code`, which runs code from the repository and is yours to
+decide after reading the card.
 
 Choosing a vLLM row prints
 two commands for the same server; run one of the two in a terminal that stays open.
@@ -1102,8 +1108,8 @@ this repository naming the account and one of its models; the catalog is data in
 and takes a new family with its evidence.
 
 The guided mode reads the current catalog from the public dataset `jm-vis/modelroom-catalog` on
-Hugging Face (the file `catalog-v3.json` since 1.1.0; release 1.0.0 reads `catalog-v2.json`, which stays as
-it was) and keeps a copy in `~/.modelroom/catalog/`: at most one attempt every 24 hours, usually
+Hugging Face (the file `catalog-v4.json` since 1.2.0, `catalog-v3.json` in 1.1.0; release 1.0.0 reads `catalog-v2.json`,
+which stays as it was) and keeps a copy in `~/.modelroom/catalog/`: at most one attempt every 24 hours, usually
 no request or one, three at most, each answer capped and every redirect kept on `huggingface.co`.
 Whatever goes wrong -- no network, a missing dataset, a file that does not validate -- the run goes on
 with the newer of the copy and the catalog shipped in the package, and step 2 says which one applied.
@@ -1153,9 +1159,6 @@ In the order we plan to build it, none of it dated:
 - **Package checks for more models a day.** The daily scan checks the GGUF packages of up to forty
   catalog rows a run, but one popular model with many conversions can use a run's whole share. A
   fair share per row lets every row come round within days instead of weeks.
-- **vLLM switches from the model card.** Since 1.1.0 the results name a model card's setup
-  instructions over the vLLM commands, but add no switch to them. Taking the switches a card states
-  for its model (a reasoning or tool-call parser, a cache type) into the commands is the next step.
 - **Throughput for many people.** Step 3 sizes the memory for the parallel requests a head count
   stands for; a measurement of several requests at once is still missing for Ollama. Beyond roughly eight at once it is a job for a serving stack such as vLLM; the
   ranking itself stays the rule of thumb of "Step 3, Context".

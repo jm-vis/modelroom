@@ -2,9 +2,10 @@
 
 Where the catalog holds a note with status `instructions` for a model, every place that draws that model's two vLLM
 commands -- the install line under the table, the choice in step 5, the handover for another computer -- puts the
-red lines of `catalog_findings.setup_note_lines` before them, and the Markdown view carries the same lines. The
-commands are not changed: no parser, backend or sampler switch is added from a card (that is P3, and never a
-card-dependent switch). Without a note the lines are the lines of before.
+red lines of `catalog_findings.setup_note_lines` before them, and the Markdown view carries the same lines. A note
+without switches changes neither command: no backend or sampler switch is ever added from a card, and the parser and
+cache switches of release 1.2.0 come only from the note's `vllm_args` (`tests/test_vs_switches.py`). Without a note the
+lines are the lines of before.
 """
 
 from __future__ import annotations

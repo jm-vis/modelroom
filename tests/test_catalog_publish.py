@@ -131,7 +131,7 @@ class Runner:
     def __call__(self, args, env) -> int:
         self.calls.append((list(args), dict(env)))
         target = Path(args[6])
-        if target.is_dir():  # the publication sends a folder with both channel files; `uploaded` keeps the bytes of the old channel
+        if target.is_dir():  # the publication sends a folder with the three channel files; `uploaded` keeps the bytes of the old channel
             files = {p.name: p.read_bytes() for p in sorted(target.iterdir())}
             self.folders.append(files)
             self.uploaded.append(files["catalog-v2.json"])
@@ -141,13 +141,13 @@ class Runner:
 
 
 def hub_answers(body: bytes, dataset: str = publish.DATASET, status: int = 200) -> FixtureTransport:
-    """The dataset as the Hub shows it: `body` as the old channel's file, and the new channel's file made from it the way the
-    publisher makes it (a body that is no catalog stands for both)."""
+    """The dataset as the Hub shows it: `body` as the old channel's file, and the files of the newer channels made from it the
+    way the publisher makes it (a body that is no catalog stands for all three)."""
     revision = f"https://huggingface.co/api/datasets/{dataset}/revision/main"
     try:
         files = P.channel_files(body)
     except P.PublishError:
-        files = {"catalog-v3.json": body, "catalog-v2.json": body}
+        files = {"catalog-v4.json": body, "catalog-v3.json": body, "catalog-v2.json": body}
     files["catalog-v2.json"] = body
     answers = {("GET", revision): Response(status, {}, json.dumps({"sha": PUBLISHED}).encode())}
     for name, content in files.items():

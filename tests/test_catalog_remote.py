@@ -773,8 +773,8 @@ def test_a_guided_run_with_no_word_asks_the_current_models_of_the_published_cata
     from modelroom.search_pages import catalog_page_url
 
     new_file = json.loads(doc_text())
-    new_file["schema_version"] = 3  # a guided run asks the new channel
-    mapping = {**guided_transport_mapping(), **hub(doc=json.dumps(new_file).encode("utf-8"), name="catalog-v3.json")}
+    new_file["schema_version"] = 4  # a guided run asks the newest channel
+    mapping = {**guided_transport_mapping(), **hub(doc=json.dumps(new_file).encode("utf-8"), name="catalog-v4.json")}
     empty = json_response("hf_search_none.json")
     published = load_catalog(FIXTURES / "catalog_v2_published.json")
     # only the published catalog's current models are bound: a page asked for any other catalog is a KeyError
@@ -799,4 +799,4 @@ def test_a_guided_run_with_no_word_asks_the_current_models_of_the_published_cata
     asked = [url for _method, url in transport.calls]
     assert catalog_page_url("Nova-9B-2610") in asked  # a model only the published catalog knows is a page
     assert any(line.strip() == f"catalog: published {SHIPPED + 3 * DAY}" for line in lines)
-    assert (tmp_path / "home" / ".modelroom" / "catalog" / catalog_remote.CHANNEL_V3.cache_name).exists()
+    assert (tmp_path / "home" / ".modelroom" / "catalog" / catalog_remote.CHANNEL_V4.cache_name).exists()

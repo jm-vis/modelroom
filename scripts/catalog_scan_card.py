@@ -2,13 +2,24 @@
 
 `detect(markdown, model)` reads the Markdown text of the card of the publisher's repository `model` and answers with a
 `Detection`. The rule is finite and written down here, with positive and negative fixtures in `tests/test_ko_p4_card.py`.
-Nothing of the card is run, followed or copied; the answer is a status and at most the name of one package.
+Nothing of the card is run or followed; the answer is a status, at most the name of one package and at most four switches
+of a closed list (copied as checked tokens, never as text of the card).
 
 **Status `instructions`.** The card has a fenced code block (a shell language, or none) with a logical line (backslash
 continuations joined, a leading `$ ` allowed) that is `vllm serve <model>` followed by anything, where `<model>` is the
 first argument after `serve` and equals the id of this model as a whole, without case. A block for another model (or for
 a variant such as `<model>-FP8`, or a path) does not count; neither does a mention in running text. Nothing found: `none_recognized`,
 which says only that this rule found nothing -- never that nothing is required.
+
+**The switches** (`Detection.vllm_args`, since schema 4) are read from those very lines, the ones for this model and no
+other line of the block: of the closed list `--reasoning-parser <name>`, `--tool-call-parser <name>`,
+`--enable-auto-tool-choice` and `--kv-cache-dtype <value>`, in the forms `--x value` and `--x=value`, of a line that holds no shell operator, bracket,
+substitution, comment, quote, non-ASCII character or ASCII control character (`\x00-\x08`, `\x0a-\x1f`, `\x7f`; only space and
+tab are plain white space; a carriage return never reaches a line, `detect` turns it into a line break first), anywhere in a start
+line of this model, also at its very end: no switch at all. A value is `[A-Za-z0-9][A-Za-z0-9_.-]{0,39}`; a switch with another value, with
+none, or with two different values in the lines of the card is left out, and so is every switch not on the list (a path,
+`--trust-remote-code`, a memory or parallelism switch, an environment variable). The note stands without a switch that is
+left out; the switches are the card's own words for this model and nothing of them is run.
 
 **A package name** is given only together with `instructions`, and only for a sentence of the running text (outside
 code blocks and table rows, front matter excluded) of exactly this form, case ignored: an optional lead-in clause
@@ -41,7 +52,7 @@ import shlex
 from dataclasses import dataclass
 from datetime import date
 
-from modelroom.catalog_findings import SetupNote
+from modelroom.catalog_findings import VLLM_FLAG_SWITCHES, VLLM_VALUE_RE, VLLM_VALUE_SWITCHES, SetupNote
 from modelroom.catalog_remote import _clean
 from modelroom.contracts import hf_id_key
 
@@ -62,10 +73,15 @@ _ADDRESS_RE = re.compile(r"\S*://\S*")
 _NAMED_PACKAGE_RE = re.compile(r"\bthe\s+" + _PACKAGE + r"\s+(?:python\s+)?package\b", re.IGNORECASE)
 
 
+_UNSAFE_RE = re.compile("[;&|<>()$`#'\"\\\\]|[^\\x00-\\x7f]|[\\x00-\\x08\\x0a-\\x1f\\x7f]")  # anything a shell reads as more than words; see `_switches`
+_SWITCH_ORDER = ("--reasoning-parser", "--tool-call-parser", "--enable-auto-tool-choice", "--kv-cache-dtype")
+
+
 @dataclass(frozen=True)
 class Detection:
     status: str  # "instructions" or "none_recognized"
     package: str | None = None
+    vllm_args: tuple[str, ...] = ()  # the switches of the list (`catalog_findings.VLLM_*_SWITCHES`) that the start lines of this model name
 
 
 def _front_matter_removed(text: str) -> str:
@@ -153,21 +169,23 @@ def whole_paragraphs(text: str) -> str:
 def _logical_lines(lines: list[str]) -> list[str]:
     joined, carry = [], ""
     for line in lines:
-        stripped = line.rstrip()
+        stripped = line.rstrip(" \t")  # only space and tab: a control character at an edge must stay for the check of `_switches`
         if stripped.endswith("\\"):
             carry += stripped[:-1] + " "
             continue
-        joined.append((carry + stripped).strip())
+        joined.append((carry + stripped).strip(" \t"))
         carry = ""
-    if carry.strip():
-        joined.append(carry.strip())
+    if carry.strip(" \t"):
+        joined.append(carry.strip(" \t"))
     return joined
 
 
-def _serves(block: tuple[str, list[str]], model: str) -> bool:
+def _start_lines(block: tuple[str, list[str]], model: str) -> list[str]:
+    """Every logical line of `block` (continuations joined, a leading `$ ` removed) that is `vllm serve <model>` for exactly this model."""
     language, lines = block
     if language not in _SHELL_LANGUAGES:
-        return False
+        return []
+    found = []
     for line in _logical_lines(lines):
         if line.startswith("$ "):
             line = line[2:]
@@ -176,8 +194,58 @@ def _serves(block: tuple[str, list[str]], model: str) -> bool:
         except ValueError:
             continue
         if len(tokens) >= 3 and tokens[0] == "vllm" and tokens[1] == "serve" and hf_id_key(tokens[2]) == hf_id_key(model):
-            return True
-    return False
+            found.append(line)
+    return found
+
+
+def _named(line: str) -> tuple[dict[str, str], set[str]]:
+    """What one start line says of the listed switches: `{switch: value}` (`""` for the flag) of those with a sound value,
+    and the switches named with a broken one. The line is cut at white space and each word is taken whole: `--x value`, or
+    `--x=value` split at the first `=`; a value that starts with `-` is no value, and one off the rule drops its switch,
+    it is never cut to a valid part."""
+    words = line.split()
+    sound: dict[str, str] = {}
+    broken: set[str] = set()
+    index = 3
+    while index < len(words):
+        name, equals, inline = words[index].partition("=")
+        index += 1
+        if name in VLLM_FLAG_SWITCHES:
+            if equals or (index < len(words) and not words[index].startswith("-")):
+                broken.add(name)  # a flag takes no value: `=x` or a word that is no switch behind it drops it
+            else:
+                sound[name] = ""
+        elif name in VLLM_VALUE_SWITCHES:
+            if equals:
+                value = inline
+            elif index < len(words) and not words[index].startswith("-"):
+                value, index = words[index], index + 1
+            else:
+                value = ""
+            if VLLM_VALUE_RE.fullmatch(value) is None:
+                broken.add(name)
+            elif sound.setdefault(name, value) != value:
+                broken.add(name)  # the same switch with two values in one line
+    return sound, broken
+
+
+def _switches(starts: list[str]) -> tuple[str, ...]:
+    """The switches of the list that the start lines of this model name, in the fixed order of `_SWITCH_ORDER`.
+
+    One strict rule, in doubt none: a line with a shell operator, bracket, substitution, comment, quote, non-ASCII or ASCII
+    control character (only space and tab are white space; `\\r` is a line break before this point) anywhere, ends included, gives no switch to the note at all (the note stays `instructions`); a switch named with a broken value, or with
+    two values in the lines of the card, is left out."""
+    if any(_UNSAFE_RE.search(line) for line in starts):
+        return ()
+    values: dict[str, set[str]] = {}
+    broken: set[str] = set()
+    for line in starts:
+        sound, bad = _named(line)
+        broken |= bad
+        for name, value in sound.items():
+            values.setdefault(name, set()).add(value)
+    kept = [name for name in _SWITCH_ORDER if name in values and name not in broken and len(values[name]) == 1]
+    return tuple(name if name in VLLM_FLAG_SWITCHES else f"{name} {next(iter(values[name]))}" for name in kept)
 
 
 def _clean_prose(text: str) -> str:
@@ -226,17 +294,18 @@ def _packages(paragraphs: list[tuple[int, str, str, bool]], model: str) -> set[s
 def detect(markdown: str, model: str) -> Detection:
     """What the rule finds in a card: see the module text."""
     blocks, paragraphs = _split(_front_matter_removed(markdown.replace("\r\n", "\n").replace("\r", "\n")))
-    if not any(_serves(block, model) for block in blocks):
+    starts = [tokens for block in blocks for tokens in _start_lines(block, model)]
+    if not starts:
         return Detection("none_recognized")
     names = _packages(paragraphs, model)
-    return Detection("instructions", next(iter(names)) if len(names) == 1 else None)
+    return Detection("instructions", next(iter(names)) if len(names) == 1 else None, _switches(starts))
 
 
 def note_of(model: str, found: Detection, revision: str, today: str | date) -> SetupNote:
     """The note a card read at `revision` makes."""
     return SetupNote(
         model=model, status=found.status, card_revision=revision, source_url=f"https://huggingface.co/{model}/blob/{revision}/README.md",
-        checked=today, package=found.package,
+        checked=today, package=found.package, vllm_args=list(found.vllm_args),
     )
 
 

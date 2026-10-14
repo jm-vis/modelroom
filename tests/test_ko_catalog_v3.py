@@ -131,11 +131,11 @@ def test_a_schema_3_document_must_say_3():
         CatalogDocumentV3.model_validate(_document())  # says 2
 
 
-def test_load_catalog_reads_schema_2_and_3_and_refuses_4(tmp_path):
+def test_load_catalog_reads_schema_2_and_3_and_refuses_5(tmp_path):
     assert load_catalog(FIXTURES / "catalog_v2_valid.json").schema_version == 2
     assert _catalog(_v3(), tmp_path).schema_version == 3
     broken = _v3()
-    broken["schema_version"] = 4
+    broken["schema_version"] = 5  # schema 4 is the catalog of release 1.2.0 (`tests/test_vs_switches.py`)
     path = tmp_path / "four.json"
     path.write_text(json.dumps(broken), encoding="utf-8")
     with pytest.raises(SchemaVersionError):
@@ -499,9 +499,9 @@ def _published_catalog_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MODELROOM_CATALOG", raising=False)
 
 
-def test_the_old_channel_is_unchanged_and_the_new_one_is_the_default_since_release_1_1_0():
+def test_the_old_channel_is_unchanged_and_the_newest_one_is_the_default():
     assert (catalog_remote.REMOTE_FILE_NAME, catalog_remote.CACHE_FILE_NAME) == ("catalog-v2.json", "catalog-v2.cache.json")
-    assert catalog_remote.DEFAULT_CHANNEL is catalog_remote.CHANNEL_V3
+    assert catalog_remote.DEFAULT_CHANNEL is catalog_remote.CHANNEL_V4  # since release 1.2.0 (`tests/test_vs_switches.py`)
     assert (catalog_remote.CHANNEL_V2.file_name, catalog_remote.CHANNEL_V2.schema, catalog_remote.CHANNEL_V2.max_bytes) == ("catalog-v2.json", 2, CATALOG_MAX_BYTES)
 
 

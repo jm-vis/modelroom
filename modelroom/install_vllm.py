@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .catalog_findings import SetupNote, setup_note_lines
+from .catalog_findings import VLLM_ARG_RE, SetupNote, setup_note_lines
 from .contracts import Fit, Package, _HF_REPO_RE
 from .fit_vllm import VLLM_GPU_MEMORY_UTILIZATION, chosen_cards, equal_size_group
 from .hf_cache import HF_CACHE_EXPRESSION
@@ -92,13 +92,32 @@ def _whole(value: object, minimum: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
 
 
+def card_switches(note: SetupNote | None, taken: str) -> str:
+    """The switches of a setup note's `vllm_args` that `taken` (the command so far) does not name yet, as text to append.
+
+    modelroom's own values win (CONTRACTS.md, V7): a switch the command carries already is not set a second time.
+    Each is checked again against the closed list, so a note that did not come through its contract adds nothing.
+    """
+    if note is None or note.status != "instructions":
+        return ""
+    words = set(taken.split())
+    return "".join(
+        f" {arg}" for arg in note.vllm_args if VLLM_ARG_RE.fullmatch(arg) and arg.split(" ", 1)[0] not in words
+    )
+
+
 def vllm_install(
-    package: Package | None, fit: Fit, profile: HardwareProfile | None, *, relative_cache: bool = False
+    package: Package | None, fit: Fit, profile: HardwareProfile | None, *, relative_cache: bool = False,
+    setup_note: SetupNote | None = None,
 ) -> VllmInstall:
     """The two lines for `package` as `fit` judged it on `profile`'s cards.
 
     `relative_cache`: a cache variable of the machine is relative (`hf_cache.cache_is_relative`), so only
     the Docker line goes, with its note. Nothing here reads a file or the machine.
+
+    `setup_note` (V7, since release 1.2.0): the note of the model card of this package's base model. The switches it
+    carries (`vllm_args`, a closed list, each value checked) follow modelroom's own in both lines, the same in each; a
+    switch modelroom sets itself is not set again. Nothing else of a card reaches a command.
     """
     refused = VllmInstall(None, reason=NO_SAFE_COMMAND)
     if package is None or install_name(package) is None or profile is None:
@@ -116,6 +135,7 @@ def vllm_install(
         f"{package.repo} --revision {package.revision} --max-model-len {fit.context} "
         f"--tensor-parallel-size {fit.cards} --gpu-memory-utilization {VLLM_GPU_MEMORY_UTILIZATION}"
     )
+    common += card_switches(setup_note, common)
     serve = (
         f"CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES={numbers} VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 "
         f"vllm serve {common} --host 127.0.0.1 --port 8000"
@@ -146,7 +166,7 @@ def install_block_lines(
     `setup_note` (AP9-KO, E4-B): the note of the model card over both command variants, the one place every
     view that draws these commands (the table, the choice in step 5, the handover) takes it from. Its lines
     (`catalog_findings.setup_note_lines`, red) stand before the commands and only where the card gave
-    instructions; no automatic switch is added to either command.
+    instructions; the switches of the note are already in the commands (`vllm_install`), none is added here.
     """
     if install.serve is None:
         return [label_line(label, [("class:note", f"#{rank} {install.reason or NO_SAFE_COMMAND}")])]
@@ -188,6 +208,7 @@ __all__ = [
     "STOP_LINE",
     "VLLM_IMAGE",
     "VllmInstall",
+    "card_switches",
     "install_block_lines",
     "install_name",
     "safe_repo",

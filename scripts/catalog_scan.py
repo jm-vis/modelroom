@@ -779,7 +779,7 @@ class _Run:
         """Stage 1 and the setup notes (`catalog_scan_packages`): the rows of this day, their findings as field changes."""
         if not self.packages:
             return
-        if self.document.get("schema_version") != 3:
+        if self.document.get("schema_version") not in (3, 4):
             self.notes.append("package checks: the working catalog is schema 2, which has no gguf_checks or setup_note; the stage did not run")
             return
         today = date.fromisoformat(self.today)
@@ -811,6 +811,9 @@ class _Run:
             self._put(key, R.field_change(row, K.STAGE, {"gguf_checks": (table, checks)}, evidence, self.today, "gguf_checks"))
         for repo, note in sorted(result.setup_notes.items()):
             row, key = self.rows[repo], ("field", repo, "setup_note")
+            if note.get("vllm_args") and self.document.get("schema_version") == 3:  # schema 3 has no switches: the note stands without them
+                note = {name: value for name, value in note.items() if name != "vllm_args"}
+                self.notes.append(f"{repo}: the card names vLLM switches; the working catalog is schema 3, which has no vllm_args: left out")
             table = row.setup_note.model_dump(mode="json") if row.setup_note else None
             if note == table:
                 self.changes.pop(key, None)

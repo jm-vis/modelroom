@@ -23,7 +23,7 @@ import re
 from datetime import date
 from typing import Literal, Mapping, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from .contracts import hf_id_key, validate_hf_repo
 from .quantization import identity_stem, parse_hf_quant
@@ -197,6 +197,17 @@ _SHARD_INDEX_RE = re.compile(r"-(?:split-)?(\d{5})-of-\d{5}\.gguf$", re.IGNORECA
 _PACKAGE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _HUB = "https://huggingface.co"
 
+# The switches of the `vllm serve` block of a model card that a setup note may carry (V7, since schema 4): a closed list,
+# a change of it is a decision of the management with a test. A value takes `VLLM_VALUE_RE` and cannot start with `-`,
+# so it is never read as a switch of its own; anything else is dropped from the note, never carried.
+VLLM_VALUE_SWITCHES = ("--reasoning-parser", "--tool-call-parser", "--kv-cache-dtype")
+VLLM_FLAG_SWITCHES = ("--enable-auto-tool-choice",)
+VLLM_VALUE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,39}")
+VLLM_ARG_RE = re.compile(
+    "(?:" + "|".join(re.escape(name) + " " + VLLM_VALUE_RE.pattern for name in VLLM_VALUE_SWITCHES)
+    + "|" + "|".join(re.escape(name) for name in VLLM_FLAG_SWITCHES) + ")"
+)
+
 
 def _revision(value: str, name: str) -> str:
     if _REVISION_RE.fullmatch(value) is None:
@@ -292,6 +303,27 @@ class SetupNote(BaseModel):
     checked: date
     package: str | None = None
     reason: str | None = Field(default=None, max_length=97)
+    # Schema 4: the switches of the card's `vllm serve` block for this model, each as `--name value` or `--name`, at most
+    # one per name. The default (none) is not written, so a note without switches is the note of schema 3 byte for byte.
+    vllm_args: list[str] = Field(default_factory=list, max_length=len(VLLM_VALUE_SWITCHES) + len(VLLM_FLAG_SWITCHES))
+
+    @model_serializer(mode="wrap")
+    def _leave_out_the_default(self, handler):
+        data = handler(self)
+        if not data.get("vllm_args"):
+            data.pop("vllm_args", None)
+        return data
+
+    @field_validator("vllm_args")
+    @classmethod
+    def _check_vllm_args(cls, value: list[str]) -> list[str]:
+        for arg in value:
+            if VLLM_ARG_RE.fullmatch(arg) is None:
+                raise ValueError(f"vllm_args holds a switch that is not on the list: {arg!r}")
+        names = [arg.split(" ", 1)[0] for arg in value]
+        if len(names) != len(set(names)):
+            raise ValueError("vllm_args names a switch twice")
+        return value
 
     @field_validator("model")
     @classmethod
@@ -323,6 +355,8 @@ class SetupNote(BaseModel):
             _revision(self.card_revision, "card_revision")
         if self.package is not None and self.status != "instructions":
             raise ValueError("package belongs to a note that found instructions")
+        if self.vllm_args and self.status != "instructions":
+            raise ValueError("vllm_args belongs to a note that found instructions")
         expected = f"{_HUB}/{self.model}" + ("" if unread else f"/blob/{self.card_revision}/README.md")
         if self.source_url != expected:
             raise ValueError(f"source_url is not the address of the card read: {expected}")

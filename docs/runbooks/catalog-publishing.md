@@ -75,9 +75,11 @@ other change. The contract is in `CONTRACTS.md`, "Package findings and the load 
 python scripts/catalog_scan.py --catalog modelroom/catalog.json --rejected modelroom/catalog-rejected.json --out <out> --packages --budget 700
 ```
 
-- **The working catalog has to be schema 3.** On a schema-2 table the stage does not run and the proposal says so
+- **The working catalog has to be schema 3 or 4.** On a schema-2 table the stage does not run and the proposal says so
   (`package checks: the working catalog is schema 2 ...`). Making the table schema 3 is one line, `"schema_version": 2` to `3`,
-  and belongs to the first approval of findings (below); until then the daily run goes without `--packages`.
+  and belongs to the first approval of findings (below); until then the daily run goes without `--packages`. **Schema 4
+  carries the vLLM switches of a note** (`vllm_args`, release 1.2.0, below); on a schema-3 table the stage runs as before and
+  proposes the note without them, with the note `the card names vLLM switches; the working catalog is schema 3 ...: left out`.
 - **Hosts.** `huggingface.co`, `api.github.com` (the llama.cpp commit and its file `src/llama-arch.cpp`, two requests a run)
   and `*.hf.co` (the Hub's CDN, to which the read of a file's first bytes is redirected). Only the scanner may reach the last
   two; the runtime of modelroom does not (`http._ALLOWED_HTTPS_HOSTS` is unchanged). Reads only (`GET`).
@@ -109,14 +111,35 @@ The shipped table stays schema 2 and unchanged until findings are approved (deci
    any other bytes make it `base: stale` in `--show`, and the scanner makes it again.
 2. Scan with `--packages` against that table, `--show` the proposal, `--apply` the numbers of the findings with the
    checksum, run the tests, commit, then continue as under "A publication".
-3. The publication makes **both** channel files from the table: `catalog-v3.json` as it is, and `catalog-v2.json` by projection
-   without the findings (it stays what release 1.0.0 reads). `--publish-pending` uploads them in one commit and
-   `--verify` compares both afterwards.
+3. The publication makes **both** channel files from the table (**all three** since release 1.2.0, see below): `catalog-v3.json`
+   as it is, and `catalog-v2.json` by projection without the findings (it stays what release 1.0.0 reads). `--publish-pending`
+   uploads them in one commit and `--verify` compares both afterwards.
 4. **Only then release 1.1.0.** The dataset's `catalog-v3.json` is published before the release, so a user of 1.1.0 meets the
    file at once. A 1.1.0 that meets none chooses between its shipped catalog and a valid cache of the new channel
    (`catalog-v3.cache.json`), says so, and goes on. It does not fall back to `catalog-v2.json` and ignores a newer cache of
    release 1.0.0. Until the file is there, such a user therefore loses the findings **and** the ordinary updates of the
    published table (models, successors, packages) that are newer than the shipped catalog; a valid newer v3 cache is kept.
+
+### The switches of a card: the table becomes schema 4 (release 1.2.0)
+
+Release 1.2.0 puts the switches that the `vllm serve` block of a card names for its model into the vLLM commands: of a closed
+list (`--reasoning-parser`, `--tool-call-parser`, `--enable-auto-tool-choice`, `--kv-cache-dtype`), each with a checked
+value, kept in the note as `vllm_args` (`CONTRACTS.md`, V7). A note with `vllm_args` needs schema 4, because release 1.1.0
+refuses the key. In this order:
+
+1. Make the working table schema 4: replace the one line `"schema_version": 3` by `"schema_version": 4` in
+   `modelroom/catalog.json` and nothing else (a proposal is bound to the bytes of the table, see above).
+2. A stored note is **not read again while its card stays at the revision it was read at** (`catalog_scan_packages`, `_card`).
+   A note stored before 1.2.0 therefore gets its switches only with the next revision of its card; to have one read at once,
+   its note has to leave the table first (a decision of the maintainer).
+3. Scan with `--packages`, `--show`, `--apply` the numbers of the notes that now carry `vllm_args`, run the tests, commit.
+4. The publication makes **three** channel files from the table: `catalog-v4.json` as it is, `catalog-v3.json` by projection
+   without the switches (what release 1.1.0 reads; the note itself stays in it) and `catalog-v2.json` by projection without
+   the findings (release 1.0.0). `--publish-pending` uploads them in one commit and `--verify` compares all three.
+5. **Only then release 1.2.0.** The dataset's `catalog-v4.json` is published before the release, so a user of 1.2.0 meets the
+   file at once. A 1.2.0 that meets none chooses between its shipped catalog and a valid cache of the new channel
+   (`catalog-v4.cache.json`), says so, and goes on; it does not fall back to `catalog-v3.json`. Releases 1.0.0 and 1.1.0
+   keep reading their own files and never meet `catalog-v4.json`.
 
 ## A publication
 

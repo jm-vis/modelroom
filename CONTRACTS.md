@@ -3990,9 +3990,9 @@ the shipped catalog and the one in the cache. Only the guided run calls it, with
 ("Shared request budget"). `MODELROOM_CATALOG=shipped` selects the shipped catalog: no request, no
 cache file written.
 
-**The cache is one file, one envelope** per channel: `catalog-v3.cache.json` for the default channel since 1.1.0
-(`catalog-v2.cache.json` is the cache of release 1.0.0 and of the old channel; the schema major version is in the
-name, so releases of different schemas never disturb each other) holds
+**The cache is one file, one envelope** per channel: `catalog-v4.cache.json` for the default channel since 1.2.0
+(`catalog-v3.cache.json` is the cache of release 1.1.0, `catalog-v2.cache.json` the cache of release 1.0.0 and of the old
+channel; the schema major version is in the name, so releases of different schemas never disturb each other) holds
 `{"cache_version": 1, "checked_at": <UTC, whole seconds, "...Z">, "sha": <40 hex | null>,
 "last_error": <text | null>, "catalog": <document of the channel's schema | null>}` and nothing else. The whole file is
 written each time, a temporary file in the same folder and one `os.replace` ("Atomic writes"), so
@@ -4006,7 +4006,7 @@ failed. Exactly 24 h, more, or a `checked_at` in the future asks once more. An a
 `GET https://huggingface.co/api/datasets/jm-vis/modelroom-catalog/revision/main` (one request, `sha` of 40
 hex characters), and, only when the `sha` differs from the envelope's, `GET
 https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/<sha>/<file of the channel>`
-(`catalog-v3.json` for the default channel, `catalog-v2.json` for the old one), which answers a
+(`catalog-v4.json` for the default channel, `catalog-v3.json` and `catalog-v2.json` for the older ones), which answers a
 `307` to the same host and then `200` (three requests in all). `X-Repo-Commit` has to equal `sha`; the
 body has to validate as the channel's schema with all its limits. The same `sha` only renews `checked_at`. **Every
 fault is the day's attempt**: the envelope is written with the new `checked_at`, the old `sha` and
@@ -4037,29 +4037,45 @@ switch above.
 else). An approval binds to the SHA-256 of the proposal that was shown and to the numbers named. The
 upload sends the bytes of the recorded commit, verified against the dataset afterwards.
 
-**Two channels (AP9-KO, V3).** The dataset holds one file per schema: `catalog-v2.json` for schema 2, which
-release 1.0.0 reads and which stays exactly as it was, and `catalog-v3.json` for schema 3, the catalog with
-findings ("Package findings and the load check"). `catalog_remote.Channel` names a channel's file, its cache file
-(`catalog-v2.cache.json`, `catalog-v3.cache.json`: the two never share one), its schema, its size limit (1 MiB,
-4 MiB) and its reader; `current_catalog(..., channel=DEFAULT_CHANNEL)` asks the channel it is given, with the
+**Three channels (AP9-KO, V3; schema 4 since release 1.2.0).** The dataset holds one file per schema:
+`catalog-v2.json` for schema 2, which release 1.0.0 reads and which stays exactly as it was, `catalog-v3.json` for schema 3,
+the catalog with findings ("Package findings and the load check"), which release 1.1.0 reads, and `catalog-v4.json` for
+schema 4, which is schema 3 plus the `vllm_args` of a setup note ("Setup notes of model cards", V7) and which release 1.2.0
+reads. The field is new to a note that has `extra="forbid"`, so it could not go into schema 3: release 1.1.0 would refuse the
+file and fall back to its shipped catalog. `catalog_remote.Channel` names a channel's file, its cache file
+(`catalog-v2.cache.json`, `catalog-v3.cache.json`, `catalog-v4.cache.json`: no two share one), its schema, its size limit
+(1 MiB, 4 MiB, 4 MiB) and its reader; `current_catalog(..., channel=DEFAULT_CHANNEL)` asks the channel it is given, with the
 same two or three requests, the same freshness and the same choice. A file of another schema than its channel's is a
-fault like any other (`... schema_version 2 ...` on the new channel, `... schema_version 3 ...` on the old one).
-`DEFAULT_CHANNEL` is the new channel since release 1.1.0 (P5; it was one line). `catalog_remote.offline_catalog(cache_dir,
-channel)` is the same choice without a request, for the commands that ask no one (`render`, `pull`); without a channel
-it reads the cache of the new one. A cache of release 1.0.0 (`catalog-v2.cache.json`) is neither read nor changed by
-release 1.1.0. Release 1.0.0 asks `catalog-v2.json` only and never meets `catalog-v3.json`
-(`tests/test_ko_p5_channel.py` runs the code of 1.0.0 against a dataset that holds both files).
+fault like any other (`... schema_version 3 ...` on the newest channel, `... schema_version 4 ...` on the one before it).
+`DEFAULT_CHANNEL` is the newest channel, `catalog-v4.json`, since release 1.2.0 (it was `catalog-v3.json` in 1.1.0, the change
+is one line and the reader of the new schema). `catalog_remote.offline_catalog(cache_dir, channel)` is the same choice without
+a request, for the commands that ask no one (`render`, `pull`); without a channel it reads the cache of the newest one. The
+cache of an earlier release is neither read nor changed by a later one. Release 1.0.0 asks `catalog-v2.json` only and never
+meets the others (`tests/test_ko_p5_channel.py`, `tests/test_vs_switches.py` run the code of 1.0.0 against a dataset that
+holds all files); release 1.1.0 asks `catalog-v3.json` only and never meets `catalog-v4.json`
+(`tests/test_vs_switches.py` runs the code of 1.1.0).
 
-**Order of a release (P5).** The dataset's `catalog-v3.json` is published **first** (`scripts/catalog_publish.py`
-makes and verifies both files of the dataset in one upload, "A publication" in `docs/runbooks/catalog-publishing.md`),
-**then** release 1.1.0. A 1.1.0 that meets a dataset without that file, or with a file that does not validate as schema
-3, is not broken: the attempt is the day's attempt and the run says `(the published one did not read: <reason>)`. The
-choice is then between the shipped catalog and a valid cache of the new channel (`catalog-v3.cache.json`; a newer valid one
-is kept). There is **no fallback to `catalog-v2.json`**, and a cache of release 1.0.0 is not read, so until the file is
-published such a run loses the findings and also the ordinary updates of the published table (models, successors,
-packages) that are newer than the shipped catalog. Publishing the release before the file costs that, not the run. The shipped
-`modelroom/catalog.json` stays schema 2 and unchanged until the first approved finding makes it schema 3 (the decision of
-P5, below the table "The forms and their versions"); the working catalog of a scan with `--packages` is schema 3.
+**The files of a publication.** One working table makes all three files (`scripts/catalog_publish_rules.channel_files`):
+`catalog-v4.json` is the table where it is schema 4, and the same rows with `schema_version` 4 where it is older (a note of
+schema 3 has no `vllm_args`); `catalog-v3.json` is the table byte for byte where it is schema 3, the same rows with
+`schema_version` 3 where it is schema 2, and `catalog_schema.project_to_schema3` of a schema-4 table, which drops the
+`vllm_args` of the notes and nothing else (a note stands without them: it still says that the card holds instructions, where
+and which package, and a reader of schema 3 cannot act on a switch it does not know); `catalog-v2.json` is as before, the
+table byte for byte where it is schema 2 and the projection of the schema-3 form without the findings otherwise. Every file
+is read back with the reader of its channel before an upload.
+
+**Order of a release (P5; 1.1.0, again for 1.2.0).** The dataset's newest file (`catalog-v3.json` for 1.1.0, `catalog-v4.json`
+for 1.2.0) is published **first** (`scripts/catalog_publish.py` makes and verifies all the files of the dataset in one upload,
+"A publication" in `docs/runbooks/catalog-publishing.md`), **then** the release. A release that meets a dataset without that
+file, or with a file that does not validate as its schema, is not broken: the attempt is the day's attempt and the run says
+`(the published one did not read: <reason>)`. The choice is then between the shipped catalog and a valid cache of its own channel
+(`catalog-v4.cache.json` for 1.2.0; a newer valid one is kept). There is **no fallback to an older channel's file**, and a cache
+of an earlier release is not read, so until the file is published such a run loses the findings and also the ordinary updates of
+the published table (models, successors, packages) that are newer than the shipped catalog. Publishing the release before the
+file costs that, not the run. The shipped `modelroom/catalog.json` stays schema 2 until the first approved finding makes it
+schema 3 (the decision of P5, below the table "The forms and their versions") and schema 4 when a note carries a switch; the
+working catalog of a scan with `--packages` is schema 3 or 4 (on schema 3 the proposed notes are left without their switches
+and the proposal says so).
 
 ### CatalogModel
 
@@ -4080,6 +4096,7 @@ P5, below the table "The forms and their versions"); the working catalog of a sc
 Schema 3 adds two fields to a row (AP9-KO), both left out of the example because their defaults are the
 fact `unknown`: `gguf_checks` (a list of `PackageCheck`, at most 200, default `[]`) and `setup_note` (a
 `SetupNote` or `null`, default `null`). A schema-2 document carries neither key, not even at its default.
+Schema 4 changes no field of a row: its `setup_note` may carry `vllm_args` (`SetupNote`), which a schema-3 document refuses.
 
 ### CatalogFamily
 
@@ -4950,10 +4967,11 @@ only as far as the contract needs it. Three principles hold throughout:
 
 | Form | Written as | Read as | Defaults |
 |---|---|---|---|
-| catalog file, shipped (`modelroom/catalog.json`) | schema 2; schema 3 once it holds a finding (decided in P5, below) | 1 (TOML), 2, 3 | a row without `gguf_checks` and `setup_note` has `[]` and `None`: `unknown` |
+| catalog file, shipped (`modelroom/catalog.json`) | schema 2; schema 3 once it holds a finding (decided in P5, below); schema 4 once a note carries a switch | 1 (TOML), 2, 3, 4 | a row without `gguf_checks` and `setup_note` has `[]` and `None`: `unknown`; a note without `vllm_args` has `[]`, no switch |
 | old channel `catalog-v2.json` | schema 2, made by `catalog_schema.project_to_schema2` only | schema 2 | -- |
-| new channel `catalog-v3.json` | schema 3 | schema 3 | as above |
-| render document (`models.json`) | schema 3, unchanged | schema 3 | `load_check` and `setup_notes` are left out where they hold their default |
+| channel `catalog-v3.json` (release 1.1.0) | schema 3, a schema-4 table through `catalog_schema.project_to_schema3` only | schema 3 | as above |
+| new channel `catalog-v4.json` (release 1.2.0, the default) | schema 4 | schema 4 | as above |
+| render document (`models.json`) | schema 3, unchanged | schema 3 | `load_check` and `setup_notes` are left out where they hold their default; a note's `vllm_args` where it holds its default |
 | `search.json` | schema 3, unchanged | -- | `direct` and `knowledge_hint` are left out where there is nothing to say |
 | snapshot, configuration, profile, measurement, pointer | unchanged | unchanged | -- |
 
@@ -5129,7 +5147,46 @@ this model; `package` only for an explicit statement that a named package is req
 training requirements and instructions for other models give none). `none_recognized` says only that the rule
 found nothing. `not_read` is the scanner's report of a card it could not read: it is never stored, a fresh
 `not_read` changes no stored note (`merge_setup_note`), and a note of another card revision is read again, not
-carried. Nothing of a card is executed or copied.
+carried. Nothing of a card is executed, and nothing of it is copied but what the rule checks: the name of one package,
+and, since release 1.2.0, the switches of the next paragraph (decision of the management, 2026-10-14).
+
+**The switches of a start block (since release 1.2.0, schema 4).** The note carries, as `vllm_args`, the switches that the
+`vllm serve` block of the card names **for exactly this model** -- the logical lines `vllm serve <model> ...` of the
+block that `instructions` found, and no other line of it. The list is **closed**, and a change of it is a decision of the
+management with a test:
+
+| Switch | Form | Value |
+|---|---|---|
+| `--reasoning-parser` | `--reasoning-parser <name>` or `--reasoning-parser=<name>` | `[A-Za-z0-9][A-Za-z0-9_.-]{0,39}` |
+| `--tool-call-parser` | like the one above | like the one above |
+| `--enable-auto-tool-choice` | the flag alone | none |
+| `--kv-cache-dtype` | like `--reasoning-parser` | like the one above |
+
+A value starts with a letter or a digit (so a switch is never taken as another switch's value) and is at most 40
+characters; a switch with another value, with none, or a flag with a value is **dropped, not the note**. A switch the card
+names with two different values in the lines of this model is dropped too (in doubt, none); the same value twice is one
+switch. **One strict rule, in doubt none:** a start line of this model that holds, anywhere, one of `; & | < > ( ) $ \` # \ ' "`
+or a non-ASCII character or an ASCII control character (`U+0000`-`U+0008`, `U+000A`-`U+001F`, `U+007F`; only space and tab are
+white space, also at the start and end of the line; a carriage return is turned into a line break before the card is read)
+gives the note **no switch at all** (the note stays `instructions`); otherwise the line is cut at
+white space, each word is taken whole (`--x=value` split at the first `=`), and a value off the rule drops its switch, it is
+never cut to a valid part. Everything else is not carried:
+`--trust-remote-code` (it runs foreign code; the red line over the commands is all modelroom says of it), paths and
+addresses, `--revision`, `--max-model-len`, `--tensor-parallel-size`, memory and GPU switches (modelroom computes those
+itself), environment variables, every other switch. `vllm_args` is stored in the order `--reasoning-parser`,
+`--tool-call-parser`, `--enable-auto-tool-choice`, `--kv-cache-dtype`, as strings `--name value` or `--name`, at most one
+per name, and only in a note with `instructions`; a note without switches does not write the key.
+
+**In the command** (`install_vllm.vllm_install(..., setup_note=...)`; the table, the choice in step 5 and the handover
+each pass the note of the package's **base model**, `views_install.setup_note_of`): the checked switches follow modelroom's
+own values (`--gpu-memory-utilization`) and stand before `--host` and `--port`, the same in the `vllm serve` line and in
+the `docker run` line. **modelroom wins**: a switch the command carries already is not set a second time
+(`install_vllm.card_switches`); today modelroom sets none of the four itself, so the card decides all of them, and the
+KV-cache type in particular is not part of the command otherwise -- the fit assumes `f16` (`Scenario.kv_type`), so a
+`--kv-cache-dtype` of the card only makes the real KV cache smaller than the one computed. The switches are those of the
+note of the base model; they are put into the command of every vLLM package of that model, whoever packaged it. A note
+without switches, or without `instructions`, leaves both lines as they were, byte for byte; the red lines over the
+commands (`SETUP_NOTE`) stay.
 
 **Limit of the rule** (decision of the management, 2026-10-14, the measure of V5): the rule guards against
 **realistic forms of model cards** -- a start block, a sentence that names a package, sections and lists of several
@@ -5230,7 +5287,9 @@ catalog that holds nothing for a package leaves the row without `load_check` and
 `setup_notes`: both keys are then absent from the JSON. The document is the document of release 1.0.0 byte for
 byte only for `None`, or for a catalog that holds nothing for these rows **and** changes the origin of no row:
 the origin rule can set `origin: "other"` on a GGUF row of an unlisted packager without any check or note. The document schema stays 3; the two keys are additive, and a reader of schema 3 that refuses an
-unknown key is told so here. What a row with a `load_check` shows or locks is P1's.
+unknown key is told so here. Since release 1.2.0 a note in `setup_notes` carries `vllm_args` where the catalog's note does
+(additive as well, and not written at its default: a document of a catalog without switches is the document of release 1.1.0
+byte for byte); the switches are in the commands the views draw from the document, not in the Markdown text over them. What a row with a `load_check` shows or locks is P1's.
 
 ### What the views do with the evidence (P1, recorded by P5)
 
@@ -5253,7 +5312,8 @@ The behavior of the views and the lists on the fields of the document (V4, V5, V
   `recommendation_lines(offered)` is what a skipped recommendation says: `COMMUNITY_CONVERSION` once per packager,
   then `NO_RECOMMENDATION` where nothing is left; a blocked row says why under its table, not here.
 - **The setup note** (`views_install.setup_note_of(notes, repo)`, by `hf_id_key`): the note of a base model with
-  status `instructions`, over both vLLM commands in the card of step 5 and in the handover views.
+  status `instructions`, over both vLLM commands in the card of step 5 and in the handover views; its `vllm_args` are in
+  those commands (V7, "In the command").
 - **The scale of step 3** (`guided_context.fit_texts(..., catalog)`): a package the catalog holds an `absent` check for
   stays in the total and does not count as fitting, so the column agrees with step 5; without a catalog, or with
   a `present` check or one of another revision, the column is that of 1.0.0.
@@ -5306,6 +5366,10 @@ What the model card of the publisher's repository says about setting up vLLM, at
 `status` is `instructions`, `none_recognized` or `not_read` (never stored); `package` only with `instructions`;
 `reason` exactly with `not_read`, one printable ASCII line of at most 97 characters; `source_url` is the card at
 `card_revision` (`https://huggingface.co/<model>/blob/<revision>/README.md`), the model's page for `not_read`.
+`vllm_args` (schema 4; `list[str]`, default empty, at most four entries) holds the switches of the closed list of V7, each
+as `--name value` or `--name`, at most one per name, only with `instructions`; the empty list is **not written**, so a
+note without switches is the note of schema 3 byte for byte. A switch off the list or with a value off the rule is no note
+(`extra="forbid"` of the model, the validator of the field).
 
 ```json
 {
