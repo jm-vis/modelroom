@@ -196,9 +196,9 @@ def _vllm_lines(
     entry = next(entry for entry in block.ranked if entry.rank == row.rank)
     vllm = disk.vllm if disk is not None else None  # another computer's too, where its disk was read (over SSH)
     relative = vllm is not None and vllm.relative
-    install = vllm_install(package_of(row, packages), entry.fit, block.profile, relative_cache=relative)
+    note = setup_note_of(setup_notes, entry.base_model_hf_repo)  # E4-B: over both commands, in `install_block_lines`; its switches are in them
+    install = vllm_install(package_of(row, packages), entry.fit, block.profile, relative_cache=relative, setup_note=note)
     there = row.identity in (held or {}).get(runtimes.VLLM.key, frozenset()) or (vllm is not None and row.identity in vllm.held)
-    note = setup_note_of(setup_notes, entry.base_model_hf_repo)  # E4-B: over both commands, in `install_block_lines`
     if not own:
         lines = install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, on_disk=there, where=block.label, setup_note=note)
         if skipped:

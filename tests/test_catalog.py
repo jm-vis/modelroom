@@ -616,14 +616,14 @@ def test_unknown_field_is_rejected():
         CatalogDocumentV2.model_validate(document)
 
 
-def test_schema_version_3_is_rejected_by_the_schema_2_reader_and_4_by_every_reader():
+def test_schema_version_3_is_rejected_by_the_schema_2_reader_and_5_by_every_reader():
     """Schema 3 is the catalog of AP9-KO (`tests/test_ko_catalog_v3.py`): `CatalogDocumentV2` still refuses it,
-    `load_catalog` reads it; the first version no release reads is 4."""
+    `load_catalog` reads it, and schema 4 (`tests/test_vs_switches.py`); the first version no release reads is 5."""
     with pytest.raises((ValidationError, SchemaVersionError)):
         CatalogDocumentV2.model_validate(_document(schema_version=3))
     path = FIXTURES / "catalog_v2_valid.json"
     document = json.loads(path.read_text(encoding="utf-8"))
-    document["schema_version"] = 4
+    document["schema_version"] = 5
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:

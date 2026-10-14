@@ -213,9 +213,9 @@ def _show_vllm(run: "GuidedRun", context: PullContext, row: PullRow, package: Pa
     block = next(block for block in context.document.machines if block.machine == context.machine)
     entry = next(entry for entry in block.ranked if entry.rank == row.rank)
     relative = disk is not None and disk.vllm is not None and disk.vllm.relative
-    install = vllm_install(package, entry.fit, block.profile, relative_cache=relative)
+    note = setup_note_of(context.document.setup_notes, entry.base_model_hf_repo)  # E4-B, over both commands; its switches are in them
+    install = vllm_install(package, entry.fit, block.profile, relative_cache=relative, setup_note=note)
     served = run.servers.found.get("vllm")
-    note = setup_note_of(context.document.setup_notes, entry.base_model_hf_repo)  # E4-B, over both commands
     for line in install_block_lines(INSTALL_LABEL, row.rank, install, repo=row.name, served=served, on_disk=local, setup_note=note):
         run.screen.write(line)
 

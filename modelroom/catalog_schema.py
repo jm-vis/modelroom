@@ -1,4 +1,4 @@
-"""The schema-2 and schema-3 catalog documents (`catalog.json`): the flat, publicly published shape.
+"""The schema-2, schema-3 and schema-4 catalog documents (`catalog.json`): the flat, publicly published shape.
 
 A module of its own so both stay under the package's size guard. `catalog.py` owns the shared `Catalog`/`CatalogFamily`/`CatalogModel`
 shape every reader works against; this module owns the rules that apply to the **document** a
@@ -9,7 +9,8 @@ list) or the whole list (`models` count, duplicate `hf_repo`, one publisher per 
 Schema 3 is schema 2 plus the two findings of a row (`gguf_checks`, `setup_note`). A schema-2
 document is exactly the shape release 1.0.0 reads and carries neither key, not even at its default;
 `project_to_schema2` is the one way from a schema-3 document without findings to the file of the old
-channel (CONTRACTS.md, "Published catalog").
+channel (CONTRACTS.md, "Published catalog"). Schema 4 is schema 3 plus the `vllm_args` of a setup note;
+`project_to_schema3` is the one way back from it to the file release 1.1.0 reads.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from .catalog import (
     CATALOG_V2_SCHEMA_RANGE,
     CATALOG_V3_MAX_BYTES,
     CATALOG_V3_SCHEMA_RANGE,
+    CATALOG_V4_SCHEMA_RANGE,
     CatalogError,
     PIPELINE_TAG_TO_KIND,
     CatalogModel,
@@ -248,10 +250,25 @@ class CatalogDocumentV2(BaseModel):
 class CatalogDocumentV3(CatalogDocumentV2):
     """The schema-3 catalog file: schema 2 plus `gguf_checks` and `setup_note` in a row (AP9-KO).
 
-    Their rules sit on the row (`CatalogModel`); the document adds none. A row without them reads as unknown.
+    Their rules sit on the row (`CatalogModel`); the document adds none but one: a note carries no `vllm_args`, which
+    release 1.1.0 would refuse as an unknown key. A row without the findings reads as unknown.
     """
 
     SCHEMA: ClassVar[int] = 3
+
+    def _check_findings(self, model: CatalogModel) -> None:
+        if model.setup_note is not None and "vllm_args" in model.setup_note.model_fields_set:  # the key, whatever it holds: 1.1.0 refuses it
+            raise ValueError(f"schema 3 has no vllm_args ({model.hf_repo}); that needs schema 4")
+
+
+class CatalogDocumentV4(CatalogDocumentV3):
+    """The schema-4 catalog file: schema 3 plus `vllm_args` in a setup note (V7), the switches of the card's start block.
+
+    The field sits on `SetupNote` and is not written at its default, so a document without switches differs from
+    schema 3 in its `schema_version` alone.
+    """
+
+    SCHEMA: ClassVar[int] = 4
 
     def _check_findings(self, model: CatalogModel) -> None:
         return None
@@ -267,7 +284,7 @@ def _build(
         raise CatalogError(f"{path}: cannot read catalog: {exc}") from exc
     check_version_field(data, accepted, path)
     document_class = document_for(data["schema_version"])
-    check_size(text, CATALOG_V3_MAX_BYTES if document_class is CatalogDocumentV3 else CATALOG_MAX_BYTES, path)
+    check_size(text, CATALOG_V3_MAX_BYTES if document_class in (CatalogDocumentV3, CatalogDocumentV4) else CATALOG_MAX_BYTES, path)
     try:
         return document_class.model_validate(data).to_catalog()
     except (ValidationError, RecursionError) as exc:
@@ -291,9 +308,36 @@ def build_catalog_v3(text: str, path: Path) -> Catalog:
     return _build(text, path, CATALOG_V3_SCHEMA_RANGE, lambda _version: CatalogDocumentV3)
 
 
+def build_catalog_v4(text: str, path: Path) -> Catalog:
+    """The same for a schema-4 document, the file of the channel release 1.2.0 asks."""
+    return _build(text, path, CATALOG_V4_SCHEMA_RANGE, lambda _version: CatalogDocumentV4)
+
+
+_DOCUMENTS = {2: CatalogDocumentV2, 3: CatalogDocumentV3, 4: CatalogDocumentV4}
+
+
 def build_catalog(text: str, path: Path) -> Catalog:
-    """The same for either: the content says schema 2 or 3 (what `load_catalog` reads)."""
-    return _build(text, path, CATALOG_JSON_SCHEMA_RANGE, lambda version: CatalogDocumentV3 if version == 3 else CatalogDocumentV2)
+    """The same for any of them: the content says schema 2, 3 or 4 (what `load_catalog` reads)."""
+    return _build(text, path, CATALOG_JSON_SCHEMA_RANGE, _DOCUMENTS.__getitem__)
+
+
+def project_to_schema3(document: dict) -> dict:
+    """A copy of a schema-4 `document` (as read from JSON) in the exact shape of schema 3: what release 1.1.0 reads.
+
+    The `vllm_args` of a setup note are dropped. They are an addition to a note that stands without them (it still
+    says that the card holds instructions, and where), so nothing a 1.1.0 reader could act on is lost, and nothing
+    but `vllm_args` and `schema_version` differs. The file of the channel of release 1.1.0 is made through this and
+    nowhere else.
+    """
+    if not isinstance(document, dict) or document.get("schema_version") not in (3, 4):
+        raise ValueError("only a document of schema 3 or 4 is projected")
+    result = copy.deepcopy(document)
+    result["schema_version"] = 3
+    for row in result.get("models", []):
+        note = row.get("setup_note")
+        if isinstance(note, dict):
+            note.pop("vllm_args", None)
+    return result
 
 
 def project_to_schema2(document: dict) -> dict:

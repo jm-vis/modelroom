@@ -1,6 +1,7 @@
-"""P4, part 4: the publication of the catalog on two channels (AP9-KO, V3, "Published catalog"): the working document
-may be schema 2 or schema 3, the old channel `catalog-v2.json` stays what release 1.0.0 reads and is made only through
-`project_to_schema2`, the new channel `catalog-v3.json` is the schema-3 document, and the dataset card says so. The
+"""P4, part 4: the publication of the catalog on its channels (AP9-KO, V3, "Published catalog"): the working document
+may be schema 2, 3 or 4, the old channel `catalog-v2.json` stays what release 1.0.0 reads and is made only through
+`project_to_schema2`, the channel `catalog-v3.json` is the schema-3 document (release 1.1.0), `catalog-v4.json` the
+schema-4 one (release 1.2.0; `tests/test_vs_switches.py`), and the dataset card says so. The
 upload and the verification are exercised with the doubles of `test_catalog_publish.py`; nothing is uploaded."""
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from test_catalog_publish import (  # noqa: F401  (`work` is a fixture)
     APPLY, CATALOG_BYTES, COMMIT, FIX, P, PUBLISHED, R, TODAY, upload_env, work,
 )
 
-from modelroom.catalog_remote import CHANNEL_V2, CHANNEL_V3
+from modelroom.catalog_remote import CHANNEL_V2, CHANNEL_V3, CHANNEL_V4
 from modelroom.catalog_schema import build_catalog_v2, build_catalog_v3
 from modelroom.http import FixtureTransport, Response
 
@@ -45,9 +46,9 @@ def v3_with_finding() -> tuple[dict, str]:
 # --- the two files of the channels ------------------------------------------------------------------------------------------
 
 
-def test_the_channels_are_two_files_of_the_dataset():
-    assert (CHANNEL_V2.file_name, CHANNEL_V3.file_name) == ("catalog-v2.json", "catalog-v3.json")
-    assert tuple(P.channel_files(CATALOG_BYTES)) == (CHANNEL_V3.file_name, CHANNEL_V2.file_name)
+def test_the_channels_are_three_files_of_the_dataset():
+    assert (CHANNEL_V2.file_name, CHANNEL_V3.file_name, CHANNEL_V4.file_name) == ("catalog-v2.json", "catalog-v3.json", "catalog-v4.json")
+    assert tuple(P.channel_files(CATALOG_BYTES)) == (CHANNEL_V4.file_name, CHANNEL_V3.file_name, CHANNEL_V2.file_name)
 
 
 def test_a_working_catalog_of_schema_2_is_the_old_channel_byte_for_byte_and_the_new_channel_the_same_rows_as_schema_3():
@@ -85,7 +86,7 @@ def test_the_old_channel_is_made_through_the_projection_and_nowhere_else(monkeyp
 
 
 def test_a_catalog_that_is_no_catalog_makes_no_channel_files():
-    for data in (b"not json", b"[]", json.dumps({"schema_version": 4}).encode(), json.dumps({"schema_version": 1}).encode()):
+    for data in (b"not json", b"[]", json.dumps({"schema_version": 5}).encode(), json.dumps({"schema_version": 4}).encode(), json.dumps({"schema_version": 1}).encode()):
         with pytest.raises(P.PublishError):
             P.channel_files(data)
 
@@ -132,7 +133,7 @@ def answers(files: dict[str, bytes], dataset: str = publish.DATASET) -> FixtureT
     return FixtureTransport(responses)
 
 
-def test_publish_pending_uploads_both_channel_files_in_one_process_and_verifies_both(work, tmp_path):
+def test_publish_pending_uploads_the_three_channel_files_in_one_process_and_verifies_all(work, tmp_path):
     work.committed()
     env = upload_env(tmp_path)
     data = work.decision()["result_catalog"].encode()
@@ -144,10 +145,10 @@ def test_publish_pending_uploads_both_channel_files_in_one_process_and_verifies_
     assert args[:5] == ["uvx", "--from", f"huggingface_hub=={P.HF_HUB_VERSION}", "hf", "upload"] and args[5] == "jm-vis/modelroom-catalog" and args[7] == "."
     assert work.runner.folders == [files]
     urls = [url for _, url in work.transport.calls]
-    assert urls[0].endswith("/revision/main") and {u.rsplit("/", 1)[-1] for u in urls[1:]} == {"catalog-v2.json", "catalog-v3.json"}
+    assert urls[0].endswith("/revision/main") and {u.rsplit("/", 1)[-1] for u in urls[1:]} == {"catalog-v2.json", "catalog-v3.json", "catalog-v4.json"}
 
 
-@pytest.mark.parametrize("name", ["catalog-v2.json", "catalog-v3.json"])
+@pytest.mark.parametrize("name", ["catalog-v2.json", "catalog-v3.json", "catalog-v4.json"])
 def test_the_check_after_the_upload_fails_when_either_file_differs_and_names_it(work, tmp_path, name):
     work.committed()
     files = P.channel_files(work.decision()["result_catalog"].encode())
@@ -165,7 +166,7 @@ def test_verify_reads_both_files_of_the_dataset(work):
 
 def test_verify_says_which_file_could_not_be_read(work):
     files = P.channel_files(CATALOG_BYTES)
-    work.transport = answers({"catalog-v2.json": files["catalog-v2.json"], "catalog-v3.json": b""})
+    work.transport = answers({"catalog-v2.json": files["catalog-v2.json"], "catalog-v3.json": b"", "catalog-v4.json": files["catalog-v4.json"]})
     work.transport._responses[("GET", f"https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/{PUBLISHED}/catalog-v3.json")] = Response(404, {}, b"")
     result = work.call("--verify", env={})
     assert result.code == 1 and "catalog-v3.json" in result.out and "could not be read" in result.out
@@ -183,7 +184,7 @@ def test_the_hygiene_check_reads_both_files(work, tmp_path, monkeypatch):
     monkeypatch.setattr(publish.Tool, "_hygiene", spy)
     work.transport = answers(P.channel_files(work.decision()["result_catalog"].encode()))
     work.call("--publish-pending", work.folder, env=upload_env(tmp_path))
-    assert {"catalog-v2.json", "catalog-v3.json"} <= set(seen)
+    assert {"catalog-v2.json", "catalog-v3.json", "catalog-v4.json"} <= set(seen)
 
 
 # --- the dataset card ----------------------------------------------------------------------------------------------------------
@@ -191,7 +192,7 @@ def test_the_hygiene_check_reads_both_files(work, tmp_path, monkeypatch):
 
 def test_the_card_names_both_channels_and_the_two_findings_and_still_follows_the_numbers():
     text = (Path(__file__).resolve().parent.parent / "docs" / "dataset-card.md").read_text(encoding="utf-8")
-    for needle in ("catalog-v2.json", "catalog-v3.json", "gguf_checks", "setup_note", "schema 3", "llama.cpp", "release 1.0.0"):
+    for needle in ("catalog-v2.json", "catalog-v3.json", "catalog-v4.json", "gguf_checks", "setup_note", "vllm_args", "schema 3", "schema 4", "llama.cpp", "release 1.0.0"):
         assert needle in text, needle
     assert "data_files: catalog-v2.json" not in text
     numbers = card_tool.numbers(CATALOG_BYTES)

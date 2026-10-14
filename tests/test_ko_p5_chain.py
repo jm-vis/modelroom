@@ -1,6 +1,6 @@
 """AP9-KO P5, part 4: the whole chain of the brief ("Abnahme", P5 Kette) in one test module, on recorded answers only:
 
-scanner proposal -> approval -> publication on both channels -> reading of the catalog by a guided run -> search ->
+scanner proposal -> approval -> publication on all channels -> reading of the catalog by a guided run -> search ->
 choice -> configuration -> fetch -> render -> the decision about the installation.
 
 Nothing opens a socket. The model is the recorded `Qwen/Qwen3.5-9B` with its recorded GGUF repository of the guided-run
@@ -121,7 +121,7 @@ def _approved(folder: Path) -> tuple[bytes, dict[str, bytes]]:
     return table, P.channel_files(table)
 
 
-def test_the_approved_table_stays_schema_3_and_makes_both_channel_files_of_one_publication(tmp_path):
+def test_the_approved_table_stays_schema_3_and_makes_the_three_channel_files_of_one_publication(tmp_path):
     table, files = _approved(tmp_path)
 
     document = json.loads(table)
@@ -129,7 +129,8 @@ def test_the_approved_table_stays_schema_3_and_makes_both_channel_files_of_one_p
     assert document["models"][0]["gguf_checks"][0]["result"] == "absent"
     old = json.loads(files["catalog-v2.json"])
     assert old["schema_version"] == 2 and "gguf_checks" not in old["models"][0]  # what release 1.0.0 reads: no finding in it
-    assert files["catalog-v3.json"] == table
+    assert files["catalog-v3.json"] == table  # what release 1.1.0 reads
+    assert json.loads(files["catalog-v4.json"]) == {**document, "schema_version": 4}  # what release 1.2.0 reads
 
 
 def test_release_1_0_0_reads_the_old_file_of_that_publication_and_never_the_new_one(tmp_path):
@@ -147,11 +148,11 @@ def test_release_1_0_0_reads_the_old_file_of_that_publication_and_never_the_new_
 
 
 def _dataset(files: dict[str, bytes]) -> dict[tuple[str, str], Response]:
-    """The dataset of the publication as the guided run meets it: its revision, and the new channel's file at that commit."""
+    """The dataset of the publication as the guided run meets it: its revision, and the newest channel's file at that commit."""
     base = "https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve"
     return {
         ("GET", REVISION_URL): Response(200, {}, json.dumps({"sha": DATASET_SHA}).encode("utf-8")),
-        ("GET", f"{base}/{DATASET_SHA}/catalog-v3.json"): Response(200, {"X-Repo-Commit": DATASET_SHA}, files["catalog-v3.json"]),
+        ("GET", f"{base}/{DATASET_SHA}/catalog-v4.json"): Response(200, {"X-Repo-Commit": DATASET_SHA}, files["catalog-v4.json"]),
     }
 
 
@@ -180,7 +181,7 @@ def test_the_run_reads_the_published_catalog_and_the_blocked_package_reaches_the
     code, lines, _err = _guided(tmp_path, files, {**ANSWERS, "pull": False}, daemon, capsys)
 
     assert code == 0
-    assert any(line == f"catalog: published {PUBLISHED_DAY}" for line in lines)  # read through the default channel (catalog-v3.json)
+    assert any(line == f"catalog: published {PUBLISHED_DAY}" for line in lines)  # read through the default channel (catalog-v4.json)
     payload = _models(tmp_path)
     blocked = _row(payload, "Q8_0")
     assert blocked["load_check"]["result"] == "absent" and blocked["load_check"]["architecture"] == UNKNOWN_ARCH
@@ -227,11 +228,11 @@ def test_a_package_nobody_blocked_is_pulled_in_the_same_run(tmp_path, capsys):
 
 
 def test_the_run_falls_back_to_the_shipped_catalog_where_the_dataset_has_no_new_file_yet(tmp_path, capsys):
-    """The order of the release: the dataset's `catalog-v3.json` first, then the release. A release that meets a dataset
+    """The order of the release: the dataset's `catalog-v4.json` first, then the release. A release that meets a dataset
     without that file reads its shipped catalog, says so, and the run goes on (nothing is blocked, nothing breaks)."""
     _table, files = _approved(tmp_path / "scan")
     dataset = _dataset(files)
-    for key in [key for key in dataset if key[1].endswith("catalog-v3.json")]:
+    for key in [key for key in dataset if key[1].endswith("catalog-v4.json")]:
         dataset[key] = Response(404, {}, b"{}")
     lines: list[str] = []
     code = main(
@@ -245,5 +246,5 @@ def test_the_run_falls_back_to_the_shipped_catalog_where_the_dataset_has_no_new_
     assert "load_check" not in json.dumps(_models(tmp_path))
 
 
-def test_the_default_channel_of_the_chain_is_the_new_one():
-    assert catalog_remote.DEFAULT_CHANNEL.file_name == "catalog-v3.json"
+def test_the_default_channel_of_the_chain_is_the_newest_one():
+    assert catalog_remote.DEFAULT_CHANNEL.file_name == "catalog-v4.json"

@@ -42,15 +42,16 @@ def _later(document: dict, days: int = 3) -> dict:
 
 
 def _ask(transport, tmp_path: Path):
-    """What a guided run does: `current_catalog` with no channel named."""
-    return catalog_remote.current_catalog(transport, NOW, tmp_path / "cache", RequestBudget(150))
+    """What a guided run of release 1.1.0 did: `current_catalog` with the channel of schema 3 (release 1.2.0 asks the
+    default channel, schema 4: `test_vs_switches.py`; the mechanics of both are the same)."""
+    return catalog_remote.current_catalog(transport, NOW, tmp_path / "cache", RequestBudget(150), channel=catalog_remote.CHANNEL_V3)
 
 
 # --- the switch: one line, and everything that follows from it ----------------------------------------------------
 
 
-def test_a_run_that_names_no_channel_asks_the_new_one():
-    assert catalog_remote.DEFAULT_CHANNEL is catalog_remote.CHANNEL_V3
+def test_the_channel_of_release_1_1_0_stays_a_channel_of_its_own_beside_the_default():
+    assert catalog_remote.DEFAULT_CHANNEL is catalog_remote.CHANNEL_V4 and catalog_remote.CHANNEL_V3 is not catalog_remote.DEFAULT_CHANNEL
     assert catalog_remote.CHANNEL_V2.file_name == "catalog-v2.json"  # the old channel keeps its file for release 1.0.0
 
 
@@ -75,7 +76,7 @@ def test_the_offline_reading_of_render_and_pull_takes_the_new_cache_and_not_the_
         envelope = {"cache_version": 1, "checked_at": "2026-10-14T08:00:00Z", "sha": SHA, "last_error": None, "catalog": document}
         (cache / name).write_text(json.dumps(envelope), encoding="utf-8")
 
-    found = catalog_remote.offline_catalog(cache)
+    found = catalog_remote.offline_catalog(cache, channel=catalog_remote.CHANNEL_V3)
 
     assert found.schema_version == 3 and found.published.isoformat() == body["published"]  # not the later day of the old file
 
@@ -90,7 +91,7 @@ def test_a_cache_release_1_0_0_left_behind_is_not_read_by_the_new_release_and_st
     before = path.read_bytes()
     transport = FixtureTransport(_hub(catalog_remote.CHANNEL_V3, _later(_v3())))
 
-    choice = catalog_remote.current_catalog(transport, NOW, cache, RequestBudget(150))
+    choice = catalog_remote.current_catalog(transport, NOW, cache, RequestBudget(150), channel=catalog_remote.CHANNEL_V3)
 
     assert choice.catalog.schema_version == 3
     assert path.read_bytes() == before
@@ -152,7 +153,9 @@ def test_a_good_cache_survives_a_day_the_new_channel_does_not_read(tmp_path):
         ("GET", REVISION_URL): Response(200, {}, json.dumps({"sha": new_sha}).encode("utf-8")),
         ("GET", _channel_url(catalog_remote.CHANNEL_V3, new_sha)): Response(200, {"X-Repo-Commit": new_sha}, b"{not json"),
     }
-    later_day = catalog_remote.current_catalog(FixtureTransport(moved), NOW + timedelta(days=2), tmp_path / "cache", RequestBudget(150))
+    later_day = catalog_remote.current_catalog(
+        FixtureTransport(moved), NOW + timedelta(days=2), tmp_path / "cache", RequestBudget(150), channel=catalog_remote.CHANNEL_V3
+    )
 
     assert later_day.source == "cached" and later_day.catalog.model_for("acme/Nova-7B-2512").gguf_checks
     assert "the published one did not read" in later_day.origin

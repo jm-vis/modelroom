@@ -92,15 +92,15 @@ def test_a_failure_of_the_upload_file_after_the_push_is_exit_1_and_leaves_pushed
     work.committed()
     checks, real = [], publish.Tool._hygiene
 
-    def third_check_fails(self, data, name="catalog-v2.json"):  # the first check of a temporary file: `_ready` checked both channel files before the push
+    def third_check_fails(self, data, name="catalog-v2.json"):  # the first check of a temporary file: `_ready` checked the three channel files before the push
         checks.append(data)
-        if len(checks) == 3:
+        if len(checks) == 4:
             raise publish.PublishError("the file fails the hygiene check")
         real(self, data, name)
 
     monkeypatch.setattr(publish.Tool, "_hygiene", third_check_fails)
     result = work.call("--publish-pending", work.folder, env=upload_env(tmp_path))
-    assert (result.code, work.state(), len(checks), work.runner.calls) == (1, "pushed", 3, []) and "state stays" in result.err
+    assert (result.code, work.state(), len(checks), work.runner.calls) == (1, "pushed", 4, []) and "state stays" in result.err
 
 
 def test_a_failed_check_after_the_upload_leaves_uploaded_and_the_next_call_checks_without_uploading_again(work, tmp_path):
@@ -153,6 +153,7 @@ def test_verify_compares_the_published_file_with_the_working_tree_without_a_toke
     result = work.call("--verify", env={})
     assert (result.code, result.out) == (0, "catalog: published files equal working tree\n")
     assert [url for _, url in work.transport.calls] == ["https://huggingface.co/api/datasets/jm-vis/modelroom-catalog/revision/main",
+                                                        f"https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/{PUBLISHED}/catalog-v4.json",
                                                         f"https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/{PUBLISHED}/catalog-v3.json",
                                                         f"https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/{PUBLISHED}/catalog-v2.json"]
     assert work.git.calls == [] and work.runner.calls == []
@@ -165,7 +166,7 @@ def test_verify_against_a_commit_compares_the_bytes_of_that_commit_and_not_the_w
     assert work.call("--verify", "--commit", COMMIT).out == f"catalog: published files equal {COMMIT}\n"
     work.transport = hub_answers(CATALOG_BYTES)
     result = work.call("--verify", "--commit", COMMIT)
-    assert result.code == 1 and result.out == f"ALARM: the published catalog-v3.json differs from {COMMIT}\nALARM: the published catalog-v2.json differs from {COMMIT}\n"
+    assert result.code == 1 and result.out == "".join(f"ALARM: the published catalog-v{n}.json differs from {COMMIT}\n" for n in (4, 3, 2))
 
 
 def test_verify_gives_an_alarm_line_and_exit_1_when_the_published_file_differs(work):

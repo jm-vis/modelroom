@@ -3,10 +3,33 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
-## [Unreleased]
+## [1.2.0] - Unreleased
+
+Version 1.2.0 takes the vLLM switches that a model card names for its model into the commands. Where the `vllm serve`
+block of the publisher's card for a model names `--reasoning-parser`, `--tool-call-parser`,
+`--enable-auto-tool-choice` or `--kv-cache-dtype` (a closed list, each value checked), both vLLM commands of that
+model carry them. The catalog gets a third file, `catalog-v4.json`, for schema 4; the files releases 1.0.0 and 1.1.0
+read stay what they were (the second without the new field). Publish the dataset's `catalog-v4.json` before this
+release.
 
 ### Added
 
+- **vLLM switches from the model card** (V7; `scripts/catalog_scan_card.py`, `modelroom/catalog_findings.py`,
+  `modelroom/install_vllm.py`): rule E4-B reads, from the very lines `vllm serve <model>` of the block it found, the
+  switches `--reasoning-parser <name>`, `--tool-call-parser <name>`, `--enable-auto-tool-choice` and
+  `--kv-cache-dtype <value>` (forms `--x value` and `--x=value`; values of letters, digits, `.`, `_` and `-`, at most 40,
+  none starting with `-`; a start line with any shell character, quote or non-ASCII character gives no switch at all,
+  the others are cut at white space and every word is taken whole); a switch with a broken value, with two different values on the card, or off the list is
+  dropped, never the note. The note keeps them as `vllm_args` (not written where empty). `vllm_install` puts them after
+  modelroom's own values and before `--host`/`--port`, the same in the `vllm serve` and the `docker run` line; a switch the
+  command carries already is not set twice (modelroom wins; it sets none of the four today). Without switches both lines
+  are byte for byte those of 1.1.0.
+- **Schema 4** of the catalog file (`SetupNote.vllm_args`) on its own channel `catalog-v4.json` with its own cache file,
+  now the default channel of a guided run (`CHANNEL_V4`, `build_catalog_v4`); `catalog-v3.json` is made from a schema-4
+  table by `project_to_schema3` (the switches are dropped, the note stays) and stays what release 1.1.0 reads;
+  `catalog-v2.json` as before. `scripts/catalog_publish.py` makes, uploads and verifies all three files in one commit.
+  The scanner's package stage runs on a schema-3 or schema-4 working catalog; on schema 3 it proposes the notes without
+  switches and says so.
 - **Successors proposed from the names** (`scripts/catalog_scan.py`, stage `A4`, `catalog_scan_latest.name_successors`):
   the scan runs the name rule of the search over the rows of the working catalog and proposes `row -> successor` where
   both rows share a publisher, a group, a kind and a variation, the successor is the highest of that subgroup with a
@@ -34,6 +57,12 @@ All notable changes to this project are documented in this file. The format foll
   `package_reserve_days` in `scan-state.json`), so every unit and every new package of a visited repository is reached (a
   cut list is continued, not read again). A row books the reserve only when it made progress; a list longer than the
   reserve carries (37 pages at the default) is the documented bound. A run whose budget cannot give each row four requests takes fewer rows.
+
+### Not taken from a card
+
+`--trust-remote-code` (it runs foreign code; the red line over the commands stays all modelroom says of it), paths,
+`--revision`, `--max-model-len`, `--tensor-parallel-size`, memory and GPU switches (modelroom computes those), environment
+variables and every other switch.
 
 ## [1.1.0] - 2026-10-14
 
