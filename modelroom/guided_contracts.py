@@ -13,12 +13,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .catalog import Age
-from .contracts import check_aware_utc, validate_hf_repo, validate_ollama_name
+from .contracts import check_aware_utc, hf_id_key, validate_hf_repo, validate_ollama_name
 from .fit import FIXED_OVERHEAD_GIB, WEIGHTS_OVERHEAD_RATIO
 from .measurements import Scenario
 from .relation import RelationStatus
 
 UNKNOWN = "unknown"
+# V8 (AP9-KO): the direct find of a publisher's own model is asked at most this many times per search, and only
+# for a typed repository id or for words -- a search with no word makes none.
+DIRECT_FIND_MAX = 10
+DIRECT_FIND_SOURCES = ("id", "word")
 
 
 class SearchHit(BaseModel):
@@ -29,6 +33,12 @@ class SearchHit(BaseModel):
     publisher per catalog); an unresolved hit carries its reason and gets no fit and no Ollama
     name. `repo_created_at` is shown as "repo created", never as the model's release date;
     `downloads` is shown as it is and is no rank.
+
+    `found_as` (AP9-KO, V8) says how the repository came into the search. `package` is every hit
+    until now: a repository that packages a base model. `direct` is the publisher's own model, found
+    by its catalog row and read from its own Hub answer: it is `resolved` as itself
+    (`resolved_base_model == repo`), declares no base model and no relation -- a quantization
+    relation is never invented for it -- and its owner is a `publisher`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -53,6 +63,7 @@ class SearchHit(BaseModel):
     # `unknown` age, or a hit built without it, and reads as `stated`.
     release_basis: Literal["stated", "computed"] | None = None
     ollama: str | None = None
+    found_as: Literal["package", "direct"] = "package"
 
     @field_validator("repo")
     @classmethod
@@ -66,7 +77,15 @@ class SearchHit(BaseModel):
 
     @model_validator(mode="after")
     def _check_coupling(self) -> "SearchHit":
-        if self.resolved:
+        if self.found_as == "direct":
+            same = self.resolved_base_model is not None and hf_id_key(self.resolved_base_model) == hf_id_key(self.repo)
+            if not self.resolved or not same or self.unresolved_reason is not None:
+                raise ValueError("a direct find is resolved as itself: resolved_base_model is its repo")
+            if self.publisher_status != "publisher":
+                raise ValueError("a direct find is the model of its publisher")
+            if self.base_model is not None or self.base_model_relation != UNKNOWN:
+                raise ValueError("a direct find declares no base model and no relation")
+        elif self.resolved:
             if self.resolved_base_model is None or self.unresolved_reason is not None:
                 raise ValueError("a resolved hit names resolved_base_model and no unresolved_reason")
             validate_hf_repo(self.resolved_base_model)
@@ -81,6 +100,39 @@ class SearchHit(BaseModel):
             raise ValueError("release_basis 'computed' needs a known age")
         if self.ollama is not None:
             validate_ollama_name(self.ollama)
+        return self
+
+
+class DirectLogEntry(BaseModel):
+    """One line of `search.json`'s `direct` list: a publisher model the search asked the Hub for (V8).
+
+    `source` is the input that led to it (`id` a typed repository id, `word` the words); `status` what came
+    of it: `found` (the Hub answered for exactly that repository, and a hit followed), `not_read` (it asked and
+    got no usable answer, `reason` says why) or `budget` (the shared request budget ended first, nothing was
+    asked). A model that was not read is named; it is never left out of the log.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    repo: str
+    source: Literal["id", "word"]
+    status: Literal["found", "not_read", "budget"]
+    requests: int = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=97)
+
+    @field_validator("repo")
+    @classmethod
+    def _check_repo(cls, value: str) -> str:
+        return validate_hf_repo(value)
+
+    @model_validator(mode="after")
+    def _check_status(self) -> "DirectLogEntry":
+        if (self.status == "found") != (self.reason is None):
+            raise ValueError("a reason is given exactly when the model was not found")
+        if self.reason is not None and (not self.reason.isascii() or not self.reason.isprintable()):
+            raise ValueError("reason must be one printable ASCII line")
+        if (self.status == "budget") != (self.requests == 0):
+            raise ValueError("a find or a failed read costs a request, a budget that ended costs none")
         return self
 
 

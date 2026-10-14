@@ -126,21 +126,33 @@ class Runner:
     """The upload process: records the argument list and the environment and reads the file it was given while it exists."""
 
     def __init__(self, code: int = 0) -> None:
-        self.code, self.calls, self.uploaded = code, [], []
+        self.code, self.calls, self.uploaded, self.folders = code, [], [], []
 
     def __call__(self, args, env) -> int:
         self.calls.append((list(args), dict(env)))
-        self.uploaded.append(Path(args[6]).read_bytes())
+        target = Path(args[6])
+        if target.is_dir():  # the publication sends a folder with both channel files; `uploaded` keeps the bytes of the old channel
+            files = {p.name: p.read_bytes() for p in sorted(target.iterdir())}
+            self.folders.append(files)
+            self.uploaded.append(files["catalog-v2.json"])
+        else:
+            self.uploaded.append(target.read_bytes())
         return self.code
 
 
 def hub_answers(body: bytes, dataset: str = publish.DATASET, status: int = 200) -> FixtureTransport:
+    """The dataset as the Hub shows it: `body` as the old channel's file, and the new channel's file made from it the way the
+    publisher makes it (a body that is no catalog stands for both)."""
     revision = f"https://huggingface.co/api/datasets/{dataset}/revision/main"
-    file = f"https://huggingface.co/datasets/{dataset}/resolve/{PUBLISHED}/catalog-v2.json"
-    return FixtureTransport({
-        ("GET", revision): Response(status, {}, json.dumps({"sha": PUBLISHED}).encode()),
-        ("GET", file): Response(200, {"X-Repo-Commit": PUBLISHED}, body),
-    })
+    try:
+        files = P.channel_files(body)
+    except P.PublishError:
+        files = {"catalog-v3.json": body, "catalog-v2.json": body}
+    files["catalog-v2.json"] = body
+    answers = {("GET", revision): Response(status, {}, json.dumps({"sha": PUBLISHED}).encode())}
+    for name, content in files.items():
+        answers[("GET", f"https://huggingface.co/datasets/{dataset}/resolve/{PUBLISHED}/{name}")] = Response(200, {"X-Repo-Commit": PUBLISHED}, content)
+    return FixtureTransport(answers)
 
 
 class Work:

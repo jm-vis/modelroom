@@ -585,8 +585,8 @@ def test_a_first_word_family_next_to_a_readable_one_of_the_same_name_never_stand
     assert rules.latest_among([(fallback, "image-generation", None)], models[:1]) == {}  # AP9-KA-H: a mapping `repo -> reason` now
     document = json.loads((FIX / "scan_catalog.json").read_bytes())
     document["publishers"] = sorted(document["publishers"] + [{"account": "black-forest-labs", "name": "BFL", "region": "EU"}], key=lambda p: p["account"])
-    document["models"] += rows
-    from modelroom.catalog_schema import build_catalog_v2
+    from modelroom.catalog_schema import SCHEMA3_ROW_DEFAULTS, build_catalog_v2
+    document["models"] += [{k: v for k, v in row.items() if k not in SCHEMA3_ROW_DEFAULTS} for row in rows]  # a schema-2 row has none of schema 3's keys (AP9-KO)
     build_catalog_v2(json.dumps(document), Path("catalog.json"))
 
 

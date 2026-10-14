@@ -421,7 +421,9 @@ def _asked(config: Configuration, checked: Checked, snapshot=None) -> tuple[str 
             seen["instruction"], seen["choices"] = instruction, list(choices)
             return "L"
 
-    run = SimpleNamespace(asker=_Asker(), selection=RunSelection(machines=(), models=()), servers=SimpleNamespace(found={}))
+    run = SimpleNamespace(
+        asker=_Asker(), selection=RunSelection(machines=(), models=()), servers=SimpleNamespace(found={}), catalog=None
+    )
     if snapshot is None:
         guided_context._answered_context(run, config, checked)
     else:

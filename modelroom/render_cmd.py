@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
+from .catalog import Catalog
 from .config import Configuration
 from .contracts import SchemaVersionError
 from .importer import ProfileScan, scan_profiles
@@ -92,11 +93,16 @@ def render_with_config(
     selection: RunSelection | None = None,
     disks: Mapping[str, Disk] | None = None,
     live_vllm: Mapping[str, object] | None = None,
+    catalog: Catalog | None = None,
 ) -> int:
     """Run `render` against an already-loaded `Configuration` -- the programmatic entry point.
 
     `disks` is the free disk a guided run read, per machine name: the Markdown view marks a download
     larger than it (AP9-RM U11). `modelroom render` reads no machine and passes nothing.
+
+    `catalog` is the evidence of AP9-KO: the findings of the catalog the caller holds -- the guided run
+    passes the one it used, `modelroom render` the one it reads offline (`catalog_remote.offline_catalog`).
+    `None` is the default and means every package is `unknown`; the document is then what release 1.0.0 wrote.
 
     `live_vllm` is the same shape, for the same reason: a guided
     run's own render step passes what *this run's own step 1* found for `"vllm"`, by machine name
@@ -148,6 +154,7 @@ def render_with_config(
             selection,
             disks,
             live_vllm,
+            catalog,
         )
     finally:
         release_lock(handle)
@@ -191,6 +198,7 @@ def _render_locked(
     selection: RunSelection | None = None,
     disks: Mapping[str, Disk] | None = None,
     live_vllm: Mapping[str, object] | None = None,
+    catalog: Catalog | None = None,
 ) -> int:
     """Read, build and write both views; a broken profile file is a note, never the whole render.
 
@@ -222,7 +230,8 @@ def _render_locked(
     profiles = _machine_profiles(shown, scan)
     measurements, notes = _measurements_of(config, profiles)
     built = build_render_document(
-        shown, snapshot, profiles, measurements, scenario, rendered_at, rating, models=models, live_vllm=live_vllm
+        shown, snapshot, profiles, measurements, scenario, rendered_at, rating, models=models, live_vllm=live_vllm,
+        catalog=catalog,
     )
     document = with_requests_origin(built, config)
     # Each file is replaced atomically, but two files cannot be replaced as one: between the two

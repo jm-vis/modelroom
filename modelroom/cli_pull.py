@@ -17,12 +17,15 @@ import sys
 from datetime import datetime, timezone
 from typing import Callable
 
+from .catalog import Catalog
+from .catalog_findings import load_blocked_text
 from .daemon import VERSION_PATH, Daemon, DaemonError, LocalDaemon
 from .dialog import Asker, Canceled, TerminalAsker, is_interactive
 from .guided_install import FirstRow, PullTarget, _disk_allows, _pull, live_line
 from .loadtest import installed_models
 from .pull_choice import PULL_NAME_RE
 from .room import RoomProbes, default_room_probes, free_disk
+from .runtimes import OLLAMA
 from .screen import Screen, pull_question, yes_no
 
 KEY = "pull"
@@ -51,11 +54,17 @@ def run_pull(
     now: datetime | None = None,
     out: Callable[[str], None] | None = None,
     asker: Asker | None = None,
+    catalog: Catalog | None = None,
 ) -> int:
     """`modelroom pull`: `0` pulled or the user said no, `1` a daemon/disk/pull fault, `2` an
-    invalid name or no way to ask, `130` Ctrl-C. `asker` is dependency injection for a test
-    (`tests/test_cli_pull.py`, a `TerminalAsker` over a pipe): the real CLI never passes it, and
-    without one a terminal asks, or `--yes` skips the question, or there is no way to ask at all.
+    invalid name, a name the catalog blocks or no way to ask, `130` Ctrl-C. `asker` is dependency
+    injection for a test (`tests/test_cli_pull.py`, a `TerminalAsker` over a pipe): the real CLI never
+    passes it, and without one a terminal asks, or `--yes` skips the question, or there is no way to ask at all.
+
+    `catalog` (AP9-KO, V10) is the evidence, read offline by the caller (`catalog_remote.offline_catalog`): a name
+    `hf.co/<repo>:<quant>` that leads to an `absent` check ends the command with exit `2` -- after the name is
+    validated and before the daemon is touched, whatever `--yes` says. `None` asks the catalog nothing (a caller
+    that has none); an Ollama name, or a name that leads to no single check, takes the way it always took.
 
     Ctrl-C covers the whole of it (Codex r1-3): version check, the tags note, the disk check, the
     question and the pull itself all run under the one `try` below, so a `KeyboardInterrupt` in any
@@ -65,10 +74,25 @@ def run_pull(
     (Codex r2-1) -- `"nothing was pulled"` would be wrong in exactly that case.
     """
     try:
-        return _run_checked(name, weights_bytes, yes, daemon, room, now, out, asker)
+        return _run_checked(name, weights_bytes, yes, daemon, room, now, out, asker, catalog)
     except KeyboardInterrupt:
         print(STOPPED, file=sys.stderr)
         return 130
+
+
+def blocked_pull(name: str, catalog: Catalog | None) -> str | None:
+    """The red line `LOAD_BLOCKED` for a pull name the catalog's stored check blocks, else `None`.
+
+    The name carries no revision (`hf.co/<repo>:<quant>`), so the stored `absent` check decides on the content last
+    checked, and the line names its day (variant A, decided 2026-10-13): no statement about what the name serves now.
+    The model is the base model of the row that holds the check, as the table names it; the runtime is Ollama's."""
+    if catalog is None:
+        return None
+    check = catalog.pull_check(name)
+    if check is None or check.result != "absent":
+        return None
+    model = next((row.hf_repo for family in catalog.families for row in family.models if check in row.gguf_checks), check.repo)
+    return load_blocked_text(OLLAMA.name, model, check)
 
 
 def _run_checked(
@@ -80,10 +104,15 @@ def _run_checked(
     now: datetime | None,
     out: Callable[[str], None] | None,
     asker: Asker | None,
+    catalog: Catalog | None = None,
 ) -> int:
     """Steps 1-2 of `run_pull`, under its one Ctrl-C boundary."""
     if PULL_NAME_RE.fullmatch(name) is None:
         print(f"{name!r} {NOT_SAFE}", file=sys.stderr)
+        return 2
+    blocked = blocked_pull(name, catalog)  # V10: before any access to the daemon, and `--yes` does not pass it
+    if blocked is not None:
+        print(blocked, file=sys.stderr)
         return 2
     active_daemon = daemon if daemon is not None else LocalDaemon()
     try:

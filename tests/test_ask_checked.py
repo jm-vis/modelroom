@@ -99,6 +99,7 @@ def _run(script: dict[str, list[str]], tmp_path: Path | None = None, **extra) ->
         here=tmp_path or Path("."),
         selection=RunSelection(machines=(), models=()),
         servers=SimpleNamespace(found={}),
+        catalog=None,
         pointer_path=(tmp_path or Path(".")) / "pointer.json",
         problems=problems,
         failed=problems.append,

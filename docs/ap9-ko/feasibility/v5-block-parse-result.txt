@@ -1,0 +1,9 @@
+block lines 8 - 167 entries 157 non-matching lines [(166, '    { LLM_ARCH_UNKNOWN,          "(unknown)"        },')]
+unique names 157 unique enums 157
+kolibri1 False
+sarvam_moe False
+bailingmoe2 True
+glm4moe True
+llama True
+clip True
+last entries [('LLM_ARCH_QWEN3TTS', 'qwen3tts'), ('LLM_ARCH_POCKETTTS', 'pockettts'), ('LLM_ARCH_K2_HORIZON', 'k2-horizon')]

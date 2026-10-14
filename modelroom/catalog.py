@@ -4,12 +4,15 @@ The search uses it to tell a publisher from a packager, to call a model `latest`
 when the repo itself says nothing (`new_version`), and to know an Ollama name. Every model row
 names its evidence; nothing in it is inferred (CONTRACTS.md, "Catalog rules").
 
-Two forms build the same in-memory `Catalog`, told apart by their **content**, never by a file
-name: schema 1 (legacy, nested by family, TOML) or schema 2 (flat, the publicly published form,
-JSON; every row carries its own `family` and `publisher`; validated in `catalog_schema.py`).
-`load_catalog` reads either into the same `Catalog`/`CatalogFamily`/`CatalogModel` shape, so
-every other reader of this package keeps working against one search API regardless of which
-schema shipped it: `model_for`, `is_publisher`, `age_of`, `families`.
+Three forms build the same in-memory `Catalog`, told apart by their **content**, never by a file
+name: schema 1 (legacy, nested by family, TOML), schema 2 (flat, the publicly published form,
+JSON; every row carries its own `family` and `publisher`; validated in `catalog_schema.py`) or
+schema 3 (schema 2 plus the findings of AP9-KO, `catalog_findings.py`: the package checks and the
+setup note of a row). `load_catalog` reads any of them into the same `Catalog`/`CatalogFamily`/
+`CatalogModel` shape, so every other reader of this package keeps working against one search API
+regardless of which schema shipped it: `model_for`, `is_publisher`, `age_of`, `families`; the
+findings are read through `package_check`, `pull_check` and `setup_note_for`, which answer `None`
+-- unknown -- wherever the catalog holds nothing.
 """
 
 from __future__ import annotations
@@ -19,29 +22,38 @@ import re
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
 from urllib.parse import urlsplit
 
-from .contracts import SchemaVersionError, check_schema_version, validate_hf_repo, validate_ollama_pair
+from .catalog_findings import PackageCheck, SetupNote
+from .contracts import SchemaVersionError, check_schema_version, hf_id_key, validate_hf_repo, validate_ollama_pair
 from .contracts import _OLLAMA_TAG_RE as OLLAMA_TAG_RE  # the same tag rule `Package.aliases` uses
+from .quantization import canonical_quant, package_identity_key
+
+if TYPE_CHECKING:  # pragma: no cover -- the annotation only
+    from .contracts import Package
 
 CATALOG_FILE = Path(__file__).with_name("catalog.json")
 CATALOG_REJECTED_FILE = Path(__file__).with_name("catalog-rejected.json")
 # Half-open, like every schema range here. Each content shape keeps its own, narrower range --
 # content that sniffs as TOML but claims schema 2 is still refused; CATALOG_SCHEMA_RANGE is the
 # safety net a direct `Catalog.model_validate` call falls back on.
-CATALOG_SCHEMA_RANGE: tuple[int, int] = (1, 3)
+CATALOG_SCHEMA_RANGE: tuple[int, int] = (1, 4)
 CATALOG_TOML_SCHEMA_RANGE: tuple[int, int] = (1, 2)
-CATALOG_JSON_SCHEMA_RANGE: tuple[int, int] = (2, 3)
+CATALOG_JSON_SCHEMA_RANGE: tuple[int, int] = (2, 4)  # every JSON catalog this release reads ...
+CATALOG_V2_SCHEMA_RANGE: tuple[int, int] = (2, 3)  # ... and the one each published channel holds
+CATALOG_V3_SCHEMA_RANGE: tuple[int, int] = (3, 4)
 
 # A publicly published file is adversarial input: read at most one byte past this limit, then
 # reject, on both forms (catalog_schema.py carries the document-wide limits: models, publishers,
 # packagers). Every text value, list entries included, caps at CATALOG_MAX_TEXT_LEN.
 CATALOG_MAX_BYTES = 1024 * 1024
+CATALOG_V3_MAX_BYTES = 4 * 1024 * 1024  # schema 3 holds findings; schema 1 and 2 keep the limit they always had
 CATALOG_MAX_TEXT_LEN = 300
 CATALOG_MAX_GGUF_REPOS = 50
+CATALOG_MAX_PACKAGE_CHECKS = 200  # per row
 
 Age = Literal["latest", "legacy", "unknown"]
 KindSource = Literal["tags", "base_model", "config", "decision"]
@@ -139,6 +151,11 @@ class CatalogModel(BaseModel):
     )
     note: str | None = Field(default=None, max_length=CATALOG_MAX_TEXT_LEN)
 
+    # --- schema 3 (AP9-KO): findings. Their defaults are the fact "unknown"; a schema-2 document carries
+    # neither key (`catalog_schema.py`), so a row of 1.0.0 reads unchanged. ----------------------------------
+    gguf_checks: list[PackageCheck] = Field(default_factory=list, max_length=CATALOG_MAX_PACKAGE_CHECKS)
+    setup_note: SetupNote | None = None
+
     @field_validator("hf_repo")
     @classmethod
     def _check_hf_repo(cls, value: str) -> str:
@@ -225,6 +242,14 @@ class CatalogModel(BaseModel):
                 raise ValueError(f"{self.hf_repo}: a model with a successor is not latest")
             if self.successor == self.hf_repo:
                 raise ValueError(f"{self.hf_repo}: successor must be another model")
+        packages = [(hf_id_key(check.repo), check.identity) for check in self.gguf_checks]
+        if len(packages) != len(set(packages)):
+            raise ValueError(f"{self.hf_repo}: gguf_checks names a package twice")
+        if self.setup_note is not None:
+            if hf_id_key(self.setup_note.model) != hf_id_key(self.hf_repo):
+                raise ValueError(f"{self.hf_repo}: setup_note is the note of {self.setup_note.model}")
+            if self.setup_note.status == "not_read":
+                raise ValueError(f"{self.hf_repo}: a setup_note that is not_read is never stored")
         return self
 
 
@@ -310,6 +335,7 @@ class Catalog(BaseModel):
     data_license: str | None = None
     attribution: str | None = None
     published: date | None = None
+    _by_repo: dict[str, list[PackageCheck]] | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _check(self) -> "Catalog":
@@ -339,20 +365,106 @@ class Catalog(BaseModel):
             return "legacy", model.successor
         return ("latest", None) if model.latest else ("unknown", None)
 
+    # --- the findings, read offline (AP9-KO). Every answer is `None` -- unknown -- wherever the catalog holds
+    # no check that is the one asked for; nothing is carried to another repository, package or revision. ------
+
+    def _checks_of(self, repo: str) -> list[PackageCheck]:
+        """Every check of GGUF repository `repo`, over all rows; the index is built on the first question and keyed
+        by `hf_id_key`, since the Hub's repository ids are case-insensitive (file names and revisions are not)."""
+        if self._by_repo is None:
+            index: dict[str, list[PackageCheck]] = {}
+            for family in self.families:
+                for model in family.models:
+                    for check in model.gguf_checks:
+                        index.setdefault(hf_id_key(check.repo), []).append(check)
+            self._by_repo = index
+        return self._by_repo.get(hf_id_key(repo), [])
+
+    def package_check(self, package: "Package") -> PackageCheck | None:
+        """The check of exactly this package: its repository, its weight identity and its revision (V1).
+
+        Another revision of the same repository is another package here: `None`. Two checks that disagree on
+        the result (two rows naming the same package) leave it `None` as well.
+        """
+        if package.source != "huggingface" or package.format != "gguf" or package.repo is None:
+            return None
+        identity = package_identity_key(package)[2]
+        files = {file.name for file in package.files if file.role in ("weights", "weights_shard")}
+        found = [
+            check
+            for check in self._checks_of(package.repo)
+            # the file read is a file of this very package: a set of two shards is not a set of three
+            if check.identity == identity and check.revision == package.revision and check.file in files
+        ]
+        return _agreed(found)
+
+    def pull_check(self, name: str) -> PackageCheck | None:
+        """The check a pull name `hf.co/<repo>:<quant>` leads to, whatever the revision (V10).
+
+        The name carries no revision, so the check is the one stored for that repository and quantization --
+        the last one read, which the caller states as the last checked content and not as the current one.
+        `None` where the name has no quantization, where the repository holds two packages of it, and for any
+        other name: an Ollama name inherits no finding of the Hub through its base model.
+        """
+        parts = _PULL_NAME_RE.fullmatch(name)
+        if parts is None:
+            return None
+        quantization = canonical_quant(parts["quant"])
+        if quantization is None:
+            return None
+        found = [check for check in self._checks_of(parts["repo"]) if check.quantization == quantization]
+        # one package of that quantization among the checks, and each check states that the repository held
+        # only that one when it was checked: a second package nobody checked would make the name ambiguous
+        if len({check.identity for check in found}) != 1 or any(check.same_quantization != 1 for check in found):
+            return None
+        return _agreed(found)
+
+    def setup_note_for(self, hf_repo: str) -> SetupNote | None:
+        """The setup note of this model, only where the card was read and instructions were found (V7).
+
+        The row is found by `hf_id_key` (ids are case-insensitive); two rows that differ only in case leave it
+        `None`. `model_for`, the lookup of release 1.0.0, is left as it was."""
+        key = hf_id_key(hf_repo)
+        rows = [m for f in self.families for m in f.models if hf_id_key(m.hf_repo) == key]
+        note = rows[0].setup_note if len(rows) == 1 else None
+        return note if note is not None and note.status == "instructions" else None
+
+
+# The name `modelroom pull` takes for a Hugging Face package (`pull_choice.PULL_NAME_RE` is the gate before
+# it; this is the shape the lookup reads): the repository and the quantization.
+_PULL_NAME_RE = re.compile(
+    r"hf\.co/(?P<repo>[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*):(?P<quant>[A-Za-z0-9][A-Za-z0-9_-]*)"
+)
+
+
+def _agreed(found: list[PackageCheck]) -> PackageCheck | None:
+    """The newest of `found` where all of them say the same result about the same architecture read from the
+    same file, else `None` (a contradiction is unknown)."""
+    if not found or len({(check.result, check.architecture, check.file) for check in found}) != 1:
+        return None
+    return max(found, key=lambda check: check.checked)
+
 
 def _read_capped_text(path: Path) -> str:
-    """At most `CATALOG_MAX_BYTES + 1` bytes: a giant file is rejected without loading it fully."""
+    """At most `CATALOG_V3_MAX_BYTES + 1` bytes: a giant file is rejected without loading it fully. The
+    narrower limit of a schema-1 or schema-2 file is held by its builder (`check_size`)."""
     try:
         with path.open("rb") as handle:
-            raw = handle.read(CATALOG_MAX_BYTES + 1)
+            raw = handle.read(CATALOG_V3_MAX_BYTES + 1)
     except OSError as exc:
         raise CatalogError(f"{path}: cannot read catalog: {exc}") from exc
-    if len(raw) > CATALOG_MAX_BYTES:
-        raise CatalogError(f"{path}: catalog file exceeds {CATALOG_MAX_BYTES} bytes")
+    if len(raw) > CATALOG_V3_MAX_BYTES:
+        raise CatalogError(f"{path}: catalog file exceeds {CATALOG_V3_MAX_BYTES} bytes")
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise CatalogError(f"{path}: cannot read catalog: {exc}") from exc
+
+
+def check_size(text: str, limit: int, path: Path) -> None:
+    """The size rule of a form: `limit` bytes of UTF-8, counted on the text the builder was given."""
+    if len(text.encode("utf-8")) > limit:
+        raise CatalogError(f"{path}: catalog file exceeds {limit} bytes")
 
 
 def check_version_field(data: object, accepted: tuple[int, int], path: Path) -> None:
@@ -366,20 +478,21 @@ def load_catalog(path: Path = CATALOG_FILE) -> Catalog:
     """Read and validate a catalog file; the default is the one shipped with the package.
 
     The **content**, not the file name, decides the schema: text that (after leading blanks)
-    starts with `{` is read as schema-2 JSON (`catalog_schema.py`); anything else is read as
+    starts with `{` is read as JSON, schema 2 or 3 (`catalog_schema.py`); anything else is read as
     schema-1 TOML. A file named `catalog.json` that holds TOML, or the reverse, still reads
     correctly -- and a document of the wrong shape for its content still fails on its own
     `schema_version` range, not on a guessed file type.
     """
     text = _read_capped_text(path)
     if text.lstrip().startswith("{"):
-        from .catalog_schema import build_catalog_v2
+        from .catalog_schema import build_catalog
 
-        return build_catalog_v2(text, path)
+        return build_catalog(text, path)
     return _build_catalog_v1(text, path)
 
 
 def _build_catalog_v1(text: str, path: Path) -> Catalog:
+    check_size(text, CATALOG_MAX_BYTES, path)
     try:
         data = tomllib.loads(text)
     # Deep nesting overflows the parser; an integer past Python's digit limit is a plain ValueError.

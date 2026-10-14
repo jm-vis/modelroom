@@ -19,7 +19,7 @@ from typing import Sequence
 
 from .http import BudgetedTransport, BudgetExhaustedError, RedirectingTransport, RequestBudget, Transport
 from .relation import check_relation
-from .search_pages import HF_API, read_downloads
+from .search_pages import ANSWER_ERRORS, HF_API, TRANSPORT_ERRORS, read_downloads
 
 # GF question F3 (2026-09-29): the base model's own owner (always included, never a request of
 # its own -- its repository is already a target, AP9-UX2 P3) plus RedHatAI, the one vLLM
@@ -80,6 +80,7 @@ class TensorSearchOutcome:
     repos: tuple[str, ...] = ()
     skipped: int = 0
     requests: int = 0
+    errors: tuple[str, ...] = ()  # `<account>: <kind of error>` of every account whose request or answer failed
 
     def note(self) -> str | None:
         return TENSOR_NOT_FETCHED_NOTE.format(count=self.skipped) if self.skipped else None
@@ -98,11 +99,14 @@ def search_tensor_repos(
     it `quantized` from this exact base model (the same check the GGUF search and fetch share).
     `BudgetExhaustedError` ends the search where it stands -- the accounts already asked keep
     their candidates, the budget's own exhaustion note covers the rest (CONTRACTS.md, "Request
-    budget"); every other response shape is a plain pure read (JSON, a list of objects), and an
-    account that does not answer `200` with a list contributes nothing, never a crash.
+    budget"); every other response shape is a plain pure read (JSON, a list of objects). An
+    account whose request fails (`search_pages.TRANSPORT_ERRORS`) or that does not answer `200`
+    with a JSON list contributes nothing, never a crash, and is named in `errors` with the kind of
+    failure, so "not reachable" is never read as "no offer"; a bug goes up.
     """
     budgeted = RedirectingTransport(BudgetedTransport(transport, budget))
     candidates: list[_Candidate] = []
+    errors: list[str] = []
     requests = 0
     for account in tensor_packagers(base_model_hf_repo, packagers):
         url = tensor_search_url(base_model_hf_repo.split("/", 1)[1], account)
@@ -110,26 +114,40 @@ def search_tensor_repos(
             response = budgeted("GET", url)
         except BudgetExhaustedError:
             break
+        except TRANSPORT_ERRORS as exc:  # the transport's own failures: this account gives nothing, the request is spent
+            requests += 1
+            errors.append(f"{account}: {type(exc).__name__}")
+            continue
         requests += 1
-        candidates.extend(_accepted(response, base_model_hf_repo))
+        hits, error = _answer_hits(response)
+        if error is not None:
+            errors.append(f"{account}: {error}")
+            continue
+        candidates.extend(_accepted(hits, base_model_hf_repo))
     candidates.sort(key=lambda candidate: (-(candidate.downloads or 0), candidate.repo))
     kept = candidates[:MAX_TENSOR_REPOS_PER_MODEL]
     return TensorSearchOutcome(
         repos=tuple(candidate.repo for candidate in kept),
         skipped=max(0, len(candidates) - len(kept)),
         requests=requests,
+        errors=tuple(errors),
     )
 
 
-def _accepted(response, base_model_hf_repo: str) -> list[_Candidate]:
+def _answer_hits(response) -> tuple[list, str | None]:
+    """One account's answer as its list of entries, or `[]` and the kind of error: a status, a parse error, a shape."""
     if response.status != 200:
-        return []
+        return [], f"HTTP {response.status}"
     try:
         hits = response.json()
-    except Exception:
-        return []
+    except ANSWER_ERRORS as exc:
+        return [], type(exc).__name__
     if not isinstance(hits, list):
-        return []
+        return [], "not a list"
+    return hits, None
+
+
+def _accepted(hits: list, base_model_hf_repo: str) -> list[_Candidate]:
     accepted: list[_Candidate] = []
     for hit in hits:
         if not isinstance(hit, dict):

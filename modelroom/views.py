@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from . import runtimes
-from .contracts import Area, Fit, Package, Rating
+from .catalog_findings import SetupNote, setup_note_lines
+from .contracts import Area, Fit, Package, Rating, hf_id_key
 from .document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from .views_runtime import RUNTIME_LABEL, key_text, machine_runtimes, packager_cell, runtime_row, runtime_set_line, unequal_cards_note, vllm_pool_pieces, vllm_shown, vllm_table  # noqa: F401, E501
 from .screen_names import shown_names
@@ -24,13 +25,13 @@ from .intro import LABEL_COLUMN, STEP_COUNT, glyphs, label_line
 from .measurements import Scenario
 from .disk_fit import DISK_LABEL, disk_words, entry_over_disk
 from .held_text import LOCAL_LABEL, local_pieces
-from .pull_choice import collision_pieces, repo_lines
+from .pull_choice import blocked_lines_of, collision_pieces, repo_lines
 from .ranking_words import EACH_MACHINE_SENTENCE, several_ranked, showing_line, shown_pieces
 from .render import format_header_line
 from .tempo_text import QUALITY_LINK_LINE
 from .room import Disk, LiveRoom
 from .room_head import LOADED_LABEL, ROOM_LABEL, head_pieces, loaded_pieces, reserve_hint_rows
-from .views_install import INSTALL_LABEL, install_lines, install_target, over_ranks_on_machine  # noqa: F401 -- `install_target` is re-exported
+from .views_install import INSTALL_LABEL, blocked_label_lines, install_lines, install_target, over_ranks_on_machine, setup_note_of  # noqa: F401 -- `install_target` is re-exported
 from .result_card import _DASH, _folder_is_empty, _model_name, context_fact, context_short, empty_card
 from .result_card import relative_path, result_card
 from .scenario_text import document_scenario, load_hint, never_measured, scenario_line, unused_measurements
@@ -299,6 +300,7 @@ def _machine_body(
         ]
     else:
         sections += [f"No package of the configured base models is ranked{where} on this machine.", ""]
+    sections += _evidence_paragraphs(block, document)
     for heading, items in (("Not covered", block.not_covered), (NO_FIT.capitalize(), block.no_fit)):
         if not items:
             continue
@@ -310,6 +312,21 @@ def _machine_body(
         ]
     # Nothing ranked, but a vLLM row set aside: its key still stands, under the tables (Codex r3-1).
     return sections + ([" · ".join(key_text(block)), ""] if not block.ranked and vllm_shown(block) else [])
+
+
+def _evidence_paragraphs(block: MachineRanking, document: RenderDocument) -> list[str]:
+    """What the catalog's evidence says about this block's rows (AP9-KO), one paragraph each, nothing where it
+    says nothing: a shown row an `absent` check blocks (`blocked: #2 <red line>`) and, for each model with a vLLM
+    row here, the lines of its setup note (`catalog_findings.setup_note_lines`) -- the words of the terminal view."""
+    paragraphs = [f"blocked: {_cell(f'{label} {text}')}" for label, text in blocked_lines_of(block)]
+    seen: list[str] = []
+    for entry in [*block.ranked, *block.not_covered, *block.no_fit]:
+        note = setup_note_of(document.setup_notes, entry.base_model_hf_repo)
+        key = hf_id_key(entry.base_model_hf_repo)
+        if entry.fit.runtime == runtimes.VLLM.key and note is not None and key not in seen:
+            seen.append(key)
+            paragraphs += [_cell(text) for text in setup_note_lines(note)]
+    return [line for paragraph in paragraphs for line in (paragraph, "")]
 
 
 def document_markdown(
@@ -546,6 +563,7 @@ class RunView:
     held: Mapping[str, frozenset] = field(default_factory=dict)  # what each runtime but Ollama holds itself
     live_vllm: Mapping[str, object] = field(default_factory=dict)  # the render's own vLLM reading (Codex r7)
     shown: Mapping[str, str] = field(default_factory=dict)  # FR-N3: key -> display name; empty = keys, as `render` and the logs print them
+    setup_notes: Mapping[str, SetupNote] = field(default_factory=dict)  # E4-B: the document's own, by base model (`terminal_blocks` sets it)
 
 
 def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, several: bool = False) -> list[Line]:
@@ -572,8 +590,10 @@ def _note_lines(block: MachineRanking, dash: str, dot: str, view: RunView, sever
     disk = _disk(block, view)
     served = view.live_vllm.get(block.machine)
     over_ssh = block.machine == view.ssh_active  # its own disk was read over SSH (AP9-SV2-R, R3)
+    lines += blocked_label_lines(block)  # L1: a row an `absent` check blocks says so, in every view with a table
     return lines + install_lines(
-        block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view), served, over_ssh
+        block, view.install_for, view.ambiguous, disk, dash, view.pull_other_machines, view.packages, _held(block, view), served, over_ssh,
+        view.setup_notes,
     )
 
 
@@ -689,7 +709,7 @@ def show_result(
     through the screen, so the labels, the notes and the install command carry the colors of the card
     (decided 2026-09-25).
     """
-    view = replace(view or RunView(), install_for=install_for, shown=shown_names(document))
+    view = replace(view or RunView(), install_for=install_for, shown=shown_names(document), setup_notes=document.setup_notes)
     screen.blank()
     screen.card(
         result_card(
@@ -741,6 +761,7 @@ def terminal_blocks(
     `ambiguous` are the pull names no row may claim (`pull_choice.pull_collisions`, U4).
     """
     view = view if view is not None else RunView(install_for=install_for, ambiguous=ambiguous)
+    view = replace(view, setup_notes=document.setup_notes)  # E4-B: the notes are the document's, so every view shows the same
     marks = glyphs()
     lines: list[Line] = []
     several = several_ranked(document)

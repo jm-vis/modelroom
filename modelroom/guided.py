@@ -744,7 +744,7 @@ def _render_step(
         disk = replace(disk, held=held_identities(run, packages))
     code = render_with_config(
         config, now=run.now, scenario=scenario, on_document=seen, selection=chosen, disks={here: disk},
-        live_vllm={here: live, **remote_live_map(run)},
+        live_vllm={here: live, **remote_live_map(run)}, catalog=run.catalog,
     )
     if not written:
         shown = narrow_config(config, chosen)  # the card of an empty step 5 names this run's machines only

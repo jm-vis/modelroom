@@ -433,9 +433,10 @@ def _row(index: int = 0, **overrides) -> dict:
     return row
 
 
-def test_shipped_catalog_is_schema_2_with_the_fixed_license_and_attribution():
+def test_shipped_catalog_is_schema_2_until_it_holds_a_finding_with_the_fixed_license_and_attribution():
     raw = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 2
+    holds_finding = any(row.get("gguf_checks") or row.get("setup_note") for row in raw["models"])
+    assert raw["schema_version"] == (3 if holds_finding else 2)  # CONTRACTS.md, "The forms and their versions" (P5)
     assert raw["data_license"] == CATALOG_DATA_LICENSE == "CC-BY-4.0"
     assert raw["attribution"] == CATALOG_ATTRIBUTION
     catalog = load_catalog()
@@ -572,12 +573,14 @@ def test_unknown_field_is_rejected():
         CatalogDocumentV2.model_validate(document)
 
 
-def test_schema_version_3_is_rejected():
+def test_schema_version_3_is_rejected_by_the_schema_2_reader_and_4_by_every_reader():
+    """Schema 3 is the catalog of AP9-KO (`tests/test_ko_catalog_v3.py`): `CatalogDocumentV2` still refuses it,
+    `load_catalog` reads it; the first version no release reads is 4."""
     with pytest.raises((ValidationError, SchemaVersionError)):
         CatalogDocumentV2.model_validate(_document(schema_version=3))
     path = FIXTURES / "catalog_v2_valid.json"
     document = json.loads(path.read_text(encoding="utf-8"))
-    document["schema_version"] = 3
+    document["schema_version"] = 4
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:

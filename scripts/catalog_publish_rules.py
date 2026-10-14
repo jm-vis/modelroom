@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the scanner's rules 
 import catalog_scan_rules as R  # noqa: E402
 
 from modelroom.catalog import PIPELINE_TAG_TO_KIND, CatalogError  # noqa: E402
-from modelroom.catalog_remote import REMOTE_FILE_NAME  # noqa: E402
-from modelroom.catalog_schema import build_catalog_v2  # noqa: E402
+from modelroom.catalog_remote import CHANNEL_V2, CHANNEL_V3, REMOTE_FILE_NAME  # noqa: E402
+from modelroom.catalog_schema import SCHEMA3_ROW_DEFAULTS, build_catalog, build_catalog_v2, build_catalog_v3, project_to_schema2  # noqa: E402
 from modelroom.contracts import SchemaVersionError  # noqa: E402
 
 KINDS = tuple(sorted(set(PIPELINE_TAG_TO_KIND.values())))  # the eight kinds of the table
@@ -72,8 +72,41 @@ def upload_args(dataset: str, path: object, message: str) -> list[str]:
             "--repo-type", "dataset", "--commit-message", message]
 
 
+def channel_files(catalog_bytes: bytes) -> dict[str, bytes]:
+    """The two files of the dataset that a working catalog (schema 2 or 3) makes, `{file name: bytes}`, new channel first (AP9-KO, V3).
+
+    `catalog-v3.json` is the schema-3 document: the working catalog itself where it is schema 3, the same rows with
+    `schema_version` 3 where it is still schema 2. `catalog-v2.json` is what release 1.0.0 reads: the working catalog
+    byte for byte where it is schema 2, and else `project_to_schema2` of the document -- made for the old channel by
+    setting the two findings of every row to their default first (the old file carries none, and the projection refuses
+    a finding it would otherwise drop). Both files are read back with the reader of their channel."""
+    try:
+        document = json.loads(catalog_bytes.decode("utf-8"))
+        version = document.get("schema_version") if isinstance(document, dict) else None
+        if version not in (2, 3):
+            raise PublishError("the working catalog is neither schema 2 nor schema 3")
+        build_catalog(catalog_bytes.decode("utf-8"), Path("catalog.json"))
+        if version == 3:
+            v3 = catalog_bytes
+            plain = copy.deepcopy(document)
+            for row in plain.get("models", []):
+                row.update(copy.deepcopy(SCHEMA3_ROW_DEFAULTS))
+            v2 = R.dump_json(project_to_schema2(plain))
+        else:
+            v2 = catalog_bytes
+            v3 = R.dump_json({**document, "schema_version": 3})
+        build_catalog_v3(v3.decode("utf-8"), Path(CHANNEL_V3.file_name))
+        build_catalog_v2(v2.decode("utf-8"), Path(CHANNEL_V2.file_name))
+    except PublishError:
+        raise
+    except (ValueError, AttributeError, TypeError, CatalogError, SchemaVersionError) as exc:
+        raise PublishError(f"the working catalog makes no channel files: {' '.join(str(exc).split())[:160]}") from exc
+    return {CHANNEL_V3.file_name: v3, CHANNEL_V2.file_name: v2}
+
+
 def upload_folder_args(dataset: str, folder: object, message: str) -> list[str]:
-    """The card's upload process: a fixed argument list, the pinned tool, a folder of its own sent to the root of the dataset."""
+    """The upload process of a folder: a fixed argument list, the pinned tool, a folder of its own sent to the root of the
+    dataset (the card, and the two channel files of the catalog in one commit)."""
     return ["uvx", "--from", f"huggingface_hub=={HF_HUB_VERSION}", "hf", "upload", dataset, str(folder), ".",
             "--repo-type", "dataset", "--commit-message", message]
 
@@ -216,7 +249,7 @@ def plan_apply(document: dict, catalog_bytes: bytes, rejected_bytes: bytes, prop
             _admission(target, parts[1][name])
         if taken or request.admit:
             target["published"] = today
-            build_catalog_v2(json.dumps(target), Path("catalog.json"))
+            build_catalog(json.dumps(target), Path("catalog.json"))
     except (CatalogError, SchemaVersionError) as exc:
         raise PublishError(f"the table would not validate: {' '.join(str(exc).split())[:200]}") from exc
     except (StopIteration, KeyError, TypeError, ValueError) as exc:
@@ -310,7 +343,7 @@ def complete_proposal(document: dict, proposal: dict, request: Request, kind: st
     if candidate is None or candidate["candidate"] != "B3":
         raise PublishError(f"{request.admit[0]} is not a repo of open kind: --complete is for B3 only")
     try:
-        rows = [m for family in build_catalog_v2(json.dumps(document), Path("catalog.json")).families for m in family.models]
+        rows = [m for family in build_catalog(json.dumps(document), Path("catalog.json")).families for m in family.models]
         entry = R.entry_of_candidate(candidate)
         family = R.family_for(entry.repo, kind, rows, entry.parameters_b)
     except (CatalogError, SchemaVersionError, KeyError, TypeError, ValueError) as exc:

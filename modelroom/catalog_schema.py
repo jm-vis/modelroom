@@ -1,32 +1,44 @@
-"""The schema-2 catalog document (`catalog.json`): the flat, publicly published shape.
+"""The schema-2 and schema-3 catalog documents (`catalog.json`): the flat, publicly published shape.
 
 A module of its own so both stay under the package's size guard. `catalog.py` owns the shared `Catalog`/`CatalogFamily`/`CatalogModel`
 shape every reader works against; this module owns the rules that apply to the **document** a
 schema-2 file carries before it is grouped into that shape -- the ones `CatalogModel` alone
 cannot check, because they need sibling fields (`publisher` against the document's `publishers`
 list) or the whole list (`models` count, duplicate `hf_repo`, one publisher per `family`).
+
+Schema 3 is schema 2 plus the two findings of a row (`gguf_checks`, `setup_note`). A schema-2
+document is exactly the shape release 1.0.0 reads and carries neither key, not even at its default;
+`project_to_schema2` is the one way from a schema-3 document without findings to the file of the old
+channel (CONTRACTS.md, "Published catalog").
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from datetime import date
 from pathlib import Path
+from typing import ClassVar
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_serializer, model_validator
 
 from .catalog import (
     _HUB_HOSTS,
     ACCOUNT_RE,
+    CATALOG_MAX_BYTES,
     CATALOG_MAX_GGUF_REPOS,  # re-exported next to the other document limits
     CATALOG_MAX_TEXT_LEN,
+    CATALOG_V2_SCHEMA_RANGE,
+    CATALOG_V3_MAX_BYTES,
+    CATALOG_V3_SCHEMA_RANGE,
     CatalogError,
     PIPELINE_TAG_TO_KIND,
     CatalogModel,
     Catalog,
     PublisherInfo,
     CATALOG_JSON_SCHEMA_RANGE,
+    check_size,
     check_version_field,
 )
 
@@ -40,6 +52,10 @@ CATALOG_ATTRIBUTION = "modelroom catalog, jm-vis, CC BY 4.0, https://huggingface
 CATALOG_MAX_MODELS = 5000
 CATALOG_MAX_PUBLISHERS = 500
 CATALOG_MAX_PACKAGERS = 50
+
+# The row fields of schema 3 and the value each has when nothing is known: the whole of what separates a
+# row of schema 3 from a row of schema 2.
+SCHEMA3_ROW_DEFAULTS: dict[str, object] = {"gguf_checks": [], "setup_note": None}
 
 
 def _check_successor_evidence(model: CatalogModel) -> None:
@@ -105,10 +121,12 @@ class CatalogDocumentV2(BaseModel):
     """The schema-2 catalog file (`catalog.json`): a flat, publicly published table.
 
     Every model row stands on its own (no family nesting). `to_catalog` groups the rows by
-    `family` into the same shape schema 1 builds.
+    `family` into the same shape schema 1 builds. A row carries none of the keys of schema 3
+    (`SCHEMA3_ROW_DEFAULTS`), not even at its default: release 1.0.0 refuses an unknown key in a row.
     """
 
     model_config = ConfigDict(extra="forbid")
+    SCHEMA: ClassVar[int] = 2
 
     schema_version: int
     published: date
@@ -161,10 +179,25 @@ class CatalogDocumentV2(BaseModel):
             raise ValueError(f"models exceeds {CATALOG_MAX_MODELS} entries")
         return value
 
+    @model_serializer(mode="wrap")
+    def _as_its_schema(self, handler):
+        """A schema-2 document is written as schema 2: the two keys of schema 3 are not written (they hold their
+        default, `_check_findings` saw to that), so what this release writes is what release 1.0.0 reads."""
+        data = handler(self)
+        if self.SCHEMA == 2:
+            data["models"] = [{k: v for k, v in row.items() if k not in SCHEMA3_ROW_DEFAULTS} for row in data["models"]]
+        return data
+
+    def _check_findings(self, model: CatalogModel) -> None:
+        """Schema 2: a row has none of the findings' keys."""
+        present = sorted(model.model_fields_set & SCHEMA3_ROW_DEFAULTS.keys())
+        if present:
+            raise ValueError(f"schema 2 has no {', '.join(present)} ({model.hf_repo}); that needs schema 3")
+
     @model_validator(mode="after")
     def _check(self) -> "CatalogDocumentV2":
-        if self.schema_version != 2:
-            raise ValueError(f"schema_version must be 2, got {self.schema_version}")
+        if self.schema_version != self.SCHEMA:
+            raise ValueError(f"schema_version must be {self.SCHEMA}, got {self.schema_version}")
         accounts = {publisher.account for publisher in self.publishers}
         packagers = set(self.packagers)
         repos = [model.hf_repo for model in self.models]
@@ -189,6 +222,7 @@ class CatalogDocumentV2(BaseModel):
             _check_successor_evidence(model)
             _check_kind_evidence(model)
             _check_gguf_owners(model, packagers)
+            self._check_findings(model)
         return self
 
     def to_catalog(self) -> Catalog:
@@ -211,6 +245,35 @@ class CatalogDocumentV2(BaseModel):
         return Catalog.model_validate(data)
 
 
+class CatalogDocumentV3(CatalogDocumentV2):
+    """The schema-3 catalog file: schema 2 plus `gguf_checks` and `setup_note` in a row (AP9-KO).
+
+    Their rules sit on the row (`CatalogModel`); the document adds none. A row without them reads as unknown.
+    """
+
+    SCHEMA: ClassVar[int] = 3
+
+    def _check_findings(self, model: CatalogModel) -> None:
+        return None
+
+
+def _build(
+    text: str, path: Path, accepted: tuple[int, int], document_for
+) -> Catalog:
+    """The common reading: JSON, the version gate, the document class `document_for(version)`, the size rule of it."""
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise CatalogError(f"{path}: cannot read catalog: {exc}") from exc
+    check_version_field(data, accepted, path)
+    document_class = document_for(data["schema_version"])
+    check_size(text, CATALOG_V3_MAX_BYTES if document_class is CatalogDocumentV3 else CATALOG_MAX_BYTES, path)
+    try:
+        return document_class.model_validate(data).to_catalog()
+    except (ValidationError, RecursionError) as exc:
+        raise CatalogError(f"{path}: invalid catalog: {exc}") from exc
+
+
 def build_catalog_v2(text: str, path: Path) -> Catalog:
     """Parse `text` (already read and size-capped by `load_catalog`) as a schema-2 document.
 
@@ -218,14 +281,34 @@ def build_catalog_v2(text: str, path: Path) -> Catalog:
     schema-version outside range, or a `CatalogDocumentV2`/`to_catalog` validation error -- ends
     as `CatalogError`, the one exception `load_catalog`'s callers handle (`SchemaVersionError` is
     still raised on its own, same as the TOML path, so callers can map it to its own exit code).
+    This is what the old channel holds and what release 1.0.0 reads: schema 2 and nothing else.
     """
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
-        raise CatalogError(f"{path}: cannot read catalog: {exc}") from exc
-    check_version_field(data, CATALOG_JSON_SCHEMA_RANGE, path)
-    try:
-        document = CatalogDocumentV2.model_validate(data)
-        return document.to_catalog()
-    except (ValidationError, RecursionError) as exc:
-        raise CatalogError(f"{path}: invalid catalog: {exc}") from exc
+    return _build(text, path, CATALOG_V2_SCHEMA_RANGE, lambda _version: CatalogDocumentV2)
+
+
+def build_catalog_v3(text: str, path: Path) -> Catalog:
+    """The same for a schema-3 document, the file of the new channel."""
+    return _build(text, path, CATALOG_V3_SCHEMA_RANGE, lambda _version: CatalogDocumentV3)
+
+
+def build_catalog(text: str, path: Path) -> Catalog:
+    """The same for either: the content says schema 2 or 3 (what `load_catalog` reads)."""
+    return _build(text, path, CATALOG_JSON_SCHEMA_RANGE, lambda version: CatalogDocumentV3 if version == 3 else CatalogDocumentV2)
+
+
+def project_to_schema2(document: dict) -> dict:
+    """A copy of a schema-3 `document` (as read from JSON) in the exact shape of schema 2.
+
+    The two keys of schema 3 are dropped from every row -- they hold their default, or this raises
+    `ValueError`: a finding cannot be carried by a file release 1.0.0 reads, and is not dropped silently.
+    The file of the old channel is made through this and nowhere else.
+    """
+    if not isinstance(document, dict) or document.get("schema_version") not in (2, 3):
+        raise ValueError("only a document of schema 2 or 3 is projected")
+    result = copy.deepcopy(document)
+    result["schema_version"] = 2
+    for row in result.get("models", []):
+        for name, default in SCHEMA3_ROW_DEFAULTS.items():
+            if name in row and row.pop(name) != default:
+                raise ValueError(f"{row.get('hf_repo')}: {name} holds a finding, which schema 2 cannot carry")
+    return result

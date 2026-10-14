@@ -45,16 +45,16 @@ KIB = 1024
 DAY = timedelta(days=1)
 
 
-def file_url(sha: str) -> str:
-    return f"https://huggingface.co/datasets/{DATASET}/resolve/{sha}/catalog-v2.json"
+def file_url(sha: str, name: str = "catalog-v2.json") -> str:
+    return f"https://huggingface.co/datasets/{DATASET}/resolve/{sha}/{name}"
 
 
 _REDIRECT = envelope_response("hf_dataset_resolve_redirect.json")
 
 
-def resolved_url(sha: str) -> str:
+def resolved_url(sha: str, name: str = "catalog-v2.json") -> str:
     """Where the recorded `307` leads: a relative `Location` on `/api/resolve-cache/...`, joined to the asked URL."""
-    return urljoin(file_url(sha), _REDIRECT.header("Location").replace(SHA, sha))
+    return urljoin(file_url(sha, name), _REDIRECT.header("Location").replace(SHA, sha).replace("catalog-v2.json", name))
 
 
 @pytest.fixture(autouse=True)
@@ -71,20 +71,26 @@ def doc_text(published: date | None = None, **patch: object) -> bytes:
     return json.dumps(data, indent=2).encode("utf-8")
 
 
-def hub(sha: str = SHA, doc: bytes | None = None, *, commit: str | None = None) -> dict[tuple[str, str], Response]:
-    """The three answers of a changed dataset: revision, the `307`, then the file at its resolved URL."""
+def hub(
+    sha: str = SHA, doc: bytes | None = None, *, commit: str | None = None, name: str = "catalog-v2.json"
+) -> dict[tuple[str, str], Response]:
+    """The three answers of a changed dataset: revision, the `307`, then the file `name` at its resolved URL."""
     revision = json.loads((FIXTURES / "hf_dataset_revision_main.json").read_text(encoding="utf-8"))
     revision["sha"] = sha
     redirect = Response(
         status=307,
-        headers={**_REDIRECT.headers, "Location": _REDIRECT.header("Location").replace(SHA, sha), "X-Repo-Commit": sha},
+        headers={
+            **_REDIRECT.headers,
+            "Location": _REDIRECT.header("Location").replace(SHA, sha).replace("catalog-v2.json", name),
+            "X-Repo-Commit": sha,
+        },
         body=b"",
     )
     answer = Response(status=200, headers={"X-Repo-Commit": commit or sha}, body=doc if doc is not None else doc_text())
     return {
         ("GET", REVISION_URL): Response(status=200, headers={}, body=json.dumps(revision).encode("utf-8")),
-        ("GET", file_url(sha)): redirect,
-        ("GET", resolved_url(sha)): answer,
+        ("GET", file_url(sha, name)): redirect,
+        ("GET", resolved_url(sha, name)): answer,
     }
 
 
@@ -110,7 +116,10 @@ def read_envelope(cache_dir: Path) -> dict:
 
 
 def run(cache_dir: Path, transport, *, now: datetime = NOW, budget: RequestBudget | None = None) -> CatalogChoice:
-    return current_catalog(transport, now, cache_dir, budget if budget is not None else RequestBudget(150))
+    # the mechanism is the same on both channels: this module tests it on the old one, the new one has its own tests
+    return current_catalog(
+        transport, now, cache_dir, budget if budget is not None else RequestBudget(150), channel=catalog_remote.CHANNEL_V2
+    )
 
 
 class Offline:
@@ -508,13 +517,14 @@ def test_a_stamp_that_overflows_in_utc_counts_as_absent_and_the_run_goes_on(cach
 def test_an_envelope_longer_than_the_bound_counts_as_absent_even_when_its_start_is_valid(cache: Path):
     write_envelope(cache, age=timedelta(hours=1), sha=SHA, doc=doc_text())
     path = cache / CACHE_FILE_NAME
-    path.write_bytes(path.read_bytes() + b" " * (catalog_remote._ENVELOPE_MAX_BYTES + 1))
+    bound = catalog_remote.CHANNEL_V2.envelope_max_bytes  # 2 MiB + 4 KiB for the schema-2 channel
+    path.write_bytes(path.read_bytes() + b" " * (bound + 1))
     transport = FixtureTransport(hub())
 
     run(cache, transport)
 
     assert len(transport.calls) == 3
-    assert path.stat().st_size < catalog_remote._ENVELOPE_MAX_BYTES  # replaced whole by the new envelope
+    assert path.stat().st_size < bound  # replaced whole by the new envelope
 
 
 def test_two_runs_one_after_the_other_replace_the_envelope_whole_never_a_mixture(cache: Path):
@@ -744,7 +754,13 @@ def test_only_the_guided_run_imports_the_loader_and_only_readers_of_schema_two_f
         if re.search(r"^\s*(from \.catalog_remote import|from \. import .*catalog_remote|import .*catalog_remote)",
                      path.read_text(encoding="utf-8"), re.MULTILINE)
     )
-    assert users == ["guided.py"]  # 0.1.0 ships no such module at all; that is a fact of the release, not something this test proves
+    # `cli.py` is the second user since AP9-KO, for `offline_catalog` alone: it reads the stored file and asks no one.
+    # The loader that asks (`current_catalog`) stays with the guided run (checked below).
+    assert users == ["cli.py", "guided.py"]  # 0.1.0 ships no such module at all; that is a fact of the release, not something this test proves
+    askers = sorted(
+        path.name for path in package.glob("*.py") if "current_catalog" in path.read_text(encoding="utf-8") and path.name != "catalog_remote.py"
+    )
+    assert askers == ["guided.py"]
     low, high = CATALOG_JSON_SCHEMA_RANGE
     assert low <= 2 < high  # the file the 0.2.0 reader asks for is one this reader accepts
     assert catalog_remote.REMOTE_FILE_NAME == "catalog-v2.json" and catalog_remote.CACHE_FILE_NAME.startswith("catalog-v2.")
@@ -756,7 +772,9 @@ def test_only_the_guided_run_imports_the_loader_and_only_readers_of_schema_two_f
 def test_a_guided_run_with_no_word_asks_the_current_models_of_the_published_catalog(tmp_path: Path):
     from modelroom.search_pages import catalog_page_url
 
-    mapping = {**guided_transport_mapping(), **hub()}
+    new_file = json.loads(doc_text())
+    new_file["schema_version"] = 3  # a guided run asks the new channel
+    mapping = {**guided_transport_mapping(), **hub(doc=json.dumps(new_file).encode("utf-8"), name="catalog-v3.json")}
     empty = json_response("hf_search_none.json")
     published = load_catalog(FIXTURES / "catalog_v2_published.json")
     # only the published catalog's current models are bound: a page asked for any other catalog is a KeyError
@@ -781,4 +799,4 @@ def test_a_guided_run_with_no_word_asks_the_current_models_of_the_published_cata
     asked = [url for _method, url in transport.calls]
     assert catalog_page_url("Nova-9B-2610") in asked  # a model only the published catalog knows is a page
     assert any(line.strip() == f"catalog: published {SHIPPED + 3 * DAY}" for line in lines)
-    assert (tmp_path / "home" / ".modelroom" / "catalog" / CACHE_FILE_NAME).exists()
+    assert (tmp_path / "home" / ".modelroom" / "catalog" / catalog_remote.CHANNEL_V3.cache_name).exists()

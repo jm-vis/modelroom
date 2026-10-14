@@ -32,12 +32,14 @@ from typing import Mapping, Sequence
 
 from .catalog import Catalog
 from .contracts import validate_hf_repo, validate_ollama_name
-from .guided_contracts import UNKNOWN, SearchHit
+from .guided_contracts import UNKNOWN, DirectLogEntry, SearchHit
 from .http import BudgetExhaustedError, BudgetedTransport, RedirectingTransport, RequestBudget, Transport
 from .relation import check_relation
 from .search_age import HF_API, MAX_SUCCESSOR_EDGES, AgeVerdict, decide_age
 from .search_apply import apply_hits, family_name_for, write_configuration
 from .search_pages import (
+    ANSWER_ERRORS,
+    TRANSPORT_ERRORS,
     TYPED_LABEL,
     GroupPlan,
     SearchGroup,
@@ -95,11 +97,29 @@ NO_WORD_NOTE = "no search word: the catalog's current models, one page each"
 # catalog has more current models than one page each plus one age lookup per resolved base model
 # fits into 150 in the worst case.
 CATALOG_BUDGET_RESERVE = 20
+
+
 CATALOG_BUDGET_NOTE = "the request budget ended after {asked} of {planned} catalog pages"
+# AP9-KO P5 (sweep p5-b1): what the screen says about one page that did not answer. The error is the
+# page's own `SearchError` text, so a reader sees the account and the reason in the old words.
+PAGE_FAILED_NOTE = "{error}; the search went on without this page"
 
 
 class SearchError(Exception):
     """The search request itself failed: a status, a body or a budget that ends the search."""
+
+
+class _PageFailed(SearchError):
+    """One page that did not answer for a realistic reason: costs that page, never the search.
+
+    `label` is the page's group, `reason` what went wrong in the words of the old error (`unexpected
+    status 503`, `failed: timed out`, `invalid JSON: ...`), so the log and the error say the same thing.
+    """
+
+    def __init__(self, where: str, label: str, reason: str, separator: str = ": ") -> None:
+        super().__init__(f"{where}{separator}{reason}")
+        self.label = label
+        self.reason = reason
 
 
 # What the summary says when the word matches no catalog family: the two shapes differ because
@@ -145,6 +165,14 @@ class SearchOutcome:
     # search followed, so `requests` has to count it -- otherwise the log says two requests for a
     # run that made three (second-model round, 2026-09-25).
     extra_requests: int = 0
+    # AP9-KO (V8, V9), both filled by the guided mode after the search and both empty otherwise, so a
+    # search without them writes the log it always wrote: one entry for every publisher model asked for
+    # as a direct find, and how many catalog models the knowledge hint could not show for its limit.
+    direct: list[DirectLogEntry] = field(default_factory=list)
+    knowledge_hint: int = 0
+    # AP9-KO P5 (sweep p5-b1): every page that did not answer, as `(group label, reason)` in the order
+    # asked. Empty for a search whose pages all answered, so its log is the one it always was.
+    failed_pages: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def resolved(self) -> int:
@@ -197,7 +225,7 @@ class SearchOutcome:
         from this one reading of the search.
         """
         classes = {n: "packager" for n in self.listed_packagers} | {n: "publisher" for n in self.publishers}
-        return {
+        log = {
             "schema_version": SEARCH_LOG_SCHEMA_VERSION,
             "word": self.query,
             "mode": self.mode,
@@ -218,6 +246,13 @@ class SearchOutcome:
             "unresolved": [{"reason": reason, "count": count} for reason, count in sorted(unresolved.items())],
             "models": release_log(self.hits),
         }
+        if self.direct:
+            log["direct"] = [entry.model_dump(mode="json") for entry in self.direct]
+        if self.knowledge_hint:
+            log["knowledge_hint"] = self.knowledge_hint
+        if self.failed_pages:
+            log["failed_pages"] = [{"account": label, "reason": reason} for label, reason in self.failed_pages]
+        return log
 
 
 @dataclass
@@ -236,6 +271,8 @@ class _Resolution:
     publisher_required: bool
     ages: dict[str, AgeVerdict] = field(default_factory=dict)
     seen: set[str] = field(default_factory=set)
+    # Every page that did not answer, in the order asked (`_PageFailed`).
+    failures: list[_PageFailed] = field(default_factory=list)
 
 
 def run_search(
@@ -266,9 +303,12 @@ def run_search(
 
     On top of that one age lookup per *distinct* resolved base model (`decide_age`); a hit costs no
     request of its own. A repository more than one page answers with is listed once, in the first
-    group that had it. A page that fails ends the search with `SearchError` naming the account --
-    an account is never quietly left out, because "unsloth has nothing for this word" and "unsloth
-    was not asked" are different answers.
+    group that had it. A page that does not answer -- a transport error, a status other than `200`, an
+    answer that is no JSON or no list -- costs that page only (AP9-KO P5, sweep p5-b1): it is named in
+    `notes` and `failed_pages`, never quietly left out, because "unsloth has nothing for this word" and
+    "unsloth did not answer" are different answers, and the other pages are asked as always. Only when
+    no page answered at all does the search end, with the `SearchError` of the first one. A budget that
+    ends still ends the search, naming the accounts that were not asked.
     """
     shared = budget if budget is not None else RequestBudget(DEFAULT_GUIDED_BUDGET)
     redirecting = RedirectingTransport(BudgetedTransport(transport, shared))
@@ -298,6 +338,7 @@ def run_search(
         typed=word.repo_id if typed_group is not None else None,
         candidates=_candidates(word, state, plan),
         extra_requests=1 if asked_typed and typed_group is None else 0,
+        failed_pages=[(failure.label, failure.reason) for failure in state.failures],
     )
 
 
@@ -346,6 +387,9 @@ def _answer_plan(
     rather than ending a run that has a choice to offer with `SearchError`. It is a stop rule before
     a page, not a fence around the reserve: the last page it asks resolves its own repositories, and
     those age lookups spend from the reserve too.
+
+    A page that did not answer is a note here, one per page; when **no** page of the plan answered,
+    the search has no result at all and ends with the first page's `SearchError`, as it always did.
     """
     requests = plan.all_requests()
     groups: list[SearchGroup] = []
@@ -356,6 +400,10 @@ def _answer_plan(
             break
         asked += len(group.requests)
         groups.append(_fetch_group(transport, state, word, group, requests[asked:]))
+    if state.failures and len(state.failures) == sum(group.pages for group in groups):
+        first = state.failures[0]
+        raise SearchError(str(first)) from first
+    notes += [PAGE_FAILED_NOTE.format(error=failure) for failure in state.failures]
     return groups
 
 
@@ -397,13 +445,13 @@ def _typed_entry(transport: Transport, repo: str) -> dict | None:
         response = transport("GET", model_url(repo))
     except BudgetExhaustedError as exc:
         raise SearchError(f"{where} not made: {exc}") from exc
-    except Exception:  # noqa: BLE001 -- an unreadable id falls back to the word search
+    except TRANSPORT_ERRORS:  # an unreadable id falls back to the word search; a bug goes up
         return None
     if response.status != 200:
         return None
     try:
         payload = response.json()
-    except Exception:  # noqa: BLE001 -- so does an answer that is no JSON
+    except ANSWER_ERRORS:  # so does an answer that is no JSON
         return None
     if not isinstance(payload, dict) or repo not in (payload.get("id"), payload.get("modelId")):
         return None
@@ -429,7 +477,8 @@ def _fetch_group(
     it costs an age lookup: the Hub was asked with one of those words and answers with everything
     that word matches.
     """
-    entries, page_full = _group_pages(transport, word, group, pending)
+    failed_before = len(state.failures)
+    entries, page_full = _group_pages(transport, word, group, pending, state.failures)
     fresh: list[SearchHit] = []
     already_listed = 0
     filtered_out = 0
@@ -451,23 +500,33 @@ def _fetch_group(
         already_listed=already_listed,
         pages=len(group.requests),
         filtered_out=filtered_out,
+        failed_pages=len(state.failures) - failed_before,
     )
 
 
 def _group_pages(
-    transport: Transport, word: SearchWord, group: GroupPlan, pending: Sequence[SearchRequest]
+    transport: Transport,
+    word: SearchWord,
+    group: GroupPlan,
+    pending: Sequence[SearchRequest],
+    failures: list[_PageFailed],
 ) -> tuple[list[dict], bool]:
     """Every entry this group's pages answered with, and whether one of them was as long as it may be.
 
     Only an **account** group can be "full" in the sense the note is about: there may be more
     under this account than one page shows. An open list and a catalog page are as long as they
-    are by definition.
+    are by definition. A page that did not answer goes into `failures` and adds nothing; the next
+    page is asked all the same.
     """
     entries: list[dict] = []
     page_full = False
     for position, request in enumerate(group.requests):
         rest = [*group.requests[position + 1 :], *pending]
-        page = _fetch_search_page(transport, word.text, request, rest)
+        try:
+            page = _fetch_search_page(transport, word.text, request, rest)
+        except _PageFailed as failure:
+            failures.append(failure)
+            continue
         entries += page
         page_full = page_full or (request.account is not None and len(page) >= request.limit)
     return entries, page_full
@@ -546,23 +605,24 @@ def _fetch_search_page(
 
     `pending` are the pages after this one, so a budget that ends here can say how many accounts
     were never asked -- the number a user needs to know that the list in front of them is short
-    for a reason that has nothing to do with the Hub.
+    for a reason that has nothing to do with the Hub. Every other failure is `_PageFailed`, the one
+    the caller turns into a missing page rather than an ended search (AP9-KO P5, sweep p5-b1).
     """
     where = f"search for {name!r} ({request.label})"
     try:
         response = transport("GET", request.url)
     except BudgetExhaustedError as exc:
         raise SearchError(f"{where} not made: {exc}; {_pending_note(request, pending)}") from exc
-    except Exception as exc:  # a transport failure is the user's to see, never swallowed
-        raise SearchError(f"{where} failed: {exc}") from exc
+    except TRANSPORT_ERRORS as exc:  # a transport failure is the user's to see, never swallowed; a bug goes up
+        raise _PageFailed(where, request.label, f"failed: {exc}", separator=" ") from exc
     if response.status != 200:
-        raise SearchError(f"{where}: unexpected status {response.status}")
+        raise _PageFailed(where, request.label, f"unexpected status {response.status}")
     try:
         payload = response.json()
-    except Exception as exc:
-        raise SearchError(f"{where}: invalid JSON: {exc}") from exc
+    except ANSWER_ERRORS as exc:
+        raise _PageFailed(where, request.label, f"invalid JSON: {exc}") from exc
     if not isinstance(payload, list) or not all(isinstance(entry, dict) for entry in payload):
-        raise SearchError(f"{where}: the answer is not a list of repositories")
+        raise _PageFailed(where, request.label, "the answer is not a list of repositories")
     return payload
 
 
@@ -782,6 +842,7 @@ __all__ = [
     "NO_PUBLISHER_NOTE",
     "NO_PUBLISHER_NOTE_OPEN",
     "NO_WORD_NOTE",
+    "PAGE_FAILED_NOTE",
     "SEARCH_LOG_SCHEMA_VERSION",
     "UNREADABLE_ID_NOTE",
     "AgeVerdict",

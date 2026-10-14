@@ -3,10 +3,45 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
-## [Unreleased]
+## [1.1.0] - Unreleased
+
+Version 1.1.0 closes the gaps of the first hand trial with a model that only a foreign account converts to GGUF
+(AP9-KO). The catalog can now say, per GGUF package, that its architecture is absent from the llama.cpp source it
+was checked against; modelroom then offers no installation for that package. The search finds the publisher's own
+model when nobody packages it, and a model card's setup instructions are named over the vLLM commands. The catalog
+gets a second file, `catalog-v3.json`, for schema 3; the file release 1.0.0 reads stays as it was. Publish the
+dataset's `catalog-v3.json` before this release.
+
+### Added
+
+- **Package checks** (AP9-KO P0, P1, P4; `modelroom/catalog_findings.py`, `scripts/catalog_scan_packages.py`):
+  `gguf_checks` per row, bound to a repository, a revision, a file and a commit of llama.cpp
+  (`LLM_ARCH_NAMES` in `src/llama-arch.cpp`). `absent` blocks the installation (label `blocked`, the Markdown
+  paragraph `blocked: ...`, the note `load_blocked`), also for an explicit choice and for `modelroom pull` (exit `2`,
+  `--yes` does not pass). Anything else is `unknown`. `present` promises nothing: Ollama and LM Studio take over the
+  architectures of llama.cpp with a delay.
+- **Origin of a package** (V4): the automatic choice is an Ollama library package or a GGUF package of the model's
+  publisher or of a listed packager (`Offered.passed`, `recommendation_lines`); a conversion by another account stays
+  selectable by name and is never pulled by an answer file without `pull_package`.
+- **Setup notes** (V7, E4-B): the scanner reads the start of the publisher's model card for a `vllm serve` block and for
+  an explicit inference requirement (rule E4-B); step 5 and the handover name it over both vLLM commands
+  (`setup_note_of`). No switch is added from a card.
+- **Direct find and knowledge hint** (V8, V9): with a vLLM machine the search asks for the publisher's own model when
+  no GGUF names it; without one a gray line says what the catalog knows.
+- **Catalog scan with `--packages`** (`scripts/catalog_scan.py`): checks the GGUF packages of forty rows a day
+  (rotation `package_attempts`, `package_unit_attempts`) within 200 requests, on `api.github.com` and `*.hf.co`, which
+  only the scanner may reach. The runbook `docs/runbooks/catalog-publishing.md` describes the daily run.
+- **Schema 3** of the catalog file (`gguf_checks`, `setup_note` per row) on its own channel `catalog-v3.json` with its
+  own cache file; `catalog-v2.json` is made by projection and stays what release 1.0.0 reads.
 
 ### Changed
 
+- A guided run asks the new channel (`catalog_remote.DEFAULT_CHANNEL`); where the dataset has no such file it uses the
+  shipped catalog, like on any other fault.
+- The scale of step 3 counts a package that a check blocks as not fitting, as step 5 does.
+- `search.py` catches the transport and answer errors of the search (`TRANSPORT_ERRORS`, `ANSWER_ERRORS`) and no longer
+  every exception; the requests of the tensor search are counted in `budget.used` of `search.json`.
+- A search page that fails (timeout, a status such as `503`, an answer that is no JSON or no list) costs only that page: the other pages' hits are listed, the page is named on the screen and in `failed_pages` of `search.json`; only a search in which no page answered still ends with exit `2`.
 - vLLM measures up to 256 requests at once (was 64), and a batch's time now runs from its release to the last answer. LM Studio measures several requests at once when the loaded instance allows it.
 - Step 3 now asks how many people work with the model at the same time: 1, 5, 10, 50, 100 or a number of your own; `N people` still takes a daily head count. Answer files accept `at_once`; `users` keeps its previous meaning.
 - In the terminal, required input asks again after an empty or invalid answer. Answer-file behavior is unchanged. Step 2 names the context and request count used for fit.

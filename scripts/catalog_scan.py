@@ -10,6 +10,11 @@ in between leaves the old state and the next run reads the same pages again. It 
 exit 1 when the budget ended, a page failed or a stored position was lost (the proposal is written all the same); exit 2
 when the call or a file is wrong or the proposal cannot be made (nothing is written). The rules are in `catalog_scan_rules.py`.
 
+With `--packages` (AP9-KO, `catalog_scan_packages.py`) the run also checks the GGUF packages of the catalog rows against the
+llama.cpp source and reads the model cards for setup notes, for the rows it takes this day (`PACKAGE_ROWS_PER_RUN`, at most
+`PACKAGE_STAGE_BUDGET` requests); that needs a working catalog of schema 3 and opens `api.github.com` and the Hub's CDN for
+the scanner alone. Its proposals are field changes `gguf_checks` and `setup_note` (stage A9); a fault changes nothing.
+
 The watermark holds per entry: one created before the account's threshold (`covered_until` minus two days) is seen for the
 rows of the table only (their kind and card, and the GGUF repos of one, all from the list data); it is no new row, no
 candidate and no card request. An entry with no creation time counts as inside.
@@ -33,18 +38,20 @@ import sys
 import tempfile
 import urllib.parse
 from dataclasses import dataclass, field
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the rules module sits beside this script
 import catalog_scan_latest as L  # noqa: E402
 import catalog_scan_notes as N  # noqa: E402
+import catalog_scan_packages as K  # noqa: E402
 import catalog_scan_rules as R  # noqa: E402
 
 from modelroom.catalog import CatalogError, CatalogModel  # noqa: E402
 from modelroom.catalog_remote import _clean  # noqa: E402
-from modelroom.catalog_schema import build_catalog_v2  # noqa: E402
-from modelroom.contracts import SchemaVersionError, validate_hf_repo  # noqa: E402
+from modelroom.catalog_findings import PACKAGE_ROWS_PER_RUN, PACKAGE_STAGE_BUDGET, llamacpp_page_url, record_attempts  # noqa: E402
+from modelroom.catalog_schema import build_catalog  # noqa: E402
+from modelroom.contracts import SchemaVersionError, hf_id_key, validate_hf_repo  # noqa: E402
 from modelroom.hf import _LINK_NEXT_RE  # noqa: E402
 from modelroom.http import (  # noqa: E402
     BudgetedTransport, BudgetExhaustedError, RedirectingTransport, RequestBudget, ResponseTooLargeError,
@@ -56,6 +63,7 @@ from modelroom.search import owner_class  # noqa: E402
 STATE_SCHEMA = 1
 DEFAULT_BUDGET, STAGE_BUDGET = 300, 30
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+_PACKAGE_FIELDS = ("gguf_checks", "setup_note")  # the fields of the package stage (A9)
 _FAILURES = (OSError, http.client.HTTPException, RuntimeError, ResponseTooLargeError, TransportSecurityError)
 
 
@@ -131,7 +139,10 @@ class _Both:
 
 
 class _Run:
-    def __init__(self, catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files) -> None:
+    def __init__(self, catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files, packages=False,
+                 package_budget=PACKAGE_STAGE_BUDGET, package_rows=PACKAGE_ROWS_PER_RUN) -> None:
+        self.packages, self.package_budget, self.package_rows, self.package_attempts = packages, package_budget, package_rows, {}
+        self.unit_attempts: dict = {}
         self.files, self.out, self.now = files, Path(out_dir), now.astimezone(timezone.utc)
         self.today = self.now.date().isoformat()
         outputs = {(self.out / self.today / name).resolve() for name in ("proposal.json", "proposal.md")} | {(self.out / "scan-state.json").resolve()}
@@ -148,7 +159,7 @@ class _Run:
         self.catalog_sha = hashlib.sha256(catalog_bytes).hexdigest()
         try:
             self.document = json.loads(catalog_bytes.decode("utf-8"))
-            self.catalog = build_catalog_v2(catalog_bytes.decode("utf-8"), Path(catalog_path))
+            self.catalog = build_catalog(catalog_bytes.decode("utf-8"), Path(catalog_path))
         except (ValueError, CatalogError, SchemaVersionError) as exc:
             raise UsageError(f"{catalog_path}: not a valid catalog: {_clean(exc)}") from exc
         self.rows = {m.hf_repo: m for f in self.catalog.families for m in f.models}
@@ -160,6 +171,8 @@ class _Run:
         except ValueError as exc:
             raise UsageError(f"{rejected_path}: not a valid rejection list: {_clean(exc)}") from exc
         self.main, self.sub = RequestBudget(budget), RequestBudget(sub_budget)
+        self.pkg = RequestBudget(package_budget)
+        self.transport = transport
         both = _Both(transport, self.main, self.sub)
         self.t_list = RedirectingTransport(BudgetedTransport(transport, self.main), max_hops=1)
         self.t_base, self.t_config = RedirectingTransport(both, max_hops=1), RedirectingTransport(both, max_hops=2)
@@ -211,6 +224,8 @@ class _Run:
         published = self.catalog.published
         start = datetime.combine(published, time.min, tzinfo=timezone.utc) if published else self.now.replace(hour=0, minute=0, second=0, microsecond=0)
         raw_state = self._json(self.out / "scan-state.json")
+        self.package_attempts = _attempts_of(raw_state)
+        self.unit_attempts = _attempts_of(raw_state, "package_unit_attempts")
         stored = raw_state.get("accounts") if isinstance(raw_state, dict) else None
         for account in self.accounts:
             mark = stored.get(account) if isinstance(stored, dict) else None
@@ -605,7 +620,7 @@ class _Run:
         for key, change in sorted(self.changes.items()):
             if key[0] == "new_row":
                 try:
-                    build_catalog_v2(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
+                    build_catalog(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
                     rows.append(CatalogModel.model_validate({name: pair["new"] for name, pair in change["fields"].items()}))
                 except (CatalogError, SchemaVersionError, ValueError, TypeError):
                     continue
@@ -615,7 +630,7 @@ class _Run:
         """Whether the table would take `change` alone (schema 2 with its rules); a row it would not take is left out
         with a note, so it counts for nothing: not for family, not for latest, not as a successor target."""
         try:
-            build_catalog_v2(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
+            build_catalog(json.dumps(R.apply_changes(self.document, [change])), Path("catalog.json"))
         except (CatalogError, SchemaVersionError, ValueError) as exc:  # a strange Hub answer costs this row, never the run
             self.notes.append(f"{repo}: left out, it would not validate ({' '.join(str(exc).split())[:120]})")
             self.fresh.pop(repo, None)
@@ -743,6 +758,65 @@ class _Run:
             self.notes.append(refusal)
         return refusal is None
 
+    def _is_rejected_any_case(self, repo: str) -> bool:
+        """The rejection list against a Hub id: ids are compared without case (the rows' own check stays as it was)."""
+        key, owner = hf_id_key(repo), hf_id_key(repo.split("/", 1)[0])
+        return any(hf_id_key(r) == key for r in self.rejected_repos) or any(hf_id_key(a) == owner for a in self.rejected_accounts)
+
+    def _take_over_todays_proposals(self) -> None:
+        """A second run on one day does not take the rows the first one tried (`package_attempts`), so what the first one
+        proposed for them comes from its file, which this run is about to replace. Its package changes are carried exactly
+        as those of an earlier day (`R.carry_over`: against the table as it is now, ids without case), and they stand over
+        those, being built on them."""
+        earlier = self._json(self.out / self.today / "proposal.json")
+        if not isinstance(earlier, dict):
+            return
+        package_changes = [c for c in R._entries(earlier, "changes") if c.get("change") == "field" and c.get("field") in _PACKAGE_FIELDS]
+        carried = R.carry_over({"changes": package_changes}, None, self.rows, set(self.accounts), self._is_rejected_any_case, self.today)[0]
+        self.changes.update({key: change for key, change in carried.items() if not R.touched(change) & self.done_fields})
+
+    def _stage_packages(self) -> None:
+        """Stage 1 and the setup notes (`catalog_scan_packages`): the rows of this day, their findings as field changes."""
+        if not self.packages:
+            return
+        if self.document.get("schema_version") != 3:
+            self.notes.append("package checks: the working catalog is schema 2, which has no gguf_checks or setup_note; the stage did not run")
+            return
+        today = date.fromisoformat(self.today)
+        self._take_over_todays_proposals()
+        for key in [k for k in self.changes if k[0] == "field" and k[2] in _PACKAGE_FIELDS]:
+            if self._is_rejected_any_case(key[1]):
+                del self.changes[key]  # a row rejected since, in any spelling: its package proposals go, whichever day they come from
+            elif key[2] == "gguf_checks" and R.refresh_field(self.changes[key], self.rows[key[1]], self._is_rejected_any_case) is None:
+                del self.changes[key]  # carried with the case-sensitive list: a repository or account rejected in any spelling adds nothing
+        carried_checks = {key[1]: change["fields"]["gguf_checks"]["new"] for key, change in self.changes.items() if key[0] == "field" and key[2] == "gguf_checks"}
+        carried_notes = {key[1]: change["fields"]["setup_note"]["new"] for key, change in self.changes.items() if key[0] == "field" and key[2] == "setup_note"}
+        stage = K.PackageStage(_Both(self.transport, self.main, self.pkg), self.rows, today, self.package_attempts, carried_checks=carried_checks,
+                               carried_notes=carried_notes, is_rejected=self._is_rejected_any_case, limit=self.package_rows,
+                               unit_attempts=self.unit_attempts)
+        result = stage.run()
+        self.notes += result.notes
+        self.problem = self.problem or result.problem
+        self.budget_end = self.budget_end or result.budget_end
+        self.package_attempts = record_attempts(self.package_attempts, result.attempted, today)
+        units = K.record_units(self.unit_attempts, result.units, today)
+        self.unit_attempts = {name: day for name, day in units.items() if (today - day).days <= K.UNIT_ATTEMPTS_KEPT}
+        for repo, checks in sorted(result.checks.items()):
+            row, key = self.rows[repo], ("field", repo, "gguf_checks")
+            table = [c.model_dump(mode="json") for c in row.gguf_checks]
+            if checks == table:
+                self.changes.pop(key, None)  # what was proposed before is what the table holds now, or no longer follows from the source
+                continue
+            evidence = [llamacpp_page_url(result.commit)] + [f"{R.HUB}/{r}" for r in result.page_urls.get(repo, [])]
+            self._put(key, R.field_change(row, K.STAGE, {"gguf_checks": (table, checks)}, evidence, self.today, "gguf_checks"))
+        for repo, note in sorted(result.setup_notes.items()):
+            row, key = self.rows[repo], ("field", repo, "setup_note")
+            table = row.setup_note.model_dump(mode="json") if row.setup_note else None
+            if note == table:
+                self.changes.pop(key, None)
+                continue
+            self._put(key, R.field_change(row, K.STAGE, {"setup_note": (table, note)}, [note["source_url"]], self.today, "setup_note"))
+
     def _capped(self) -> list[dict]:
         overdue, rest = N.split_overdue(list(self.cands.values()), self.today)  # before the limit of ten
         kept, dropped = R.split_candidates(rest)
@@ -771,6 +845,7 @@ class _Run:
         self._seed()
         self._open_pages()
         self._build()
+        self._stage_packages()
         self._unread_notes()
         oldest = min(covered for covered, _ in self.marks.values()) - R.OVERLAP
         self.notes.append(f"watermark: entries created before {oldest.date().isoformat()} are read for existing rows only")
@@ -786,6 +861,9 @@ class _Run:
                                        len(self.incomplete), self.pending_publication, N.drift_triples(self.rows.values()))
         marks = {a: self.new_marks.get(a, self.marks[a]) for a in self.accounts}
         state = {"schema": STATE_SCHEMA, "accounts": {a: {"covered_until": R.stamp(c), "pending": p} for a, (c, p) in marks.items()}}
+        for name, attempts in (("package_attempts", self.package_attempts), ("package_unit_attempts", self.unit_attempts)):
+            if attempts:
+                state[name] = {unit: day.isoformat() for unit, day in sorted(attempts.items())}
         try:  # all three files exist in memory before the first is written
             data = R.dump_json(proposal)
             text, state_bytes = R.render_proposal(proposal, hashlib.sha256(data).hexdigest()).encode("utf-8"), R.dump_json(state)
@@ -798,11 +876,28 @@ class _Run:
         return ScanResult(int(self.budget_end or self.problem), None, proposal, self.main.used, self.sub.used, self.kind_check)
 
 
+def _attempts_of(raw_state: object, name: str = "package_attempts") -> dict[str, date]:
+    """The day each row (`package_attempts`) or each repository and package (`package_unit_attempts`, `K.unit`) was last
+    tried by the package stage, from the state file; what does not read is never tried. One id in two spellings is one
+    entry with the younger day (`record_attempts`)."""
+    found = raw_state.get(name) if isinstance(raw_state, dict) else None
+    attempts: dict[str, date] = {}
+    for unit, day in (found.items() if isinstance(found, dict) else ()):
+        try:
+            validate_hf_repo(unit.split(":", 1)[0] if name == "package_unit_attempts" else unit)
+            attempts[unit] = date.fromisoformat(day)
+        except (ValueError, TypeError):
+            continue
+    return K.record_units(attempts, [], date.min) if name == "package_unit_attempts" else record_attempts(attempts, [], date.min)
+
+
 def scan(catalog_path, rejected_path, out_dir, *, transport: Transport, now: datetime, budget: int = DEFAULT_BUDGET,
-         sub_budget: int = STAGE_BUDGET, files: DiskFiles | None = None) -> ScanResult:
-    """One run. `transport` is the only way out to the network, `now` the only clock, `files` the only disk."""
+         sub_budget: int = STAGE_BUDGET, files: DiskFiles | None = None, packages: bool = False,
+         package_budget: int = PACKAGE_STAGE_BUDGET, package_rows: int = PACKAGE_ROWS_PER_RUN) -> ScanResult:
+    """One run. `transport` is the only way out to the network, `now` the only clock, `files` the only disk. `packages`
+    switches on the package stage (off, the run asks what it asked before AP9-KO)."""
     try:
-        run = _Run(catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files or DiskFiles())
+        run = _Run(catalog_path, rejected_path, out_dir, transport, now, budget, sub_budget, files or DiskFiles(), packages, package_budget, package_rows)
         return run.execute()
     except UsageError as exc:
         return ScanResult(exit_code=2, error=str(exc))
@@ -815,13 +910,16 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None, n
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--today", help="the day of the run, YYYY-MM-DD (default: today, UTC)")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
+    parser.add_argument("--packages", action="store_true", help="also check the GGUF packages and the model cards (needs a catalog of schema 3)")
     args = parser.parse_args(argv)
     try:
         moment = datetime.combine(datetime.fromisoformat(args.today).date(), time.min, tzinfo=timezone.utc) if args.today else now or datetime.now(timezone.utc)
     except ValueError:
         print(f"--today is no date: {args.today}", file=sys.stderr)
         return 2
-    result = scan(args.catalog, args.rejected, args.out, transport=transport or UrllibTransport(), now=moment, budget=args.budget)
+    # the hosts of the source and the Hub's CDN are the scanner's alone: `http._ALLOWED_HTTPS_HOSTS` stays what it is
+    transport = transport or (UrllibTransport(allowed_https_hosts=K.ScannerHosts()) if args.packages else UrllibTransport())
+    result = scan(args.catalog, args.rejected, args.out, transport=transport, now=moment, budget=args.budget, packages=args.packages)
     if result.error:
         print(result.error, file=sys.stderr)
     elif result.proposal:

@@ -12,9 +12,10 @@ from pydantic import ValidationError
 
 from modelroom.binding import GuidedPointer
 from modelroom.catalog import Catalog, CatalogFamily, CatalogModel
+from modelroom.catalog_findings import PackageCheck, SetupNote
 from modelroom.document import MachineRanking, RankedEntry, RenderDocument, SetAsideEntry
 from modelroom.examples import EXAMPLES
-from modelroom.guided_contracts import Note, Requirement, SearchHit
+from modelroom.guided_contracts import DirectLogEntry, Note, Requirement, SearchHit
 from modelroom.guided_models import ModelChoice
 from modelroom.measurements import ExportObject, LoadState, MeasurementRecord, PackageRef, RunCounters, Scenario
 from modelroom.profile import CrossCheck, HardwareProfile, LlmfitCrosscheck
@@ -86,6 +87,11 @@ MODEL_CLASSES = {
     "SetAsideEntry": SetAsideEntry,
     "MachineRanking": MachineRanking,
     "RenderDocument": RenderDocument,
+    # AP9-KO P0: the findings of a catalog row and the log line of a direct find (CONTRACTS.md, "Package
+    # findings and the load check").
+    "PackageCheck": PackageCheck,
+    "SetupNote": SetupNote,
+    "DirectLogEntry": DirectLogEntry,
 }
 
 _NOW = datetime(2026, 9, 22, 9, 0, 0, tzinfo=timezone.utc)

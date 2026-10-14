@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
+from .catalog import Catalog
+from .catalog_findings import PackageCheck, SetupNote, load_blocked_text
 from .config import Configuration, MachineConfig
 from .contracts import BaseModelSpec, Fit, Package, Rating, Snapshot
 from .document import (
@@ -33,10 +35,12 @@ from .document import (
     RenderDocument,
     SetAsideEntry,
 )
-from .fit import GIB
+from .fit import GIB, unknown_fit
 from .guided_contracts import Note
 from .importer import ProfileScan
 from .measurements import MeasurementRecord, Scenario
+from .origin import listed_packagers_of, package_origin
+from .pull_choice import blocked_runtimes
 from .profile import PROFILE_SCHEMA_VERSION, CrossCheck, HardwareProfile, LlmfitCrosscheck, fit_block_reason
 from .quantization import package_identity_key
 from .parameters import parameter_count
@@ -451,13 +455,24 @@ def _ranked_entries(
     return entries
 
 
-def _set_aside_entries(items: list[SetAside], covered: bool, shared_memory: bool = False) -> list[SetAsideEntry]:
+def _set_aside_entries(
+    items: list[SetAside], covered: bool, shared_memory: bool = False, blocked: Mapping[tuple[str, str, str], str] | None = None
+) -> list[SetAsideEntry]:
+    """`blocked` maps a package whose `no_fit` became `not_covered` by an `absent` check (`_blocked_or`) to the red
+    line that is its reason; its note is that line, not a statement about the fit rule."""
     return [
         SetAsideEntry(
-            fit=item.fit, reason=item.reason, **_package_line(item.package, _set_aside_note(item, covered, shared_memory))
+            fit=item.fit,
+            reason=item.reason,
+            **_package_line(item.package, _blocked_note(item.reason) if (blocked or {}).get(package_identity_key(item.package)) == item.reason else _set_aside_note(item, covered, shared_memory)),
         )
         for item in items
     ]
+
+
+def _blocked_note(reason: str) -> Note:
+    """The note of a blocked package: the red line itself."""
+    return Note(code="load_blocked", subject="package", origin="computed", text=_clip(reason), facts=["fit.reason"])
 
 
 def _machine_block(
@@ -470,6 +485,7 @@ def _machine_block(
     scenario: Scenario,
     models: Mapping[str, ModelFacts] | None = None,
     per_model: bool = False,
+    checks: Mapping[tuple[str, str, str], PackageCheck] | None = None,
 ) -> MachineRanking:
     """One machine's block: its three lists, or its reason when no fit can be computed at all.
 
@@ -489,10 +505,14 @@ def _machine_block(
         return MachineRanking(
             machine=machine, status=found.status, label=found.label, reason=found.reason, **reserves
         )
-    entries = [
-        (package, fit_for(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config))
-        for package in packages
-    ]
+    entries: list[tuple[Package, Fit]] = []
+    blocked: dict[tuple[str, str, str], str] = {}  # packages whose `no_fit` an `absent` check turned into `not_covered`
+    for package in packages:
+        fit = fit_for(found.profile, package, base_model_by_repo[package.base_model_hf_repo], scenario, machine_config)
+        gated = _blocked_or(fit, package, found.profile, checks)
+        if gated is not fit:
+            blocked[package_identity_key(package)] = str(gated.reason)
+        entries.append((package, gated))
     shared = found.profile.gpu_state == "unified_memory"  # one memory, both reserves taken from it
     ranked: list[RankedEntry] = []
     rankings = _rankings_by_runtime(entries, measurements, scenario, models)
@@ -506,10 +526,23 @@ def _machine_block(
         profile=found.profile,
         ranked=ranked,
         ranked_total=sum(len(ranking.ranked) for ranking in rankings),
-        not_covered=[entry for ranking in rankings for entry in _set_aside_entries(ranking.not_covered, covered=False)],
+        not_covered=[
+            entry for ranking in rankings for entry in _set_aside_entries(ranking.not_covered, covered=False, blocked=blocked)
+        ],
         no_fit=[entry for ranking in rankings for entry in _set_aside_entries(ranking.no_fit, True, shared)],
         **reserves,
     )
+
+
+def _blocked_or(fit: Fit, package: Package, profile: HardwareProfile, checks: Mapping[tuple[str, str, str], PackageCheck] | None) -> Fit:
+    """`fit`, except that a package an `absent` check blocks which the fit would set aside as `no_fit` is `unknown`
+    with the red line of the block as its reason: it is carried as `not_covered`, with the reason, not as `no_fit`
+    (V5; `catalog_findings.load_blocked_text`). A ranked row keeps its place and its class -- it is locked in the
+    views and in the pull list; a package the fit already cannot judge keeps its own reason."""
+    check = (checks or {}).get(package_identity_key(package))
+    if check is None or check.result != "absent" or fit.fit_class != "no_fit":
+        return fit
+    return unknown_fit(load_blocked_text(blocked_runtimes(profile), package.base_model_hf_repo, check))
 
 
 def _rankings_by_runtime(
@@ -533,6 +566,53 @@ def _repos_with_rows(blocks: list[MachineRanking]) -> list[str]:
             if entry.base_model_hf_repo not in seen:
                 seen.append(entry.base_model_hf_repo)
     return seen
+
+
+def _package_checks(packages: Sequence[Package], catalog: Catalog | None) -> dict[tuple[str, str, str], PackageCheck]:
+    """The check the catalog holds for each package that has one, by package identity; none without a catalog."""
+    if catalog is None:
+        return {}
+    return {package_identity_key(package): found for package in packages if (found := catalog.package_check(package)) is not None}
+
+
+def _with_evidence(
+    blocks: list[MachineRanking], packages: Sequence[Package], catalog: Catalog | None
+) -> tuple[list[MachineRanking], dict[str, SetupNote]]:
+    """The blocks with the catalog's check on each row of a package it has one for, and the setup note of each
+    base model that has a row (AP9-KO, V11). No catalog gives the blocks back as they are and no note: the document
+    of release 1.0.0. A catalog that holds nothing for these rows gives that document only where it also changes the
+    origin of no row (`origin: "other"` needs no check). The rows keep their place and their class; what a check
+    changes in a view is not decided here."""
+    if catalog is None:
+        return blocks, {}
+    updates: dict[tuple[str, str, str], dict] = {}
+    listed = listed_packagers_of(catalog)
+    for package in packages:
+        update: dict = {}
+        found = catalog.package_check(package)
+        if found is not None:
+            update["load_check"] = found
+        if package.source == "huggingface" and package.format == "gguf" and package.repo is not None:
+            if package_origin(package.repo.split("/", 1)[0], package.base_model_hf_repo, listed) == "other":
+                update["origin"] = "other"
+        if update:
+            updates[package_identity_key(package)] = update
+
+    def checked(entries):
+        return [
+            entry.model_copy(update=updates[tuple(entry.package_identity)]) if tuple(entry.package_identity) in updates else entry
+            for entry in entries
+        ]
+
+    if updates:
+        blocks = [
+            block.model_copy(
+                update={"ranked": checked(block.ranked), "not_covered": checked(block.not_covered), "no_fit": checked(block.no_fit)}
+            )
+            for block in blocks
+        ]
+    notes = {repo: note for repo in _repos_with_rows(blocks) if (note := catalog.setup_note_for(repo)) is not None}
+    return blocks, notes
 
 
 def _collect_ratings(
@@ -575,8 +655,15 @@ def build_render_document(
     *,
     models: Mapping[str, ModelFacts] | None = None,
     live_vllm: Mapping[str, object] | None = None,
+    catalog: Catalog | None = None,
 ) -> RenderDocument:
     """The one object a render produces; pure, no I/O and no clock read.
+
+    `catalog` is the evidence (AP9-KO, V11): the check it holds for a package goes on that package's row
+    (`PackageLine.load_check`), the setup note it holds for a base model with rows into `setup_notes`. `None`
+    is the default and leaves the document exactly as it was: every package is `unknown`. A catalog that knows
+    nothing of these packages does so only where it changes the origin of no row (`_with_evidence`; CONTRACTS.md
+    V11).
 
     `profiles` maps every `config.machines` key to the `MachineProfile` the results folder
     holds for it (`machine_profile`); `measurements` maps a `profile_id` to that profile's
@@ -601,6 +688,7 @@ def build_render_document(
     shown = list(machine_runtimes.values())
     per_model = len({package.base_model_hf_repo for package in _eligible_packages(snapshot, shown)}) > 1
     facts = models if models is not None else snapshot_model_facts(snapshot)
+    checks = _package_checks(snapshot.packages, catalog)
     blocks = [
         _machine_block(
             machine,
@@ -612,9 +700,11 @@ def build_render_document(
             scenario,
             facts,
             per_model,
+            checks,
         )
         for machine, machine_config in config.machines.items()
     ]
+    blocks, setup_notes = _with_evidence(blocks, snapshot.packages, catalog)
     ratings, rating_error = _collect_ratings(rating_source, _repos_with_rows(blocks))
     rule = RANKING_RULE_PER_MODEL if per_model else RANKING_RULE
     # F5 (Codex r5-1): the rule says the per-runtime selection wherever a machine ranks both.
@@ -633,6 +723,7 @@ def build_render_document(
         ratings=ratings,
         areas=snapshot.areas,
         machines=blocks,
+        setup_notes=setup_notes,
     )
 
 

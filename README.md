@@ -25,7 +25,7 @@ Start: [Quick start](#quick-start). Depth: [The guided run](#the-guided-run), [R
 
 ## Status
 
-Version 1.0.0 (see `CHANGELOG.md`, which lists what has landed). The guided mode and the
+Version 1.1.0 (see `CHANGELOG.md`, which lists what has landed). The guided mode and the
 subcommands work end to end. The data shapes are versioned contracts (see `CONTRACTS.md`).
 
 The branch `main` runs ahead of the release on PyPI. What `CHANGELOG.md` lists under "Unreleased"
@@ -376,6 +376,17 @@ In the picture the search found 8 repositories and one model to pick, `Qwen3.5-4
 marked. It shows `fits` at the folder's 4k, `legacy*` because a higher version of the family is
 known, `unsloth +2` and `qwen3.5:4b`.
 
+**A model whose publisher offers no GGUF.** The word or the repository you typed can name a model of the
+catalog that no listed packager converts, or that only an account nobody listed converts. With a vLLM
+machine among the chosen ones, the search asks the Hub for the publisher's own repository of that model (one
+request each, ten models at most) and lists it beside the GGUF packages, whatever the owner filter says;
+chosen, it is written to the configuration with that repository. A model it could not read is named in
+`state/search.json` (`direct`), never left out silently. Without a vLLM machine nothing more is asked, and a
+gray line says what the catalog knows instead: `<model> (<publisher>) is in the catalog; no GGUF from its
+publisher or a listed packager is known here`, and, only where the folder holds a complete tensor package of
+the model, `; tensor packages are shown when a machine with vLLM is selected; check the model card for runtime
+requirements`. The line is shown for three models at most.
+
 The packages come from Hugging Face (the model's publisher, RedHatAI for vLLM builds and the
 listed GGUF packagers) and from the Ollama library. The start screen shows the runtimes, not the
 origins; the origin stands with each row at the package name (`<packager> · <quant>`).
@@ -414,7 +425,8 @@ In the terminal, a required field asks again after an empty or invalid answer.
 
 The last column is the point of the question. It shows how many of the packages just fetched still
 fit this computer at that context and for those requests. The memory a model needs grows with the
-text it holds.
+text it holds. A package whose installation the catalog blocks (see "Which GGUF packages are offered")
+stays in the total and does not count as fitting, as in step 5.
 
 The picture shows the question of an earlier version, which asked for a daily head count: the
 folder offers what the first run chose, 25 people (3 requests), and **XS** (4k, the context the
@@ -489,7 +501,9 @@ Some rows are locked:
 
 - an Ollama row without an Ollama name;
 - a row whose pull name is not unique;
-- a row whose download is too large for the free disk, shown in red with what it needs.
+- a row whose download is too large for the free disk, shown in red with what it needs;
+- a row whose package the catalog blocks, shown in red with the reason (see "Which GGUF packages are
+  offered"); naming it in an answer file does not pass the lock, and nothing is downloaded.
 
 The command of the choice follows. Then **Pull #1 into Ollama now?** asks, with the size of the
 package (7.8 GB in the picture). **Yes** pulls it into the daemon and shows the progress. **No**,
@@ -638,6 +652,34 @@ name already, checks the free disk against `--weights-bytes` where one was given
 terminal-less run. See `CONTRACTS.md`, "`modelroom pull`", for its exit codes.
 
 ## Runtimes
+
+### Which GGUF packages are offered
+
+For Ollama and LM Studio, which load GGUF files, the catalog can hold a **check** per package: the
+architecture the file states, compared with the architectures of the llama.cpp source at one commit,
+for one repository, one revision and one file. The scanner makes the checks (see "Publishers the search
+resolves"); modelroom itself reads them from the catalog and asks no one.
+
+- **`absent` blocks.** The architecture is not in the checked source. The row keeps its place and its fit,
+  and a red line under the table says `<runtime> installation not offered for <model>: architecture
+  <arch> is absent from the checked llama.cpp source (checked <date>)`. The install line passes the row,
+  the pull list locks it for an explicit choice too, and a package the fit would set aside as `no_fit`
+  is carried as `not_covered` with that reason. `modelroom pull hf.co/<repo>:<quant>` ends with exit `2`
+  for a name the catalog holds an `absent` check for, and `--yes` does not pass it. The name carries no
+  revision, so this decides on the content last checked, and the line names its day.
+- **`present` is no promise.** It says the architecture is in the checked source, not that Ollama or LM
+  Studio load the file. Missing Hub metadata, a changed revision and a file that cannot be assigned are
+  `unknown`, which blocks nothing.
+- **Risk that remains.** Ollama and LM Studio take over the architectures of llama.cpp with a delay. A
+  package the check lets through can still fail to load in the version you run, and a package it blocks
+  may load in a newer one. The check says what was compared, never what a runtime does.
+- **Origin.** The automatic choice is an Ollama library package or a GGUF package of the model's publisher
+  or of a listed packager. A conversion by another account stays selectable by name, but it is never
+  the automatic choice and an answer file without `pull_package` does not pull it:
+  `<packager> is a community conversion, not checked; not offered as the automatic choice`. Where no shown
+  row is left, the line reads `no automatic recommendation: every row shown is blocked or not checked;
+  choose a row by name` and nothing is pulled. The origin steers this choice only, not the fit or the
+  ranking.
 
 ### Ollama
 
@@ -841,6 +883,14 @@ A4 concerns LM Studio (see "LM Studio").
 
 **The install line.**
 
+**Setup instructions of the model card.** Some models need more than the plain start line. Where the card of
+the publisher's repository holds a `vllm serve` block of that model, a red line stands above both commands:
+`<model> has setup instructions in its model card: <url>`; the link is the card at the revision the scanner
+read. Where the card also states that a named package is required for inference, a second line says `it names
+the package <package> as required; the commands below are templates without it`. A card that was not read, or
+whose wording the rule does not know, gives no line, which is no statement that nothing is needed. The commands
+are the ones below: modelroom adds no switch from a card and starts nothing.
+
 Choosing a vLLM row prints
 two commands for the same server; run one of the two in a terminal that stays open.
 
@@ -918,6 +968,7 @@ them. They never leave your computer: neither is exported or copied into a resul
 
 | Word | Meaning |
 |---|---|
+| check | The catalog's statement about one GGUF package: its architecture compared with a commit of llama.cpp; see "Which GGUF packages are offered". |
 | context | The amount of text a model holds at once, counted in tokens, the pieces of text a model counts. |
 | daemon | A program that runs in the background; for Ollama, the one that serves its models on this computer. |
 | family | A group of models that belong together, offered in several sizes and versions. |
@@ -1048,7 +1099,8 @@ this repository naming the account and one of its models; the catalog is data in
 and takes a new family with its evidence.
 
 The guided mode reads the current catalog from the public dataset `jm-vis/modelroom-catalog` on
-Hugging Face and keeps a copy in `~/.modelroom/catalog/`: at most one attempt every 24 hours, usually
+Hugging Face (the file `catalog-v3.json` since 1.1.0; release 1.0.0 reads `catalog-v2.json`, which stays as
+it was) and keeps a copy in `~/.modelroom/catalog/`: at most one attempt every 24 hours, usually
 no request or one, three at most, each answer capped and every redirect kept on `huggingface.co`.
 Whatever goes wrong -- no network, a missing dataset, a file that does not validate -- the run goes on
 with the newer of the copy and the catalog shipped in the package, and step 2 says which one applied.
@@ -1059,7 +1111,10 @@ choice stays the same.
 Maintenance: a daily background run proposes changes from the Hub (`scripts/catalog_scan.py`), the maintainer
 approves them by number in conversation, and `scripts/catalog_publish.py` commits and uploads exactly the bytes of
 that commit. Nothing is published without the maintainer's word, and the published file is compared with the
-repository every day.
+repository every day. With `--packages` the run also checks the GGUF packages of forty catalog rows a day against
+the llama.cpp source and reads model cards for setup instructions (`docs/runbooks/catalog-publishing.md`). That
+needs two more hosts, `api.github.com` and `*.hf.co`, which only the scanner may reach; modelroom itself never
+connects to them.
 
 ### Language choice
 

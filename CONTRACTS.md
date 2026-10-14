@@ -1411,6 +1411,18 @@ line a reader is looking at -- on a screen that has a choice to offer they said 
 times over (test round, 2026-09-24). The three automation commands write no such file; `fetch` still
 prints `SearchOutcome.group_lines`/`summary_line` unchanged.
 
+**Additive keys of AP9-KO (V8, V9; schema 3 stays).** `direct`: one `DirectLogEntry` per publisher model the
+search asked the Hub for as a direct find, in the order they were asked, present only where at least one was.
+`knowledge_hint`: the number of catalog models the hint of a search without a vLLM machine could not show for
+its limit, present only where it was cut. Both are left out otherwise, so a search without either writes the
+file it always wrote. "Package findings and the load check".
+
+**Additive key of AP9-KO P5 (sweep p5-b1; schema 3 stays).** `failed_pages`: one
+`{"account": <group label>, "reason": <the page's error>}` per search page that did not answer, in the order
+asked (`{"account": "deepseek-ai", "reason": "unexpected status 503"}`), present only where at least one did.
+The page still counts in `requests` and its group keeps its entry in `accounts`. "Search over the Hugging
+Face API".
+
 **Written without the lock, and deliberately so.** Unlike the configuration, a profile, a
 measurement and the snapshot, this one file is not taken under `modelroom.lock`: it is a record of
 one run's own search that no other writer of the state touches and no reader of the state depends
@@ -3978,10 +3990,11 @@ the shipped catalog and the one in the cache. Only the guided run calls it, with
 ("Shared request budget"). `MODELROOM_CATALOG=shipped` selects the shipped catalog: no request, no
 cache file written.
 
-**The cache is one file, one envelope**: `catalog-v2.cache.json` (the schema major version is in the
+**The cache is one file, one envelope** per channel: `catalog-v3.cache.json` for the default channel since 1.1.0
+(`catalog-v2.cache.json` is the cache of release 1.0.0 and of the old channel; the schema major version is in the
 name, so releases of different schemas never disturb each other) holds
 `{"cache_version": 1, "checked_at": <UTC, whole seconds, "...Z">, "sha": <40 hex | null>,
-"last_error": <text | null>, "catalog": <schema-2 document | null>}` and nothing else. The whole file is
+"last_error": <text | null>, "catalog": <document of the channel's schema | null>}` and nothing else. The whole file is
 written each time, a temporary file in the same folder and one `os.replace` ("Atomic writes"), so
 content and `sha` never disagree; there is no lock, and when two runs write at once the last one
 leaves a consistent envelope. An envelope that does not read, has another `cache_version`, an unknown
@@ -3992,9 +4005,10 @@ without a catalog (or the reverse), or a catalog that does not validate counts a
 failed. Exactly 24 h, more, or a `checked_at` in the future asks once more. An attempt is
 `GET https://huggingface.co/api/datasets/jm-vis/modelroom-catalog/revision/main` (one request, `sha` of 40
 hex characters), and, only when the `sha` differs from the envelope's, `GET
-https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/<sha>/catalog-v2.json`, which answers a
+https://huggingface.co/datasets/jm-vis/modelroom-catalog/resolve/<sha>/<file of the channel>`
+(`catalog-v3.json` for the default channel, `catalog-v2.json` for the old one), which answers a
 `307` to the same host and then `200` (three requests in all). `X-Repo-Commit` has to equal `sha`; the
-body has to validate as schema 2 with all its limits. The same `sha` only renews `checked_at`. **Every
+body has to validate as the channel's schema with all its limits. The same `sha` only renews `checked_at`. **Every
 fault is the day's attempt**: the envelope is written with the new `checked_at`, the old `sha` and
 `catalog`, and the reason in `last_error`. The one exception is an attempt that fails at the budget
 before its first request: it is no attempt and writes nothing. When the cache folder cannot be written,
@@ -4023,6 +4037,30 @@ switch above.
 else). An approval binds to the SHA-256 of the proposal that was shown and to the numbers named. The
 upload sends the bytes of the recorded commit, verified against the dataset afterwards.
 
+**Two channels (AP9-KO, V3).** The dataset holds one file per schema: `catalog-v2.json` for schema 2, which
+release 1.0.0 reads and which stays exactly as it was, and `catalog-v3.json` for schema 3, the catalog with
+findings ("Package findings and the load check"). `catalog_remote.Channel` names a channel's file, its cache file
+(`catalog-v2.cache.json`, `catalog-v3.cache.json`: the two never share one), its schema, its size limit (1 MiB,
+4 MiB) and its reader; `current_catalog(..., channel=DEFAULT_CHANNEL)` asks the channel it is given, with the
+same two or three requests, the same freshness and the same choice. A file of another schema than its channel's is a
+fault like any other (`... schema_version 2 ...` on the new channel, `... schema_version 3 ...` on the old one).
+`DEFAULT_CHANNEL` is the new channel since release 1.1.0 (P5; it was one line). `catalog_remote.offline_catalog(cache_dir,
+channel)` is the same choice without a request, for the commands that ask no one (`render`, `pull`); without a channel
+it reads the cache of the new one. A cache of release 1.0.0 (`catalog-v2.cache.json`) is neither read nor changed by
+release 1.1.0. Release 1.0.0 asks `catalog-v2.json` only and never meets `catalog-v3.json`
+(`tests/test_ko_p5_channel.py` runs the code of 1.0.0 against a dataset that holds both files).
+
+**Order of a release (P5).** The dataset's `catalog-v3.json` is published **first** (`scripts/catalog_publish.py`
+makes and verifies both files of the dataset in one upload, "A publication" in `docs/runbooks/catalog-publishing.md`),
+**then** release 1.1.0. A 1.1.0 that meets a dataset without that file, or with a file that does not validate as schema
+3, is not broken: the attempt is the day's attempt and the run says `(the published one did not read: <reason>)`. The
+choice is then between the shipped catalog and a valid cache of the new channel (`catalog-v3.cache.json`; a newer valid one
+is kept). There is **no fallback to `catalog-v2.json`**, and a cache of release 1.0.0 is not read, so until the file is
+published such a run loses the findings and also the ordinary updates of the published table (models, successors,
+packages) that are newer than the shipped catalog. Publishing the release before the file costs that, not the run. The shipped
+`modelroom/catalog.json` stays schema 2 and unchanged until the first approved finding makes it schema 3 (the decision of
+P5, below the table "The forms and their versions"); the working catalog of a scan with `--packages` is schema 3.
+
 ### CatalogModel
 
 ```json
@@ -4038,6 +4076,10 @@ upload sends the bytes of the recorded commit, verified against the dataset afte
   "kind": "text"
 }
 ```
+
+Schema 3 adds two fields to a row (AP9-KO), both left out of the example because their defaults are the
+fact `unknown`: `gguf_checks` (a list of `PackageCheck`, at most 200, default `[]`) and `setup_note` (a
+`SetupNote` or `null`, default `null`). A schema-2 document carries neither key, not even at its default.
 
 ### CatalogFamily
 
@@ -4274,6 +4316,12 @@ runs one way: `computed` needs an `age` other than `unknown`. `repo_created_at` 
 "repo created", never as the model's release date. `downloads` is how often the Hub says the
 repository was downloaded (`ge=0`, `None` when the answer carries no count): an indication of what
 many people take, **never a rank** -- the ranking rule alone orders the result.
+
+`found_as` (AP9-KO, V8) is `package` -- every hit until now, the example below -- or `direct`: the
+publisher's own model, found by its catalog row and read from its own Hub answer. A direct find is
+`resolved` as itself (`resolved_base_model` is its `repo`), its owner is a `publisher`, and it declares **no**
+base model and no relation (`base_model` `None`, `base_model_relation` `unknown`): a quantization relation
+is never invented for it. `age`, `successor` and `ollama` hold as for any hit.
 
 ```json
 {
@@ -4594,13 +4642,24 @@ own repositories, and each distinct base model of it costs an age lookup from th
 a run can come out of the search with fewer than 20 requests left (second-model round, 2026-09-25).
 A fetch that then runs out says so and the run ends with exit `1`; nothing is written wrong.
 
-**Every page costs one request of the shared budget.** A page that fails -- a status other than
-`200`, a body that is no JSON, a body that is no list, an entry with no repository id or one that is
-not a repository id -- ends the search with `SearchError` **naming the page**
-(`search for 'qwen' (mradermacher): unexpected status 503`); an account is never quietly
-left out, because "unsloth has nothing for this word" and "unsloth was not asked" are different
-answers. A budget that ends before the last page does the same and says how many accounts have no
-answer (`... not made: budget exhausted; 6 accounts were not asked: deepseek-ai, unsloth, ...`).
+**Every page costs one request of the shared budget.** A page that does not answer -- a request that
+did not go through (`search_pages.TRANSPORT_ERRORS`: a timeout, a reset, a cut-off answer), a status
+other than `200` (`429` and `5xx` included), a body that is no JSON, a body that is no list -- costs
+**that page only** (AP9-KO P5, sweep p5-b1; measured live 2026-10-14, when single pages answered
+`500`/`504` and two guided runs ended at one of them with exit `2`). The page spent its request and adds
+no entry; the other pages are asked as always, and their hits are listed. It is never quietly left out,
+because "unsloth has nothing for this word" and "unsloth did not answer" are different answers: the
+screen shows one note per page in the words of the page's own error
+(`search for 'qwen' (mradermacher): unexpected status 503; the search went on without this page`),
+`search.json` lists it under `failed_pages` ("Search log"), its group line says `1 of 2 pages not
+answered`, and a publisher with no hit and a page that did not answer is not said to have no GGUF
+repository. Only a search in which **no** page answered ends with `SearchError` -- the first page's,
+word for word as before -- since a search with no answer at all is no result; the guided mode then
+ends with exit `2`. An entry with no repository id or one that is not a repository id still ends the
+search with `SearchError` **naming the page**: that is no network or answer error of the Hub but a
+broken answer. A budget that ends before the last page ends the search too and says how many accounts
+have no answer (`... not made: budget exhausted; 6 accounts were not asked: deepseek-ai, unsloth, ...`).
+A bug (any other exception) goes up.
 
 **A repository is held against what earlier pages answered before it is resolved**, entry by entry,
 so a page that carries the same repository twice lists it once and the duplicate costs no age
@@ -4871,6 +4930,412 @@ marks a new row whose name has no reading with `reading: false` (a mark for the 
 - **The limit.** The search sees two pages of twenty repositories per account, filtered by the
   search word. What it does not see and the catalog does not know is not compared -- that is why the
   status says `computed` and never stands in for a statement.
+
+## Package findings and the load check (AP9-KO)
+
+What a catalog can say beyond its model rows, and how that reaches the views. The forms here are
+the contract of work package P0 of AP9-KO; what the views and the commands do with them (blocking an
+installation, the recommendation, the search) is the behavior of the packages after it and is stated here
+only as far as the contract needs it. Three principles hold throughout:
+
+- **Rules, not cases.** No model, publisher or packager is named in code or in a test as a special case;
+  a rule reads a property (an architecture, an owner, a revision), a datum belongs to the catalog row.
+- **Only what was checked is said.** A finding names what was compared, with what and when. `present` is
+  no promise that a runtime loads the file; `absent` is a statement about one package against one commit
+  of one source, never about a runtime version. Everything else is `unknown`, and `unknown` is the
+  absence of a finding, never a stored value.
+- **A failed run changes nothing it did not read.** No new `absent`, no deletion, no new date.
+
+### The forms and their versions (V3)
+
+| Form | Written as | Read as | Defaults |
+|---|---|---|---|
+| catalog file, shipped (`modelroom/catalog.json`) | schema 2; schema 3 once it holds a finding (decided in P5, below) | 1 (TOML), 2, 3 | a row without `gguf_checks` and `setup_note` has `[]` and `None`: `unknown` |
+| old channel `catalog-v2.json` | schema 2, made by `catalog_schema.project_to_schema2` only | schema 2 | -- |
+| new channel `catalog-v3.json` | schema 3 | schema 3 | as above |
+| render document (`models.json`) | schema 3, unchanged | schema 3 | `load_check` and `setup_notes` are left out where they hold their default |
+| `search.json` | schema 3, unchanged | -- | `direct` and `knowledge_hint` are left out where there is nothing to say |
+| snapshot, configuration, profile, measurement, pointer | unchanged | unchanged | -- |
+
+**The shipped catalog (decision of P5, 2026-10-14).** `modelroom/catalog.json` becomes schema 3 as soon as an approved
+finding is in it, and not before: until the maintainer approves findings it stays the schema-2 document it was, byte for
+byte. The step is one line (`"schema_version": 2` to `3`, the working catalog of the scanner with `--packages` being
+that very file) followed by the approval of the proposal that was made against it; `catalog_publish.py` then makes both
+channel files of the dataset from it (the old one by projection without the findings, the new one as it is). The shipped
+file is read by `load_catalog` as either schema, so a release that ships a schema-3 file reads it offline too.
+
+A schema-2 document is also **written** as schema 2 (`CatalogDocumentV2` leaves the two keys out when it
+serializes), so reading and writing an old file again stays what 1.0.0 reads. A schema-2 catalog is exactly the
+shape release 1.0.0 reads. Release 1.0.0 refuses an unknown key in a
+row, so a schema-2 document carries neither new key, not even at its default (`CatalogDocumentV2`); a
+schema-3 document is read by 1.0.0 as an unsupported version and 1.0.0 falls back to its shipped catalog.
+The new channel is therefore a file of its own in the same dataset, with a cache file of its own
+("Published catalog"): 1.0.0 never meets it. `catalog_schema.project_to_schema2(document)` is the one way from
+a schema-3 document to the old file: it drops the two keys where they hold their default and raises
+`ValueError` where a row holds a finding. A scanner that proposes a new row for a schema-2 document leaves the
+two keys out at their default (`apply_changes`), and a proposed finding is left out of a schema-2 document with
+the reason `schema 2 has no gguf_checks` until the working document is schema 3. The size limit of a
+schema-1 or schema-2 file stays 1 MiB; a schema-3 file may hold 4 MiB (`CATALOG_V3_MAX_BYTES`), a row at most 200
+checks. The document rules of a row with findings: a `setup_note` is the note of the model of its row and is
+never `not_read`; a package (`repo`, `identity`) has one check per row.
+
+### What a check is a statement about (V1, V2)
+
+A `PackageCheck` ("PackageCheck" below) is bound to one package: the repository, the **revision** of the
+repository that was read, the **identity** (the stems of the weight files, shard suffix removed, as
+`quantization.package_identity_key` builds it) and the weight file, or first shard, whose architecture was
+read. A package of the snapshot gets the check where repository, identity **and revision** are equal
+(`Catalog.package_check`); the same file in another revision of the repository, the same name in another
+repository or folder, and another package of the same repository get nothing: `unknown`. Two rows that
+contradict each other on a package leave it `unknown` too. Only a Hugging Face GGUF package has a check; an
+Ollama package and a tensor package have none.
+
+**Ids are compared without case** (Codex b4). Hugging Face account and repository ids are case-insensitive, so
+every comparison, index and key of the findings on such an id uses `contracts.hf_id_key` (casefold): the
+repository of `package_check` and `pull_check`, the package key of `merge_package_checks` and of the
+duplicate check of a row, the model of a setup note against its row and against its key in `setup_notes`,
+`setup_note_for`, the direct find's `resolved_base_model == repo`, and the owner of `origin.package_origin`.
+An id is stored and shown as it was written; file names, identities and revisions are never folded.
+
+**Which file the Hub's `gguf` field describes** (feasibility proof, `docs/ap9-ko/feasibility/`, 2026-10-13,
+seven repositories). The field `gguf.architecture` of a repository answer is the architecture of **one file** of
+the repository, not of the repository: `gguf.totalFileSize` equals the size of exactly that file, and the choice of
+the file is the Hub's own by a rule it does not publish (the first file by name in six of the seven recorded
+repositories, the BF16 file in the seventh). One recorded repository holds a file of
+another architecture next to its model files (an importance-matrix file). So the field proves a package only
+where `catalog_findings.hub_metadata_file(files, totalFileSize)` returns that package's file: the one file of that
+size, else `None`. For every other package of the repository the architecture is `unknown` until it is read from
+the file's own header (`architecture_source` `file_header`: the first bytes of the first shard, which the
+transport reads with a range request on `huggingface.co/<repo>/resolve/<revision>/<file>`); a repository-wide
+reading is never made. Where the scope cannot be shown, no check is written.
+
+**Three states.** A missing field, missing Hub metadata (`gguf` is optional in the Hub answer), a revision that was
+not checked and a file that cannot be assigned are `unknown`. Only `absent` blocks. The one exception is the
+direct pull ("Direct pull", below).
+
+### The source of the architectures (V5)
+
+Canonical source: `github.com/ggml-org/llama.cpp`, the file `src/llama-arch.cpp`, the block
+`LLM_ARCH_NAMES` -- the one place where llama.cpp maps its architectures to the identifiers a GGUF file states
+(`general.architecture`), and the function `llm_arch_from_string` that compares a given name with the second
+member of each entry. The scanner (never the runtime of modelroom) reads it in two steps, and only the commit:
+
+1. `GET https://api.github.com/repos/ggml-org/llama.cpp/commits/HEAD` with `Accept: application/vnd.github.sha`:
+   the answer is the commit id alone, 40 lowercase hex characters (`read_commit`; anything else is a fault);
+2. `GET https://api.github.com/repos/ggml-org/llama.cpp/contents/src/llama-arch.cpp?ref=<commit>` with
+   `Accept: application/vnd.github.raw+json`: the file at that commit.
+
+The answers are limited to 256 bytes and 512 KiB, no redirect is followed (`LLAMACPP_MAX_REDIRECTS` is 0),
+and the host `api.github.com` is allowed to the scanner only: `http._ALLOWED_HTTPS_HOSTS` is unchanged. Two
+requests per run; the page recorded in a check is `https://github.com/ggml-org/llama.cpp/blob/<commit>/src/llama-arch.cpp`.
+
+`catalog_findings.parse_arch_names(text)` reads the block **whole or not at all** (`ArchBlockError`): it
+starts exactly once at `static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {` and ends at the first
+line `};`; every line in it is a blank line, a `//` line or an entry `{ LLM_ARCH_X, "name" },` (trailing spaces,
+tabs and a trailing `//` comment allowed); the sentinel `LLM_ARCH_UNKNOWN` with the name `(unknown)` is no architecture and is the last
+entry, and no entry follows the end; names match
+`[a-z0-9][a-z0-9_.-]*`, no enum and no name repeats; at least 100 entries remain (157 at the recorded commit);
+and the lookup function `llm_arch_from_string` is named once in the file and is **whole as known** -- the loop over
+the block (after its exact head `... : LLM_ARCH_NAMES) {` the line may carry an ordinary `//` comment such as
+`// NOLINT(performance-for-range-copy)`, nothing else), the comparison with
+the second member, `return kv.first;`, `return LLM_ARCH_UNKNOWN;` and its closing brace, with no other statement
+(added logic, another return or a cut-off function is a fault). Nowhere in the file may a form appear that the
+compiler reads other than the parser splits it (the list is under "Limit of the check" below). A block that is empty,
+unfinished, in another form, only partly understood, there twice or with a changed lookup is a fault, never a
+smaller result. `compare_architecture(name, names)` is `present` exactly when the whole identifier is among the
+names. The recorded originals (commit `45451c366d4256f94fbc8845645e31a6b9155054`, read 2026-10-13): the whole file
+`docs/ap9-ko/feasibility/llama-arch.cpp.45451c366d4256f94fbc8845645e31a6b9155054.txt` and its first, cut recording
+`v5-llamacpp-arch-block.txt`; both hold 157 names, are read whole by the test suite, and hold none of the forms
+refused below. The whole file maps a GGUF name to an architecture in no other place than the block and
+`llm_arch_from_string` (no alias, no second map).
+
+**Limit of the check** (decision of the management, 2026-10-13). The parser guards against **realistic changes
+of form by the developers of llama.cpp** -- a new entry, trailing spaces, Windows line ends, a comment, a moved or
+rewritten block or lookup -- and against nothing more: it is no C++ parser, and **deliberate deception by the
+source** (code written to look like the known form and compile to something else) is outside what it checks.
+Exotic forms are not interpreted but refused whole, anywhere in the file, as a fault: a block comment (`/*`, `*/`);
+a backslash at the end of a line (it splices the next line into a `//` comment); a carriage return without a line
+feed; a form feed or a vertical tab; a conditional or macro line (`#if`, `#ifdef`, `#ifndef`, `#elif`, `#else`,
+`#endif`, `#define`, `#undef`, `#line`); the digraph `%:`; a raw string `R"` with or without a prefix (`u8R`,
+`uR`, `UR`, `LR`). **The consequence of an error that remains** is bounded: a check only decides whether an
+installation is blocked (`absent`, the line `LOAD_BLOCKED`) or may be offered as the automatic choice; it is
+bound to one package, one revision and one llama.cpp commit, shows its day, and never states that a runtime loads
+a file.
+
+**On a fault** (network, budget, parser, redirect, a changed form): the scanner writes **no new `absent`** and
+**no deletion**; every existing check keeps its day. A source read whole may replace an existing check by a new
+one (`merge_package_checks`: by package, never an earlier day over a later one, nothing fresh changes nothing);
+setting and removing a check goes through the existing approval of the catalog proposals. A gated package is
+carried as `not_covered` with its reason, not as `no_fit`.
+
+### Which repositories are checked (V6)
+
+The scanner asks for the GGUF repositories **of each catalog row** through their quantization relation
+(`filter=base_model:quantized:<row>`), for every row of `kind` `text` or `vision`, **not only `latest`
+ones** and **independent of who owns the repository**: an account that is not a listed packager is checked, and
+is not made a listed packager by it. The list queries request `gguf` and `sha` (`expand`), so a revision and the
+Hub's architecture arrive with the list; the files of a repository need one tree request, the header of a file
+one range request. Per run at most `PACKAGE_ROWS_PER_RUN` (40) rows are taken and at most
+`PACKAGE_STAGE_BUDGET` (200) requests are spent on them. The **continuation state** is small and independent of
+any finding: `package_attempts` in the scanner's state file, the UTC day each row was last tried, **recorded
+whether or not the try found a repository, a check or an error** (`record_attempts`). A run takes the rows by
+`package_rows_for_run`: rows never tried first, then the one tried longest ago, then by name, and never a row already
+tried that day; so any number of rows that yield nothing cannot hold the run in place, and a run that stops at its
+budget leaves the rows it did not reach untried. The state moves no check. The header of every package of a
+repository that the Hub's `gguf` field does not describe is read too (decided 2026-10-13): the first bytes of its
+first shard by a range request on `huggingface.co`, inside the same budget; where that read fails the package stays
+`unknown`. The revision binding stays strict: a new revision of a repository is `unknown` until it was checked
+again. A stored check is compared again with every source that was read whole,
+without a Hub request, as long as the repository's revision in the list is the one stored; a revision that
+moved is read again.
+
+**Hosts of the scanner** (decision of the management, 2026-10-14). With `--packages` the scanner reaches
+`huggingface.co`, `api.github.com` (the llama.cpp commit and its file, V5) and the Hub's own CDN `*.hf.co`, to which the
+read of a file's first bytes is redirected (at most two hops, kept on the two Hub hosts); nothing else.
+`catalog_scan_packages.ScannerHosts` is that list and only the scanner builds its transport with it
+(`UrllibTransport(allowed_https_hosts=ScannerHosts())`); a run without `--packages` keeps the transport it had, and
+`http._ALLOWED_HTTPS_HOSTS` -- the list of the runtime of modelroom -- does not change. A daily run of the package
+stage is `python scripts/catalog_scan.py --catalog ... --rejected ... --out ... --packages --budget 700`: the budget of
+the run has to cover the scan of accounts (some 100 to 150 requests) **and** the 200 requests of the package stage,
+or the stage ends early and says `budget ended: package checks stopped after n of 40 rows`.
+
+Inside a row the same rule holds one level down (P4): `package_unit_attempts` in the same state file holds the UTC
+day a GGUF repository was last read to its end (with a check or with a fault) and a package whose header read
+failed (`<repo>:<identity>`; the repository compared by `hf_id_key`, the identity as written; entries older than 60
+days are dropped). Repositories and packages are read never tried first, then the one tried longest ago, so a unit
+that fails every day goes behind the others. The budget is no fault of a unit: the one it cuts is not recorded.
+A row the budget cuts stays untried, except the first row of a run for which a request was sent; a row for which no
+request was sent is never tried. **Bound** (decision of the management, 2026-10-14): the list of a row and the file
+list of a repository are not continued over runs page by page -- a row whose list alone takes the whole budget
+(some ten thousand repositories) and a file list longer than one page (some thousand entries) are taken as
+unrealistic; the second is a fault of that repository with a note, and deletes nothing.
+
+### Setup notes of model cards (V7)
+
+A `SetupNote` is a pointer to the model card of the **publisher's** repository, valid for that model and that card
+revision. The scanner reads the card's Markdown text at a revision it fixed first (`resolve/<revision>/README.md`),
+by a range request for its first `CARD_MAX_BYTES` (128 KiB, the window; an unreadable card is `not_read`). **A card
+longer than the window** (decision of the management, 2026-10-14; measured: publisher cards 7-28 KB, one card of
+236 KB bloated by HTML tables) is read at its start. What a `206` is, its `Content-Range` alone proves: `bytes
+0-<n-1>/<n>` for a body of `n` bytes is the whole card; `bytes 0-<window-1>/<total>` with a body that fills the window
+and `total` above it is a start; anything else -- the header missing, another range, a total that fits neither -- is a
+fault (`not_read`). Of a start the last line (cut, inside a character too) and then the last paragraph or code block
+still open at the cut are dropped (a statement may go on with what limits it), and only a **positive** finding counts
+(`instructions`, with `package` where the rule names one); a start without one is `not_read`, never
+`none_recognized`, and the stored note stays. A `200` up to the window is the whole card, read as before; a `200`
+longer than the window and an `X-Repo-Commit` of another revision are faults (`not_read`). The rule is finite and
+documented with positive and negative fixtures (P4). `instructions`: an unambiguous `vllm serve` block of
+this model; `package` only for an explicit statement that a named package is required for inference (negation,
+training requirements and instructions for other models give none). `none_recognized` says only that the rule
+found nothing. `not_read` is the scanner's report of a card it could not read: it is never stored, a fresh
+`not_read` changes no stored note (`merge_setup_note`), and a note of another card revision is read again, not
+carried. Nothing of a card is executed or copied.
+
+**Limit of the rule** (decision of the management, 2026-10-14, the measure of V5): the rule guards against
+**realistic forms of model cards** -- a start block, a sentence that names a package, sections and lists of several
+models, negation, training -- and not against a card written to deceive it; in doubt it gives no package name (a
+missed name is allowed, a wrong one is not). **Faults of the run** (network, answer, form): the measure is realistic
+faults of the network and of answers, and one fault fails only its unit (a card, a package, a repository, a row),
+never the run.
+
+**The recognition rule E4-B** (`scripts/catalog_scan_card.py`, `detect(markdown, model)`; the fixtures are
+`tests/test_ko_p4_card.py`). `instructions` needs a fenced block (a shell language or none) with a logical line
+`vllm serve <model>` whose first argument is exactly this model's id, case ignored: a block for another model, for a
+variant such as `<model>-FP8` or for a path does not count, nor does a mention in running text. A **package name** is
+given only with `instructions` and only for one sentence of running text (not a code block, not a table row) of the form
+`[To run|serve|use|deploy|start ..., ] <subject> [also] requires|needs the <name> [python] package` whose rest names vLLM,
+inference or serving. The subject has to mean this model and nothing else: the repository name anywhere; a pronoun or
+the leading word of the name only in a section without a reference to another model (a word that joins a letter and a
+digit with `-`, `.`, `_` or `/`, or a size such as `70B`). A negation, `optional`, training, tuning, quantizing,
+converting or building, a heading that speaks of those, and a card that names two different packages give no name only: a
+card with a matching `vllm serve` block stays `instructions` with `package` `null` (`catalog_scan_card.detect`). A missing
+package recognition omits the name and nothing else. `none_recognized` arises only where no matching start block was found,
+and says only that the rule found nothing.
+
+### Origin of a package (V4)
+
+`origin.package_origin(owner, base_model, packagers)`: `publisher` is the owner of **this** base model (an
+account name has no case on the Hub); `listed packager` is an account of `listed_packagers_of(catalog)`, the
+catalog's own `packagers` list (the shipped default list where a catalog has none; a list a folder's
+configuration adds changes what is searched, not what is recommended); anything else is `other`. The publisher
+stands over the listed packager. `search.owner_class` is not used: it counts every publisher account of the
+catalog, so an account that publishes other models would be released for a foreign conversion.
+
+The comparison with the list ignores case on both sides. The origin reaches the render document (V4, additive,
+like `load_check`): a row carries `origin` `other` where its GGUF package is of an account that is neither the owner of
+the row's base model nor in `listed_packagers_of` the catalog the render was given; the key is **not written** for a
+publisher, a listed packager, an Ollama package or a render without a catalog, so documents without such a row
+are byte for byte those of 1.0.0, and two catalogs that differ in their list give two documents. The standalone
+`render` and the Markdown view therefore decide V4 from the document alone.
+
+The origin steers **only** the automatic recommendation, not the fit, the rating or the ranking. Rules for the
+list of step 5 and for `offered()` (behavior of P1): a row is **recommendable** when its package is an Ollama
+library package, or a GGUF package whose origin is `publisher` or `listed packager` (`auto_recommendable`), and
+its check is not `absent`. The recommendation looks at **the rows shown** only -- hidden alternatives are neither
+shown nor searched. A row that is not recommendable stays selectable by name (a filter that is off, a direct
+id), except one whose check is `absent`: that stays blocked even for an explicit choice. `other` is not
+recommended **whatever its check says and whatever approval or measurement it has**. When the first shown row
+is skipped for the recommendation, the line `COMMUNITY_CONVERSION` says why; when no shown row is left,
+`NO_RECOMMENDATION` is the line and nothing is pulled implicitly. An answer file without `pull_package` takes row
+#1 or nothing -- it does not move to another rank.
+
+### Direct pull (V10)
+
+`modelroom pull <name>` reads the catalog offline (`catalog_remote.offline_catalog`, the same file the guided mode
+stored) after the name was validated and **before** the daemon is touched. `Catalog.pull_check(name)` assigns
+`hf.co/<repo>:<quant>` to the one stored check of that repository and quantization (`canonical_quant`, case
+ignored), **only where the check itself states `same_quantization` 1**: the repository held exactly one package of
+that quantization when it was checked, so a second package nobody checked cannot hide behind the name. A name without
+a quantization, with two packages of that quantization or without that statement, in any other form -- an Ollama
+name included, which inherits **no** finding of the Hub through its base model -- is unchecked and takes the
+old way. The name carries no revision, so a stored `absent` check **blocks the pull of a movable name until a
+released new check replaces it** (decided 2026-10-13, variant A): a decision on the content last checked, not a
+statement about what the name serves now; the reason is `LOAD_BLOCKED` with the day of the check. A known block
+ends the command with exit `2`, and `--yes` does not pass it. The two machines of a handover may hold different
+catalogs; the one that pulls decides.
+
+### Direct find and knowledge hint (V8, V9)
+
+Applies only with a vLLM machine among the chosen ones (`guided_context.vllm_among_chosen`); without one no
+tensor query is made and the knowledge hint stands in. The **direct find** puts the publisher's own model, found
+by its catalog row, in the list beside the packages found by GGUF, before the list and before the question after
+a typo: for a typed repository id the row with that id, for words the rows whose name the words match (the
+matching of `search_word`), for a search with no word none. At most `DIRECT_FIND_MAX` (10) models are asked,
+each with one request for its own repository answer (`GET /api/models/<repo>`, which must name that repository),
+booked in the shared budget. A model whose answer is unreadable, not found or cut off by the budget is **named**
+in `search.json` (`DirectLogEntry`), never left out. The owner filter does not hide a publisher's own model,
+filter on or off. A direct find is a `SearchHit` with `found_as` `direct`: resolved as itself, no base model, no
+relation, deduplicated against the packages by the base model's id. Only chosen models are written to the
+configuration, through the existing change (`apply_hits`, `apply_tensor_repos`), and the original repository
+is carried explicitly; no choice, no change. `search.json` gets the list `direct` (one `DirectLogEntry` each) where
+at least one model was asked, and `knowledge_hint` (the count of models the hint could not show) where it was
+cut; both keys are left out otherwise.
+
+The **knowledge hint** shows without a vLLM machine, for catalog rows the words match whose base model no GGUF
+hit of this search resolved to and whose row lists no GGUF repository (`gguf_repos`): `KNOWLEDGE_HINT`, and after
+`; ` the sentence `KNOWLEDGE_HINT_TENSOR` only where the snapshot of the folder holds an active complete tensor
+package of that model (a positive proof; the catalog holds none). No request is made. Order: `latest` rows first,
+then the catalog order; at most `KNOWLEDGE_HINT_MAX` (3) lines.
+
+### How the evidence reaches the views (V11)
+
+The evidence is the **catalog**. `render.build_render_document(..., catalog=None)` takes it and writes it into the
+document: the check of a package on its row (`load_check`, on `RankedEntry` and `SetAsideEntry`) and the setup
+note of each base model that has a row (`setup_notes`, by repository id, only notes that found instructions).
+Everything downstream reads the document: the Markdown, the JSON, the terminal, the pull list and the
+install lines of step 5 and of the handover. The guided run passes the catalog it used (`GuidedRun.catalog`);
+`modelroom render` passes `catalog_remote.offline_catalog(<folder of the pointer file>/catalog)`, the shipped or
+the stored published one, whichever is later, and `MODELROOM_CATALOG=shipped` leaves the shipped one. A
+catalog that holds nothing for a package leaves the row without `load_check` and the document without
+`setup_notes`: both keys are then absent from the JSON. The document is the document of release 1.0.0 byte for
+byte only for `None`, or for a catalog that holds nothing for these rows **and** changes the origin of no row:
+the origin rule can set `origin: "other"` on a GGUF row of an unlisted packager without any check or note. The document schema stays 3; the two keys are additive, and a reader of schema 3 that refuses an
+unknown key is told so here. What a row with a `load_check` shows or locks is P1's.
+
+### What the views do with the evidence (P1, recorded by P5)
+
+The behavior of the views and the lists on the fields of the document (V4, V5, V11); the words are the next section.
+
+- **A blocked row** (`load_check.result` `absent`, for a GGUF package over Ollama or LM Studio, never a vLLM row): it
+  keeps its place, class and rank. The terminal table names it in a line that starts with the label `blocked` and
+  holds `#2 <red line>` (`packager · quantization` instead of `#n` for a package that has no rank, the repository
+  and the file added where two labels would read alike), the Markdown file in a paragraph `blocked: #2 <red line>`; the
+  line is said once for the runtimes the machine has (`Ollama and LM Studio`). A package the fit would set aside as
+  `no_fit` is `unknown` with the red line as its reason and goes to `not_covered` with the note code `load_blocked`
+  (`render._blocked_or`); a package the fit cannot judge for another reason keeps its own reason and shows the line.
+- **The pull list** (`pull_choice.PullRow`): `blocked` holds the red line and the row is `locked` with it, so neither
+  an explicit choice, a name in an answer file nor `--yes` passes it; `community` holds the packager of a GGUF row of
+  origin `other`. `recommendable` is true for a row with neither. `modelroom pull` ends with exit `2` for a name
+  `Catalog.pull_check` assigns to an `absent` check.
+- **The recommendation** (`pull_choice.offered`, `Offered.passed`): only the shown rows are looked at; a rank none of
+  whose fitting rows is recommendable goes to `passed` and the search goes on to the next rank, except for `#1` alone
+  (an answer file without `pull_package`), which ends there and never moves to another rank.
+  `recommendation_lines(offered)` is what a skipped recommendation says: `COMMUNITY_CONVERSION` once per packager,
+  then `NO_RECOMMENDATION` where nothing is left; a blocked row says why under its table, not here.
+- **The setup note** (`views_install.setup_note_of(notes, repo)`, by `hf_id_key`): the note of a base model with
+  status `instructions`, over both vLLM commands in the card of step 5 and in the handover views.
+- **The scale of step 3** (`guided_context.fit_texts(..., catalog)`): a package the catalog holds an `absent` check for
+  stays in the total and does not count as fitting, so the column agrees with step 5; without a catalog, or with
+  a `present` check or one of another revision, the column is that of 1.0.0.
+
+### The words (decision E3)
+
+English, with placeholders; a change is made for length or layout only and is reported. `LOAD_BLOCKED`:
+`{runtime} installation not offered for {model}: architecture {arch} is absent from the checked llama.cpp source
+(checked {date})` (red, only for an `absent` check; `load_blocked_text`). `COMMUNITY_CONVERSION`: `{packager} is a
+community conversion, not checked; not offered as the automatic choice` (red, only where a recommendation is
+passed over). `KNOWLEDGE_HINT`: `{model} ({publisher}) is in the catalog; no GGUF from its publisher or a listed
+packager is known here` (gray; `{publisher}` is the account), with `KNOWLEDGE_HINT_TENSOR` after `; ` on a positive
+proof. `SETUP_NOTE`: `{model} has setup instructions in its model card: {url}` over both vLLM commands (red), and
+`SETUP_NOTE_PACKAGE` as a second line only where the note names a package. `NO_RECOMMENDATION` (not in the
+decision): `no automatic recommendation: every row shown is blocked or not checked; choose a row by name`.
+
+### PackageCheck
+
+The architecture of one GGUF package compared with a commit of llama.cpp, on the row of the base model
+(`gguf_checks`). `result` is `present` or `absent`; `architecture_source` is `hub_field` (the Hub's field,
+valid for the file `hub_metadata_file` shows) or `file_header`.
+
+```json
+{
+  "repo": "othercorp/Nova-7B-GGUF",
+  "revision": "9f8e7d6c5b4a3928170615243342516078960a1b",
+  "identity": "Nova-7B-Q8_0.gguf",
+  "file": "Nova-7B-Q8_0.gguf",
+  "quantization": "Q8_0",
+  "architecture": "nova7",
+  "architecture_source": "file_header",
+  "result": "absent",
+  "llamacpp_commit": "45451c366d4256f94fbc8845645e31a6b9155054",
+  "source_url": "https://github.com/ggml-org/llama.cpp/blob/45451c366d4256f94fbc8845645e31a6b9155054/src/llama-arch.cpp",
+  "checked": "2026-10-13",
+  "same_quantization": 1
+}
+```
+
+`identity` is `identity_stem(file)`, a shard set is read at its first shard, `quantization` is what the name of
+`file` says, `source_url` is the page of the block at `llamacpp_commit`, and `checked` is a UTC day.
+`same_quantization` (optional, `>= 1`) is the number of weight packages of this quantization the repository held at
+`revision`, counted by the scanner from the file list; `null` is not recorded. A package is found by repository,
+identity, revision **and** `file` (the file read must be a file of that very package: a set of two shards and a
+set of three are two packages), and two checks that differ in result, architecture or file leave it `unknown`.
+
+### SetupNote
+
+What the model card of the publisher's repository says about setting up vLLM, at one revision of the card.
+`status` is `instructions`, `none_recognized` or `not_read` (never stored); `package` only with `instructions`;
+`reason` exactly with `not_read`, one printable ASCII line of at most 97 characters; `source_url` is the card at
+`card_revision` (`https://huggingface.co/<model>/blob/<revision>/README.md`), the model's page for `not_read`.
+
+```json
+{
+  "model": "acme/Nova-7B",
+  "status": "instructions",
+  "card_revision": "9f8e7d6c5b4a3928170615243342516078960a1b",
+  "source_url": "https://huggingface.co/acme/Nova-7B/blob/9f8e7d6c5b4a3928170615243342516078960a1b/README.md",
+  "checked": "2026-10-13",
+  "package": "nova-inference",
+  "reason": null
+}
+```
+
+### DirectLogEntry
+
+One line of the list `direct` in `search.json`: a publisher model the search asked the Hub for.
+
+```json
+{
+  "repo": "acme/Nova-7B",
+  "source": "word",
+  "status": "found",
+  "requests": 1,
+  "reason": null
+}
+```
+
+`source` is `id` or `word` (a search with no word makes no direct find); `status` is `found` (a reason is
+`null`), `not_read` (asked, no usable answer, `reason` says why) or `budget` (the shared budget ended first:
+`requests` is 0). A found model or a failed read costs its request.
 
 ## Render (schema 2)
 
@@ -5451,6 +5916,15 @@ card; a hint, never a limit.
 |---|---|---|
 | `users` | `int \| None` | schema 2; `1..10240`; set only together with `requests_origin` |
 | `requests_origin` | `"default" \| "entered" \| "from_users" \| None` | schema 2; `None` for a scenario that is not the configuration's |
+| `setup_notes` | `dict[repo, SetupNote]` | AP9-KO, additive; the key is each note's `model`; only notes that found instructions; **left out of the JSON when empty** |
+
+**Evidence (AP9-KO, V11; schema 3, additive).** `build_render_document(..., catalog=None)` writes the check the
+catalog holds for exactly a row's package into that row (`load_check`, a `PackageCheck`, on `RankedEntry` and
+`SetAsideEntry`) and the setup note of each base model with a row into `setup_notes`. `load_check` `None` is
+`unknown`, and a `None` or an empty one is **left out of the JSON**: with no evidence and no changed origin
+the document is the document of release 1.0.0 byte for byte (the limits are V11's, "How the evidence reaches
+the views"), and the schema version does not move. A row keeps its place and its
+class; what a check changes in a view is not decided by the document. "Package findings and the load check".
 
 **Package visibility (AP9-SV2-P, F3).** Which packages an output may show or count is read from
 the runtime table, never from a package's format (`runtimes.visible_packages`, the one filter):
@@ -7238,6 +7712,12 @@ the machine that should get the package, whether or not modelroom ever measured 
    guided run's own pull does, size included where one was known: `✓ Pulled    <name> · <size> ·
    say Yes in step 4 of the next run to measure it` -- the sentence names the guided run because
    this command reuses its success line unchanged (`cli_pull.py` passes no `hint` of its own).
+
+**The catalog check (AP9-KO, V10; behavior of P1, data of P0).** After step 1 and before step 2 the name is
+looked up in the catalog read offline (`Catalog.pull_check`, "Package findings and the load check", "Direct
+pull"). A name the catalog assigns to a package with an `absent` check ends the command with exit `2` and the
+reason of the display, with the day of the check; `--yes` does not pass it. A name nothing can be assigned to --
+no quantization, two packages, an Ollama name -- takes the way described here unchanged.
 
 **`PullTarget`** (`guided_install.py`) is what steps 4 and 6 draw on either way: seven fields --
 `daemon`, `disk` (a callable, read fresh at the check, not a value), `now`, `screen`, `asker`,
