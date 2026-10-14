@@ -3955,7 +3955,8 @@ page is no evidence), and
 `latest_checked`, the date the maintainer confirmed it. Both are set exactly when `latest` is
 true. A **stated** `latest` or `successor` is never derived from a number, a line or a family: a
 higher version number in the same line does not make an earlier model `legacy` in the catalog, only
-an explicit `successor` does. The list's **computed** status is derived from the version numbers of
+an explicit `successor` does. (The scanner may propose such a `successor` from the names, and the maintainer approves
+each one; once approved it is stated, not derived: "How a successor is proven in the shipped catalog".) The list's **computed** status is derived from the version numbers of
 a family, and says so with `*` ("Latest and legacy evidence", "Computed release"; decided
 2026-09-25); the catalog itself computes nothing. `Catalog.age_of(hf_repo)` returns `latest`, `legacy` with its successor, or
 `unknown`. A model with a successor is never `latest`; successors stay under the family's
@@ -3971,12 +3972,44 @@ very model as the one it replaces, next to the collection that carries the succe
 with the day it was checked. A line the publisher carries as current is on its own no such proof: it
 does not say that every model of the line before it was replaced. Neither is a model of the same
 size or a benchmark table: the card of `Qwen3.8-27B` follows "the Qwen3.5 and Qwen3.6 series" and
-compares itself with `Qwen3.6-27B`, but names no model as replaced, so both 27B rows keep age
-`unknown`. `Magistral-Small-2509` has a successor: the card of `Mistral-Small-4-119B-2603` names it
+compares itself with `Qwen3.6-27B`, but names no model as replaced, so no card proves a successor for
+either 27B row. Since 2026-10-14 that is no longer the end of it: the name rule below may propose
+`Qwen3.8-27B` for them, and a row keeps age `unknown` until the maintainer approves that proposal.
+`Magistral-Small-2509` has a successor: the card of `Mistral-Small-4-119B-2603` names it
 as one of the previous Magistral models of the family it now carries. The one successor that is no
 `latest` row is `EuroLLM-9B-Instruct`'s: the card of `EuroLLM-9B-Instruct-2512` calls itself an
 improved version of it, but the publisher's collection lists both lines side by side.
 `tests/test_catalog.py` holds the shipped file to both rules.
+
+**The name rule may propose, the maintainer approves each one** (decided 2026-10-14, changing the decision of
+2026-09-25 above: a successor needed a model card as proof, and so only three rows carried one). The scanner
+(`scripts/catalog_scan.py`, stage `A4`, `catalog_scan_latest.name_successors`) runs the name rule of the search
+(`search_release`: `line_key`, `stands_over`, the highest members of a group, `_ordered_successors`) over the rows of the
+working catalog, offline, and proposes `row -> successor` when all of these hold: both rows are in the catalog, of one
+publisher, one group `(publisher, family, line)`, one `kind` (the search has names and no kind, so it groups a text and a
+vision model of one family; the catalog knows the kind and keeps them apart) and **one variation** (`line_key`'s variation
+words, the same set in any case: a missing successor is allowed, a wrong one is not, so a LoRA, an audio or an Omni build is
+no successor of the plain model; the size may differ, the maintainer sees it when approving); the successor stands over the
+row by a **strictly higher version**, a date alone never (U5 rule 4); both rows have a `hub_created` and the successor's is
+later; the row has no successor yet and neither it nor the successor is on the rejection list, and that very pair is not
+(below); the successor has no successor at the end of the run and is a highest member of its **subgroup** (group and
+variation, not of the whole group), the first in the order of `_ordered_successors`. A row that is
+`latest` and has such a successor gets **no** proposal: the scanner says it in a note (`latest in the catalog, but ... stands
+over it by version`) and the maintainer decides that apart. Each proposal is a numbered change of its own with a line
+`basis: name rule: ...`; it changes nothing until the maintainer names its number in `--approve`. An approved one is a stated
+`successor` like any other: `successor_source` is the Hub page of the successor, `successor_checked` the day of the
+proposal. The successor of such a row need not be a `latest` row, and that is the one place where `tests/test_catalog.py` lets
+a non-`latest` target stand without an entry in `SUCCESSORS_NOT_LATEST`: the source is the successor's own page and the name
+rule still holds for the pair. A proposal is made again from the table every run (the carried one keeps its first day, one the
+rule no longer makes is gone). **A rejection (`--reject <n>`) of such a proposal turns down the pair, not the row**: the
+rejection list (`catalog-rejected.json`) gets the entry `{"hf_repo": <row>, "successor": <target>, "date": ...}`, the one
+additive form of the file. That proposal never comes back; another successor of the row (a new higher version) and every
+other field of the row still do. A reader takes an entry with a `successor` as a pair only (`parse_rejected_pairs`) and
+never as a rejected repo; entries of the old form read as before, and a pair with names that are no strings is an error.
+Every other rejected number still puts its repo on the list. The scan alone (`--offline`) asks no one and moves no mark. The shipped file reads unchanged in
+release 1.1.0 (schema 3) and, through the projection, in release 1.0.0 (schema 2), because a `successor` with its source and
+day is a field both know. A model a card names as replaced (`new_version`, stage `A3`) keeps its card as proof and goes first;
+the name rule never gives a second proposal for the same row.
 
 `load_catalog` raises `SchemaVersionError` for an unsupported version and `CatalogError` for a
 file that does not read or validate.

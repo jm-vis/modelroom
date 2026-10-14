@@ -37,6 +37,7 @@ from modelroom.catalog_schema import (
 from modelroom.contracts import SchemaVersionError
 from modelroom.examples import EXAMPLES
 from modelroom.search_pages import publisher_accounts
+from modelroom.search_release import line_key
 from modelroom.search_word import latest_model_names
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -171,8 +172,21 @@ def _rows_with_successor():
     return catalog, [(family, model) for family in catalog.families for model in family.models if model.successor]
 
 
+def _name_rule_holds(model, target) -> bool:
+    """A successor the maintainer approved from a proposal of the scanner's name rule (decided 2026-10-14), so that the
+    target need not be a `latest` row: its page is the proof (`successor_source`), and the rule still holds for the pair --
+    one publisher, one group of the search's grammar, one variation, one kind, a strictly higher version, created later on the Hub."""
+    mine, theirs = line_key(model.hf_repo, model.parameters_b), line_key(target.hf_repo, target.parameters_b)
+    return bool(
+        mine and theirs and model.successor_source == f"https://huggingface.co/{target.hf_repo}"
+        and mine.group == theirs.group and mine.variant == theirs.variant and model.kind == target.kind and theirs.version > mine.version
+        and model.hub_created and target.hub_created and target.hub_created > model.hub_created
+    )
+
+
 def _successor_faults(catalog, rows, exceptions):
-    """Rule faults of the successor rows; an exception covers only the successor it names."""
+    """Rule faults of the successor rows; an exception covers only the successor it names, and a pair the name rule
+    holds for (`_name_rule_holds`) needs none."""
     faults = []
     for family, model in rows:
         target = catalog.model_for(model.successor)
@@ -182,7 +196,7 @@ def _successor_faults(catalog, rows, exceptions):
         if model.successor.split("/", 1)[0] != family.publisher:
             faults.append(f"{model.hf_repo}: successor {model.successor} has another publisher")
         covered = exceptions.get(model.hf_repo, (None, None))[0] == model.successor
-        if not target.latest and not covered:
+        if not target.latest and not covered and not _name_rule_holds(model, target):
             faults.append(f"{model.hf_repo}: successor {model.successor} is not a latest row")
     return faults
 
@@ -206,6 +220,35 @@ def test_an_exception_for_a_successor_that_is_no_latest_row_covers_only_that_suc
     assert not any(f.startswith("utter-project/EuroLLM-9B-Instruct:") for f in faults)
     # Without any exception both rows fail.
     assert len(_successor_faults(catalog, rows, {})) >= 2
+
+
+def _name_rule_pair(**overrides):
+    """`acme/Nova-1` with the successor `acme/Nova-2`, neither `latest`; `overrides` change the row (`row_`) or the target (`target_`)."""
+    page = "https://huggingface.co/acme/Nova-2"
+    row = {"hf_repo": "acme/Nova-1", "source": "https://huggingface.co/acme/Nova-1", "hub_created": date(2026, 1, 1), "successor": "acme/Nova-2", "successor_source": page}
+    target = {"hf_repo": "acme/Nova-2", "source": page, "hub_created": date(2026, 3, 1)}
+    for name, value in overrides.items():
+        (row if name.startswith("row_") else target)[name.split("_", 1)[1]] = value
+    row_model, target_model = CatalogModel.model_validate(row), CatalogModel.model_validate(target)
+    catalog = type("Rows", (), {"model_for": lambda self, repo: {row_model.hf_repo: row_model, target_model.hf_repo: target_model}.get(repo)})()
+    return catalog, [(type("Family", (), {"publisher": "acme"})(), row_model)]
+
+
+def test_a_successor_that_is_no_latest_row_passes_when_the_name_rule_holds_for_the_pair_and_its_page_is_the_proof():
+    assert _successor_faults(*_name_rule_pair(), {}) == []
+
+
+@pytest.mark.parametrize("overrides", [
+    {"row_successor_source": "https://huggingface.co/acme/Nova-1"},  # the row's own card is the proof of a card, not of the rule
+    {"row_hf_repo": "acme/Nova-2-2501", "row_source": "https://huggingface.co/acme/Nova-2-2501"},  # a later date is no higher version
+    {"target_hub_created": date(2026, 1, 1)},  # not created later
+    {"target_hub_created": None},  # a date missing
+    {"target_kind": "vision"},  # another kind
+    {"row_successor": "acme/Nova-2-LoRA", "row_successor_source": "https://huggingface.co/acme/Nova-2-LoRA", "target_hf_repo": "acme/Nova-2-LoRA",
+     "target_source": "https://huggingface.co/acme/Nova-2-LoRA"},  # another variation (Fix 1)
+])
+def test_a_successor_that_is_no_latest_row_fails_when_one_condition_of_the_name_rule_fails(overrides):
+    assert len(_successor_faults(*_name_rule_pair(**overrides), {})) == 1
 
 
 def test_the_rows_given_a_successor_on_2026_09_25_are_legacy():

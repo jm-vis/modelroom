@@ -6,7 +6,69 @@ package or the scripts, so `catalog_scan_rules` and `catalog_scan_notes` can imp
 
 from __future__ import annotations
 
-from modelroom.search_release import line_key
+from typing import Callable, NamedTuple
+
+from modelroom.search_release import _maximal_members, _ordered_successors, line_key
+
+
+class NameSuccessor(NamedTuple):
+    """A successor the name rule proposes: the target, and in words why (`basis`, for the reader of the proposal)."""
+
+    target: str
+    basis: str
+
+
+def name_successors(rows: list, state: dict, rejected: Callable[[str], bool], refused: frozenset | set = frozenset()) -> tuple[dict[str, NameSuccessor], list[str]]:
+    """The successors the name rule of the search proposes for rows of the table: `({row: NameSuccessor}, notes)` (NF,
+    decided 2026-10-14; the maintainer approves each one). The rule is `search_release`'s -- `line_key`, `stands_over`,
+    the highest members of a group, `_ordered_successors` -- with these conditions on top, every one a test:
+
+    1. both rows are in the table, of one publisher and one group `(publisher, family, line)`, of one `kind` (the
+       search has names and no kind, so it groups a text and a vision model of one family; here they stay apart) and
+       of one variation (`line_key`'s `variant`, the same set of words in any case: a LoRA, an audio or an Omni build is
+       no replacement of the plain model -- a missing successor is allowed, a wrong one is not; the size may differ);
+    2. the target stands over the row by a strictly higher version, a later date alone is not enough (U5 rule 4);
+    3. both have a `hub_created` and the target's is later;
+    4. the row has no successor and the target has none at the end of the run (`state`: `repo -> (latest, successor)`,
+       `end_state`); neither is rejected, and the pair `(row, target)` is not in `refused` (the maintainer turned that
+       very proposal down; another successor, or another field of the row, is still open);
+    5. the target is a highest member of its subgroup (group and variation), the first of those in the order of
+       `_ordered_successors`, so no chain arises among proposals and no cycle with a stated link.
+
+    A row that is `latest` at the end of the run gets no proposal where the others would be made: it is a note (the
+    maintainer decides that apart). Names the grammar does not read take no part."""
+    shown = {row.hf_repo: row for row in rows}
+    keys: dict[tuple, dict] = {}
+    for row in rows:
+        if key := line_key(row.hf_repo, row.parameters_b):
+            keys.setdefault((row.kind, key.variant), {})[row.hf_repo] = key
+    found: dict[str, NameSuccessor] = {}
+    notes: list[str] = []
+    for (kind, _variant), members in sorted(keys.items(), key=lambda item: (item[0][0], sorted(item[0][1]))):
+        highest = _maximal_members(members)
+        for repo, key in sorted(members.items()):
+            tops = [top for top in highest[key.group] if members[top].version > key.version]
+            if repo in highest[key.group] or not tops or rejected(repo) or state[repo][1] is not None:
+                continue
+            target = _ordered_successors(key, [(top, members[top]) for top in tops])[0]
+            if (repo, target) in refused or not _later(shown[repo], shown[target]) or rejected(target) or state[target][1] is not None or repo.split("/", 1)[0] != target.split("/", 1)[0]:
+                continue
+            if state[repo][0]:
+                notes.append(f"{repo}: latest in the catalog, but {target} stands over it by version; no successor proposed, decide separately")
+                continue
+            group = f"{key.publisher}/{key.family}" + (f" {key.line}" if key.line else "")
+            below = f"version {_dotted(key.version)}" if key.version else "no version"
+            found[repo] = NameSuccessor(target, f"name rule: version {_dotted(members[target].version)} stands over {below} in {group} ({kind})")
+    return found, notes
+
+
+def _dotted(version: tuple[int, ...]) -> str:
+    return ".".join(map(str, version))
+
+
+def _later(row, target) -> bool:
+    """Both rows know the day their repo was created on the Hub, and the target's is later."""
+    return row.hub_created is not None and target.hub_created is not None and target.hub_created > row.hub_created
 
 
 def group_tops(fresh: list[tuple[str, str, float | None]], rows: list, touched=frozenset()) -> tuple[dict[str, str], list[str]]:

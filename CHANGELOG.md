@@ -5,7 +5,24 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Successors proposed from the names** (`scripts/catalog_scan.py`, stage `A4`, `catalog_scan_latest.name_successors`):
+  the scan runs the name rule of the search over the rows of the working catalog and proposes `row -> successor` where
+  both rows share a publisher, a group, a kind and a variation, the successor is the highest of that subgroup with a
+  strictly higher version and was created later, and neither has a successor yet. Each proposal is a numbered change with the successor's Hub page as proof, which the
+  maintainer approves one by one; a `latest` row with a higher version is a note, never a proposal. `--offline` makes
+  these proposals from the table alone, without a request. Nothing reaches a user before an approval and a publication
+  of the dataset; the shipped files read unchanged in releases 1.0.0 and 1.1.0.
+
+- **A rejected name-rule proposal turns down the pair** (`catalog_publish.py --reject`): the rejection list gets an entry
+  `{"hf_repo": ..., "successor": ..., "date": ...}`, an additive form; the row and its other fields stay open.
+
 ### Changed
+
+- The shipped catalog's rule that a successor is a `latest` row (`tests/test_catalog.py`) also lets stand a successor
+  approved from the name rule, if the rule still holds for the pair and its source is the successor's page.
+  `CONTRACTS.md`, "How a successor is proven in the shipped catalog", records the decision of 2026-10-14.
 
 - The daily package run (`scripts/catalog_scan.py --packages`) gives every row it takes the same share of the stage's
   budget, so one popular model with many conversions no longer uses the run: it reaches its forty rows instead of one to
