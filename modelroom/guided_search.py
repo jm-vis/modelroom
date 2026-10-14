@@ -135,7 +135,9 @@ def search_step(run: GuidedRun, config: Configuration, results_dir: Path) -> Sea
         again = _did_you_mean(run, step.outcome.candidates)
         if again is not None:
             step = _searched(run, config, again, filtered, checked, context, direct=vllm)
-    step = replace(step, tensor_repos=_tensor_hits(run, vllm, step.outcome.hits))
+    tensor_repos = _tensor_hits(run, vllm, step.outcome.hits)
+    # The tensor requests are booked in the log's budget as well, like the direct find's: it says what is left for the fetch.
+    step = replace(step, tensor_repos=tensor_repos, outcome=replace(step.outcome, budget_used=run.budget.used))
     if not vllm:
         step = _with_hints(run, config, step)
     _report(run, config, step)
@@ -160,7 +162,8 @@ def _searched(
     (decided 2026-09-25). A typed repository id is never hidden by it.
 
     `SearchError` becomes the guided mode's own error here, so the caller keeps its exit code; the
-    import is local because `guided.py` imports this module.
+    import is local because `guided.py` imports this module. A single page that did not answer is no
+    `SearchError` (AP9-KO P5): it is a note of the outcome, and only a search with no answer at all ends here.
     """
     from .guided import GuidedError
 
@@ -355,13 +358,21 @@ def searched_sentence(log: dict) -> str:
     "no publisher of this catalog that answered" is true but tells a reader nothing they can act on,
     and the accounts were asked -- which is the whole question the change of 2026-09-24 exists to
     answer (decided 2026-09-25).
+
+    A publisher with no hit and a page that did not answer (`failed_pages`, AP9-KO P5) is not named as
+    having no GGUF repository: that is not known, and the page's own note says what went wrong.
     """
     accounts = log.get("accounts", [])
     if log.get("mode") == "id":
         return TYPED_SENTENCE.format(repo=log.get("word", ""))
     if log.get("mode") == "catalog":
         return CATALOG_SENTENCE.format(count=len(accounts))
-    publishers = [entry["account"] for entry in accounts if entry["class"] == "publisher"]
+    unanswered = {entry["account"] for entry in log.get("failed_pages", [])}
+    publishers = [
+        entry["account"]
+        for entry in accounts
+        if entry["class"] == "publisher" and (entry["hits"] or entry["account"] not in unanswered)
+    ]
     answered = [entry["account"] for entry in accounts if entry["class"] == "publisher" and entry["hits"]]
     packagers = len({entry["account"] for entry in accounts if entry["class"] == "packager"})
     open_lists = any(entry["class"] == "open" for entry in accounts)

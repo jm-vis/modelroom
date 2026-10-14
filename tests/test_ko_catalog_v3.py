@@ -105,7 +105,9 @@ def test_a_schema_3_document_without_any_finding_is_valid_and_reads_like_schema_
 
 
 def test_the_shipped_catalog_stays_a_schema_2_document_until_it_holds_findings():
-    assert json.loads(CATALOG_FILE.read_text(encoding="utf-8"))["schema_version"] == 2
+    raw = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
+    holds_finding = any(row.get("gguf_checks") or row.get("setup_note") for row in raw["models"])
+    assert raw["schema_version"] == (3 if holds_finding else 2)  # decided in P5: schema 3 as soon as a finding is approved
 
 
 # --- schema 2 stays exactly the shape release 1.0.0 reads -------------------------------------------------------
@@ -204,13 +206,20 @@ def test_the_release_1_0_0_reader_takes_the_old_channel_unchanged_and_never_meet
         tar.extractall(old, filter="data")
 
     shipped = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
+    shipped_bytes = CATALOG_FILE.read_bytes()
+    if shipped["schema_version"] == 3:  # once findings are approved the shipped file is schema 3: this is its form for the old channel
+        shipped["schema_version"] = 2
+        for row in shipped["models"]:
+            row.pop("gguf_checks", None)
+            row.pop("setup_note", None)
+        shipped_bytes = json.dumps(shipped).encode("utf-8")
     v3 = copy.deepcopy(shipped)
     v3["schema_version"] = 3
     for row in v3["models"]:
         row.update(gguf_checks=[], setup_note=None)
     files = tmp_path / "files"
     files.mkdir()
-    (files / "shipped_v2.json").write_bytes(CATALOG_FILE.read_bytes())
+    (files / "shipped_v2.json").write_bytes(shipped_bytes)
     (files / "projected_v2.json").write_text(json.dumps(project_to_schema2(v3)), encoding="utf-8")
     (files / "v3_without_findings.json").write_text(json.dumps(v3), encoding="utf-8")
     with_finding = copy.deepcopy(v3)
@@ -490,9 +499,9 @@ def _published_catalog_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MODELROOM_CATALOG", raising=False)
 
 
-def test_the_old_channel_is_unchanged_and_stays_the_default_until_the_release_decides():
+def test_the_old_channel_is_unchanged_and_the_new_one_is_the_default_since_release_1_1_0():
     assert (catalog_remote.REMOTE_FILE_NAME, catalog_remote.CACHE_FILE_NAME) == ("catalog-v2.json", "catalog-v2.cache.json")
-    assert catalog_remote.DEFAULT_CHANNEL is catalog_remote.CHANNEL_V2
+    assert catalog_remote.DEFAULT_CHANNEL is catalog_remote.CHANNEL_V3
     assert (catalog_remote.CHANNEL_V2.file_name, catalog_remote.CHANNEL_V2.schema, catalog_remote.CHANNEL_V2.max_bytes) == ("catalog-v2.json", 2, CATALOG_MAX_BYTES)
 
 
@@ -521,7 +530,9 @@ def test_the_new_channel_refuses_a_schema_2_file_and_the_old_channel_refuses_a_s
     assert new.source == "shipped" and "schema_version 2" in new.origin
     three = _v3()
     three["published"] = "2026-10-12"
-    old = catalog_remote.current_catalog(FixtureTransport(_hub(catalog_remote.CHANNEL_V2, three)), NOW, tmp_path / "b", RequestBudget(150))
+    old = catalog_remote.current_catalog(
+        FixtureTransport(_hub(catalog_remote.CHANNEL_V2, three)), NOW, tmp_path / "b", RequestBudget(150), channel=catalog_remote.CHANNEL_V2
+    )
     assert old.source == "shipped" and "schema_version 3" in old.origin
 
 
@@ -568,7 +579,8 @@ def test_the_offline_catalog_takes_the_stored_published_one_when_it_is_newer_and
     (cache / "catalog-v3.cache.json").write_text(json.dumps(envelope), encoding="utf-8")
     found = catalog_remote.offline_catalog(cache, channel=catalog_remote.CHANNEL_V3)
     assert found.model_for("acme/Nova-7B-2512").gguf_checks
-    assert catalog_remote.offline_catalog(cache).published == load_catalog().published  # the old channel's cache is another file
+    old = catalog_remote.offline_catalog(cache, channel=catalog_remote.CHANNEL_V2)
+    assert old.published == load_catalog().published  # the old channel's cache is another file
 
 
 def test_the_offline_catalog_honours_the_switch_for_the_shipped_catalog(tmp_path, monkeypatch):

@@ -514,10 +514,11 @@ def test_a_run_with_a_vllm_server_writes_the_same_bytes_as_one_without(tmp_path:
         "knowledge_hint",
         "budget",
     }
-    # The budget differs by exactly the requests the direct find spent, one per model asked.
+    # The budget differs by the requests the direct find spent, one per model asked, and (AP9-KO P5) by the requests of
+    # the tensor search, which the log books as well: a run without vLLM spends neither.
     spent = sum(entry["requests"] for entry in keys_with["direct"])
     assert spent == len(keys_with["direct"]) > 0
-    assert keys_with["budget"]["used"] - keys_without["budget"]["used"] == spent
+    assert keys_with["budget"]["used"] - keys_without["budget"]["used"] > spent
     assert keys_with["budget"]["limit"] == keys_without["budget"]["limit"]
 
     def _qwen25_package(written: dict) -> dict:

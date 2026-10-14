@@ -466,15 +466,16 @@ def test_run_search_defaults_to_the_shared_guided_budget():
 
 
 def test_run_search_reports_a_failing_status_and_names_the_account():
+    # AP9-KO P5 (sweep p5-b1): the account's pages cost themselves only; the note names the account.
     transport = build_transport(
         _search_mapping(_account_pages("mradermacher", Response(status=503, body=b"")))
     )
 
-    with pytest.raises(SearchError) as exc:
-        run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(60))
+    outcome = run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(60))
 
-    assert "503" in str(exc.value)
-    assert "mradermacher" in str(exc.value)
+    assert outcome.failed_pages == [("mradermacher", "unexpected status 503")] * 2
+    assert any(note.startswith("search for 'qwen' (mradermacher): unexpected status 503") for note in outcome.notes)
+    assert ("GET", account_search_url("qwen", "lmstudio-community")) in transport.calls
 
 
 @pytest.mark.parametrize(
@@ -490,13 +491,12 @@ def test_run_search_reports_a_body_it_cannot_read_and_names_the_page(body, messa
         _search_mapping({("GET", account_search_url("qwen", "Qwen")): Response(status=200, body=body)})
     )
 
-    with pytest.raises(SearchError) as exc:
-        run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(60))
+    outcome = run_search(transport, "qwen", catalog=_catalog(), budget=RequestBudget(60))
 
-    assert str(exc.value).startswith("search for 'qwen' (Qwen): ")
-    assert message in str(exc.value)
-    # the page that failed is the first one, so no later account was asked
-    assert ("GET", account_search_url("qwen", "unsloth")) not in transport.calls
+    assert outcome.notes[0].startswith("search for 'qwen' (Qwen): ")
+    assert message in outcome.notes[0]
+    # AP9-KO P5: the page that failed is the first one, and every later account was asked all the same
+    assert ("GET", account_search_url("qwen", "unsloth")) in transport.calls
 
 
 def test_a_transport_that_raises_ends_the_search_with_the_page_in_the_message():

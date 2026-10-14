@@ -153,6 +153,9 @@ class SearchGroup:
     # takes one string as `search=`, so the pages are asked with one word and the rest of the
     # words are held against the answer here -- and a reader is told how much that removed.
     filtered_out: int = 0
+    # AP9-KO P5 (sweep p5-b1): how many of this group's pages did not answer. They cost their request
+    # and add nothing, so `page_size` is what the others answered with.
+    failed_pages: int = 0
 
     def line(self) -> str:
         """The one line the summary prints for this group: the label and its numbers."""
@@ -161,6 +164,8 @@ class SearchGroup:
             parts.append(f"{self.already_listed} of them already listed")
         if self.filtered_out:
             parts.append(f"{self.filtered_out} of them other models")
+        if self.failed_pages:
+            parts.append(f"{self.failed_pages} of {self.pages} pages not answered")
         text = ", ".join(parts)
         if self.page_full:
             return f"{text} (page full: a more specific word shortens the list)"

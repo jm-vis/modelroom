@@ -58,6 +58,7 @@ from .screen_names import profile_name
 from .state import UnreadableStateFileError, read_snapshot
 
 if TYPE_CHECKING:  # pragma: no cover - the run object is passed in, never constructed here
+    from .catalog import Catalog
     from .guided import GuidedRun
     from .selection import RunSelection
 
@@ -447,7 +448,12 @@ def scale_choices(levels: tuple[Level, ...], default_context: int, fits: dict[in
 
 
 def fit_texts(
-    packages: list[Package], base_models: dict[str, BaseModelSpec], checked: Checked, contexts: list[int], requests: int = 1
+    packages: list[Package],
+    base_models: dict[str, BaseModelSpec],
+    checked: Checked,
+    contexts: list[int],
+    requests: int = 1,
+    catalog: "Catalog | None" = None,
 ) -> dict[int, str]:
     """The last column, one text per context: `all N packages fit`, `k of N`, `none of N`.
 
@@ -457,6 +463,10 @@ def fit_texts(
     finished ranking would judge it. `packages` already is the set `runtimes.visible_packages`
     shows for this machine (`snapshot_packages`'s own filter through `render._eligible_packages`),
     so the scale and the ranking read the same packages too, not only the same formula.
+
+    A package the `catalog` holds an `absent` check for (AP9-KO, `Catalog.package_check`) is shown, so it stays in
+    the total, and does not fit: its installation is not offered, and step 5 carries it locked or as `not_covered`.
+    No catalog, or a package without such a check, counts as before.
     """
     from .runtimes import fit_for  # deferred: runtimes.py imports guided_vllm.py, which imports this module (a cycle)
 
@@ -465,13 +475,20 @@ def fit_texts(
     total = len(packages)
     if not total:
         return {context: NO_PACKAGES for context in contexts}
+    allowed = [package for package in packages if not _is_blocked(package, catalog)]
     texts = {}
     for context in contexts:
         fitting = count_fitting(
-            checked.profile, checked.machine_config, packages, base_models, context, requests, fit_function=fit_for
+            checked.profile, checked.machine_config, allowed, base_models, context, requests, fit_function=fit_for
         )
         texts[context] = _fit_text(fitting, total)
     return texts
+
+
+def _is_blocked(package: Package, catalog: "Catalog | None") -> bool:
+    """Whether the catalog holds an `absent` check for exactly this package (what step 5 locks)."""
+    check = catalog.package_check(package) if catalog is not None else None
+    return check is not None and check.result == "absent"
 
 
 CAP_WORDS = "every model of this run"
@@ -620,7 +637,7 @@ def _answered_context(run: "GuidedRun", config: Configuration, checked: Checked,
     packages, base_models = snapshot_packages(config, run.selection, [(checked.profile, run.servers.found.get("vllm"))])
     default_context = config.guided.context if config.guided.context is not None else DEFAULT_CONTEXT
     contexts = [level.tokens for level in LEVELS] + [default_context]
-    fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts, requests)
+    fits = fit_texts(packages, {spec.hf_repo: spec for spec in base_models}, checked, contexts, requests, run.catalog)
     choices = scale_choices(LEVELS, default_context, fits, context_cap(base_models))
     instruction = EXPLANATION.format(machine=checked.shown) if fits else None
     from .guided import ask_checked  # imported here: that module calls this step in turn

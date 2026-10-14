@@ -63,10 +63,11 @@ class Channel:
 
 CHANNEL_V2 = Channel("catalog-v2.json", "catalog-v2.cache.json", 2, CATALOG_MAX_BYTES, build_catalog_v2)
 CHANNEL_V3 = Channel("catalog-v3.json", "catalog-v3.cache.json", 3, CATALOG_V3_MAX_BYTES, build_catalog_v3)
-# The channel a guided run asks. It stays the old one until the data of the new one is published and
-# released with this version (AP9-KO P5): the switch is this one line.
-DEFAULT_CHANNEL = CHANNEL_V2
-REMOTE_FILE_NAME = CHANNEL_V2.file_name  # one file per schema major version; the default channel reads schema 2
+# The channel a guided run asks: the new one since release 1.1.0 (AP9-KO P5). The dataset's `catalog-v3.json` is
+# published before this release is, so a 1.1.0 that meets no such file falls back to its shipped catalog like on any
+# other fault; release 1.0.0 asks `catalog-v2.json` and does not know this line.
+DEFAULT_CHANNEL = CHANNEL_V3
+REMOTE_FILE_NAME = CHANNEL_V2.file_name  # the old channel's file, which release 1.0.0 reads and the publication tool probes
 CACHE_FILE_NAME = CHANNEL_V2.cache_name
 CACHE_VERSION = 1
 SWITCH = "MODELROOM_CATALOG"  # `shipped` turns the network off

@@ -65,6 +65,59 @@ datasets) into the entry that records the set-up.
   for the caller: the hygiene check runs before the probe upload as well, so `MODELROOM_RELEASE_PRIVATE_WORDS` must be
   set for it too; without it the call ends with exit 2 and nothing is uploaded.
 
+## The daily scan with `--packages` (AP9-KO, release 1.1.0)
+
+The scanner can also check the GGUF packages of the catalog rows and read the model cards of the publishers. It proposes
+the results as the fields `gguf_checks` and `setup_note` of a row (stage `A9`); they go through the same approval as every
+other change. The contract is in `CONTRACTS.md`, "Package findings and the load check" (V1 to V7).
+
+```
+python scripts/catalog_scan.py --catalog modelroom/catalog.json --rejected modelroom/catalog-rejected.json --out <out> --packages --budget 700
+```
+
+- **The working catalog has to be schema 3.** On a schema-2 table the stage does not run and the proposal says so
+  (`package checks: the working catalog is schema 2 ...`). Making the table schema 3 is one line, `"schema_version": 2` to `3`,
+  and belongs to the first approval of findings (below); until then the daily run goes without `--packages`.
+- **Hosts.** `huggingface.co`, `api.github.com` (the llama.cpp commit and its file `src/llama-arch.cpp`, two requests a run)
+  and `*.hf.co` (the Hub's CDN, to which the read of a file's first bytes is redirected). Only the scanner may reach the last
+  two; the runtime of modelroom does not (`http._ALLOWED_HTTPS_HOSTS` is unchanged). Reads only (`GET`).
+- **Rotation.** Per run at most 40 rows of `kind` `text` or `vision`, never a row already tried that day: rows never tried
+  first, then the one tried longest ago, then by name (`package_attempts` in `scan-state.json`; within a row the repositories
+  and packages by `package_unit_attempts`). A second run on the same day takes the next rows and keeps the proposals of the first.
+- **Budget.** The package stage spends at most 200 requests a run; the run's own budget (`--budget`, 300 by default) pays for
+  the scan of the accounts first, some 130 requests. With the default the stage gets what is left: on 2026-10-14 that was one
+  row. Use `--budget 700`. A row with many conversions (some ninety repositories for one popular model) can use the whole 200
+  alone, so a run reaches between one and a few dozen rows, not always 40; the run says `budget ended: package checks
+  stopped after n of 40 rows` and the rest follows the next day. A full turn through the table therefore takes weeks.
+- **Rate limit.** The Hub answers `429` to a client that asks in bursts. A unit that gets one fails alone (`package checks:
+  HTTP 429` or `model card not read (HTTP 429)` in the notes), changes nothing it did not read, and is tried again by a later
+  run; run the scan once a day, not twice within minutes.
+- **A failed run changes nothing it did not read.** No new `absent`, no deletion, and every stored check keeps its day.
+- **Reading the proposal.** A `gguf_checks` change lists all checks of the row, `absent` and `present`; only `absent` blocks an
+  installation in modelroom. Each check names the repository, the revision, the file, the architecture the file states, where
+  that came from (`hub_field` or `file_header`) and the llama.cpp commit it was compared with. A `setup_note` change points at
+  the publisher's model card at one revision and names the package only for an explicit inference requirement.
+- **Approving.** By number, as every change (`--approve 30,31,...`). The checks and the note of one row are two numbers.
+  Removing a finding is a change too and goes the same way.
+
+### First approval of findings: the table becomes schema 3
+
+The shipped table stays schema 2 and unchanged until findings are approved (decision of 2026-10-14). The steps, in this order:
+
+1. Make the working table schema 3 and keep the scan against exactly that file: replace the one line `"schema_version": 2` by
+   `"schema_version": 3` in `modelroom/catalog.json` and nothing else. A proposal is made against the bytes of the table;
+   any other bytes make it `base: stale` in `--show`, and the scanner makes it again.
+2. Scan with `--packages` against that table, `--show` the proposal, `--apply` the numbers of the findings with the
+   checksum, run the tests, commit, then continue as under "A publication".
+3. The publication makes **both** channel files from the table: `catalog-v3.json` as it is, and `catalog-v2.json` by projection
+   without the findings (it stays what release 1.0.0 reads). `--publish-pending` uploads them in one commit and
+   `--verify` compares both afterwards.
+4. **Only then release 1.1.0.** The dataset's `catalog-v3.json` is published before the release, so a user of 1.1.0 meets the
+   file at once. A 1.1.0 that meets none chooses between its shipped catalog and a valid cache of the new channel
+   (`catalog-v3.cache.json`), says so, and goes on. It does not fall back to `catalog-v2.json` and ignores a newer cache of
+   release 1.0.0. Until the file is there, such a user therefore loses the findings **and** the ordinary updates of the
+   published table (models, successors, packages) that are newer than the shipped catalog; a valid newer v3 cache is kept.
+
 ## A publication
 
 1. **See the proposal.** `python scripts/catalog_publish.py --show <out>` names every pending publication first (day, state,
