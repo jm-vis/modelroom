@@ -112,7 +112,10 @@ column is what the profile says: `server (entered)` means the run supplied the c
 | a laptop of the maintainer | laptop (chassis) | 1 x NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU, 11.94 GiB | 127.46 GiB | 2026-09-27 | `SELFTEST: OK` | 56.9 tok/s |
 | a rented instance at Verda (Helsinki) | server (entered) | 2 x NVIDIA A100-SXM4-80GB, 80.00 GiB each | 235.92 GiB | 2026-09-27 | `SELFTEST: OK` | 143.5 tok/s |
 | a rented instance at Scaleway (Paris) | server (entered) | 2 x NVIDIA L4, 22.49 GiB each | 94.29 GiB | 2026-09-27 | `SELFTEST: OK` | 48.2 tok/s |
+| a rented instance at Scaleway (Paris) | server (entered) | 4 x NVIDIA L4, 22.49 GiB each | 188.69 GiB | 2026-09-28 | `SELFTEST: OK` | 48.4 tok/s |
 | a rented instance at Seeweb (Frosinone) | server (entered) | 1 x NVIDIA L40S, 44.99 GiB | 31.27 GiB | 2026-10-08 | `SELFTEST: OK` | 122.8 tok/s |
+| a rented instance at Exoscale (Frankfurt) | server (entered) | 1 x NVIDIA RTX PRO 6000 Blackwell Server Edition, 95.59 GiB | 117.90 GiB | 2026-10-12 | `SELFTEST: OK` | 216.6 tok/s |
+| a rented instance at Exoscale (Frankfurt) | server (entered) | 4 x NVIDIA RTX PRO 6000 Blackwell Server Edition, 95.59 GiB each | 472.14 GiB | 2026-10-13 | `SELFTEST: OK` | 207.2 tok/s |
 
 ## The guided run
 
@@ -1147,6 +1150,12 @@ procedure is in `AGENTS.md`, "Versioning and releases".
 
 In the order we plan to build it, none of it dated:
 
+- **Package checks for more models a day.** The daily scan checks the GGUF packages of up to forty
+  catalog rows a run, but one popular model with many conversions can use a run's whole share. A
+  fair share per row lets every row come round within days instead of weeks.
+- **vLLM switches from the model card.** Since 1.1.0 the results name a model card's setup
+  instructions over the vLLM commands, but add no switch to them. Taking the switches a card states
+  for its model (a reasoning or tool-call parser, a cache type) into the commands is the next step.
 - **Throughput for many people.** Step 3 sizes the memory for the parallel requests a head count
   stands for; a measurement of several requests at once is still missing for Ollama. Beyond roughly eight at once it is a job for a serving stack such as vLLM; the
   ranking itself stays the rule of thumb of "Step 3, Context".
