@@ -1172,6 +1172,6 @@ to size on-premise deployments before anyone buys hardware.
 
 ### License
 
-MIT, see [LICENSE](https://github.com/jm-vis/modelroom/blob/v1.0.0/LICENSE). The optional
+MIT, see [LICENSE](https://github.com/jm-vis/modelroom/blob/v1.1.0/LICENSE). The optional
 tool [llmfit](https://github.com/AlexsJones/llmfit) (MIT) runs as a separate program and is not
 part of this package.

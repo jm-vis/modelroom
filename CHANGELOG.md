@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
-## [1.1.0] - Unreleased
+## [1.1.0] - 2026-10-14
 
 Version 1.1.0 closes the gaps of the first hand trial with a model that only a foreign account converts to GGUF
 (AP9-KO). The catalog can now say, per GGUF package, that its architecture is absent from the llama.cpp source it
@@ -28,9 +28,9 @@ dataset's `catalog-v3.json` before this release.
   (`setup_note_of`). No switch is added from a card.
 - **Direct find and knowledge hint** (V8, V9): with a vLLM machine the search asks for the publisher's own model when
   no GGUF names it; without one a gray line says what the catalog knows.
-- **Catalog scan with `--packages`** (`scripts/catalog_scan.py`): checks the GGUF packages of forty rows a day
+- **Catalog scan with `--packages`** (`scripts/catalog_scan.py`): checks the GGUF packages of up to forty rows a run
   (rotation `package_attempts`, `package_unit_attempts`) within 200 requests, on `api.github.com` and `*.hf.co`, which
-  only the scanner may reach. The runbook `docs/runbooks/catalog-publishing.md` describes the daily run.
+  only the scanner may reach; a row with many conversions can take a run's whole share, so a full turn takes weeks. The runbook `docs/runbooks/catalog-publishing.md` describes the daily run.
 - **Schema 3** of the catalog file (`gguf_checks`, `setup_note` per row) on its own channel `catalog-v3.json` with its
   own cache file; `catalog-v2.json` is made by projection and stays what release 1.0.0 reads.
 
