@@ -132,6 +132,9 @@ class _Both:
         self._main, self._sub = main, sub
         self._inner = BudgetedTransport(BudgetedTransport(transport, main), sub)
 
+    def remaining(self) -> int:
+        return max(0, min(self._main.remaining, self._sub.remaining))
+
     def __call__(self, method, url, headers=None, *, max_bytes=None):
         if self._main.remaining <= 0 or self._sub.remaining <= 0:
             raise BudgetExhaustedError()
@@ -143,6 +146,7 @@ class _Run:
                  package_budget=PACKAGE_STAGE_BUDGET, package_rows=PACKAGE_ROWS_PER_RUN) -> None:
         self.packages, self.package_budget, self.package_rows, self.package_attempts = packages, package_budget, package_rows, {}
         self.unit_attempts: dict = {}
+        self.reserve_days: dict = {}
         self.files, self.out, self.now = files, Path(out_dir), now.astimezone(timezone.utc)
         self.today = self.now.date().isoformat()
         outputs = {(self.out / self.today / name).resolve() for name in ("proposal.json", "proposal.md")} | {(self.out / "scan-state.json").resolve()}
@@ -226,6 +230,7 @@ class _Run:
         raw_state = self._json(self.out / "scan-state.json")
         self.package_attempts = _attempts_of(raw_state)
         self.unit_attempts = _attempts_of(raw_state, "package_unit_attempts")
+        self.reserve_days = _attempts_of(raw_state, "package_reserve_days")
         stored = raw_state.get("accounts") if isinstance(raw_state, dict) else None
         for account in self.accounts:
             mark = stored.get(account) if isinstance(stored, dict) else None
@@ -791,9 +796,10 @@ class _Run:
                 del self.changes[key]  # carried with the case-sensitive list: a repository or account rejected in any spelling adds nothing
         carried_checks = {key[1]: change["fields"]["gguf_checks"]["new"] for key, change in self.changes.items() if key[0] == "field" and key[2] == "gguf_checks"}
         carried_notes = {key[1]: change["fields"]["setup_note"]["new"] for key, change in self.changes.items() if key[0] == "field" and key[2] == "setup_note"}
-        stage = K.PackageStage(_Both(self.transport, self.main, self.pkg), self.rows, today, self.package_attempts, carried_checks=carried_checks,
+        both = _Both(self.transport, self.main, self.pkg)
+        stage = K.PackageStage(both, self.rows, today, self.package_attempts, carried_checks=carried_checks,
                                carried_notes=carried_notes, is_rejected=self._is_rejected_any_case, limit=self.package_rows,
-                               unit_attempts=self.unit_attempts)
+                               remaining=both.remaining, packagers=self.packagers, unit_attempts=self.unit_attempts, reserve_days=self.reserve_days)
         result = stage.run()
         self.notes += result.notes
         self.problem = self.problem or result.problem
@@ -801,6 +807,7 @@ class _Run:
         self.package_attempts = record_attempts(self.package_attempts, result.attempted, today)
         units = K.record_units(self.unit_attempts, result.units, today)
         self.unit_attempts = {name: day for name, day in units.items() if (today - day).days <= K.UNIT_ATTEMPTS_KEPT}
+        self.reserve_days = record_attempts(self.reserve_days, result.reserved, today)
         for repo, checks in sorted(result.checks.items()):
             row, key = self.rows[repo], ("field", repo, "gguf_checks")
             table = [c.model_dump(mode="json") for c in row.gguf_checks]
@@ -861,7 +868,7 @@ class _Run:
                                        len(self.incomplete), self.pending_publication, N.drift_triples(self.rows.values()))
         marks = {a: self.new_marks.get(a, self.marks[a]) for a in self.accounts}
         state = {"schema": STATE_SCHEMA, "accounts": {a: {"covered_until": R.stamp(c), "pending": p} for a, (c, p) in marks.items()}}
-        for name, attempts in (("package_attempts", self.package_attempts), ("package_unit_attempts", self.unit_attempts)):
+        for name, attempts in (("package_attempts", self.package_attempts), ("package_unit_attempts", self.unit_attempts), ("package_reserve_days", self.reserve_days)):
             if attempts:
                 state[name] = {unit: day.isoformat() for unit, day in sorted(attempts.items())}
         try:  # all three files exist in memory before the first is written

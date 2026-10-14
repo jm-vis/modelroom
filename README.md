@@ -1150,9 +1150,6 @@ procedure is in `AGENTS.md`, "Versioning and releases".
 
 In the order we plan to build it, none of it dated:
 
-- **Package checks for more models a day.** The daily scan checks the GGUF packages of up to forty
-  catalog rows a run, but one popular model with many conversions can use a run's whole share. A
-  fair share per row lets every row come round within days instead of weeks.
 - **vLLM switches from the model card.** Since 1.1.0 the results name a model card's setup
   instructions over the vLLM commands, but add no switch to them. Taking the switches a card states
   for its model (a reasoning or tool-call parser, a cache type) into the commands is the next step.

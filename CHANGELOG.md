@@ -3,6 +3,21 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
+## [Unreleased]
+
+### Changed
+
+- The daily package run (`scripts/catalog_scan.py --packages`) gives every row it takes the same share of the stage's
+  budget, so one popular model with many conversions no longer uses the run: it reaches its forty rows instead of one to
+  six, and a full turn through the text and vision rows takes about a week instead of weeks. A row cut at its share is
+  tried and no fault; its unread repositories come first next time (V6 holds). Within a row the repository tried
+  longest ago comes first; only among repositories of the same day the publisher's come before those of the catalog's
+  listed packagers, and those before the rest. A reserve (at least 8 requests, a tenth of the budget when that is more) is kept back and
+  is never nil, and it goes with what the rows leave to the cut row that got it longest ago (new state
+  `package_reserve_days` in `scan-state.json`), so every unit and every new package of a visited repository is reached (a
+  cut list is continued, not read again). A row books the reserve only when it made progress; a list longer than the
+  reserve carries (37 pages at the default) is the documented bound. A run whose budget cannot give each row four requests takes fewer rows.
+
 ## [1.1.0] - 2026-10-14
 
 Version 1.1.0 closes the gaps of the first hand trial with a model that only a foreign account converts to GGUF

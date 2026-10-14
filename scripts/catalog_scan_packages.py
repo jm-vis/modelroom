@@ -29,7 +29,32 @@ So a repository or a package that fails every day goes behind the others. The bu
 is not recorded and comes first next time, and what was read before it is kept. A row the budget cuts stays untried, so the
 next run takes it first and goes on behind what it recorded -- except the first row of a run that sent a request for it:
 it had the whole budget, waiting gives it no more, so it is tried and the rows behind it are not held back. A row for
-which no request was sent (the budget was spent before it) is never tried. Bound: a row whose list alone takes the
+which no request was sent (the budget was spent before it) is never tried.
+
+**A fixed share for every row (NB).** One row with many repositories must not use the run. What is left of the budget
+after the one-time reads (the commit and the file of llama.cpp) is divided by the rows the run takes, and each row may
+send `floor(rest / rows)` requests (card, list and repositories together); a request over the share is not sent and the
+row ends. The least share is `MIN_ROW_SHARE`, 4: the model answer, the card, one page of the list and the file list of
+one repository, so that a row with a quiet card and a short list reads at least one repository; when the budget is too
+small for that many rows, the run takes fewer (`budget ended`), as it did before. A row that got its share is **tried**,
+though units stay open: a row that waited for all its units would be taken first again and hold the rotation as before.
+What the share cuts is no fault: the repository or package it cut is not recorded (see above) and comes first next
+time, which keeps V6. Round 1 gives every row its share; round 2 gives what is left of the budget to the rows that were
+cut, the one that got it longest ago first (`package_reserve_days` in the scanner's state, ordered by day, then by the order the
+rows were taken), so that every cut row comes round in a finite number of runs and none keeps it for ever. The reserve kept back
+from round 1 for this is never nil: `max(RESERVE_MIN, rest // 10)`, `RESERVE_MIN` 8, that is the progress of one open unit with what it
+needs first. V6 holds as long as the reserve carries the rest of a row's list pages, one file list and one head (two requests when the Hub redirects the read to its CDN): pages <= (share - 2) + (round 2 budget - 3), where round 1 reads share - 2 pages after the model answer and the card and round 2 has what round 1 left, at least the reserve. At the default (198 requests for the stage, 40 rows) the reserve is 19, the share 4 (two list pages in round 1) and round 2 has 38 requests: a list of up to 37 pages, some 1850 repositories at `LIST_PAGE`, is reached; with 16 requests and two rows, 8 pages (tested). A longer list is of the class the management put aside as unrealistic on 2026-10-14 (a list that takes the budget): it is not reached, the run ends without a fault, the row is tried, and the stand still is the same the next day; nothing is deleted. When the budget cannot pay it beside
+`MIN_ROW_SHARE` for every row, round 1 takes fewer rows and the others rotate on as before; a budget below
+`RESERVE_MIN + MIN_ROW_SHARE` (12) gives its one row all of it and keeps no reserve (taken as unrealistic, like the other
+bounds). Known bound of V6: it presumes that a row runs through its units once inside `UNIT_ATTEMPTS_KEPT` (365 days), after which a unit counts as never tried again. At the default budget and with realistic catalogs that holds; extreme catalogs (for example 40 rows with some ninety repositories each) lie beyond it and are taken as unrealistic, like the other bounds (decision of the management, 2026-10-14).
+A row is recorded as having got the reserve only when it made progress in round 2 (a unit read to its end, a head read or
+failed); a leftover without progress books nothing and the row keeps its priority. a cut row may take it again though all its repositories were read, because a
+new package or revision of a visited repository needs it too, and the rotation keeps the others from starving (their card is not asked again, a list the share cut is continued at its next address, repositories read in
+round 1 are skipped). Inside a row the order is: never tried first, then the one tried longest ago; among equals the repositories
+of the publisher itself, then of the catalog's listed packagers, then all others (the class decides only among equals, or
+a class with many repositories would keep the next one unread for ever); the one without a check, then downloads, last.
+A list of more than one page (card and list over the share) is read to its repositories in round 2 only; inside a run it is
+continued where the share ended, over runs it is not continued page by page (decision of the management, 2026-10-14). Bound: a row whose list alone takes the
 whole budget of a run (some ten thousand repositories at `LIST_PAGE`) gets no repository read, and a file list over
 more than one page (some thousand entries) is a fault of its repository; both are taken as unrealistic (decision of the
 management, 2026-10-14), neither is continued page by page.
@@ -89,7 +114,9 @@ HEADER_BYTES = 64 * 1024  # the range asked of a file, and the most the answer m
 LIST_PAGE = 50  # the size of a page of the list query; the list is followed to its end, the budget alone limits a run
 CHECKS_PER_ROW = 200  # the limit of the schema (`CatalogModel.gguf_checks`)
 STAGE = "A9"  # the stage mark of both proposals
-UNIT_ATTEMPTS_KEPT = 60  # days a unit's last try is kept in the state; one older counts as never tried, which is as early
+UNIT_ATTEMPTS_KEPT = 365  # days a unit's last try is kept in the state; one older counts as never tried, which is as early
+RESERVE_MIN = 8  # the least kept back for round 2 (the bound of the list pages is in the module text)
+MIN_ROW_SHARE = 4  # the least a row is given: the model answer, the card, one page of the list and the file list of one repository
 _FAILURES = (OSError, http.client.HTTPException, RuntimeError, ResponseTooLargeError, TransportSecurityError)
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ARCH_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
@@ -288,6 +315,10 @@ class _Fail(Exception):
     """One answer that cannot be used; its text is the reason in a note."""
 
 
+class _ShareEnd(Exception):
+    """The share of the row is spent: the request is not sent, and the row ends -- no fault of anything."""
+
+
 @dataclass
 class StageResult:
     checks: dict[str, list[dict]] = field(default_factory=dict)  # row -> the list the row should hold, for every row read
@@ -299,6 +330,9 @@ class StageResult:
     budget_end: bool = False
     commit: str | None = None
     page_urls: dict[str, list[str]] = field(default_factory=dict)  # row -> pages of the repositories whose checks changed
+    cut_rows: list[str] = field(default_factory=list)  # the rows that were cut at their share, in the order they were taken
+    reserved: list[str] = field(default_factory=list)  # the rows that got a part of the reserve in round 2
+    open_repos: int = 0  # the repositories those rows had listed and not read when the run ended
 
 
 def unit(repo: str, identity: str | None = None) -> str:
@@ -328,8 +362,19 @@ class PackageStage:
 
     def __init__(self, transport: Transport, rows: Mapping[str, CatalogModel], today: date, attempts: Mapping[str, date], *,
                  carried_checks: Mapping[str, Sequence[dict]], carried_notes: Mapping[str, dict | None], is_rejected: Callable[[str], bool],
-                 limit: int, unit_attempts: Mapping[str, date] | None = None) -> None:
+                 limit: int, remaining: Callable[[], int], packagers: Sequence[str] = (),
+                 unit_attempts: Mapping[str, date] | None = None, reserve_days: Mapping[str, date] | None = None) -> None:
         self.rows, self.today, self.attempts, self.limit = rows, today, attempts, limit
+        self.reserve_days = {hf_id_key(name): day for name, day in (reserve_days or {}).items()}  # row -> the day it last got the reserve
+        self.remaining = remaining  # what the budgets still allow the stage, asked when the run takes its rows
+        self.packagers = {hf_id_key(account) for account in packagers}  # the listed packagers of the catalog
+        self.allowance: int | None = None  # the requests the row in hand may still send, or no limit
+        self.row_start = 0
+        self.second_round = False
+        self.progress = 0  # units read to their end, heads read or failed: what counts as progress of a row in round 2
+        self.card_done: set[str] = set()  # rows whose card was read or failed; a second round does not ask it again
+        self.candidates: dict[str, list] = {}  # row -> its repositories once its list was read to the end
+        self.partial: dict[str, tuple[list, set, list]] = {}  # row -> list pages read, their addresses, the address still ahead
         self.carried_checks = {hf_id_key(row): value for row, value in carried_checks.items()}  # ids are compared without case
         self.carried_notes = {hf_id_key(row): value for row, value in carried_notes.items()}
         self.is_rejected = is_rejected
@@ -347,6 +392,8 @@ class PackageStage:
 
     def _counted(self, transport: Transport) -> Transport:
         def counted(method, url, headers=None, *, max_bytes=None):
+            if self.allowance is not None and self.sent - self.row_start >= self.allowance:
+                raise _ShareEnd()  # the share of the row is spent: nothing is sent
             try:
                 response = transport(method, url, headers, max_bytes=max_bytes)
             except BudgetExhaustedError:
@@ -392,19 +439,51 @@ class PackageStage:
             return self.result
         eligible = [name for name, row in self.rows.items() if row.kind in ("text", "vision") and not self.is_rejected(name)]
         due = package_rows_for_run(eligible, self.attempts, self.today, self.limit)
+        rest = self.remaining()
+        # The reserve is never nil: it pays the progress of one open unit with what it needs first (V6). When the budget cannot give
+        # it next to the minimum of every row, round 1 takes fewer rows, and the others rotate on as before; one row is always taken
+        # when its minimum is there, with what is left of the reserve.
+        reserve = max(RESERVE_MIN, rest // 10)
+        count = min(len(due), max(0, (rest - reserve) // MIN_ROW_SHARE))
+        if count == 0 and due and rest >= MIN_ROW_SHARE:
+            count = 1  # a budget below RESERVE_MIN + MIN_ROW_SHARE pays no progress beside a row: the one row gets all of it
+            reserve = 0
+        taken = due[:count]
+        reserve = min(reserve, rest - count * MIN_ROW_SHARE)
+        share = (rest - reserve) // len(taken) if taken else 0
         done, current, sent = 0, None, 0
         try:
-            for name in due:
+            for name in taken:  # round 1: every row gets the same share
                 current, sent = name, self.sent
-                self._row(self.rows[name])
-                self.result.attempted.append(name)
+                if self._row(self.rows[name], share):
+                    self.result.cut_rows.append(name)
+                self.result.attempted.append(name)  # tried once it had its share, whatever stays open (module text)
                 done += 1
+            self.second_round = True
+            # round 2: what is left goes to the cut rows, the one that got it longest ago first (`package_reserve_days`), so that
+            # every cut row comes round in a finite number of runs and none keeps it for ever
+            order = sorted(enumerate(self.result.cut_rows), key=lambda item: (self.reserve_days.get(hf_id_key(item[1]), date.min), item[0]))
+            for _, name in order:
+                if self.remaining() <= 0:
+                    break
+                before = self.progress
+                self._row(self.rows[name], self.remaining())
+                if self.progress > before:  # a leftover without progress books nothing: the row keeps its priority
+                    self.result.reserved.append(name)
         except BudgetExhaustedError:
             if current is not None and done == 0 and self.sent > sent:  # it had the whole budget: tried, so it holds back no other row (module text)
                 self.result.attempted.append(current)
             self.result.budget_end = True
             self.result.notes.append(f"budget ended: package checks stopped after {done} of {len(due)} rows, the others are taken next run")
+        else:
+            if len(taken) < len(due):  # the budget did not reach the minimum for every row
+                self.result.budget_end = True
+                self.result.notes.append(f"budget ended: package checks stopped after {done} of {len(due)} rows, the others are taken next run")
+        self.result.open_repos = sum(self._never_tried(name) for name in self.result.cut_rows)
         self.result.notes.append(f"package checks: llama.cpp {self.commit[:12]} read ({len(self.names)} architectures); {done} of {len(due)} rows tried")
+        if self.result.cut_rows:
+            self.result.notes.append(f"package checks: {len(self.result.cut_rows)} rows ended at their share of {share} requests, "
+                                     f"{self.result.open_repos} listed repositories are read next time")
         return self.result
 
     def _source(self) -> None:
@@ -415,16 +494,26 @@ class PackageStage:
         self.names, self.commit = parse_arch_names(text), commit
         self.result.commit = commit
 
-    def _row(self, row: CatalogModel) -> None:
+    def _row(self, row: CatalogModel, allowance: int) -> bool:
+        """The card and the packages of one row within `allowance` requests; `True` when the share ended before the row did."""
+        self.allowance, self.row_start = allowance, self.sent
         try:
-            self._card(row)
-        except _Fail as fail:  # not reached: reported, a stored note stays
-            self._unread(row, str(fail))
-        try:
-            self._packages(row)
-        except _Fail as fail:
-            self.result.problem = True
-            self.result.notes.append(f"{row.hf_repo}: package checks: {fail}")
+            if row.hf_repo not in self.card_done:
+                try:
+                    self._card(row)
+                except _Fail as fail:  # not reached: reported, a stored note stays
+                    self._unread(row, str(fail))
+                self.card_done.add(row.hf_repo)
+            try:
+                self._packages(row)
+            except _Fail as fail:
+                self.result.problem = True
+                self.result.notes.append(f"{row.hf_repo}: package checks: {fail}")
+        except _ShareEnd:
+            return True
+        finally:
+            self.allowance = None
+        return False
 
     # --- the setup note (V7)
 
@@ -491,7 +580,9 @@ class PackageStage:
     # --- the package checks (V1, V5, V6)
 
     def _base_checks(self, row: CatalogModel) -> list[PackageCheck]:
-        carried = self.carried_checks.get(hf_id_key(row.hf_repo))
+        carried = self.result.checks.get(row.hf_repo)  # what this run read of the row in an earlier round
+        if carried is None:
+            carried = self.carried_checks.get(hf_id_key(row.hf_repo))
         try:
             return [PackageCheck.model_validate(item) for item in carried] if carried is not None else list(row.gguf_checks)
         except ValueError:
@@ -509,26 +600,32 @@ class PackageStage:
             merged = kept_old + added[: max(0, CHECKS_PER_ROW - len(kept_old))]
             merged.sort(key=lambda c: (hf_id_key(c.repo), c.identity))
             self.result.checks[row.hf_repo] = [c.model_dump(mode="json") for c in merged]
-            self.result.page_urls[row.hf_repo] = sorted(state.changed_repos.values())
+            earlier = self.result.page_urls.get(row.hf_repo, [])  # the evidence of a first round stays with the checks it belongs to
+            self.result.page_urls[row.hf_repo] = sorted({*earlier, *state.changed_repos.values()})
 
     def _listed(self, row: CatalogModel) -> list:
         """Every page of the list query of a row, to its end; a next page must stay on the Hub's list and may not repeat."""
-        url, visited, found = list_url(row.hf_repo), set(), []
-        while url is not None:
+        # the pages read so far and the next address are kept for this run: a share that ends inside the list is continued there
+        progress = self.partial.setdefault(row.hf_repo, ([], set(), [list_url(row.hf_repo)]))
+        found, visited, ahead = progress
+        while ahead:
+            url = ahead[0]
             visited.add(url)
             response = self._get(self.api, url, R.API_MAX_BYTES)
             data = self._json(response)
             if not isinstance(data, list):
                 raise _Fail("the list answer is no list")
-            found += data
             link = response.header("Link")
             match = _LINK_NEXT_RE.search(link) if link else None
             try:
-                url = urllib.parse.urljoin(url, match.group(1)) if match else None
+                following = urllib.parse.urljoin(url, match.group(1)) if match else None
             except ValueError as exc:
                 raise _Fail("the next page of the list has an address of no URL form") from exc
-            if url is not None and (not url.startswith(f"{HUB}/api/models?") or url in visited):
+            if following is not None and (not following.startswith(f"{HUB}/api/models?") or following in visited):
                 raise _Fail("the next page of the list leads elsewhere or repeats")
+            found += data
+            ahead[:] = [following] if following is not None else []
+        del self.partial[row.hf_repo]
         return found
 
     @staticmethod
@@ -541,7 +638,10 @@ class PackageStage:
             out.append(match.group(1) + row if match and hf_id_key(match.group(2)) == hf_id_key(row) else tag)
         return out
 
-    def _repos(self, row: CatalogModel, base: list[PackageCheck], state: "_RowState") -> None:
+    def _candidates(self, row: CatalogModel) -> list[tuple[str, str, object]]:
+        """The repositories of a row that quantize it and nothing else, `(repository, revision, hub gguf field)`, in the list's order."""
+        if row.hf_repo in self.candidates:  # the list was read to its end in an earlier round
+            return self.candidates[row.hf_repo]
         candidates, seen = [], set()
         for raw in self._listed(row):
             entry = R.parse_entry(raw)
@@ -553,9 +653,25 @@ class PackageStage:
                 continue
             seen.add(hf_id_key(entry.repo))
             candidates.append((entry.repo, sha, raw.get("gguf")))
+        self.candidates[row.hf_repo] = candidates
+        return candidates
+
+    def _owner_class(self, row: CatalogModel, repo: str) -> int:
+        """0 the publisher of the row itself, 1 a listed packager of the catalog, 2 any other account."""
+        owner = hf_id_key(repo.split("/", 1)[0])
+        if owner == hf_id_key(row.hf_repo.split("/", 1)[0]):
+            return 0
+        return 1 if owner in self.packagers else 2
+
+    def _repos(self, row: CatalogModel, base: list[PackageCheck], state: "_RowState") -> None:
+        candidates = self._candidates(row)
         checked = {hf_id_key(c.repo) for c in base}
-        candidates.sort(key=lambda item: (self._day(unit(item[0])), hf_id_key(item[0]) in checked))  # module text; downloads among equals
+        # module text: never tried first, then the one tried longest ago; among equals the publisher's, the listed packagers', the
+        # rest; then the one without a check; downloads (the list's order) last
+        candidates = sorted(candidates, key=lambda item: (self._day(unit(item[0])), self._owner_class(row, item[0]), hf_id_key(item[0]) in checked))
         for repo, sha, hub_gguf in candidates:
+            if self.second_round and self._day(unit(repo)) == self.today:
+                continue  # read to its end in the first round
             known = [c for c in base if hf_id_key(c.repo) == hf_id_key(repo)]
             try:
                 self._repo(repo, sha, hub_gguf, known, state)
@@ -563,6 +679,16 @@ class PackageStage:
                 self.result.problem = True
                 self.result.notes.append(f"{repo}: package checks: {fail}")
             self.result.units.append(unit(repo))  # read to its end, with or without a fault; a budget that ends skips this
+            self.progress += 1
+            self.unit_days[unit_key(unit(repo))] = self.today  # a second round reads the others first
+
+    def _never_tried(self, name: str) -> int:
+        """How many repositories of a cut row nobody read yet; a row whose list the share ended inside, or before, counts as one more
+        than it can tell."""
+        candidates = self.candidates.get(name)
+        if candidates is None:
+            return 1
+        return sum(1 for repo, _sha, _gguf in candidates if unit_key(unit(repo)) not in self.unit_days)
 
     def _day(self, name: str) -> date:
         return self.unit_days.get(unit_key(name), date.min)
@@ -608,6 +734,7 @@ class PackageStage:
                     self.result.problem = True
                     self.result.notes.append(f"{repo}: package checks: {package.file}: {fail}")
                     self.result.units.append(unit(repo, package.identity))
+                    self.progress += 1
                     continue
             try:
                 check = PackageCheck(
@@ -619,6 +746,7 @@ class PackageStage:
             except ValueError:
                 continue  # a name or an identifier the schema refuses: no check, the package stays unknown
             state.fresh.append(check)
+            self.progress += 1
             state.changed_repos[hf_id_key(repo)] = repo
 
     def _head(self, repo: str, sha: str, file: str) -> str:

@@ -86,9 +86,22 @@ python scripts/catalog_scan.py --catalog modelroom/catalog.json --rejected model
   and packages by `package_unit_attempts`). A second run on the same day takes the next rows and keeps the proposals of the first.
 - **Budget.** The package stage spends at most 200 requests a run; the run's own budget (`--budget`, 300 by default) pays for
   the scan of the accounts first, some 130 requests. With the default the stage gets what is left: on 2026-10-14 that was one
-  row. Use `--budget 700`. A row with many conversions (some ninety repositories for one popular model) can use the whole 200
-  alone, so a run reaches between one and a few dozen rows, not always 40; the run says `budget ended: package checks
-  stopped after n of 40 rows` and the rest follows the next day. A full turn through the table therefore takes weeks.
+  row. Use `--budget 700`. **Every row gets the same share.** After the one-time reads (the llama.cpp commit and file) the
+  stage divides what is left by the rows it takes (`floor(rest / rows)`, 4 requests each at the default of 198 over 40 rows)
+  and no row may send more than its share, so a row with many conversions (some ninety repositories for one popular model)
+  cannot use the run: the run reaches its 40 rows, and a full turn through the text and vision rows takes about a week. A
+  row needs at least 4 requests (model answer, card, one page of the list, one file list); when the budget is too small for
+  that many rows the run takes fewer and says `budget ended: package checks stopped after n of 40 rows`. What a share cuts is
+  no fault: the row counts as tried, the repositories it did not reach are read first next time, and the run says
+  `n rows ended at their share`. Inside a row the repository tried longest ago (never tried first) comes first; only among
+  repositories of the same day the publisher's own come before those of the catalog's listed packagers, and those before all
+  others. A reserve of at least 8 requests (a tenth of the budget when that is more) is kept back from the shares, so that
+  it pays the progress of one open unit; when the budget cannot give it next to the minimum of every row, the run takes fewer
+  rows. It goes, with what the rows leave, to the cut row that got it longest ago (`package_reserve_days` in
+  `scan-state.json`), so every cut row comes round and none keeps it; a list the share cut is continued where it ended, not
+  read again. A stage budget below 12 requests gives one row all of it and no reserve. A row books the reserve only when it made progress
+  with it. A list longer than the reserve carries (at the default 37 pages, some 1850 repositories) is not reached and ends
+  every day the same way without a fault; it is the documented bound (CONTRACTS, V6).
 - **Rate limit.** The Hub answers `429` to a client that asks in bursts. A unit that gets one fails alone (`package checks:
   HTTP 429` or `model card not read (HTTP 429)` in the notes), changes nothing it did not read, and is tried again by a later
   run; run the scan once a day, not twice within minutes.

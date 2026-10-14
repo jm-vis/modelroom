@@ -5101,11 +5101,37 @@ or the stage ends early and says `budget ended: package checks stopped after n o
 
 Inside a row the same rule holds one level down (P4): `package_unit_attempts` in the same state file holds the UTC
 day a GGUF repository was last read to its end (with a check or with a fault) and a package whose header read
-failed (`<repo>:<identity>`; the repository compared by `hf_id_key`, the identity as written; entries older than 60
+failed (`<repo>:<identity>`; the repository compared by `hf_id_key`, the identity as written; entries older than 365
 days are dropped). Repositories and packages are read never tried first, then the one tried longest ago, so a unit
 that fails every day goes behind the others. The budget is no fault of a unit: the one it cuts is not recorded.
 A row the budget cuts stays untried, except the first row of a run for which a request was sent; a row for which no
-request was sent is never tried. **Bound** (decision of the management, 2026-10-14): the list of a row and the file
+request was sent is never tried.
+
+**The share of a row (NB, decision of the management, 2026-10-14: way B).** A run does not let one row use its budget.
+After the one-time reads (the llama.cpp commit and file) the stage divides the requests that are left by the rows it
+takes: every row gets `floor(rest / rows)` requests for its model answer, card, list and repositories, and a request
+over the share is not sent. The least a row is given is `MIN_ROW_SHARE` (4: the model answer, the card, one page of
+the list and the file list of one repository); a budget too small for that many rows takes fewer and says `budget
+ended`. A row that reached its share is **tried** (`package_attempts`), whatever stays open: otherwise it would hold
+back the rotation again. What the share cuts is no fault and sets no flag; the repository or package it cut is not
+recorded in `package_unit_attempts` and comes first next time, so every unit is still reached in a finite number of
+runs (V6, tests `test_every_repository_of_a_row_is_read_in_a_finite_number_of_runs_whatever_the_share` and
+`test_every_unit_of_every_row_is_reached_with_the_least_share_competing_rows_and_a_list_of_two_pages`). The reserve
+kept back from the shares is **never nil**: `max(RESERVE_MIN, rest // 10)` with `RESERVE_MIN` 8, so that it pays the progress of one open unit with what it needs first. When the budget
+cannot pay it beside the minimum of every row, round 1 takes fewer rows and the others rotate on as before; a budget below
+12 requests gives its one row all of it (unrealistic, taken as the other bounds). In a second round what the rows left
+of the budget and the reserve go to the rows that were cut, **the one that got it longest ago first**: the scanner's state
+`package_reserve_days` holds the UTC day a row last got it (a row of the form of `package_attempts`), so every cut row
+comes round in a finite number of runs and none takes it every run; a row whose repositories were all read once may take it
+too, because a new package or revision of a visited repository needs it. Known bound of V6: it presumes that a row runs through its units once inside `UNIT_ATTEMPTS_KEPT` (365 days), after which a unit counts as never tried again. At the default budget and with realistic catalogs that holds; extreme catalogs (for example 40 rows with some ninety repositories each) lie beyond it and are taken as unrealistic, like the other bounds (decision of the management, 2026-10-14). A row is recorded in `package_reserve_days` only when it made progress in round 2 (a unit read to its end, a head read or
+failed): a leftover without progress books nothing and the row keeps its priority. **Bound of the lists:** V6 holds as long as the reserve carries the rest of a row's list pages, one file list and one head (two requests when the Hub redirects the read to its CDN): pages <= (share - 2) + (round 2 budget - 3), where round 1 reads share - 2 pages after the model answer and the card and round 2 has what round 1 left, at least the reserve. At the default (198 requests for the stage, 40 rows) the reserve is 19, the share 4 (two list pages in round 1) and round 2 has 38 requests: a list of up to 37 pages, some 1850 repositories at `LIST_PAGE`, is reached; with 16 requests and two rows, 8 pages (tested). A longer list is of the class the management put aside as unrealistic on 2026-10-14 (a list that takes the budget): it is not reached, the run ends without a fault, the row is tried, and the stand still is the same the next day; nothing is deleted. (tests `test_the_limit_of_a_long_list_just_inside_is_reached...` and `test_a_long_list_just_beyond_the_limit...`). Test bound: with four rows, a budget of 16
+requests after the source, lists of two pages and four repositories each, every package is reached within 24 runs, and
+so is a new package of every visited repository (`test_the_reserve_is_never_nil_...`). Their card is not asked again, and a list the share cut is continued at its next address
+inside the run, not read again from its first page. Inside a row the repositories are read in the order of their last try
+(never tried first); among repositories tried on the same day the publisher's own come first, then those of the
+listed packagers (`packagers` of the catalog), then all others, each class in the order of downloads. The class decides
+only among equals, so a repository of the last class is never held back by the others for ever. A row whose card and
+list alone take its share (a list of more than one page, some fifty repositories) is read to its repositories only in the second round. **Bound** (decision of the management, 2026-10-14): the list of a row and the file
 list of a repository are not continued over runs page by page -- a row whose list alone takes the whole budget
 (some ten thousand repositories) and a file list longer than one page (some thousand entries) are taken as
 unrealistic; the second is a fault of that repository with a note, and deletes nothing.

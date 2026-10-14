@@ -570,7 +570,7 @@ def test_a_row_whose_budget_ended_after_some_progress_is_tried_and_keeps_what_it
         F.tree(hub, repo, F.SHA_A, [("Atlas-1-9B-Q8_0.gguf", 900)])
         F.header(hub, repo, F.SHA_A, "Atlas-1-9B-Q8_0.gguf", F.KNOWN)
     proposal, result, _ = run(env, hub, package_rows=1, package_budget=9)
-    assert result.exit_code == 1 and env.state()["package_attempts"] == {first: TODAY}
+    assert result.exit_code == 0 and env.state()["package_attempts"] == {first: TODAY}  # the row's share ended: no fault (NB)
     assert len(new_checks(proposal, first)) == 1
 
 
