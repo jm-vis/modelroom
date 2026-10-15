@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
-## [1.2.0] - Unreleased
+## [1.2.0] - 2026-10-15
 
 Version 1.2.0 takes the vLLM switches that a model card names for its model into the commands. Where the `vllm serve`
 block of the publisher's card for a model names `--reasoning-parser`, `--tool-call-parser`,
