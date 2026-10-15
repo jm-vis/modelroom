@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
-## [1.2.0] - Unreleased
+## [1.2.0] - 2026-10-15
 
 Version 1.2.0 takes the vLLM switches that a model card names for its model into the commands. Where the `vllm serve`
 block of the publisher's card for a model names `--reasoning-parser`, `--tool-call-parser`,
@@ -58,11 +58,33 @@ release.
   cut list is continued, not read again). A row books the reserve only when it made progress; a list longer than the
   reserve carries (37 pages at the default) is the documented bound. A run whose budget cannot give each row four requests takes fewer rows.
 
+- The pictures of `README.md` were taken again on 1.2.0, on a rented Verda instance with one NVIDIA A100-SXM4-80GB
+  (80 GB), Ollama 0.40.4 and vLLM 0.31.0 serving `RedHatAI/Qwen3.8-27B-INT4`; the links point to `v1.2.0`. New in
+  `docs/screenshots/`: `6-people.png`, `6-measure.png`, `8b-pulled.png`, `11-kolibri.png`, and shorter cuts of the long screens
+  (`5-models-short.png`, `7-measurement-short.png`, `8-results-short-ollama.png`, `8-results-short-vllm.png`,
+  `8b-pulled-short.png`, `10-no-fit-short.png`, `10-no-fit-question.png`, `11-kolibri-short.png`). "Tested on" has a line
+  for that machine.
+
 ### Not taken from a card
 
 `--trust-remote-code` (it runs foreign code; the red line over the commands stays all modelroom says of it), paths,
 `--revision`, `--max-model-len`, `--tensor-parallel-size`, memory and GPU switches (modelroom computes those), environment
 variables and every other switch.
+
+### Known limits
+
+Both have a way around them, named below; neither is scheduled.
+
+- The guided run shares one budget of 150 Hub requests between search and fetch. A broad search word such as `qwen`
+  (200 repositories, 74 models) spends it in the search, and the fetch then ends with `the fetch ended with exit 1` and
+  no package. A more specific word (`qwen 3.8`) works; the list itself says `a more specific word shortens the list`.
+- Where the folder's snapshot holds two tensor packages of the repository a vLLM server serves (same revision, as for
+  `RedHatAI/Qwen3.8-27B-INT4`), the run cannot match the server to one package and falls back to the repository's name
+  (`match_served`, `not_counting_reason` in `guided_vllm.py`); the server's number is shown but not counted: `the server
+  names none of the 2 tensor packages of …`. The number stays on the screen (a vLLM number is saved nowhere since
+  0.2.0). It counts, as before, when the snapshot holds exactly one active, complete tensor package of the served
+  repository, that package's base model is one the run chose, and the server's context is the run's. Why the snapshot
+  holds two packages is open.
 
 ## [1.1.0] - 2026-10-14
 
