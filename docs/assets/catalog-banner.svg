@@ -30,7 +30,7 @@
   <text x="330" y="210" class="tl" font-size="26" fill="#CFE1EC">Swept every morning, approved by a person, one file.</text>
   <g class="chip" font-size="18">
     <rect x="330" y="238" width="136" height="44" rx="8" fill="#C32F27"/>
-    <text x="398.0" y="267.04" fill="#FFFFFF" text-anchor="middle">252 models</text>
+    <text x="398.0" y="267.04" fill="#FFFFFF" text-anchor="middle">282 models</text>
     <rect x="480" y="238" width="247" height="44" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
     <text x="603.5" y="267.04" fill="#FFFFFF" text-anchor="middle">57 publishers watched</text>
     <rect x="741" y="238" width="126" height="44" rx="8" fill="rgba(255,255,255,0.14)" stroke="#8CACC9" stroke-width="2"/>
