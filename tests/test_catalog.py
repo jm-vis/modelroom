@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import json
+import sys
 from datetime import date
 from pathlib import Path
 from typing import get_args
@@ -1054,16 +1056,68 @@ NOTES = {
 _CARD_READ = "Kind vision from the model card, checked 2026-10-01."
 
 
+def _maintainer_kind_note():
+    """The form of the note `--complete` writes (`scripts/catalog_publish_rules.py`), or `None` where `scripts/` is not
+    shipped (the sdist): there the shipped catalog is compared as it is."""
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    if not (scripts / "catalog_publish_rules.py").is_file():
+        return None
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    return importlib.import_module("catalog_publish_rules").MAINTAINER_KIND_NOTE
+
+
+def _reasoned_notes(catalog) -> dict[str, str]:
+    """The statements the `note` fields make, as the schema-1 file had them as comments. KA-S2 appended the card
+    sentence to the seven `decision` notes; what stands before it is the statement. A note in exactly the form
+    `--complete` writes when the maintainer sets a kind is product, not a statement (decided 2026-10-27), and stays out."""
+    form = _maintainer_kind_note()
+    notes = {}
+    for family in catalog.families:
+        for model in family.models:
+            text = (model.note or "").removesuffix(_CARD_READ).strip()
+            if text and not (form is not None and form.fullmatch(text)):
+                notes[model.hf_repo] = text
+    return notes
+
+
 def test_every_reasoned_missing_statement_of_the_schema_1_file_is_a_note():
-    catalog = load_catalog()
-    # KA-S2 appended the card sentence to the seven `decision` notes; what stands before it is the statement.
-    notes = {
-        model.hf_repo: model.note.removesuffix(_CARD_READ).strip()
-        for family in catalog.families
-        for model in family.models
-        if model.note
-    }
-    assert {repo: note for repo, note in notes.items() if note} == NOTES
+    assert _reasoned_notes(load_catalog()) == NOTES
+
+
+def _catalog_with_notes(tmp_path, *notes: str):
+    """The valid v2 fixture with the given notes on its first rows (one note per row)."""
+    document = json.loads((FIXTURES / "catalog_v2_valid.json").read_text(encoding="utf-8"))
+    for row in document["models"]:
+        row["note"] = None
+    for row, note in zip(document["models"], notes, strict=False):
+        row["note"] = note
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return load_catalog(path)
+
+
+def test_a_note_in_the_form_of_complete_is_not_a_statement(tmp_path):
+    if _maintainer_kind_note() is None:
+        pytest.skip("scripts/ is not shipped in the sdist; the form of the note is tested from a clone")
+    catalog = _catalog_with_notes(tmp_path, "Kind video-generation set by the maintainer on 2026-10-27.", "Kind vision set by the maintainer on 2026-10-27. " + _CARD_READ)
+    assert _reasoned_notes(catalog) == {}
+
+
+def test_a_note_that_is_not_exactly_the_form_of_complete_stays_in_the_comparison(tmp_path):
+    if _maintainer_kind_note() is None:
+        pytest.skip("scripts/ is not shipped in the sdist; the form of the note is tested from a clone")
+    for note in (
+        "Kind banana set by the maintainer on 2026-10-27.",  # not a kind
+        "Kind vision set by the maintainer on 2026-10-27",  # no full stop
+        "Kind vision set by the maintainer on 2026-1-27.",  # not YYYY-MM-DD
+        "Note: Kind vision set by the maintainer on 2026-10-27.",  # something before
+        "Kind vision set by the maintainer on 2026-10-27. And more.",  # something after
+    ):
+        first = json.loads((FIXTURES / "catalog_v2_valid.json").read_text(encoding="utf-8"))["models"][0]["hf_repo"]
+        assert _reasoned_notes(_catalog_with_notes(tmp_path, note)) == {first: note}, note
+    # and the comparison itself turns red on such a note
+    assert _reasoned_notes(_catalog_with_notes(tmp_path, "Kind banana set by the maintainer on 2026-10-27.")) != {}
 
 
 # `kind` per row, from the Hub: `pipeline_tag` through the table where it is one of the fifteen
