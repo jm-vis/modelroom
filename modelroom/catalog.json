@@ -8907,7 +8907,7 @@
     {
       "account": "Edge0",
       "name": "Edge0",
-      "region": null
+      "region": "US"
     },
     {
       "account": "m-a-p",
@@ -8917,7 +8917,7 @@
     {
       "account": "Cactus-Compute",
       "name": "Cactus Compute",
-      "region": null
+      "region": "US"
     },
     {
       "account": "yandex",
@@ -8972,27 +8972,27 @@
     {
       "account": "fishaudio",
       "name": "fishaudio",
-      "region": null
+      "region": "US"
     },
     {
       "account": "RecursiveSI",
       "name": "RecursiveSI",
-      "region": null
+      "region": "US"
     },
     {
       "account": "OpenMOSS-Team",
       "name": "OpenMOSS-Team",
-      "region": null
+      "region": "CN"
     },
     {
       "account": "XHToken",
       "name": "XHToken",
-      "region": null
+      "region": "CN"
     },
     {
       "account": "Nanbeige",
       "name": "Nanbeige",
-      "region": null
+      "region": "CN"
     },
     {
       "account": "speridlabs",
@@ -9002,17 +9002,17 @@
     {
       "account": "InternScience",
       "name": "InternScience",
-      "region": null
+      "region": "CN"
     },
     {
       "account": "reflection",
       "name": "reflection",
-      "region": null
+      "region": "US"
     },
     {
       "account": "KRAFTON",
       "name": "KRAFTON",
-      "region": null
+      "region": "KR"
     },
     {
       "account": "KittenML",
