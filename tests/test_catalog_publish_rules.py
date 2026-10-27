@@ -390,6 +390,24 @@ def test_a_row_that_stands_over_the_latest_of_its_group_is_made_latest_with_the_
     assert (new["latest"], new["latest_source"], new["latest_checked"], new["family"]) == (True, "https://huggingface.co/acme", TODAY, "atlas")
 
 
+@pytest.mark.parametrize("task, kind", [("text-to-video", "video-generation"), ("text-generation", "text"), ("image-text-to-text", "vision")])
+def test_a_candidate_whose_task_is_in_the_table_is_refused_with_the_kind_it_gives_on_its_own(document, proposal, task, kind):
+    """The scanner reads the task first (`catalog_scan_rules.py`, stage 1), so it never makes a B3 of such a repo; a hand-changed
+    `proposal.json` could. `--complete` is for a candidate without a table task: its kind is no decision to make."""
+    proposal["candidates"][2]["hub_pipeline_tag"] = task
+    before = json.dumps(proposal, sort_keys=True)
+    message = refused(complete, document, proposal, "K3", "vision")
+    assert f"acme/Odd-1-5B carries the task {task}, which gives kind {kind} on its own" in message
+    assert "--complete is for a candidate without a table task" in message
+    assert json.dumps(proposal, sort_keys=True) == before  # nothing is changed
+
+
+def test_a_task_outside_the_table_does_not_stop_a_completion(document, proposal):
+    proposal["candidates"][2]["hub_pipeline_tag"] = "any-to-any"
+    data, number = complete(document, proposal)
+    assert any(c["n"] == number for c in data["changes"])
+
+
 @pytest.mark.parametrize("admit, kind, fragment", [
     ("K3", None, "eight kinds"), ("K3", "classification", "eight kinds"), ("K3", "Vision", "eight kinds"), ("K3,K2", "vision", "exactly one"),
     ("K1", "vision", "B3 only"), ("K2", "vision", "B3 only"), ("K9", "vision", "B3 only"),

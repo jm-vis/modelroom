@@ -6,6 +6,7 @@ The rules live in `modelroom/catalog_schema.py`; the last tests read the shipped
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ import pytest
 from modelroom.catalog import Catalog, CatalogError, load_catalog
 
 from fixture_support import FIXTURES
-from test_catalog import _CARD_READ, _document, _row
+from test_catalog import _CARD_READ, _document, _maintainer_kind_note, _row
 
 
 # --- the task Hugging Face gives a model (`hub_pipeline_tag`) and the evidence for `kind` ---
@@ -170,28 +171,123 @@ DECISION_ONLY_REPOS = frozenset(
 )
 
 
-def test_the_shipped_catalog_has_a_task_or_an_evidence_stage_on_every_one_of_its_rows():
-    rows = [model for family in load_catalog().families for model in family.models]
+# The note `--complete` writes when the maintainer sets a kind (`MAINTAINER_KIND_NOTE`), with the kind as a group.
+_MAINTAINER_KIND = re.compile(r"Kind ([a-z-]+) set by the maintainer on [0-9]{4}-[0-9]{2}-[0-9]{2}\.")
+
+
+def _maintainer_form():
+    """`MAINTAINER_KIND_NOTE` from `scripts/`; the test is skipped where `scripts/` is not shipped (the sdist), as in test_catalog."""
+    form = _maintainer_kind_note()
+    if form is None:
+        pytest.skip("scripts/ is not shipped in the sdist; the form of the maintainer's note is not at hand")
+    return form
+
+
+def _is_maintainer_decision(model, form) -> bool:
+    return model.kind_source == "decision" and form.fullmatch(model.note or "") is not None
+
+
+def _row_problems(rows, off_table, form) -> list[str]:
+    """The repos among `rows` that carry none of the four forms a shipped row may have (empty: every row is sound).
+
+    1. a row listed in `off_table`, as the filling run measured it; 2. a task of the table and no `kind_source`;
+    3. a maintainer's decision from `--complete`: `decision`, the note in the form of `MAINTAINER_KIND_NOTE`, no task of
+    the table, and `kind` the kind that note names; 4. a stage of the scanner (`tags`, `base_model`, `config`) with
+    a task that is missing or outside the table."""
+    kinds = set(TABLE_KIND_OF_TASK.values())
+    problems = []
     for model in rows:
-        if model.hf_repo in OFF_TABLE_ROWS:
-            task, source, note = OFF_TABLE_ROWS[model.hf_repo]
-            assert (model.hub_pipeline_tag, model.kind_source, model.note) == (task, source, note), model.hf_repo
+        if model.hf_repo in off_table:
+            task, source, note = off_table[model.hf_repo]
+            sound = (model.hub_pipeline_tag, model.kind_source, model.note) == (task, source, note)
         elif model.kind_source is None:
-            assert model.hub_pipeline_tag in TABLE_KIND_OF_TASK, model.hf_repo
-            assert model.kind == TABLE_KIND_OF_TASK[model.hub_pipeline_tag], model.hf_repo
+            sound = model.hub_pipeline_tag in TABLE_KIND_OF_TASK and model.kind == TABLE_KIND_OF_TASK[model.hub_pipeline_tag]
+        elif _is_maintainer_decision(model, form):
+            named = _MAINTAINER_KIND.fullmatch(model.note)
+            sound = (
+                named is not None and named.group(1) in kinds and model.kind == named.group(1)
+                and (model.hub_pipeline_tag is None or model.hub_pipeline_tag not in TABLE_KIND_OF_TASK)
+            )
         else:
             # A row added by a later publication, kind from a stage of scripts/catalog_scan.py
             # (`tags`, `base_model`, `config`); the task is missing or outside the table.
-            assert model.kind_source in {"tags", "base_model", "config"}, model.hf_repo
-            assert model.hub_pipeline_tag is None or model.hub_pipeline_tag not in TABLE_KIND_OF_TASK, model.hf_repo
-            assert model.kind is not None, model.hf_repo
+            sound = (
+                model.kind_source in {"tags", "base_model", "config"}
+                and (model.hub_pipeline_tag is None or model.hub_pipeline_tag not in TABLE_KIND_OF_TASK)
+                and model.kind is not None
+            )
+        if not sound:
+            problems.append(model.hf_repo)
+    return problems
 
 
-def test_only_the_seven_listed_repos_of_the_shipped_catalog_carry_a_decision():
-    rows = [model for family in load_catalog().families for model in family.models]
-    decided = {model.hf_repo for model in rows if model.kind_source == "decision"}
-    assert decided == DECISION_ONLY_REPOS
+def _decision_problems(rows, decision_only, form) -> list[str]:
+    """What is wrong with the rows that carry a `decision`: the card decisions (`decision`, no note of the maintainer's
+    form) must be exactly `decision_only`; a maintainer's decision may not be one of those, and none of those may have the form."""
+    card = {m.hf_repo for m in rows if m.kind_source == "decision" and not _is_maintainer_decision(m, form)}
+    maintainer = {m.hf_repo for m in rows if _is_maintainer_decision(m, form)}
+    problems = [f"card decisions differ from the listed repos: {sorted(card ^ decision_only)}"] if card != decision_only else []
+    problems += [f"{repo} is listed as a card decision but carries the maintainer's note" for repo in sorted(maintainer & decision_only)]
+    return problems
+
+
+def _shipped_rows():
+    return [model for family in load_catalog().families for model in family.models]
+
+
+def test_the_shipped_catalog_has_a_task_or_an_evidence_stage_on_every_one_of_its_rows():
+    assert _row_problems(_shipped_rows(), OFF_TABLE_ROWS, _maintainer_form()) == []
+
+
+def test_only_the_seven_listed_repos_carry_a_card_decision_and_the_other_decisions_are_the_maintainers():
+    """The seven Mistral repos are the card decisions (`decision`, a note without the form of `--complete`); every other
+    `decision` row is a kind the maintainer set (note in the form of `MAINTAINER_KIND_NOTE`) and is none of the seven."""
+    form = _maintainer_form()
+    assert _decision_problems(_shipped_rows(), DECISION_ONLY_REPOS, form) == []
     assert len(OFF_TABLE_ROWS) == 10
+
+
+# One row of the fixture, read as the shipped catalog would hold it: the first row `--complete` made (a kind the
+# maintainer set, no task at all), a note with no kind, and one of the "seven" that carries the maintainer's note.
+MAINTAINER_NOTE = "Kind video-generation set by the maintainer on 2026-10-27."
+
+
+def _fixture_rows(tmp_path, **fields):
+    return [m for family in _load(tmp_path, _evidence_row(**fields)).families for m in family.models]
+
+
+def test_a_row_with_a_maintainers_kind_is_sound_where_its_note_names_its_kind(tmp_path):
+    form = _maintainer_form()
+    rows = _fixture_rows(tmp_path, hub_pipeline_tag=None, kind="video-generation", kind_source="decision", note=MAINTAINER_NOTE)
+    assert _row_problems(rows, {}, form) == []
+    assert _decision_problems(rows, frozenset(), form) == []
+
+
+def test_a_note_that_names_no_kind_is_a_card_decision_and_makes_the_suite_red(tmp_path):
+    form = _maintainer_form()
+    banana = "Kind banana set by the maintainer on 2026-10-27."
+    rows = _fixture_rows(tmp_path, hub_pipeline_tag=None, kind="video-generation", kind_source="decision", note=banana)
+    assert _row_problems(rows, {}, form) == ["acme/Nova-7B-2512"]
+    assert _decision_problems(rows, frozenset(), form) != []
+
+
+def test_a_maintainers_note_that_names_another_kind_than_the_row_makes_the_suite_red(tmp_path):
+    form = _maintainer_form()
+    rows = _fixture_rows(tmp_path, hub_pipeline_tag=None, kind="vision", kind_source="decision", note=MAINTAINER_NOTE)
+    assert _row_problems(rows, {}, form) == ["acme/Nova-7B-2512"]
+
+
+def test_one_of_the_seven_with_the_maintainers_note_makes_the_suite_red(tmp_path):
+    form = _maintainer_form()
+    rows = _fixture_rows(tmp_path, hub_pipeline_tag=None, kind="video-generation", kind_source="decision", note=MAINTAINER_NOTE)
+    problems = _decision_problems(rows, frozenset({"acme/Nova-7B-2512"}), form)
+    assert any("carries the maintainer's note" in problem for problem in problems), problems
+
+
+def test_a_maintainers_note_on_a_row_with_a_task_of_the_table_does_not_load(tmp_path):
+    """The schema, not this suite, keeps a kind of the maintainer off a row whose task already gives the kind."""
+    with pytest.raises(CatalogError, match="kind_source"):
+        _load(tmp_path, _evidence_row(hub_pipeline_tag="text-to-video", kind="video-generation", kind_source="decision", note=MAINTAINER_NOTE))
 
 
 def test_a_schema_1_row_reads_with_no_task_and_no_kind_source_and_no_rule_applies():

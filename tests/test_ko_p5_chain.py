@@ -12,7 +12,7 @@ really finds. A blocked choice starts no download; a package nobody blocked is p
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -43,9 +43,14 @@ ROW = "Qwen/Qwen3.5-9B"
 REPO = "unsloth/Qwen3.5-9B-GGUF"
 FIRST_FILE, FIRST_BYTES = "Qwen3.5-9B-Q8_0.gguf", 9_527_502_048  # the first row of the guided run at 8192 tokens (FIRST_NAME)
 SCAN_DAY = datetime(2026, 10, 14, 9, 0, 0, tzinfo=timezone.utc)
-PUBLISHED_DAY = "2026-10-20"  # later than the shipped catalog, so a published file wins the choice
+
+# The publication of the chain must be younger than the shipped catalog, or the shipped one wins the choice and the
+# line `catalog: published <day>` never appears; the run must be younger than the publication. Both days are therefore
+# read from the shipped catalog (each publication moves its `published`), not written here.
+_SHIPPED_DAY = datetime.fromisoformat(json.loads(CATALOG_FILE.read_bytes())["published"]).date()
+PUBLISHED_DAY = (_SHIPPED_DAY + timedelta(days=1)).isoformat()
+RUN = datetime.combine(_SHIPPED_DAY + timedelta(days=2), time(8, 0), tzinfo=timezone.utc)
 DATASET_SHA = "5d" * 20
-RUN = datetime(2026, 10, 21, 8, 0, 0, tzinfo=timezone.utc)
 UNKNOWN_ARCH = "nova7"  # an identifier the recorded llama.cpp source does not hold
 NO_PULL = "installation not offered"
 
