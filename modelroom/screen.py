@@ -40,6 +40,8 @@ HEAD_WIDTH = 72
 NAME_WIDTH = 14
 # A note is a side remark about the answer above it, indented by two.
 NOTE_INDENT = "  "
+# The blank `plain` puts in front of every line of the screen; a wrap that fills a line must count it.
+SCREEN_MARGIN = 1
 # What `joined` wraps at: the width of the result table, so the notes under it end where it ends.
 JOIN_WIDTH = 100
 # A fit against system memory says so behind its class, in the selection list of step 2 and in the
@@ -87,7 +89,7 @@ def plain(line: Line) -> str:
     """One line as a log reads it: the fragments' text, with the one leading space of the screen."""
     if not line:
         return ""
-    return (" " + "".join(text for _class, text in line)).rstrip()
+    return (" " * SCREEN_MARGIN + "".join(text for _class, text in line)).rstrip()
 
 
 def head_line(number: int, marks: Glyphs) -> Line:

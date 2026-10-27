@@ -230,7 +230,9 @@ refuses the key. In this order:
    `MAINTAINER_KIND_NOTE`, and `test_every_reasoned_missing_statement_of_the_schema_1_file_is_a_note` leaves exactly
    that form out of its comparison; any other wording of a note stays in the comparison and has to be in `NOTES`.
 4. **Test, check, commit.** Run the test suite and the release gate's hygiene check, then commit `modelroom/catalog.json`
-   and `modelroom/catalog-rejected.json`.
+   and `modelroom/catalog-rejected.json`. The maintainer's release wrapper runs the whole
+   suite before the commit (about 8 minutes, the same stage for `-Freigeben` and `-Fortsetzen`); a red test stops the chain
+   before the commit with the state `applied`, and after the fix it goes on with `-Fortsetzen`.
 5. **Record the commit.** `python scripts/catalog_publish.py --record-commit <out>/<day> <full commit hash>` (state
    `committed`; it refuses a hash that is no commit, or a commit whose `catalog.json` or `catalog-rejected.json` is not
    the result of the decision; the same commit recorded again is confirmed without a write).

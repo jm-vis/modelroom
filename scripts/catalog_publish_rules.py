@@ -372,6 +372,14 @@ def complete_proposal(document: dict, proposal: dict, request: Request, kind: st
     try:
         rows = [m for family in build_catalog(json.dumps(document), Path("catalog.json")).families for m in family.models]
         entry = R.entry_of_candidate(candidate)
+        if entry.pipeline in PIPELINE_TAG_TO_KIND:
+            # The other direction of the rule: a task of the table gives the kind on its own, so no decision may stand
+            # next to it (the schema would refuse `kind_source` on such a row). The scanner does not make a B3 of such a
+            # candidate; this stops a hand-changed `proposal.json`.
+            raise PublishError(
+                f"{entry.repo} carries the task {entry.pipeline}, which gives kind {PIPELINE_TAG_TO_KIND[entry.pipeline]} on its own: "
+                "--complete is for a candidate without a table task"
+            )
         family = R.family_for(entry.repo, kind, rows, entry.parameters_b)
     except (CatalogError, SchemaVersionError, KeyError, TypeError, ValueError) as exc:
         raise PublishError(f"the candidate cannot be read: {type(exc).__name__}") from exc

@@ -159,6 +159,20 @@ def test_no_line_of_the_screen_is_wider_than_a_hundred_characters(tmp_path: Path
     assert servers is None or "the number will not count: the server serves" in screen
 
 
+def test_a_knowledge_hint_for_a_long_name_breaks_into_lines_of_at_most_a_hundred_columns_as_the_screen_writes_them():
+    """The hint of the catalog (E3, fixed words) for `Qwen-Image-2.1-PE-I2I`: the first line stood at 98 characters, and the
+    screen adds a blank in front (`plain`) and the indent of a note, so it measured 101. Counted here as the screen writes it."""
+    from modelroom.catalog_findings import KNOWLEDGE_HINT
+    from modelroom.guided_search import hint_lines
+    from modelroom.screen import note_line, plain
+
+    hint = KNOWLEDGE_HINT.format(model="Qwen-Image-2.1-PE-I2I", publisher="Qwen") + " as of 2026-10-27."
+    lines = hint_lines(hint)
+    assert len(lines) >= 2 and " ".join(lines) == hint  # nothing cut, nothing added
+    for line in lines:
+        assert len(plain(note_line(line))) <= 100, line
+
+
 def test_a_reason_of_step_four_breaks_before_the_longest_name_of_the_catalog():
     """Reasons 1 and 3 name a model; beyond 100 columns the line breaks before the name, never inside it."""
     from modelroom.catalog import load_catalog

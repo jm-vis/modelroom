@@ -36,7 +36,7 @@ from .contracts import Package, SchemaVersionError, hf_id_key
 from .dialog import Choice
 from .guided_context import Checked, machine_checked, vllm_among_chosen
 from .guided_models import LINE_LIMIT, ModelChoice, hit_reason, list_context, model_choices, unusable_counts
-from .screen import NOTE_INDENT, number_word, repositories_note, searched_note, yes_no
+from .screen import NOTE_INDENT, SCREEN_MARGIN, number_word, repositories_note, searched_note, yes_no
 from .search import DEFAULT_PACKAGERS, SearchError, SearchOutcome, run_search
 from .search_direct import find_direct, knowledge_hints
 from .search_word import parse_search
@@ -325,9 +325,10 @@ def hint_lines(hint: str) -> list[str]:
     """One hint of the catalog (E3, fixed words) in the lines of a 100-column screen, broken at blanks only.
 
     The sentence is longer than a note line for a model with a long name; the words are the fixed ones and
-    only the line break is ours (the layout rule of decision E3). The indent of a note is counted.
+    only the line break is ours (the layout rule of decision E3). Both indents are counted: the one of a note and the
+    one blank every line of the screen carries in front (`screen.plain`).
     """
-    return textwrap.wrap(hint, LINE_LIMIT - len(NOTE_INDENT), break_long_words=False, break_on_hyphens=False)
+    return textwrap.wrap(hint, LINE_LIMIT - SCREEN_MARGIN - len(NOTE_INDENT), break_long_words=False, break_on_hyphens=False)
 
 
 def search_notes(log: dict, repositories: int, models: int, dot: str = "·") -> list[str]:
