@@ -525,3 +525,38 @@ def test_the_head_imports_of_the_module_stay_small():
     source = (Path(__file__).resolve().parent.parent / "modelroom" / "lmstudio_install.py").read_text(encoding="utf-8")
     heads = {node.module for node in ast.parse(source).body if isinstance(node, ast.ImportFrom) and node.level == 1}
     assert not heads & {"runtimes", "guided", "importer", "intro", "views"}
+
+
+# --- the width of the rows under the command, counted as the screen writes them ----------------------------
+
+
+def _printed_width(row: str) -> int:
+    """What the screen writes of one note row: `label_line` (the empty label's column) and the margin `plain` puts in front."""
+    from modelroom.intro import label_line
+    from modelroom.screen import plain
+
+    return len(plain(label_line("", [("class:note", row)])))
+
+
+def test_no_row_under_the_command_of_an_lm_studio_row_is_wider_than_a_hundred_columns_as_the_screen_writes_it():
+    from modelroom import lmstudio_install as lms
+
+    rows = [row for form in ("path", "home", None) for system in ("win32", "linux") for with_command in (True, False)
+            for row in lms.hint_rows(form, system, 32768, with_command)]
+    rows += lms.service_rows()
+    assert rows and all(_printed_width(row) <= 100 for row in rows), [row for row in rows if _printed_width(row) > 100]
+
+
+def test_a_text_that_fills_the_whole_line_of_a_labeled_row_breaks_one_column_earlier(monkeypatch):
+    """The width is `JOIN_WIDTH` less the label's column less the margin: a text of 90 words-and-blanks used to stand at
+    101 once `plain` had put its blank in front of it."""
+    from modelroom import lmstudio_install as lms
+
+    text = " ".join(["abcdefghi"] * 8 + ["abcdefghij"])
+    assert len(text) == 90
+    monkeypatch.setattr(lms, "hint_lines", lambda *args, **kwargs: [text])
+    monkeypatch.setattr(lms, "SERVICE_HINT", text)
+
+    for rows in (lms.hint_rows("path", "linux", 4096), lms.service_rows()):
+        assert " ".join(rows) == text  # nothing cut, nothing added
+        assert len(rows) == 2 and all(_printed_width(row) <= 100 for row in rows), rows

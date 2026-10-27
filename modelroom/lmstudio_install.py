@@ -159,20 +159,21 @@ def hint_lines(form: str | None, system: str, context: int, with_command: bool =
 
 def hint_rows(form: str | None, system: str, context: int, with_command: bool = True) -> list[str]:
     """`hint_lines` broken between words to what a labeled row has left of the 100 characters (`JOIN_WIDTH` less the
-    label's column), the words as they are; a command is never part of it, so a command is never cut."""
+    label's column and the margin `plain` puts in front of every line), the words as they are; a command is never part
+    of it, so a command is never cut."""
     from .intro import LABEL_COLUMN  # call time: the head imports of this module stay the small ones, a test holds it
-    from .screen import JOIN_WIDTH
+    from .screen import JOIN_WIDTH, SCREEN_MARGIN
 
-    width = JOIN_WIDTH - LABEL_COLUMN
+    width = JOIN_WIDTH - LABEL_COLUMN - SCREEN_MARGIN
     return [row for text in hint_lines(form, system, context, with_command) for row in textwrap.wrap(text, width, break_long_words=False)]
 
 
 def service_rows() -> list[str]:
     """`SERVICE_HINT` broken between words the way `hint_rows` breaks its lines."""
     from .intro import LABEL_COLUMN  # call time, as in `hint_rows`
-    from .screen import JOIN_WIDTH
+    from .screen import JOIN_WIDTH, SCREEN_MARGIN
 
-    return textwrap.wrap(SERVICE_HINT, JOIN_WIDTH - LABEL_COLUMN, break_long_words=False)
+    return textwrap.wrap(SERVICE_HINT, JOIN_WIDTH - LABEL_COLUMN - SCREEN_MARGIN, break_long_words=False)
 
 
 # --- the model folder and "already there" ---------------------------------------------------------------

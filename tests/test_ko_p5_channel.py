@@ -138,6 +138,17 @@ def test_the_new_channel_falls_back_to_the_shipped_catalog_and_says_why(kind, tm
     assert envelope["catalog"] is None and envelope["last_error"]  # the day's attempt is kept, nothing else is
 
 
+def test_a_shipped_catalog_handed_in_is_the_candidate_shipped_and_the_file_of_the_package_is_not_read(tmp_path):
+    mine = load_catalog(FIXTURES / "catalog_v2_published.json")
+
+    choice = catalog_remote.current_catalog(
+        FixtureTransport(_faulty("not_found")), NOW, tmp_path / "cache", RequestBudget(150), channel=catalog_remote.CHANNEL_V3, shipped=mine
+    )
+
+    assert choice.source == "shipped" and choice.catalog is mine
+    assert choice.origin.startswith(f"catalog: shipped {mine.published.isoformat()}")
+
+
 def test_a_schema_2_file_on_the_new_channel_is_a_fault_naming_the_schema(tmp_path):
     choice = _ask(FixtureTransport(_faulty("schema_2")), tmp_path)
 

@@ -201,11 +201,12 @@ def main(
     room: "RoomProbes | None" = None,
     ssh: "SshRunner | None" = None,
     catalog: "Catalog | None" = None,
+    shipped: "Catalog | None" = None,
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon, servers, room, ssh)
+        return _cmd_guided(args, parser, transport, probes, pointer_path, now, asker, here, out, daemon, servers, room, ssh, shipped)
     if args.answers is not None:
         print(f"--answers belongs to the guided mode; {args.command} never asks a question", file=sys.stderr)
         return 2
@@ -217,7 +218,7 @@ def main(
     if args.command == "hardware":
         return _cmd_hardware(args, probes, pointer_path, now, daemon, servers, room)
     if args.command == "render":
-        return _cmd_render(args, now, pointer_path, host, catalog)
+        return _cmd_render(args, now, pointer_path, host, catalog, shipped)
     if args.command == "migrate":
         return _cmd_migrate(args, now, pointer_path, host)
     if args.command == "export-profile":
@@ -229,7 +230,7 @@ def main(
         # The catalog is read offline for the one check of V10 (`render` reads it the same way): nothing is asked of the network.
         # V10: the name is validated first (`run_pull` refuses an invalid one), so nothing is read for it.
         valid = PULL_NAME_RE.fullmatch(args.name) is not None
-        evidence = None if not valid else catalog if catalog is not None else offline_catalog((pointer_path or default_pointer_path()).parent / "catalog")
+        evidence = None if not valid else catalog if catalog is not None else offline_catalog((pointer_path or default_pointer_path()).parent / "catalog", shipped=shipped)
         return run_pull(args.name, args.weights_bytes, args.yes, daemon=daemon, room=room, now=now, out=out, catalog=evidence)
     if args.command == "remote":
         # The counterpart (B2): stdin/stdout only, no results folder, nothing swept, nothing bound.
@@ -252,6 +253,7 @@ def _cmd_guided(
     servers: dict | None = None,
     room: "RoomProbes | None" = None,
     ssh: "SshRunner | None" = None,
+    shipped: "Catalog | None" = None,
 ) -> int:
     """`modelroom` with no subcommand: the guided mode (`modelroom/guided.py`).
 
@@ -278,6 +280,7 @@ def _cmd_guided(
             servers=servers,
             room=room,  # `None`: the real room of this machine (`room.default_room_probes`, AP9-UX2 U8)
             ssh=ssh,  # `None`: the real ssh of this machine (`ssh.default_ssh`, FR-B1)
+            shipped=shipped,  # `None`: `modelroom/catalog.json`
             # A run that answers from a file is read from a log: no color, whatever the
             # terminal it was started in (CONTRACTS.md, "Guided mode", the start screen).
             colored=None if args.answers is None else False,
@@ -746,6 +749,7 @@ def _cmd_render(
     pointer_path: Path | None,
     host: Callable[[], str],
     catalog: "Catalog | None" = None,
+    shipped: "Catalog | None" = None,
 ) -> int:
     """`render`: the evidence is the catalog read offline -- the shipped one, or the published one the guided
     mode stored next to the pointer file when that is newer (`catalog_remote.offline_catalog`); nothing is asked."""
@@ -761,7 +765,7 @@ def _cmd_render(
         print(str(exc), file=sys.stderr)
         return 2
 
-    evidence = catalog if catalog is not None else offline_catalog((pointer_path or default_pointer_path()).parent / "catalog")
+    evidence = catalog if catalog is not None else offline_catalog((pointer_path or default_pointer_path()).parent / "catalog", shipped=shipped)
     code = render_with_config(config, now=now, catalog=evidence)  # prints its `note:` lines itself; the guided mode calls it too
     if code == 0:
         # stdout order: notes (above), the Ollama setting of a saving context choice (T-K fills it here), the link.

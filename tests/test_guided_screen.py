@@ -7,7 +7,9 @@ color, and that is what a log of a run is read from. So the screen has a fixture
 Everything variable is replaced before the comparison -- the results folder by `<results>`, a
 profile id by `<profile>`, a measured speed by `<speed>` -- because a golden file may not depend
 on which machine ran the test. Nothing outside `tmp_path` is written: `HOME`/`USERPROFILE` are
-never read here, the pointer file lives in `tmp_path`, and every source is a fixture.
+never read here, the pointer file lives in `tmp_path`, and every source is a fixture -- the catalog the run
+chooses from as well (`fixtures/catalog_guided.json`, handed in as `shipped=`), so a publication of the real catalog
+cannot turn a golden file red. The one test that holds an invariant of the shipped catalog itself says so.
 """
 
 from __future__ import annotations
@@ -18,11 +20,13 @@ from pathlib import Path
 
 import pytest
 
+from modelroom.catalog import load_catalog
 from modelroom.dialog import FileAsker
 from modelroom.guided import run_guided
 
 from fixture_support import (
     DEEPSEEK_OLLAMA_NAME,
+    FIXTURES,
     build_transport,
     guided_transport_mapping,
     loadtest_daemon,
@@ -38,6 +42,12 @@ GOLDEN = Path(__file__).parent / "golden"
 RUN_AT = datetime(2026, 9, 25, 8, 0, 0, tzinfo=timezone.utc)
 DEEPSEEK = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
 QWEN = "Qwen/Qwen3.5-9B"
+
+def guided_shipped():
+    """The catalog of the golden runs: a cut of the shipped one (`fixtures/README.md`), not `modelroom/catalog.json`."""
+    return load_catalog(FIXTURES / "catalog_guided.json")
+
+
 # The model the recorded vLLM server states it serves: an id is as long as it is, and stands last.
 SERVED_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 
@@ -66,7 +76,7 @@ ENTERED = {
 }
 
 
-def _screen(tmp_path: Path, answers: dict, *, daemon=None, servers=None) -> str:
+def _screen(tmp_path: Path, answers: dict, *, daemon=None, servers=None, shipped=None) -> str:
     """Every line one `--answers` run prints, with what varies per machine masked out."""
     results = tmp_path / "results"
     results.mkdir(exist_ok=True)
@@ -82,6 +92,7 @@ def _screen(tmp_path: Path, answers: dict, *, daemon=None, servers=None) -> str:
         now=RUN_AT,
         out=lines.append,
         colored=False,
+        shipped=shipped if shipped is not None else guided_shipped(),
     )
     return _masked("\n".join(lines), results) + "\n"
 
@@ -106,6 +117,35 @@ def _compare(name: str, screen: str) -> None:
 def test_the_screen_of_a_run_with_two_models_reads_as_the_golden_file(tmp_path: Path):
     """Two models chosen, context `L`, no measurement -- the run the mockup of 2026-09-24 draws."""
     _compare("guided-screen.txt", _screen(tmp_path, CHOSEN))
+
+
+def test_the_hints_of_the_screen_follow_the_catalog_handed_in_and_never_the_file_of_the_package(tmp_path: Path, monkeypatch):
+    """The decoupling itself: a Qwen row without a GGUF added to a copy of the fixture catalog shows up as a hint, while
+    every read of `modelroom/catalog.json` (a `load_catalog()` without a path) is refused."""
+    import json
+
+    from modelroom import catalog_remote, guided
+
+    document = json.loads((FIXTURES / "catalog_guided.json").read_text(encoding="utf-8"))
+    row = dict(next(model for model in document["models"] if model["hf_repo"] == "Qwen/Qwen3.5-27B"))
+    row.update(hf_repo="Qwen/Qwen9-Probe-1B", source="https://huggingface.co/Qwen/Qwen9-Probe-1B", ollama_tag="1b", note=None)
+    document["models"].append(row)
+    mine = tmp_path / "catalog_plus.json"
+    mine.write_text(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    plus = load_catalog(mine)
+
+    def only_with_a_path(path=None):
+        if path is None:
+            raise AssertionError("modelroom/catalog.json was read")
+        return load_catalog(path)
+
+    monkeypatch.setattr(guided, "load_catalog", only_with_a_path)
+    monkeypatch.setattr(catalog_remote, "load_catalog", only_with_a_path)
+
+    screen = _screen(tmp_path, CHOSEN, shipped=plus)
+
+    assert "Qwen9-Probe-1B (Qwen) is in the catalog; no GGUF from its publisher or a listed packager is known" in screen
+    assert screen != (GOLDEN / "guided-screen.txt").read_text(encoding="utf-8")
 
 
 def test_the_screen_of_a_run_that_chose_nothing_carries_a_dash(tmp_path: Path):
@@ -174,7 +214,9 @@ def test_a_knowledge_hint_for_a_long_name_breaks_into_lines_of_at_most_a_hundred
 
 
 def test_a_reason_of_step_four_breaks_before_the_longest_name_of_the_catalog():
-    """Reasons 1 and 3 name a model; beyond 100 columns the line breaks before the name, never inside it."""
+    """Reasons 1 and 3 name a model; beyond 100 columns the line breaks before the name, never inside it.
+
+    An invariant of the shipped `modelroom/catalog.json` itself (its longest name), so it reads that file on purpose."""
     from modelroom.catalog import load_catalog
     from modelroom.guided_vllm import not_counting_reason, wrapped
     from modelroom.vllm_server import ServedModel
@@ -226,6 +268,7 @@ def _go(tmp_path: Path, asker: FileAsker) -> list[str]:
         now=RUN_AT,
         out=lines.append,
         colored=False,
+        shipped=guided_shipped(),
     )
     return lines
 

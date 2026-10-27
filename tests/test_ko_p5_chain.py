@@ -19,6 +19,7 @@ import pytest
 
 import fixture_ko_p4 as F
 from fixture_support import (
+    FIXTURES as F_FIXTURES,
     UNSLOTH_SHA,
     build_transport,
     guided_transport_mapping,
@@ -34,7 +35,7 @@ from test_ko_catalog_v3 import REVISION_URL
 from test_ko_p5_channel import _old_reader
 
 from modelroom import catalog_remote
-from modelroom.catalog import CATALOG_FILE
+from modelroom.catalog import load_catalog
 from modelroom.cli import main
 from modelroom.dialog import FileAsker
 from modelroom.http import Response
@@ -45,9 +46,12 @@ FIRST_FILE, FIRST_BYTES = "Qwen3.5-9B-Q8_0.gguf", 9_527_502_048  # the first row
 SCAN_DAY = datetime(2026, 10, 14, 9, 0, 0, tzinfo=timezone.utc)
 
 # The publication of the chain must be younger than the shipped catalog, or the shipped one wins the choice and the
-# line `catalog: published <day>` never appears; the run must be younger than the publication. Both days are therefore
-# read from the shipped catalog (each publication moves its `published`), not written here.
-_SHIPPED_DAY = datetime.fromisoformat(json.loads(CATALOG_FILE.read_bytes())["published"]).date()
+# line `catalog: published <day>` never appears; the run must be younger than the publication. The "shipped" catalog of
+# the chain is the fixture `fixtures/catalog_guided.json` (handed to `main` as `shipped=`), never `modelroom/catalog.json`,
+# so a publication of the real catalog moves nothing here; both days are read from that fixture.
+_FIXTURE = F_FIXTURES / "catalog_guided.json"
+SHIPPED = load_catalog(_FIXTURE)
+_SHIPPED_DAY = SHIPPED.published
 PUBLISHED_DAY = (_SHIPPED_DAY + timedelta(days=1)).isoformat()
 RUN = datetime.combine(_SHIPPED_DAY + timedelta(days=2), time(8, 0), tzinfo=timezone.utc)
 DATASET_SHA = "5d" * 20
@@ -67,7 +71,7 @@ def _folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def _working_catalog(folder: Path) -> tuple[Path, Path]:
     """A working catalog of schema 3 with the one model of the chain (its GGUF repository the listed packager's), and an empty rejection list."""
-    shipped = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
+    shipped = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     row = next(m for m in shipped["models"] if m["hf_repo"] == ROW)
     row = {**row, "gguf_repos": [REPO], "latest": False, "latest_source": None, "latest_checked": None}
     document = {
@@ -167,6 +171,7 @@ def _guided(tmp_path: Path, files: dict[str, bytes], answers: dict, daemon, caps
     code = main(
         [], transport=transport, probes=windows_probes(), pointer_path=tmp_path / "home" / ".modelroom" / "guided.json", now=RUN,
         asker=FileAsker(answers), here=tmp_path / "results", out=lines.append, daemon=daemon, servers=offline_servers(),
+        shipped=SHIPPED,
     )
     return code, [line.strip() for line in lines], capsys.readouterr().err
 
@@ -244,6 +249,7 @@ def test_the_run_falls_back_to_the_shipped_catalog_where_the_dataset_has_no_new_
         [], transport=build_transport({**guided_transport_mapping(), **dataset}), probes=windows_probes(),
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json", now=RUN, asker=FileAsker({**ANSWERS, "pull": False}),
         here=tmp_path / "results", out=lines.append, daemon=pull_daemon(), servers=offline_servers(),
+        shipped=SHIPPED,
     )
 
     assert code == 0

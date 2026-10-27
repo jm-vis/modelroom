@@ -28,8 +28,9 @@ from modelroom.catalog_schema import (  # noqa: E402
 from modelroom.contracts import SchemaVersionError  # noqa: E402
 
 KINDS = tuple(sorted(set(PIPELINE_TAG_TO_KIND.values())))  # the eight kinds of the table
-# The note `--complete` writes for a kind the maintainer set (the line in `complete_proposal`); the suite hides exactly this form.
-MAINTAINER_KIND_NOTE = re.compile(r"Kind (?:" + "|".join(map(re.escape, KINDS)) + r") set by the maintainer on [0-9]{4}-[0-9]{2}-[0-9]{2}\.")
+# The note `--complete` writes for a kind the maintainer set (the line in `complete_proposal`); the suite hides exactly this form
+# and reads the kind out of it by the group `kind` (tests/test_catalog_task.py): one grammar for the note, not two.
+MAINTAINER_KIND_NOTE = re.compile(r"Kind (?P<kind>" + "|".join(map(re.escape, KINDS)) + r") set by the maintainer on [0-9]{4}-[0-9]{2}-[0-9]{2}\.")
 STATES = R.DECISION_STATES  # approved, applied, committed, pushed, uploaded, published: the order of a publication
 CATALOG_IN_REPO, REJECTED_IN_REPO = "modelroom/catalog.json", "modelroom/catalog-rejected.json"
 # The version of `huggingface_hub` the upload runs with, through `uvx`: no dependency of the package. `uv.lock` names none,
