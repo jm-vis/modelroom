@@ -167,7 +167,7 @@ def _dataset(files: dict[str, bytes]) -> dict[tuple[str, str], Response]:
 
 def _guided(tmp_path: Path, files: dict[str, bytes], answers: dict, daemon, capsys) -> tuple[int, list[str], str]:
     lines: list[str] = []
-    transport = build_transport({**guided_transport_mapping(), **_dataset(files)})
+    transport = build_transport({**guided_transport_mapping(SHIPPED), **_dataset(files)})
     code = main(
         [], transport=transport, probes=windows_probes(), pointer_path=tmp_path / "home" / ".modelroom" / "guided.json", now=RUN,
         asker=FileAsker(answers), here=tmp_path / "results", out=lines.append, daemon=daemon, servers=offline_servers(),
@@ -246,7 +246,7 @@ def test_the_run_falls_back_to_the_shipped_catalog_where_the_dataset_has_no_new_
         dataset[key] = Response(404, {}, b"{}")
     lines: list[str] = []
     code = main(
-        [], transport=build_transport({**guided_transport_mapping(), **dataset}), probes=windows_probes(),
+        [], transport=build_transport({**guided_transport_mapping(SHIPPED), **dataset}), probes=windows_probes(),
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json", now=RUN, asker=FileAsker({**ANSWERS, "pull": False}),
         here=tmp_path / "results", out=lines.append, daemon=pull_daemon(), servers=offline_servers(),
         shipped=SHIPPED,

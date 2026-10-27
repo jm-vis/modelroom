@@ -81,18 +81,19 @@ def _screen(tmp_path: Path, answers: dict, *, daemon=None, servers=None, shipped
     results = tmp_path / "results"
     results.mkdir(exist_ok=True)
     lines: list[str] = []
+    catalog = shipped if shipped is not None else guided_shipped()  # the answers of the transport follow the same catalog
     run_guided(
         FileAsker(answers),
         here=results,
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
-        transport=build_transport(guided_transport_mapping()),
+        transport=build_transport(guided_transport_mapping(catalog)),
         probes=windows_probes(host="workstation", ids=["a" * 16]),
         daemon=daemon if daemon is not None else offline_daemon(),
         servers=servers if servers is not None else offline_servers(),
         now=RUN_AT,
         out=lines.append,
         colored=False,
-        shipped=shipped if shipped is not None else guided_shipped(),
+        shipped=catalog,
     )
     return _masked("\n".join(lines), results) + "\n"
 
@@ -121,9 +122,12 @@ def test_the_screen_of_a_run_with_two_models_reads_as_the_golden_file(tmp_path: 
 
 def test_the_hints_of_the_screen_follow_the_catalog_handed_in_and_never_the_file_of_the_package(tmp_path: Path, monkeypatch):
     """The decoupling itself: a Qwen row without a GGUF added to a copy of the fixture catalog shows up as a hint, while
-    every read of `modelroom/catalog.json` (a `load_catalog()` without a path) is refused."""
+    every read of `modelroom/catalog.json` (a `load_catalog()` without a path) is refused -- by the product (`guided`,
+    `catalog_remote`) and by the recorded answers of the transport (`fixture_support`, which imports it from `modelroom.catalog`
+    at call time)."""
     import json
 
+    from modelroom import catalog as catalog_module
     from modelroom import catalog_remote, guided
 
     document = json.loads((FIXTURES / "catalog_guided.json").read_text(encoding="utf-8"))
@@ -134,11 +138,14 @@ def test_the_hints_of_the_screen_follow_the_catalog_handed_in_and_never_the_file
     mine.write_text(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
     plus = load_catalog(mine)
 
+    original = catalog_module.load_catalog  # kept before the patch: the wrapper calls it for a read with a path
+
     def only_with_a_path(path=None):
         if path is None:
             raise AssertionError("modelroom/catalog.json was read")
-        return load_catalog(path)
+        return original(path)
 
+    monkeypatch.setattr(catalog_module, "load_catalog", only_with_a_path)
     monkeypatch.setattr(guided, "load_catalog", only_with_a_path)
     monkeypatch.setattr(catalog_remote, "load_catalog", only_with_a_path)
 
@@ -257,18 +264,19 @@ def _go(tmp_path: Path, asker: FileAsker) -> list[str]:
     results = tmp_path / "results"
     results.mkdir(exist_ok=True)
     lines: list[str] = []
+    catalog = guided_shipped()
     run_guided(
         asker,
         here=results,
         pointer_path=tmp_path / "home" / ".modelroom" / "guided.json",
-        transport=build_transport(guided_transport_mapping()),
+        transport=build_transport(guided_transport_mapping(catalog)),
         probes=windows_probes(host="workstation", ids=["a" * 16]),
         daemon=offline_daemon(),
         servers=offline_servers(),
         now=RUN_AT,
         out=lines.append,
         colored=False,
-        shipped=guided_shipped(),
+        shipped=catalog,
     )
     return lines
 

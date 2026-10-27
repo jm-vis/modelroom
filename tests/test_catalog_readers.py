@@ -42,7 +42,7 @@ READERS = {
     "test_guided_vllm_match.py": "source",
     "test_guided_write.py": "source",
     "test_install_vllm.py": "source",
-    "test_ko_catalog_v3.py": "source",
+    "test_ko_catalog_v3.py": "invariant",  # Z.107-112 hold the schema_version of the shipped file against its content; Z.210 also takes it as a source
     "test_ko_findings.py": "source",
     "test_ko_p5_channel.py": "source",
     "test_ko_render.py": "source",
