@@ -6,7 +6,6 @@ The rules live in `modelroom/catalog_schema.py`; the last tests read the shipped
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -171,10 +170,6 @@ DECISION_ONLY_REPOS = frozenset(
 )
 
 
-# The note `--complete` writes when the maintainer sets a kind (`MAINTAINER_KIND_NOTE`), with the kind as a group.
-_MAINTAINER_KIND = re.compile(r"Kind ([a-z-]+) set by the maintainer on [0-9]{4}-[0-9]{2}-[0-9]{2}\.")
-
-
 def _maintainer_form():
     """`MAINTAINER_KIND_NOTE` from `scripts/`; the test is skipped where `scripts/` is not shipped (the sdist), as in test_catalog."""
     form = _maintainer_kind_note()
@@ -203,9 +198,9 @@ def _row_problems(rows, off_table, form) -> list[str]:
         elif model.kind_source is None:
             sound = model.hub_pipeline_tag in TABLE_KIND_OF_TASK and model.kind == TABLE_KIND_OF_TASK[model.hub_pipeline_tag]
         elif _is_maintainer_decision(model, form):
-            named = _MAINTAINER_KIND.fullmatch(model.note)
+            named = form.fullmatch(model.note)  # `MAINTAINER_KIND_NOTE` itself: the group `kind` names the kind of the note
             sound = (
-                named is not None and named.group(1) in kinds and model.kind == named.group(1)
+                named is not None and named.group("kind") in kinds and model.kind == named.group("kind")
                 and (model.hub_pipeline_tag is None or model.hub_pipeline_tag not in TABLE_KIND_OF_TASK)
             )
         else:

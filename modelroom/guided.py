@@ -795,13 +795,15 @@ def run_guided(
     servers: dict | None = None,
     room: RoomProbes | None = None,
     ssh: "ssh_module.SshRunner | None" = None,
+    shipped: Catalog | None = None,
 ) -> int:
     """Run the whole guided mode; returns the exit code (`0` when a document was written).
 
     `here` is the folder "this folder" means -- the caller passes it in, this package never resolves
     a path against the working directory on its own. Everything else is the usual dependency
     injection: the transport, the daemon and the other local servers of this machine by key
-    (`local_servers.py`), its probes, the clock, the pointer file and the shipped catalog. `colored`
+    (`local_servers.py`), its probes, the clock and the pointer file. `catalog` is a finished catalog: no choice
+    is made, nothing is asked. `shipped` is the candidate "shipped" of that choice (`None`: `modelroom/catalog.json`). `colored`
     says whether the start screen may carry color; `modelroom --answers <file>` passes `False`, `None`
     asks the stream (`intro.use_color`). `room`: the free memory and disk of this machine (`room.py`);
     `None` is the real one.
@@ -813,7 +815,7 @@ def run_guided(
         transport=transport if transport is not None else UrllibTransport(),
         probes=probes if probes is not None else Probes(),
         now=(now or datetime.now(timezone.utc)).replace(microsecond=0),
-        catalog=catalog if catalog is not None else load_catalog(),
+        catalog=catalog if catalog is not None else shipped if shipped is not None else load_catalog(),
         daemon=daemon if daemon is not None else LocalDaemon(),
         servers=ServerRun(servers if servers is not None else default_transports()),
         out=out,
@@ -822,7 +824,7 @@ def run_guided(
         ssh=ssh if ssh is not None else ssh_module.default_ssh(),
     )
     if catalog is None:  # the published catalog, else the shipped one (`catalog_remote.py`)
-        run.catalog, origin, _ = current_catalog(run.transport, run.now, run.pointer_path.parent / "catalog", run.budget)
+        run.catalog, origin, _ = current_catalog(run.transport, run.now, run.pointer_path.parent / "catalog", run.budget, shipped=shipped)
         run.catalog_notes = (origin,)
     known = _known_config(run, config_arg)
     elsewhere = last_elsewhere(run, config_arg, known)

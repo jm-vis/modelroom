@@ -283,6 +283,11 @@ def test_the_offline_reading_takes_the_cache_of_the_v4_channel(tmp_path):
     assert catalog_remote.offline_catalog(cache, channel=catalog_remote.CHANNEL_V3).published == load_catalog().published
 
 
+def test_the_offline_reading_takes_the_shipped_catalog_handed_in_when_there_is_no_cache(tmp_path):
+    mine = load_catalog(FIXTURES / "catalog_v2_published.json")
+    assert catalog_remote.offline_catalog(tmp_path / "no-cache", shipped=mine) is mine
+
+
 def _faulty(kind: str) -> dict:
     channel = catalog_remote.CHANNEL_V4
     good = _later(_v4_with_switches())

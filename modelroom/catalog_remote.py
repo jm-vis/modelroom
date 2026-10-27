@@ -125,10 +125,16 @@ class _SameHost:
 
 
 def current_catalog(
-    transport: Transport, now: datetime, cache_dir: Path, budget: RequestBudget, channel: Channel = DEFAULT_CHANNEL
+    transport: Transport,
+    now: datetime,
+    cache_dir: Path,
+    budget: RequestBudget,
+    channel: Channel = DEFAULT_CHANNEL,
+    shipped: Catalog | None = None,
 ) -> CatalogChoice:
-    """The catalog this run uses, and the line that says which (rules 1-9 of the KA brief)."""
-    shipped = load_catalog()
+    """The catalog this run uses, and the line that says which (rules 1-9 of the KA brief).
+    `shipped` is the candidate "shipped"; `None` reads `modelroom/catalog.json` as ever (tests pass their own)."""
+    shipped = load_catalog() if shipped is None else shipped
     if os.environ.get(SWITCH) == "shipped":
         return _choose(shipped, None, None, None)
     stamp = _utc(now)
@@ -153,11 +159,12 @@ def current_catalog(
     return _choose(shipped, replace(envelope, last_error=None) if envelope else None, catalog, None)
 
 
-def offline_catalog(cache_dir: Path, channel: Channel = DEFAULT_CHANNEL) -> Catalog:
+def offline_catalog(cache_dir: Path, channel: Channel = DEFAULT_CHANNEL, shipped: Catalog | None = None) -> Catalog:
     """The catalog a command that asks no one reads (`render`, `pull`): the shipped one, or the stored published
     one of `channel` when it is the later of the two. Nothing is requested and nothing is written; a missing
-    or broken cache, or `MODELROOM_CATALOG=shipped`, leaves the shipped catalog."""
-    shipped = load_catalog()
+    or broken cache, or `MODELROOM_CATALOG=shipped`, leaves the shipped catalog. `shipped=None` reads
+    `modelroom/catalog.json` as ever."""
+    shipped = load_catalog() if shipped is None else shipped
     if os.environ.get(SWITCH) == "shipped":
         return shipped
     return _choose(shipped, _read_envelope(cache_dir / channel.cache_name, channel), None, None).catalog

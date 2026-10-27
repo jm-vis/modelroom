@@ -619,3 +619,29 @@ one 8 GiB `NVIDIA GeForce RTX 4060 Laptop GPU`, 31.62 GiB of memory, `machine_cl
 cross-checks `confirmed`, and `runtimes` `["ollama", "lmstudio"]`. `profile_id` `4c7e19a2b5d8f038`, `os_fingerprint`
 `c3d4e5f60718294a` (a fixed literal of the same shape), `recorded_at` `2026-09-28T09:14:03Z`, no newline at the end. It is
 the machine of `tests/golden/golden_lmstudio_laptop.*` and of `tests/test_lmstudio_render.py`.
+
+## The catalog of the guided screen (2026-10-27)
+
+`catalog_guided.json` -- a cut of the shipped catalog (`modelroom/catalog.json`, schema 4, `published` 2026-10-27, main
+`3d16723`). The golden files `tests/golden/guided-screen*.txt` and the chain `tests/test_ko_p5_chain.py` take it as the
+"shipped" catalog (`run_guided(..., shipped=...)`, `main([], ..., shipped=...)`), so that a publication of the real
+catalog moves none of them. It holds every row whose `hf_repo` contains `qwen` (any case) and every row of the families
+`qwen3.5` and `deepseek-r1` (the families of `Qwen/Qwen3.5-9B` and `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`): 17 rows;
+`publishers` cut to the accounts those rows name, `packagers` kept whole (the screen counts them: "the five listed
+packagers"). Written with this call, run in the folder of the repository:
+
+    import json
+    d = json.load(open("modelroom/catalog.json", encoding="utf-8"))
+    families = set(("qwen3.5", "deepseek-r1"))
+    keep = list(m for m in d.get("models") if "qwen" in m.get("hf_repo").lower() or m.get("family") in families)
+    accounts = set(m.get("publisher") for m in keep)
+    out = dict(d)
+    out.update(dict(models=keep))
+    out.update(dict(publishers=list(p for p in d.get("publishers") if p.get("account") in accounts)))
+    with open("tests/fixtures/catalog_guided.json", "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(out, fh, indent=2, sort_keys=True, ensure_ascii=False)
+        fh.write("\n")
+
+If a golden file changes with it, the cut is wrong: the fixture is drawn again, never the golden. The one test that holds
+an invariant of the real catalog (the longest name, `test_guided_screen.py`) reads `modelroom/catalog.json` on purpose;
+`tests/test_catalog_readers.py` lists every test that does.
