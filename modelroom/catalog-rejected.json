@@ -166,5 +166,65 @@
     "date": "2026-10-14",
     "hf_repo": "upstage/SOLAR-0-70b-16bit",
     "successor": "upstage/SOLAR-10.7B-Instruct-v1.0"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "openbmb/Trident-Train"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "Skywork/Matrix-Game-4.0"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "nvidia/GR00T-N1.7-AppleToPlate-cosine40k-checkpoint-15000"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "allenai/HiRO-ACEv2"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "microsoft/scFM-dataselection"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "nvidia/ARDY-SOMA-RP-30FPS-KimodoRep-Horizon60"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "nvidia/Kimodo-SOMA-RP-ArdyRep-v1.2"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "nvidia/Kimodo-SOMA-RP-v1.2"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "stepfun-ai/Step-5-Preview"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "tencent/Qwen3-8B-DSpine-b16"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "nvidia/RFD4-Proteina-Diffusers"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "nvidia/RFD4-Proteina-prep"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "nvidia/InternVideo2-CLIP-anomaly-detection"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "tencent/Hy-Nomas-Diffusers"
+  },
+  {
+    "date": "2026-10-27",
+    "hf_repo": "microsoft/CogACT-v2-RoboDojo"
   }
 ]
