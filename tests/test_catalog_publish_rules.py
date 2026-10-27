@@ -367,6 +367,16 @@ def test_a_candidate_of_open_kind_becomes_a_complete_row_with_the_kind_the_maint
     assert R.check_changes(document, data["changes"])[1] == [] and proposal["candidates"][2]["k"] == "K3"  # the argument is not changed
 
 
+def test_the_note_of_complete_has_exactly_the_shared_form(document, proposal):
+    """The suite hides a note of this form (`MAINTAINER_KIND_NOTE`); what `--complete` writes must be exactly it."""
+    data, number = complete(document, proposal)
+    note = next(c for c in data["changes"] if c["n"] == number)["fields"]["note"]["new"]
+    assert P.MAINTAINER_KIND_NOTE.fullmatch(note) is not None
+    assert all(P.MAINTAINER_KIND_NOTE.fullmatch(f"Kind {kind} set by the maintainer on 2026-10-27.") for kind in P.KINDS)
+    for off in ("Kind banana set by the maintainer on 2026-10-27.", f"{note} ", f" {note}", note[:-1], f"{note}\n"):
+        assert P.MAINTAINER_KIND_NOTE.fullmatch(off) is None, off
+
+
 def test_the_numbers_are_made_again_in_the_order_of_the_scanner_and_the_row_takes_its_place_in_it(document, proposal):
     data, number = complete(document, proposal)
     assert number == 2 and [(c["stage"], c["hf_repo"]) for c in data["changes"]][:3] == [("A1", "acme/Atlas-3-9B"), ("A1", "acme/Odd-1-5B"), ("A2", "nova/Nimbus-1-30B")]

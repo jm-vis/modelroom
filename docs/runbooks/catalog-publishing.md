@@ -201,7 +201,11 @@ refuses the key. In this order:
    proposal, computed from repo and size, not from a mark) is taken by `--apply` only with `--approve-unread <n>`, where
    `<n>` is also in `--approve` and named once; the number is then stored as `approved_unread` in `decision.json` (a
    decision without the field counts as an empty list). The exception entry in `SHIPPED_WITHOUT_READING`
-   (`tests/test_search_release.py`) and the `--apply` belong in the same commit. Candidates open for more than 30 days
+   (`tests/test_search_release.py`) and the `--apply` belong in the same commit. The way through the maintainer's
+   wrapper (`katalog-freigabe.ps1`, kept outside this repository) is its switch `-OhneLesart <n>`, used with
+   `-Freigeben`: every number in it must also be in `-Zeilen`, none twice, and the wrapper passes
+   `--approve <list> --approve-unread <list>`; `-Ohne` only notes a row left open in the journal line and is no way to
+   take a row without a reading. Candidates open for more than 30 days
    are listed first under `## Candidates past 30 days (decide now)`.
    **Deciding on candidates (rule of 2026-10-08).** The catalog is the public list of sources the maintainer trusts;
    admitting an account says "we watch this maker, its models appear by themselves". A name that is not in the catalog
@@ -221,6 +225,10 @@ refuses the key. In this order:
 3. **A candidate of open kind** becomes a row only through the kind the maintainer names:
    `... --complete <proposal.json> --proposal-sha <checksum> --admit K3 --kind vision`. It rewrites `proposal.json` and
    `proposal.md` with new numbers and prints the new checksum; show it again and apply with the new checksum.
+   The new row carries the note `Kind <kind> set by the maintainer on <YYYY-MM-DD>.` (one of the eight kinds, nothing
+   before or after). That form is product, not a schema-1 reason: `scripts/catalog_publish_rules.py` holds it as
+   `MAINTAINER_KIND_NOTE`, and `test_every_reasoned_missing_statement_of_the_schema_1_file_is_a_note` leaves exactly
+   that form out of its comparison; any other wording of a note stays in the comparison and has to be in `NOTES`.
 4. **Test, check, commit.** Run the test suite and the release gate's hygiene check, then commit `modelroom/catalog.json`
    and `modelroom/catalog-rejected.json`.
 5. **Record the commit.** `python scripts/catalog_publish.py --record-commit <out>/<day> <full commit hash>` (state

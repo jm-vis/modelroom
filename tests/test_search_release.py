@@ -173,6 +173,11 @@ SHIPPED_WITHOUT_READING: list[str] = [
     "sbintuitions/sarashina2.2-3b-instruct-v0.1",
     # three digits (`512`) have no class; shipped without a reading by decision, the grammar stays as it is
     "kyutai/ovie-512",
+    # a version mark with a point inside one token (`m3.1`): a letter and a dotted version in one token have no class;
+    # shipped without a reading by decision of the owner 2026-10-27, the grammar stays as it is
+    "MiniMaxAI/MiniMax-M3.1-Flash",
+    # a memory size (`24gb`) has no class; shipped without a reading by decision of the owner 2026-10-27, the grammar stays
+    "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr",
 ]
 
 NOT_INTERPRETABLE = [
@@ -242,6 +247,13 @@ def test_a_shipped_row_that_loses_its_reading_is_named():
     reference_repos = {model.hf_repo for family in reference.families for model in family.models}
     extra = next(m.hf_repo for f in catalog.families for m in f.models if m.hf_repo not in reference_repos)
     assert unread_rows(catalog, reference_repos, lambda repo, size: None if repo == extra else line_key(repo, size)) == [extra]
+
+
+def test_the_rows_without_a_reading_of_2026_10_27_are_listed_with_a_reason():
+    """The two rows of the proposal 2026-10-27 that the grammar has no class for (decided 2026-10-27, grammar unchanged)."""
+    for repo in ("MiniMaxAI/MiniMax-M3.1-Flash", "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr"):
+        assert repo in SHIPPED_WITHOUT_READING
+        assert line_key(repo, None) is None
 
 
 @pytest.mark.parametrize("repo", NOT_INTERPRETABLE + SHIPPED_WITHOUT_READING)

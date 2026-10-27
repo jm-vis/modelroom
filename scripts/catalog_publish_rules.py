@@ -28,6 +28,8 @@ from modelroom.catalog_schema import (  # noqa: E402
 from modelroom.contracts import SchemaVersionError  # noqa: E402
 
 KINDS = tuple(sorted(set(PIPELINE_TAG_TO_KIND.values())))  # the eight kinds of the table
+# The note `--complete` writes for a kind the maintainer set (the line in `complete_proposal`); the suite hides exactly this form.
+MAINTAINER_KIND_NOTE = re.compile(r"Kind (?:" + "|".join(map(re.escape, KINDS)) + r") set by the maintainer on [0-9]{4}-[0-9]{2}-[0-9]{2}\.")
 STATES = R.DECISION_STATES  # approved, applied, committed, pushed, uploaded, published: the order of a publication
 CATALOG_IN_REPO, REJECTED_IN_REPO = "modelroom/catalog.json", "modelroom/catalog-rejected.json"
 # The version of `huggingface_hub` the upload runs with, through `uvx`: no dependency of the package. `uv.lock` names none,
@@ -379,6 +381,8 @@ def complete_proposal(document: dict, proposal: dict, request: Request, kind: st
     latest = R.latest_among([(entry.repo, kind, entry.parameters_b)], rows).get(entry.repo) == "over latest"  # as before AP9-KA-H: no `family top` here
     row = R.build_row(entry, result, family=family, today=today, latest=latest, latest_source=f"{R.HUB}/{entry.owner}")
     row["note"] = f"Kind {kind} set by the maintainer on {today}."
+    if MAINTAINER_KIND_NOTE.fullmatch(row["note"]) is None:
+        raise PublishError(f"the note for the kind does not have the form of MAINTAINER_KIND_NOTE (date {today!r})")
     change = R.mark_reading(R.new_row_change(row, result, candidate["open_since"]))
     changes = [R.mark_reading(c) for c in copy.deepcopy(proposal["changes"])] + [change]
     try:
