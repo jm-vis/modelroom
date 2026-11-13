@@ -3,6 +3,16 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow Semver.
 
+## [Unreleased]
+
+### Added
+
+- **Secret scan** (`scripts/gitleaks_gate.py`, `.gitleaks.toml`, `.gitleaks-version`, `.gitleaksignore`): every commit,
+  every commit message and every push is scanned with a pinned gitleaks release and three house rules for values the
+  default rules miss; the workflow `secret-scan` runs the same scan over every ref on GitHub and Forgejo. The scan prints
+  rule, line and an identifier of the file name, never a value, a name or a message. Hooks: `pre-commit`, `commit-msg`,
+  `pre-push`. A missing or different program refuses the commit.
+
 ## [1.2.0] - 2026-10-15
 
 Version 1.2.0 takes the vLLM switches that a model card names for its model into the commands. Where the `vllm serve`

@@ -1,0 +1,45 @@
+# Shared secret-scan rules. The default rules plus three rules for values the defaults miss.
+# The file is byte-identical in every repository that carries it; change it in the source, not here.
+
+[extend]
+useDefault = true
+
+# A password-like name assigned a quoted value. The separator forms are spelled out so that a
+# database client's variable reference (a colon directly before a quote after a space) is no value:
+# `=`, `=>`, `:=` (with an optional type annotation before them), a colon straight after the name or
+# its closing quote, or a colon with a space on both sides.
+[[rules]]
+id = "house-password-quoted"
+description = "password-like name assigned a quoted value"
+regex = '''(?i)[\w.-]*(?:passw(?:or)?d|passphrase|pwd)[\w.-]*(?:["']?\s*(?::[^=\n]{0,40})?(?:=>|:=|=)|["']?:|\s+:\s)\s*["']([^"'\n]{6,200})["']'''
+secretGroup = 1
+keywords = ["pass", "pwd"]
+
+# A password-like name assigned an unquoted value on its own line (environment file style).
+[[rules]]
+id = "house-password-bare"
+description = "password-like name assigned an unquoted value (env style)"
+regex = '''(?im)^\s*(?:export\s+)?[\w.-]*(?:passw(?:or)?d|passphrase|pwd)[\w.-]*\s*=\s*([^\s"'#]{6,200})\s*$'''
+secretGroup = 1
+keywords = ["pass", "pwd"]
+
+# A secret-like name with a type annotation assigned a quoted value.
+[[rules]]
+id = "house-typed-assignment"
+description = "secret-like name with a type annotation assigned a quoted value"
+regex = '''(?i)\b\w*(?:api[_-]?key|secret|token|access[_-]?key|private[_-]?key|auth)\w*\s*:\s*[A-Za-z_][\w\[\]., |]*\s*=\s*["']([^"'\s]{16,})["']'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["key", "secret", "token", "auth"]
+
+# Placeholders and references are no values. The exception names its three rules; nothing else.
+[[allowlists]]
+description = "placeholders and references, not values"
+targetRules = ["house-password-quoted", "house-password-bare", "house-typed-assignment"]
+regexTarget = "secret"
+regexes = [
+  '''^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$''',
+  '''^<[^>]*>$''',
+  '''^\*+$''',
+  '''^(?i)(x+|changeme|example|placeholder|dummy|redacted|none|null)$''',
+]

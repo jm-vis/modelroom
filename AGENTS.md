@@ -128,6 +128,11 @@ This repository is public. Nothing operator-specific belongs in it:
 - No references to an internal workspace, its folder layout, its personas or its chronicle.
   `tests/test_public_hygiene.py` enforces a negative list over every tracked file and runs
   from the git hooks in `.githooks/`.
+- Every commit, push and CI run is scanned for secrets by `scripts/gitleaks_gate.py` (hooks in
+  `.githooks/`, workflow `secret-scan`), with the gitleaks release named in `.gitleaks-version` and the
+  rules of `.gitleaks.toml`. A missing or different program refuses the commit; set it once per clone with
+  `git config hooks.gitleaks <absolute path to the program>`. A pull request can change the scan files
+  themselves, so one that does is read by the maintainer before it is merged.
 - Configuration is data the user brings (`modelroom.toml` or a `Configuration` object). The
   package never guesses paths relative to the current working directory: paths in a
   configuration file resolve relative to that file, programmatic callers pass absolute paths.
@@ -207,6 +212,7 @@ literal appears anywhere. Releases are annotated tags `vX.Y.Z` on `main`. Releas
 
 1. Gate: `uv run --frozen python scripts/release-check.py` ends with `RELEASE-CHECK: OK <version>`;
    `MODELROOM_RELEASE_PRIVATE_WORDS` names the file of private words, outside the repository.
+   1b. Secret scan: `python scripts/gitleaks_gate.py full` (with `hooks.gitleaks` set) ends clean.
 2. Smoke: `uv run --frozen python scripts/release-smoke.py` ends with `RELEASE-SMOKE: OK`.
 3. Tag: `git tag -a vX.Y.Z -m "modelroom X.Y.Z"`, then the gate again with `--tag vX.Y.Z`.
 4. Review: an independent second-model review of the release diff, findings closed or answered.

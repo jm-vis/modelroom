@@ -1,0 +1,19 @@
+#!/bin/sh
+# Secret scan over the commit message, unchanged, before the commit is made.
+# git names the message file relative to the top folder, or absolute (a linked worktree); under a Windows
+# shell (Git for Windows, MSYS, Cygwin) an absolute name may start with a drive (C:/).
+case "$1" in
+    /*) message="$1" ;;
+    [A-Za-z]:[\\/]*)
+        case "$(uname -s 2>/dev/null)" in
+            MINGW* | MSYS* | CYGWIN*) message="$1" ;;
+            *) message="$PWD/$1" ;;
+        esac ;;
+    *) message="$PWD/$1" ;;
+esac
+top=$(git rev-parse --show-toplevel) || exit 1
+cd "$top" || exit 1
+uv run --frozen python scripts/gitleaks_gate.py commit-msg "$message" || {
+    echo "commit-msg: secret scan failed, commit refused" >&2
+    exit 1
+}
