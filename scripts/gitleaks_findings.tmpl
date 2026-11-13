@@ -1,0 +1,1 @@
+{{ range . }}{{ dict "rule" .RuleID "file" .File "line" .StartLine "commit" .Commit | toJson }}{{ "\n" }}{{ end }}
