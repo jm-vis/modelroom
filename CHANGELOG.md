@@ -12,6 +12,11 @@ All notable changes to this project are documented in this file. The format foll
   default rules miss; the workflow `secret-scan` runs the same scan over every ref on GitHub and Forgejo. The scan prints
   rule, line and an identifier of the file name, never a value, a name or a message. Hooks: `pre-commit`, `commit-msg`,
   `pre-push`. A missing or different program refuses the commit.
+- **Shared module version 1.0.0** (`.repo-kit.json`): the scan files, the three hooks and the tests of the scan are now
+  copies of a versioned module, byte for byte. The public hygiene check moved to repository-own steps
+  (`.githooks/after-scan/pre-commit` and `pre-push`, named in `.githooks/after-scan.required`); the hooks run it after
+  a clean scan, so the scan now runs before the hygiene check. `tests/test_after_scan.py` tests that order. The scan
+  gate's tests check that a finding prints its full summary and no error line.
 
 ## [1.2.0] - 2026-10-15
 

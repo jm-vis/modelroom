@@ -1,5 +1,5 @@
 #!/bin/sh
-# Secret scan over the commit message, unchanged, before the commit is made.
+# Secret scan over the commit message, unchanged, before the commit is made; then the repository's own steps.
 # git names the message file relative to the top folder, or absolute (a linked worktree); under a Windows
 # shell (Git for Windows, MSYS, Cygwin) an absolute name may start with a drive (C:/).
 case "$1" in
@@ -13,7 +13,64 @@ case "$1" in
 esac
 top=$(git rev-parse --show-toplevel) || exit 1
 cd "$top" || exit 1
-uv run --frozen python scripts/gitleaks_gate.py commit-msg "$message" || {
+py=python
+command -v python >/dev/null 2>&1 || py=python3
+"$py" scripts/gitleaks_gate.py commit-msg "$message" || {
     echo "commit-msg: secret scan failed, commit refused" >&2
     exit 1
 }
+# The repository's own step runs here, after a clean scan (.githooks/after-scan/commit-msg).
+# A file .githooks/after-scan.required names each hook that must have such a step.
+req=.githooks/after-scan.required
+need=no
+if [ -L "$req" ]; then
+    echo "commit-msg: .githooks/after-scan.required is not usable, commit refused" >&2
+    exit 1
+fi
+if [ -e "$req" ]; then
+    if [ ! -f "$req" ]; then
+        echo "commit-msg: .githooks/after-scan.required is not usable, commit refused" >&2
+        exit 1
+    fi
+    size=$(LC_ALL=C wc -c < "$req" | tr -d ' ')
+    other=$(LC_ALL=C tr -d 'a-z\n-' < "$req" | LC_ALL=C wc -c | tr -d ' ')
+    ends=$(tail -c 1 "$req" | LC_ALL=C wc -l | tr -d ' ')
+    if [ "$size" -lt 1 ] || [ "$size" -gt 64 ] || [ "$other" != 0 ] || [ "$ends" != 1 ]; then
+        echo "commit-msg: .githooks/after-scan.required is not usable, commit refused" >&2
+        exit 1
+    fi
+    seen=" "
+    while IFS= read -r name; do
+        case "$name" in
+            pre-commit | commit-msg | pre-push) ;;
+            *)
+                echo "commit-msg: .githooks/after-scan.required is not usable, commit refused" >&2
+                exit 1 ;;
+        esac
+        case "$seen" in
+            *" $name "*)
+                echo "commit-msg: .githooks/after-scan.required is not usable, commit refused" >&2
+                exit 1 ;;
+        esac
+        seen="$seen$name "
+        if [ "$name" = "commit-msg" ]; then need=yes; fi
+    done < "$req"
+fi
+step=.githooks/after-scan/commit-msg
+if [ -L .githooks/after-scan ] || [ -L "$step" ]; then
+    echo "commit-msg: the step in .githooks/after-scan is not usable, commit refused" >&2
+    exit 1
+fi
+if [ -e "$step" ]; then
+    if [ ! -f "$step" ] || [ ! -x "$step" ]; then
+        echo "commit-msg: the step in .githooks/after-scan is not usable, commit refused" >&2
+        exit 1
+    fi
+    "$step" "$message" < /dev/null || {
+        echo "commit-msg: the step in .githooks/after-scan refused, commit refused" >&2
+        exit 1
+    }
+elif [ "$need" = yes ]; then
+    echo "commit-msg: the step required by .githooks/after-scan.required is missing, commit refused" >&2
+    exit 1
+fi

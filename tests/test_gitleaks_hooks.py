@@ -1,9 +1,9 @@
 """Tests of the secret scan through the real git hooks in `.githooks/`, run in temporary repositories.
 
-Local only (never in CI): the hooks need `uv` and the project environment. Skipped with a reason unless
-`GITLEAKS_HOOK_TESTS=1` and `GITLEAKS_TEST_BINARY` are set; with `GITLEAKS_REQUIRED=1` a missing
-setting fails instead. Every temporary repository is built from the index of this repository
-(`git checkout-index`), has an empty global git configuration, and sets `core.hooksPath` and
+Skipped with a reason unless `GITLEAKS_HOOK_TESTS=1` and `GITLEAKS_TEST_BINARY` are set; with
+`GITLEAKS_REQUIRED=1` a missing setting fails instead. Every temporary repository is built from the module
+files that lie next to this test (the same layout in a module source and in a repository that carries the
+module), has an empty global git configuration, and sets `core.hooksPath` and
 `hooks.gitleaks` only in its own local configuration. The remote is always a bare repository in the
 temporary folder. Every bait is made at run time.
 
@@ -41,17 +41,21 @@ ROOT = Path(__file__).resolve().parent.parent
 BINARY = os.environ.get("GITLEAKS_TEST_BINARY", "")
 REQUIRED = os.environ.get("GITLEAKS_REQUIRED") == "1"
 HOOK_TESTS = os.environ.get("GITLEAKS_HOOK_TESTS") == "1"
-UV_ENVIRONMENT = os.environ.get("GITLEAKS_HOOK_UV_ENV") or str(ROOT / ".venv")
 R = random.SystemRandom()
 B62 = string.ascii_letters + string.digits
 WORK: Path | None = None  # the temporary folder of a run, made by `setUpModule`
 EMPTY_CONFIG: Path | None = None
+HOOKS3 = ("pre-commit", "commit-msg", "pre-push")
+# M12, every forbidden byte as a file of its own: False = rotating over the three hooks (one run per byte), a fixed group
+# of bytes on every hook and both git ways; True = every byte on every hook and both git ways (about 15 minutes more).
+FULL_BYTE_MATRIX = os.environ.get("GITLEAKS_HOOK_FULL_BYTES") == "1"
 REFUSED = 1  # the return value of a refusal: of a hook, and of git commit and git push when a hook refuses
 SYNTHETIC_FILES = (
     ".githooks/pre-commit", ".githooks/commit-msg", ".githooks/pre-push", "scripts/gitleaks_gate.py",
-    "scripts/gitleaks_findings.tmpl", ".gitleaks.toml", ".gitleaks-version", ".gitleaksignore",
-    "tests/test_public_hygiene.py", "pyproject.toml", "uv.lock",
+    "scripts/gitleaks_findings.tmpl", ".gitleaks.toml", ".gitleaks-version",
 )
+MODULE_FILES = SYNTHETIC_FILES + ("tests/test_gitleaks_gate.py",)  # what `export_index` copies
+IGNORE_TEXT = "# No known finding.\n"  # `.gitleaksignore` belongs to the repository, not to the module
 LINE_FORM = re.compile(r"[A-Za-z0-9._-]+ (?:file:[0-9a-f]{12}:[0-9]+|tag:[0-9a-f]{12}:[0-9]+|message:[0-9]+) "
                        r"(?:[0-9a-f]{8}|-|staged)")
 RAW_NAME = b"n\xff\xfeam\xc3\xa4e\xe2\x82.txt"  # not UTF-8: two bad bytes, a valid letter, a cut multi-byte character
@@ -277,8 +281,7 @@ def env_for(extra: dict | None = None) -> dict:
         env.pop(key, None)
     env.update(GIT_CONFIG_GLOBAL=str(EMPTY_CONFIG), GIT_CONFIG_NOSYSTEM="1", GIT_ALLOW_PROTOCOL="file",
                GIT_AUTHOR_NAME="probe", GIT_COMMITTER_NAME="probe",
-               GIT_AUTHOR_EMAIL="probe" + "@" + "example.invalid", GIT_COMMITTER_EMAIL="probe" + "@" + "example.invalid",
-               UV_PROJECT_ENVIRONMENT=UV_ENVIRONMENT, UV_NO_SYNC="1", UV_OFFLINE="1")
+               GIT_AUTHOR_EMAIL="probe" + "@" + "example.invalid", GIT_COMMITTER_EMAIL="probe" + "@" + "example.invalid")
     env.update(extra or {})
     return env
 
@@ -347,9 +350,11 @@ def baits() -> dict[str, str]:
 
 
 def export_index(dest: Path) -> None:
-    """The index of this repository, written to `dest` (the full tracked state, nothing else)."""
-    prefix = str(dest).replace("\\", "/").rstrip("/") + "/"
-    run_ok(["git", "-C", str(ROOT), "checkout-index", "-a", f"--prefix={prefix}"], "checkout-index")
+    """The module files next to this test, copied to `dest` (hooks keep their mode; nothing else is copied)."""
+    for rel in MODULE_FILES:
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / rel, dest / rel)
+    (dest / ".gitleaksignore").write_bytes(IGNORE_TEXT.encode("utf-8"))
 
 
 def init_repo(repo: Path) -> None:
@@ -391,9 +396,9 @@ def build_unborn(extra: dict[str, str] | None = None) -> Path:
     """Aufbau A: a clean synthetic index, hooks active, no commit yet. Copies keep the mode of the hooks."""
     repo = WORK / ("u" + rnd(8, LOWER))
     for rel in SYNTHETIC_FILES:
-        if (ROOT / rel).exists():
-            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(ROOT / rel, repo / rel)
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / rel, repo / rel)
+    (repo / ".gitleaksignore").write_bytes(IGNORE_TEXT.encode("utf-8"))
     if os.name != "nt":
         for name in ("pre-commit", "commit-msg", "pre-push"):
             path = repo / ".githooks" / name
@@ -466,7 +471,10 @@ def lookup_in_process(repo: Path, identifier: str, words: tuple[str, ...], chang
 def shell() -> Path:
     """The real POSIX shell of git: on Windows the MSYS `sh.exe` itself, which keeps the given PATH."""
     if os.name == "nt":
-        return Path(shutil.which("git")).resolve().parent.parent / "usr" / "bin" / "sh.exe"
+        for parent in Path(shutil.which("git")).resolve().parents:
+            if (parent / "usr" / "bin" / "sh.exe").is_file():
+                return parent / "usr" / "bin" / "sh.exe"
+        raise FixedError("the shell of git was not found")
     return Path(shutil.which("sh"))
 
 
@@ -836,7 +844,7 @@ class P5ProgramMissing(HookCase):
         repo, _ = build_normal()
         git(repo, "config", "--unset", "hooks.gitleaks")
         dirs = []
-        for tool in ("git", "python", "python3", "uv", "sh", "mktemp"):
+        for tool in ("git", "python", "python3", "sh", "mktemp"):
             found = shutil.which(tool)
             if found and os.path.dirname(found) not in dirs:
                 dirs.append(os.path.dirname(found))
@@ -850,7 +858,6 @@ class P5ProgramMissing(HookCase):
         self.assert_refused(done.returncode, "commit without the program")
         self.assertEqual(count(repo), before, "a commit was made")
         self.assertTrue(has_line(output, r"gitleaks_gate: pre-commit: error binary-path"), "the error line of the gate is missing")
-        self.assertFalse("public hygiene check failed" in output, "the hygiene check failed first")
 
 
 class P16Merge(HookCase):
@@ -943,8 +950,13 @@ class P18Names(HookCase):
         git(repo, "tag", "-a", tag_name, "-m", "note token=" + values["commit_nachricht"])
         add_raw_name(repo, RAW_NAME, "pass" + "word" + ' = "' + with_marks(token(20)) + '"\n')
         git(repo, "commit", "-q", "-m", "raw name")  # from the index; the name never touches the file system
-        rc, out, _err = gate(repo, "full")
+        rc, out, err = gate(repo, "full")
         self.assertEqual(rc, 1, "the return value is not 1 (finding)")
+        # GL-C4-1: stderr is exactly the summary of the finding lines, so it holds no error line of the gate.
+        self.assertFalse(any(re.match(r"gitleaks_gate: [a-z-]+: error ", line) for line in err.splitlines()),
+                         "stderr holds an error line of the gate")
+        self.assertTrue(err.splitlines() == [f"gitleaks_gate: full: {len(out.splitlines())} finding(s), refused"],
+                        "stderr is not exactly the summary of the findings")
         found = [line.split(" ")[1] for line in out.splitlines() if " " in line]
         identifiers = sorted({loc.split(":")[1] for loc in found if loc.startswith(("file:", "tag:"))})
         self.assertEqual(len(identifiers), 5, "not five reported identifiers")
@@ -1010,6 +1022,511 @@ class P18Names(HookCase):
                 result, calls = lookup_in_process(repo, name_id("notes.txt"), words, lambda rc, out: (rc, out + extra))
                 self.assertEqual(calls, [0], f"precondition: {label}: one sound inventory call before the change")
                 self.assert_lookup_error(result, label)
+
+
+class P10Extension(HookCase):
+    """The step after the scan: `.githooks/after-scan/<hook>` runs only after a clean scan (M10).
+
+    A step records its arguments, working folder and standard input in a file of the test.
+    """
+
+    CLEAN = "gitleaks_gate: pre-push: clean"
+
+    def setUp(self):
+        super().setUp()
+        self.repo, self.remote = build_normal()
+        self.rec = WORK / ("rec" + rnd(6, LOWER))
+        self.rec.mkdir()
+        self.posix = str(self.rec).replace("\\", "/")
+        self.base = git(self.remote, "rev-parse", "main").stdout.decode().strip()
+
+    def step_text(self, status: int = 0, name: str = "step") -> bytes:
+        """A step that records by appending: a second call is told apart from a single one by the counter file."""
+        return ('#!/bin/sh\nrec="' + self.posix + '"\nprintf x >> "$rec/' + name + '_calls.txt"\n'
+                'printf "%s\\n%s\\n%s\\n" "$#" "$1" "$2" >> "$rec/' + name + '_args.txt"\n'
+                'pwd >> "$rec/' + name + '_cwd.txt"\ncat >> "$rec/' + name + '_stdin.bin"\nexit ' + str(status) + '\n').encode("utf-8")
+
+    def unusable_text(self, hook: str) -> bytes:
+        """The recording step without its shebang (and, by `add_step` callers, without the executable bit): a shell
+        that ran it anyway would record the call, so the check that it was not started can fail."""
+        return self.step_text(0, hook).split(b"\n", 1)[1]
+
+    def hooks_direct(self, hook: str):
+        """The tracked hook run by the real shell with its own arguments and input, after a clean scan."""
+        sh = shell()
+        env = env_for({"PATH": os.pathsep.join([str(sh.parent), os.environ.get("PATH", "")])})
+        message = self.repo / "msg.txt"
+        message.write_bytes(b"plain\n")
+        if hook == "pre-commit":
+            args, data = [], b""
+        elif hook == "commit-msg":
+            args, data = [str(message).replace("\\", "/")], b""
+        else:
+            args = ["origin", str(self.remote).replace("\\", "/")]
+            data = f"refs/heads/main {head(self.repo)} refs/heads/main {self.base}\n".encode()
+        return subprocess.run([str(sh), ".githooks/" + hook, *args], input=data, capture_output=True, env=env,
+                              cwd=str(self.repo))
+
+    def runs(self, hook: str) -> int:
+        path = self.rec / (hook + "_calls.txt")
+        return len(path.read_bytes()) if path.exists() else 0
+
+    def fresh(self) -> None:
+        """A new repository, remote and recording folder (the test goes on with them)."""
+        self.repo, self.remote = build_normal()
+        self.rec = WORK / ("rec" + rnd(6, LOWER))
+        self.rec.mkdir()
+        self.posix = str(self.rec).replace("\\", "/")
+        self.base = git(self.remote, "rev-parse", "main").stdout.decode().strip()
+
+    def ahead(self) -> None:
+        """One plain commit (hooks off) so that a push has something to bring."""
+        write(self.repo, "ahead" + rnd(4, LOWER) + ".txt", "ahead\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "-c", "core.hooksPath=", "commit", "-q", "-m", "ahead")
+
+    def route(self, hook: str):
+        """The git way of a hook: a commit for `pre-commit` and `commit-msg`, a push for `pre-push`."""
+        if hook == "pre-push":
+            self.ahead()
+            return self.push()
+        return self.clean_commit()
+
+    @staticmethod
+    def verb(hook: str) -> str:
+        return "push" if hook == "pre-push" else "commit"
+
+    def add_step(self, hook: str, status: int = 0) -> Path:
+        path = self.repo / ".githooks" / "after-scan" / hook
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.step_text(status, hook))
+        path.chmod(0o755)
+        return path
+
+    def ran(self, hook: str) -> bool:
+        return (self.rec / (hook + "_args.txt")).exists()
+
+    def clean_commit(self):
+        write(self.repo, "clean" + rnd(4, LOWER) + ".txt", "clean\n")
+        git(self.repo, "add", "-A")
+        return commit_hooked(self.repo, "control")
+
+    def push(self):
+        return git(self.repo, "push", "origin", "main", env=env_for(), check=False)
+
+    def test_p10_without_a_step_the_scan_decides(self):
+        self.assertEqual(self.clean_commit().returncode, 0, "a clean commit without a step was refused")
+        write(self.repo, "leak.py", f'GITHUB_TOKEN = "{github_token()}"\n')
+        git(self.repo, "add", "-A")
+        done = commit_hooked(self.repo, "leak")
+        self.assert_refused(done.returncode, "bait without a step")
+        self.assert_refused_by_finding(text_of(done), "pre-commit", "bait without a step")
+
+    def test_p10_a_green_step_runs_once_after_the_scan_with_the_arguments_of_each_hook(self):
+        for hook in ("pre-commit", "commit-msg", "pre-push"):
+            self.add_step(hook)
+        done = self.clean_commit()
+        self.assertEqual(done.returncode, 0, "a clean commit with green steps was refused")
+        top = git(self.repo, "rev-parse", "--show-toplevel").stdout.decode().strip()
+        for hook in ("pre-commit", "commit-msg"):
+            self.assertTrue(self.ran(hook), f"{hook}: the step did not run")
+            self.assertEqual(self.runs(hook), 1, f"{hook}: the step did not run exactly once")
+            lines =(self.rec / (hook + "_args.txt")).read_text(encoding="utf-8").split("\n")
+            self.assertEqual(lines[0], "0" if hook == "pre-commit" else "1", f"{hook}: wrong number of arguments")
+            self.assertEqual((self.rec / (hook + "_stdin.bin")).read_bytes(), b"", f"{hook}: the standard input is not empty")
+            cwd = (self.rec / (hook + "_cwd.txt")).read_text(encoding="utf-8").strip().replace("\\", "/").lower()
+            self.assertTrue(cwd.endswith("/" + Path(top).name.lower()), f"{hook}: the working folder is not the top")
+        message = (self.rec / "commit-msg_args.txt").read_text(encoding="utf-8").split("\n")[1]
+        self.assertTrue(message.startswith("/") or re.match(r"[A-Za-z]:[\\/]", message) is not None,
+                        "commit-msg: the message path is not absolute")
+        pushed = self.push()
+        self.assertEqual(pushed.returncode, 0, "the push with a green step was refused")
+        self.assertTrue(self.CLEAN in text_of(pushed).splitlines(), "the scan line of the push is missing")
+        self.assertEqual(self.runs("pre-push"), 1, "pre-push: the step did not run exactly once")
+        lines = (self.rec / "pre-push_args.txt").read_text(encoding="utf-8").split("\n")
+        url =git(self.repo, "config", "remote.origin.url").stdout.decode().strip()
+        self.assertEqual(lines[:3], ["2", "origin", url], "the push step did not get the two arguments")
+        expected = f"refs/heads/main {head(self.repo)} refs/heads/main {self.base}\n".encode()
+        self.assertTrue((self.rec / "pre-push_stdin.bin").read_bytes() == expected, "the push step did not get the push lines")
+
+    def test_p10_a_red_step_refuses_each_hook(self):
+        for hook in ("pre-commit", "commit-msg", "pre-push"):
+            self.add_step(hook, 1)
+        before = count(self.repo)
+        done = self.clean_commit()
+        self.assert_refused(done.returncode, "commit with a red step")
+        self.assertEqual(count(self.repo), before, "a commit was made")
+        self.assertTrue("pre-commit: the step in .githooks/after-scan refused, commit refused" in text_of(done).splitlines(),
+                        "the fixed line of the red step is missing")
+        git(self.repo, "-c", "core.hooksPath=", "commit", "-q", "-m", "plain")
+        done = self.push()
+        self.assert_refused(done.returncode, "push with a red step")
+        self.assertTrue("pre-push: the step in .githooks/after-scan refused, push refused" in text_of(done).splitlines(),
+                        "the fixed line of the red push step is missing")
+        self.assertTrue(git(self.remote, "rev-parse", "main").stdout.decode().strip() == self.base, "the remote moved")
+
+    def test_p10_a_bait_is_refused_and_the_step_is_not_started(self):
+        for hook in ("pre-commit", "commit-msg"):
+            self.add_step(hook)
+        write(self.repo, "leak.py", f'GITHUB_TOKEN = "{github_token()}"\n')
+        git(self.repo, "add", "-A")
+        done = commit_hooked(self.repo, "leak")
+        self.assert_refused(done.returncode, "bait with a step")
+        self.assert_refused_by_finding(text_of(done), "pre-commit", "bait with a step")
+        self.assertFalse(self.ran("pre-commit"), "the step ran after a red scan")
+        self.assertFalse(self.ran("commit-msg"), "the message step ran after a red scan")
+
+    def test_p10_a_bait_in_the_message_is_refused_by_commit_msg_and_its_step_is_not_started(self):
+        """A clean file state and a bait only in the message: `pre-commit` passes (its step runs once), `commit-msg`
+        refuses with its own fixed line, and the step of `commit-msg` is never started (the counter appends)."""
+        for hook in ("pre-commit", "commit-msg"):
+            self.add_step(hook)
+        write(self.repo, "clean" + rnd(4, LOWER) + ".txt", "clean\n")
+        git(self.repo, "add", "-A")
+        before = count(self.repo)
+        done = commit_hooked(self.repo, "note " + github_token() + "\n")
+        self.assert_refused(done.returncode, "a bait in the message")
+        self.assertEqual(count(self.repo), before, "a commit was made")
+        lines = text_of(done).splitlines()
+        self.assertTrue("commit-msg: secret scan failed, commit refused" in lines, "the fixed line of commit-msg is missing")
+        self.assertTrue(is_finding(text_of(done), "commit-msg"), "the refusal is not a finding of the message scan")
+        self.assertFalse(any(line.startswith("pre-commit: ") for line in lines), "pre-commit refused")
+        self.assertEqual(self.runs("pre-commit"), 1, "pre-commit did not pass through to its step exactly once")
+        self.assertEqual(self.runs("commit-msg"), 0, "the step of commit-msg was started before or after a red scan")
+
+    def test_p10_an_unusable_step_refuses_without_starting_it(self):
+        path = self.add_step("pre-commit")
+        write(self.repo, "clean.txt", "clean\n")
+        git(self.repo, "add", "-A")
+        fixed = "pre-commit: the step in .githooks/after-scan is not usable, commit refused"
+        path.write_bytes(self.unusable_text("pre-commit"))  # no shebang, no executable bit
+        path.chmod(0o644)
+        done = commit_hooked(self.repo, "x")
+        self.assert_refused(done.returncode, "step without the executable bit")
+        self.assertTrue(fixed in text_of(done).splitlines(), "the fixed line is missing (not executable)")
+        path.unlink()
+        path.mkdir()
+        done = commit_hooked(self.repo, "x")
+        self.assert_refused(done.returncode, "step as a folder")
+        self.assertTrue(fixed in text_of(done).splitlines(), "the fixed line is missing (folder)")
+        self.assertFalse(self.ran("pre-commit"), "a step ran although it was unusable")
+
+    def test_p10_a_red_step_refuses_each_hook_alone(self):
+        for hook in HOOKS3:
+            with self.case(hook=hook):
+                self.fresh()
+                self.add_step(hook, 1)
+                before = count(self.repo)
+                done = self.route(hook)
+                self.assert_refused(done.returncode, f"{hook}: a red step")
+                fixed = f"{hook}: the step in .githooks/after-scan refused, {self.verb(hook)} refused"
+                self.assertTrue(fixed in text_of(done).splitlines(), f"{hook}: the fixed line of the red step is missing")
+                self.assertEqual(self.runs(hook), 1, f"{hook}: the red step did not start exactly once")
+                self.assertFalse(any(self.ran(other) for other in HOOKS3 if other != hook), f"{hook}: another step ran")
+                if hook == "pre-push":
+                    self.assertEqual(git(self.remote, "rev-parse", "main").stdout.decode().strip(), self.base, "the remote moved")
+                else:
+                    self.assertEqual(count(self.repo), before, "a commit was made")
+
+    def test_p10_an_unusable_step_refuses_each_hook(self):
+        for hook in HOOKS3:
+            for form in ("not executable", "a folder"):
+                with self.case(hook=hook, form=form):
+                    self.fresh()
+                    path = self.add_step(hook)
+                    if form == "not executable":
+                        path.write_bytes(self.unusable_text(hook))  # no shebang, no executable bit
+                        path.chmod(0o644)
+                    else:
+                        path.unlink()
+                        path.mkdir()
+                    done = self.route(hook)
+                    self.assert_refused(done.returncode, f"{hook}: an unusable step ({form})")
+                    fixed = f"{hook}: the step in .githooks/after-scan is not usable, {self.verb(hook)} refused"
+                    self.assertTrue(fixed in text_of(done).splitlines(), f"{hook}: the fixed line is missing ({form})")
+                    self.assertFalse(self.ran(hook), f"{hook}: an unusable step ran")
+
+    LINK_KINDS = ("file-link", "junction", "dir-symlink", "broken-file-link", "broken-junction")
+
+    def link_of(self, kind: str, link: Path, content: bytes = b"", inside: str | None = None) -> None:
+        """A link of the given kind made natively; the test fails (never skips) unless a reparse point or link results
+        and the shell of git sees a link (`test -L`). A broken link points to a target that is gone. With `inside`, the
+        folder behind a folder link holds an executable file of that name with `content` (a hook that followed the
+        link would find and start it)."""
+        folder_kind = kind in ("junction", "dir-symlink", "broken-junction")
+        real = WORK / ("lt" + rnd(6, LOWER))
+        if folder_kind:
+            real.mkdir()
+            if inside is not None:
+                (real / inside).write_bytes(content)
+                (real / inside).chmod(0o755)
+        else:
+            real.write_bytes(content)
+            real.chmod(0o755)
+            if kind == "broken-file-link":
+                real.unlink()
+        if os.name == "nt":
+            flag = {"junction": ["/J"], "broken-junction": ["/J"], "dir-symlink": ["/D"]}.get(kind, [])
+            made = subprocess.run(["cmd", "/c", "mklink", *flag, str(link), str(real)], capture_output=True)
+            if made.returncode != 0:
+                raise AssertionError("setup step failed: the link cannot be made")
+            if not getattr(os.lstat(link), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise AssertionError("setup step failed: no reparse point was made")
+        else:
+            os.symlink(real, link, target_is_directory=folder_kind)
+        if kind == "broken-junction":
+            shutil.rmtree(real)
+        seen = subprocess.run([str(shell()), "-c", 'test -L "$1"', "x", str(link).replace("\\", "/")], capture_output=True)
+        if seen.returncode != 0:
+            raise AssertionError("setup step failed: the shell does not see a link")
+
+    def test_p10_every_form_of_a_link_as_step_or_as_folder_refuses_each_hook(self):
+        for hook in HOOKS3:
+            for kind in self.LINK_KINDS:
+                for where in ("step", "folder"):
+                    with self.case(hook=hook, kind=kind, where=where):
+                        self.fresh()
+                        folder = self.repo / ".githooks" / "after-scan"
+                        if where == "step":
+                            folder.mkdir(parents=True)
+                            self.link_of(kind, folder / hook, self.step_text(0, hook))
+                        else:
+                            self.link_of(kind, folder, self.step_text(0, hook), inside=hook)
+                        done = self.route(hook)
+                        self.assert_refused(done.returncode, f"{hook}: a link ({kind}, {where})")
+                        # a linked folder is seen first by `pre-commit`, which comes before `commit-msg` on a commit
+                        refuser = "pre-commit" if (where == "folder" and hook == "commit-msg") else hook
+                        fixed = f"{refuser}: the step in .githooks/after-scan is not usable, {self.verb(hook)} refused"
+                        self.assertTrue(fixed in text_of(done).splitlines(), f"{hook}: the fixed line is missing ({kind}, {where})")
+                        self.assertFalse(self.ran(hook), f"{hook}: a step ran behind a link")
+
+    def test_p10_a_linked_folder_refuses_each_hook_called_by_itself(self):
+        """The folder `after-scan` as a link, each hook called directly after a clean scan: each refuses with its own
+        fixed line (on a commit `pre-commit` comes first, so only the direct call shows the check of `commit-msg`)."""
+        for hook in HOOKS3:
+            for kind in self.LINK_KINDS:
+                with self.case(hook=hook, kind=kind):
+                    self.fresh()
+                    self.ahead()
+                    self.link_of(kind, self.repo / ".githooks" / "after-scan", self.step_text(0, hook), inside=hook)
+                    done = self.hooks_direct(hook)
+                    self.assert_refused(done.returncode, f"{hook}: a linked folder ({kind})")
+                    fixed = f"{hook}: the step in .githooks/after-scan is not usable, {self.verb(hook)} refused"
+                    self.assertTrue(fixed in text_of(done).splitlines(), f"{hook}: the own fixed line is missing ({kind})")
+                    self.assertEqual(self.runs(hook), 0, f"{hook}: the step behind the linked folder was started ({kind})")
+
+    def native_link(self, link: Path, target: Path, folder: bool) -> None:
+        """A link or a junction made natively; the test fails (never skips) unless a reparse point or link results
+        and the shell of git sees a link (`test -L`)."""
+        if os.name == "nt":
+            if folder:
+                made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True)
+            else:
+                made = subprocess.run(["cmd", "/c", "mklink", str(link), str(target)], capture_output=True)
+            if made.returncode != 0:
+                raise AssertionError("setup step failed: the link cannot be made")
+            attributes = getattr(os.lstat(link), "st_file_attributes", 0)
+            if not attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise AssertionError("setup step failed: no reparse point was made")
+        else:
+            os.symlink(target, link)
+        seen = subprocess.run([str(shell()), "-c", 'test -L "$1"', "x", str(link).replace("\\", "/")], capture_output=True)
+        if seen.returncode != 0:
+            raise AssertionError("setup step failed: the shell does not see a link")
+
+    def test_p10_a_link_as_step_or_as_folder_refuses(self):
+        write(self.repo, "clean.txt", "clean\n")
+        git(self.repo, "add", "-A")
+        real = WORK / ("real" + rnd(6, LOWER))
+        real.mkdir()
+        (real / "pre-commit").write_bytes(self.step_text(0, "pre-commit"))
+        (real / "pre-commit").chmod(0o755)
+        fixed = "pre-commit: the step in .githooks/after-scan is not usable, commit refused"
+        folder = self.repo / ".githooks" / "after-scan"
+        folder.mkdir(parents=True)
+        self.native_link(folder / "pre-commit", real / "pre-commit", folder=False)
+        done = commit_hooked(self.repo, "x")
+        self.assert_refused(done.returncode, "a link as the step")
+        self.assertTrue(fixed in text_of(done).splitlines(), "the fixed line is missing (link)")
+        (folder / "pre-commit").unlink()
+        folder.rmdir()
+        self.native_link(folder, real, folder=True)
+        done = commit_hooked(self.repo, "x")
+        self.assert_refused(done.returncode, "a link as the folder")
+        self.assertTrue(fixed in text_of(done).splitlines(), "the fixed line is missing (folder link)")
+        broken = WORK / ("gone" + rnd(6, LOWER))
+        if os.name != "nt":
+            folder.unlink()
+            folder.mkdir()
+            os.symlink(broken, folder / "pre-commit")
+            done = commit_hooked(self.repo, "x")
+            self.assert_refused(done.returncode, "a broken link as the step")
+            self.assertTrue(fixed in text_of(done).splitlines(), "the fixed line is missing (broken link)")
+        self.assertFalse(self.ran("pre-commit"), "a step ran behind a link")
+
+    def test_p10_the_store_of_the_push_lines_still_comes_first(self):
+        self.add_step("pre-push")
+        self.clean_commit()
+        line = f"refs/heads/main {head(self.repo)} refs/heads/main {self.base}\n".encode()
+        tmp = WORK / ("tmp" + rnd(6, LOWER))
+        tmp.mkdir()
+        done = run_pre_push_directly(self.repo, self.remote, line, tmp, fake_cat=True)
+        self.assert_refused(done.returncode, "push lines that could not be stored")
+        self.assertTrue("pre-push: the push lines cannot be stored, push refused" in text_of(done).splitlines(),
+                        "the fixed line of the store is missing")
+        self.assertFalse(self.ran("pre-push"), "the step ran on push lines that were not stored")
+        self.assertEqual(sum(1 for _ in tmp.iterdir()), 0, "a temporary file of the push lines is left over")
+
+
+class P12Required(P10Extension):
+    """`.githooks/after-scan.required` names the hooks that must have a step (M12)."""
+
+    FORM = "pre-commit: .githooks/after-scan.required is not usable, commit refused"
+
+    @staticmethod
+    def form_line(hook: str) -> str:
+        return f"{hook}: .githooks/after-scan.required is not usable, {P10Extension.verb(hook)} refused"
+
+    def required(self, data: bytes) -> None:
+        (self.repo / ".githooks").mkdir(exist_ok=True)
+        (self.repo / ".githooks" / "after-scan.required").write_bytes(data)
+
+    def test_p12_every_form_of_a_faulty_file_refuses_every_hook(self):
+        forms = {
+            "empty": b"", "unknown name": b"post-commit\n", "double": b"pre-push\npre-push\n", "blank line": b"pre-push\n\n",
+            "comment": b"# x\npre-push\n", "space before": b" pre-push\n", "space after": b"pre-push \n", "cr": b"pre-push\r\n",
+            "bom": b"\xef\xbb\xbfpre-push\n", "nul inside": b"pre-\x00push\n", "nul before": b"\x00pre-push\n", "tab": b"pre-push\t\n",
+            "bell": b"pre-push\x07\n", "del": b"pre-push\x7f\n", "high byte": b"pre-push\xe4\n", "upper case": b"Pre-push\n",
+            "no final lf": b"pre-push",
+            # More than 64 bytes of known names always repeats a name: the size form cannot be made alone.
+            "too long": (b"pre-commit\n" * 6),
+        }
+        self.ahead()
+        for label, data in forms.items():
+            with self.case(form=label):
+                self.required(data)
+                self.refuses_everywhere(data, label)
+
+    def refuses_everywhere(self, data: bytes, label: str, hooks: tuple = HOOKS3, ways: bool = True) -> None:
+        """Every hook of `hooks` called by itself, and the git ways (commit, push), refuse with the fixed line; the
+        faulty file stays as it is and nothing reaches the remote. Needs `ahead()` and `required()` before."""
+        for hook in hooks:
+            done = self.hooks_direct(hook)
+            self.assert_refused(done.returncode, f"{label}: {hook}")
+            self.assertTrue(self.form_line(hook) in text_of(done).splitlines(), f"{label}: {hook}: the fixed line is missing")
+        if ways:
+            git(self.repo, "add", "-A")
+            before = count(self.repo)
+            done = commit_hooked(self.repo, "x")
+            self.assert_refused(done.returncode, f"{label}: commit")
+            # on a commit `pre-commit` comes first: its fixed line, and no other refusal, ends the commit
+            self.assertTrue(self.form_line("pre-commit") in text_of(done).splitlines(), f"{label}: commit: the fixed line is missing")
+            self.assertEqual(count(self.repo), before, f"{label}: a commit was made")
+            done = self.push()
+            self.assert_refused(done.returncode, f"{label}: push")
+            self.assertTrue(self.form_line("pre-push") in text_of(done).splitlines(), f"{label}: push: the fixed line is missing")
+            self.assertEqual(git(self.remote, "rev-parse", "main").stdout.decode().strip(), self.base, f"{label}: the remote moved")
+
+    def test_p12_every_forbidden_byte_as_a_file_of_its_own_refuses(self):
+        allowed = set(b"abcdefghijklmnopqrstuvwxyz-\n")
+        forbidden = [value for value in range(256) if value not in allowed]
+        self.assertEqual(len(forbidden), 256 - 28, "the number of forbidden bytes is wrong")
+        group = [0x00, 0x09, 0x0D, 0x01, 0x1F, 0x7F, 0x80, 0xE4, 0xFF, ord("P"), ord(" "), ord("_")]
+        self.ahead()
+        for value in group:  # a plain check: the first failure ends the test
+            self.required(b"pre-" + bytes([value]) + b"push\n")
+            self.refuses_everywhere(b"", f"byte {value}")
+        for number, value in enumerate(forbidden):
+            with self.case(byte=value):
+                self.required(b"pre-" + bytes([value]) + b"push\n")
+                if FULL_BYTE_MATRIX:
+                    self.refuses_everywhere(b"", f"byte {value}")
+                else:
+                    self.refuses_everywhere(b"", f"byte {value}", hooks=(HOOKS3[number % 3],), ways=False)
+
+    def test_p12_every_form_of_a_link_or_a_folder_as_the_file_refuses_everywhere(self):
+        self.ahead()
+        path = self.repo / ".githooks" / "after-scan.required"
+        for kind in ("a folder",) + self.LINK_KINDS:
+            with self.case(kind=kind):
+                if os.path.lexists(path):
+                    try:
+                        os.rmdir(path)  # a folder, a junction, a link to a folder
+                    except OSError:
+                        os.unlink(path)
+                if kind == "a folder":
+                    path.mkdir()
+                else:
+                    self.link_of(kind, path, b"pre-push\n")
+                self.refuses_everywhere(b"", kind)
+
+    def test_p12_a_link_or_a_folder_as_the_file_refuses(self):
+        path = self.repo / ".githooks" / "after-scan.required"
+        path.parent.mkdir(exist_ok=True)
+        path.mkdir()
+        done = self.hooks_direct("pre-commit")
+        self.assert_refused(done.returncode, "a folder as the file")
+        self.assertTrue(self.form_line("pre-commit") in text_of(done).splitlines(), "the fixed line is missing (folder)")
+        path.rmdir()
+        target = WORK / ("req" + rnd(6, LOWER))
+        target.write_bytes(b"pre-push\n")
+        self.native_link(path, target, folder=False)
+        for hook in ("pre-commit", "commit-msg", "pre-push"):
+            done = self.hooks_direct(hook)
+            self.assert_refused(done.returncode, f"a link as the file: {hook}")
+            self.assertTrue(self.form_line(hook) in text_of(done).splitlines(), f"a link as the file: {hook}: the fixed line is missing")
+
+    def test_p12_a_named_step_that_is_missing_refuses_after_the_scan(self):
+        self.required(b"pre-push\n")
+        done = self.hooks_direct("pre-push")
+        self.assert_refused(done.returncode, "the named step is missing")
+        lines = text_of(done).splitlines()
+        self.assertTrue(self.CLEAN in lines, "the scan did not run first")
+        self.assertTrue("pre-push: the step required by .githooks/after-scan.required is missing, push refused" in lines,
+                        "the fixed line of the missing step is missing")
+        self.assertEqual(self.hooks_direct("pre-commit").returncode, 0, "a hook the file does not name was refused")
+
+    def test_p12_both_present_the_steps_run(self):
+        self.required(b"pre-commit\npre-push\n")
+        self.add_step("pre-commit")
+        self.add_step("pre-push")
+        self.assertEqual(self.hooks_direct("pre-commit").returncode, 0, "pre-commit with its step was refused")
+        self.assertEqual(self.hooks_direct("pre-push").returncode, 0, "pre-push with its step was refused")
+        self.assertTrue(self.ran("pre-commit") and self.ran("pre-push"), "a step did not run")
+
+    def test_p12_the_accepted_rest_both_removed_lets_everything_through(self):
+        self.assertEqual(self.hooks_direct("pre-push").returncode, 0, "the hook refused without file and step")
+        self.assertEqual(self.clean_commit().returncode, 0, "the commit was refused without file and step")
+        self.assertEqual(self.push().returncode, 0, "the push was refused without file and step")
+
+    def mutated_hook(self, hook: str, old: str, new: str) -> Path:
+        """A copy of the hook in a temporary folder with `old` replaced by `new`; the module file is never changed."""
+        text = (self.repo / ".githooks" / hook).read_text(encoding="utf-8")
+        self.assertEqual(text.count(old), 1, "the mutation does not apply")
+        (self.repo / ".githooks" / hook).write_bytes(text.replace(old, new).encode("utf-8"))
+        return self.repo / ".githooks" / hook
+
+    def test_p12_red_a_hook_without_the_file_check_lets_its_fault_through(self):
+        self.required(b"post-commit\n")
+        for hook in ("pre-commit", "commit-msg", "pre-push"):
+            with self.case(hook=hook):
+                repo, remote = build_normal()
+                self.repo, self.remote = repo, remote
+                self.base = git(remote, "rev-parse", "main").stdout.decode().strip()
+                self.required(b"post-commit\n")
+                self.assert_refused(self.hooks_direct(hook).returncode, "precondition: the unchanged hook refuses the fault")
+                self.mutated_hook(hook, "if [ -e \"$req\" ]; then", "if false; then")
+                self.assertEqual(self.hooks_direct(hook).returncode, 0, "the mutation does not let the fault through")
+
+    def test_p12_red_a_line_reading_check_loses_the_nul_byte(self):
+        self.required(b"pre-\x00push\n")  # the shell's `read` drops the NUL: only the byte count sees it
+        self.assert_refused(self.hooks_direct("pre-commit").returncode, "precondition: the unchanged hook refuses a NUL")
+        self.mutated_hook("pre-commit", "other=$(LC_ALL=C tr -d 'a-z\\n-' < \"$req\" | LC_ALL=C wc -c | tr -d ' ')", "other=0")
+        self.assertEqual(self.hooks_direct("pre-commit").returncode, 0, "the line-reading hook did not lose the NUL byte")
+
+
+for _name in [name for name in dir(P10Extension) if name.startswith("test_p10")]:
+    setattr(P12Required, _name, None)  # P12 inherits only the helpers, not the tests of P10
 
 
 if __name__ == "__main__":

@@ -1,0 +1,61 @@
+{
+  "modul": "gitleaks",
+  "fassung": "1.0.0",
+  "dateien": [
+    {
+      "pfad": ".githooks/pre-commit",
+      "sha256": "998ee268915fb8b497dddeb53f1215b55eabc882b06e7a94e50bdc7cfddbbbfb",
+      "ausfuehrbar": true
+    },
+    {
+      "pfad": ".githooks/commit-msg",
+      "sha256": "a9aded209aabca36b6ef70c24b0af858c8b191d9bee09c93563fd7f4370b1bab",
+      "ausfuehrbar": true
+    },
+    {
+      "pfad": ".githooks/pre-push",
+      "sha256": "c90dc2edf7e8c3de2a91385e1234a1332e9764c486f0e03362579ebbaaaf49cb",
+      "ausfuehrbar": true
+    },
+    {
+      "pfad": ".gitleaks.toml",
+      "sha256": "fb6b674dca92cccba10b27a37ea28fa55ea9ceb34ba34605f15d1551cb89796e",
+      "ausfuehrbar": false
+    },
+    {
+      "pfad": ".gitleaks-version",
+      "sha256": "c9fd9ccb6682c54b5fcb0363757b6c6873564e7c067f70b3b5581b611528b9f4",
+      "ausfuehrbar": false
+    },
+    {
+      "pfad": "scripts/gitleaks_gate.py",
+      "sha256": "b979773acd96a4e4ec2b2ccf941820f8a5193ce81c26c46c28cd18a45129c85d",
+      "ausfuehrbar": false
+    },
+    {
+      "pfad": "scripts/gitleaks_findings.tmpl",
+      "sha256": "60cf2a845cc2569ffd0492937d53d05eacf84b8a208638c5045b27fc17de172e",
+      "ausfuehrbar": false
+    },
+    {
+      "pfad": "tests/test_gitleaks_gate.py",
+      "sha256": "9df775749dc0fe9623cc34166f3a02f2b08779459a845a43f761359a875d77c7",
+      "ausfuehrbar": false
+    },
+    {
+      "pfad": "tests/test_gitleaks_hooks.py",
+      "sha256": "590baa6f80d5638aa12285fa375824594b2cb2f5980ebae8b800c6369d5fe6ab",
+      "ausfuehrbar": false
+    },
+    {
+      "pfad": ".github/workflows/secret-scan.yml",
+      "sha256": "fd4b221a7a6a3a12a221a4ae978356f8d0b40bf32cbf9e1dd67e82087d90572c",
+      "ausfuehrbar": false
+    },
+    {
+      "pfad": ".forgejo/workflows/secret-scan.yml",
+      "sha256": "3225f0ab5609900fbf601ca537d8265babb15f85acb69f3c0e5b1547606b60fd",
+      "ausfuehrbar": false
+    }
+  ]
+}
