@@ -228,6 +228,14 @@ class SafeCase(unittest.TestCase):
         self.assertTrue(err.splitlines() == [f"gitleaks_gate: {label}: {len(lines)} finding(s), refused"],
                         f"{what}: stderr is not exactly the summary of the findings")
 
+    def assert_summary_only(self, out: str, err: str, label: str, what: str):
+        """GL-C4-1: stderr is exactly the summary of the finding lines of stdout, so it holds no error line of the gate."""
+        found = len(parse_lines(out))
+        self.assertFalse(any(re.match(r"gitleaks_gate: [a-z-]+: error ", line) for line in err.splitlines()),
+                         f"{what}: stderr holds an error line of the gate")
+        self.assertTrue(err.splitlines() == [f"gitleaks_gate: {label}: {found} finding(s), refused"],
+                        f"{what}: stderr is not exactly the summary of the findings")
+
 
 def error_only(out: str, err: str, label: str, kind: str) -> bool:
     """True if stdout is empty and stderr is exactly the fixed error line (and the fixed remedy line)."""
@@ -318,6 +326,8 @@ def new_repo(name: str | None = None) -> Path:
         if source.exists():
             (repo / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, repo / rel)
+    if not (repo / ".gitleaksignore").exists():  # the ignore file belongs to the repository, not to the module
+        (repo / ".gitleaksignore").write_bytes(b"# No known finding.\n")
     return repo
 
 
@@ -561,6 +571,7 @@ class P1BaitMeasurement(BinaryCase):
         result = self.measure()
         self.assertEqual(result["rc"], 1, "the return value is not 1 (finding)")
         self.assertEqual(len(result["missing"]), 0, f"{len(result['missing'])} bait(s) not reported with their rule")
+        self.assert_summary_only(result["out"], result["err"], "full", "the baits")
         self.assertFalse(result["gap_hit"], "the known gap (a value without a keyword) is closed: update Z1 and this test")
         everything = result["out"] + result["err"]
         self.assertEqual(leaked(everything, list(result["values"].values())), 0, "a piece of a bait is in the output")
@@ -987,7 +998,12 @@ class P11Static(SafeCase):
 
     def texts(self):
         found = {rel: (ROOT / rel).read_text(encoding="utf-8") for rel in self.WORKFLOWS if (ROOT / rel).exists()}
-        self.assertTrue(self.WORKFLOWS[0] in found, "the GitHub workflow is missing")
+        self.assertTrue(len(found) >= 1, "no workflow is present")
+        kit_file = ROOT / ".repo-kit.json"
+        if kit_file.exists():  # the list names every file of the module version, so a workflow present must be in it
+            listed = json.loads(kit_file.read_bytes().decode("utf-8"))["dateien"]
+            named = {entry["pfad"] for entry in listed}
+            self.assertTrue(set(found) <= named, "a workflow is present that the kit file does not name")
         return found
 
     def test_p11_workflows_state_the_checks(self):
@@ -1080,6 +1096,7 @@ class P18aNamesAsIdentifiers(BinaryCase):
         values, files, tag_name = self.build(repo)
         result = self.gate(repo, "full")
         self.assertEqual(result[0], 1, "the return value is not 1 (finding)")
+        self.assert_summary_only(result[1], result[2], "full", "the names")
         everything = result[1] + result[2]
         for name in list(files) + [tag_name]:
             self.assertEqual(sum(1 for piece in windows_of(name) | {name} if piece in everything), 0, "a name is in the output")
@@ -1117,6 +1134,7 @@ class NestedTags(BinaryCase):
         git(repo, "tag", "-d", inner)  # only the outer tag has a ref; the inner text is reachable through it
         result = self.gate(repo, "full")
         self.assertEqual(result[0], 1, "the return value is not 1 (finding)")
+        self.assert_summary_only(result[1], result[2], "full", "the nested tag")
         self.assertTrue(any(rule == "github-pat" and loc.startswith(f"tag:{name_id(outer)}:") and ref == "-"
                             for rule, loc, ref in parse_lines(result[1])), "the text of the inner tag is not reported")
 

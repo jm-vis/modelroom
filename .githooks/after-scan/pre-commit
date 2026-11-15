@@ -1,0 +1,7 @@
+#!/bin/sh
+# Public-repo guard: refuses a commit if any tracked file carries operator-specific content
+# (machine paths, e-mail addresses, internal workspace vocabulary, key prefixes). Runs after the secret scan.
+uv run --frozen python tests/test_public_hygiene.py || {
+    echo "pre-commit: public hygiene check failed, commit refused" >&2
+    exit 1
+}

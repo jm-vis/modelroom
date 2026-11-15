@@ -2,3 +2,19 @@
 * text=auto eol=lf
 *.png binary
 *.jpg binary
+.githooks/pre-commit text eol=lf
+.githooks/commit-msg text eol=lf
+.githooks/pre-push text eol=lf
+.gitleaks.toml text eol=lf
+.gitleaks-version text eol=lf
+scripts/gitleaks_gate.py text eol=lf
+scripts/gitleaks_findings.tmpl text eol=lf
+tests/test_gitleaks_gate.py text eol=lf
+tests/test_gitleaks_hooks.py text eol=lf
+.github/workflows/secret-scan.yml text eol=lf
+.forgejo/workflows/secret-scan.yml text eol=lf
+.repo-kit.json text eol=lf
+.githooks/after-scan/* text eol=lf
+.githooks/after-scan.required text eol=lf
+.gitleaksignore text eol=lf
+.gitattributes text eol=lf

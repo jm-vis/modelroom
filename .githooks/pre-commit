@@ -1,15 +1,67 @@
 #!/bin/sh
-# Public-repo guard: refuses a commit if any tracked file carries operator-specific content
-# (machine paths, e-mail addresses, internal workspace vocabulary, key prefixes), then runs the
-# secret scan over the staged content.
+# Secret scan over the staged content, then the repository's own steps.
 # Enable once per clone: git config core.hooksPath .githooks
+# and point the repository at the pinned gitleaks program: git config hooks.gitleaks <absolute path>
 top=$(git rev-parse --show-toplevel) || exit 1
 cd "$top" || exit 1
-uv run --frozen python tests/test_public_hygiene.py || {
-    echo "pre-commit: public hygiene check failed, commit refused" >&2
-    exit 1
-}
-uv run --frozen python scripts/gitleaks_gate.py pre-commit || {
+py=python
+command -v python >/dev/null 2>&1 || py=python3
+"$py" scripts/gitleaks_gate.py pre-commit || {
     echo "pre-commit: secret scan failed, commit refused" >&2
     exit 1
 }
+# The repository's own step runs here, after a clean scan (.githooks/after-scan/pre-commit).
+# A file .githooks/after-scan.required names each hook that must have such a step.
+req=.githooks/after-scan.required
+need=no
+if [ -L "$req" ]; then
+    echo "pre-commit: .githooks/after-scan.required is not usable, commit refused" >&2
+    exit 1
+fi
+if [ -e "$req" ]; then
+    if [ ! -f "$req" ]; then
+        echo "pre-commit: .githooks/after-scan.required is not usable, commit refused" >&2
+        exit 1
+    fi
+    size=$(LC_ALL=C wc -c < "$req" | tr -d ' ')
+    other=$(LC_ALL=C tr -d 'a-z\n-' < "$req" | LC_ALL=C wc -c | tr -d ' ')
+    ends=$(tail -c 1 "$req" | LC_ALL=C wc -l | tr -d ' ')
+    if [ "$size" -lt 1 ] || [ "$size" -gt 64 ] || [ "$other" != 0 ] || [ "$ends" != 1 ]; then
+        echo "pre-commit: .githooks/after-scan.required is not usable, commit refused" >&2
+        exit 1
+    fi
+    seen=" "
+    while IFS= read -r name; do
+        case "$name" in
+            pre-commit | commit-msg | pre-push) ;;
+            *)
+                echo "pre-commit: .githooks/after-scan.required is not usable, commit refused" >&2
+                exit 1 ;;
+        esac
+        case "$seen" in
+            *" $name "*)
+                echo "pre-commit: .githooks/after-scan.required is not usable, commit refused" >&2
+                exit 1 ;;
+        esac
+        seen="$seen$name "
+        if [ "$name" = "pre-commit" ]; then need=yes; fi
+    done < "$req"
+fi
+step=.githooks/after-scan/pre-commit
+if [ -L .githooks/after-scan ] || [ -L "$step" ]; then
+    echo "pre-commit: the step in .githooks/after-scan is not usable, commit refused" >&2
+    exit 1
+fi
+if [ -e "$step" ]; then
+    if [ ! -f "$step" ] || [ ! -x "$step" ]; then
+        echo "pre-commit: the step in .githooks/after-scan is not usable, commit refused" >&2
+        exit 1
+    fi
+    "$step" < /dev/null || {
+        echo "pre-commit: the step in .githooks/after-scan refused, commit refused" >&2
+        exit 1
+    }
+elif [ "$need" = yes ]; then
+    echo "pre-commit: the step required by .githooks/after-scan.required is missing, commit refused" >&2
+    exit 1
+fi
